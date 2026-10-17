@@ -2,10 +2,10 @@
 import { spawnSync } from 'node:child_process'
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const LIB = process.env.KURO_LIB
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const LIB = process.env.YORU_LIB
 // A real catalogue id, so the series page resolves; the file is its episode 1 for the run.
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const EP = 1
 const shots = process.env.SHOTS ?? '.'
 
@@ -50,7 +50,7 @@ let file
 for (let i = 0; i < 30 && !file; i++) {
   await sleep(1000)
   const files = await api('/api/local/files')
-  file = (files.body.items ?? []).find((f) => String(f.path ?? '').includes('Kuro Test Show'))
+  file = (files.body.items ?? []).find((f) => String(f.path ?? '').includes('Yoru Test Show'))
 }
 check(!!file, 'test file listed', JSON.stringify(file ?? {}).slice(0, 200))
 if (!file) process.exit(1)
@@ -62,9 +62,9 @@ check(autoplay.ok, 'autoplay enabled for the run', JSON.stringify(autoplay.body)
 
 // ---------------------------------------------------------------- downloads
 // Seeded into the database and checked first: the sweep forgets rows the engine lacks two minutes in.
-if (process.env.KURO_DB && process.env.KURO_REPO) {
-  const seed = spawnSync('go', ['run', './scripts/e2e-seed', '-db', process.env.KURO_DB, '-anime', String(ANIME)], {
-    cwd: process.env.KURO_REPO,
+if (process.env.YORU_DB && process.env.YORU_REPO) {
+  const seed = spawnSync('go', ['run', './scripts/e2e-seed', '-db', process.env.YORU_DB, '-anime', String(ANIME)], {
+    cwd: process.env.YORU_REPO,
     stdio: 'inherit',
   })
   check(seed.status === 0, 'download rows seeded')
@@ -160,7 +160,7 @@ const subtitleResponses = []
 let streamOpen = null
 page.on('response', (r) => {
   if (r.url().includes('/subtitle/')) {
-    subtitleResponses.push({ status: r.status(), complete: r.headers()['x-kuro-complete'] })
+    subtitleResponses.push({ status: r.status(), complete: r.headers()['x-yoru-complete'] })
   }
   if (r.url().includes('/api/stream/open')) {
     r.json().then((b) => { streamOpen = b }).catch(() => {})
@@ -404,7 +404,8 @@ check(
 // Select mode queues a hand-picked set. Only the library episode is picked: it
 // needs no download, so nothing reaches the swarm and the queue drains at once.
 await page.getByRole('button', { name: 'Select episodes…' }).click()
-const firstRow = page.locator('li button[aria-pressed]').first()
+// The row itself is the button in select mode; the Up next toggle inside a row is pressed-or-not too.
+const firstRow = page.locator('li > button[aria-pressed]').first()
 await firstRow.click()
 check((await firstRow.getAttribute('aria-pressed')) === 'true', 'episode row toggles selected')
 check(
@@ -420,7 +421,7 @@ const queuedNote = await page
   .catch(() => false)
 check(queuedNote, 'download selected queues the picked episode')
 check(
-  (await page.locator('li button[aria-pressed]').count()) === 0,
+  (await page.locator('li > button[aria-pressed]').count()) === 0,
   'select mode closes after queuing',
 )
 await sleep(2000)

@@ -1,6 +1,6 @@
 package bep44
 
-import "kuro/internal/bt/dht/krpc"
+import "yoru/internal/bt/dht/krpc"
 
 var (
 	ErrValueFieldTooBig = krpc.Error{

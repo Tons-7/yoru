@@ -2,9 +2,9 @@
 // Each change restarts the stream where it was, playback carries on, and the choice is kept for the next open.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const ANIME = process.env.KURO_ANIME ?? '127230'
-const LIB = process.env.KURO_LIB
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const ANIME = process.env.YORU_ANIME ?? '127230'
+const LIB = process.env.YORU_LIB
 const SHOTS = process.env.SHOTS ?? '.'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -34,7 +34,7 @@ await post('/api/local/scan', {})
 let file
 for (let i = 0; i < 30 && !file; i++) {
   await sleep(1000)
-  file = ((await api('/api/local/files')).body?.items ?? []).find((f) => String(f.path ?? '').includes('Kuro Test Show - 01'))
+  file = ((await api('/api/local/files')).body?.items ?? []).find((f) => String(f.path ?? '').includes('Yoru Test Show - 01'))
 }
 check(!!file, 'the test file is in the library')
 await post('/api/local/assign', { id: file.id, animeId: Number(ANIME), episode: 1 })

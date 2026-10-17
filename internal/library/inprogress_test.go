@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"kuro/internal/store"
+	"yoru/internal/store"
 )
 
 // A finished film bigger than the budget, played a little and left for later: the

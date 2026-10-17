@@ -6,10 +6,10 @@ import { createInterface } from 'node:readline'
 import { join } from 'node:path'
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
-const LIB = process.env.KURO_LIB
-const REPO = process.env.KURO_REPO
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
+const LIB = process.env.YORU_LIB
+const REPO = process.env.YORU_REPO
 const SHOTS = process.env.SHOTS ?? '.'
 // The same arithmetic as run-player-check.mjs: the engine's peer port, and the indexer port it wrote.
 const PORT = Number(new URL(BASE).port)
@@ -56,7 +56,7 @@ check(!!title, 'the show is known to the instance', title)
 
 // The swarm: one torrent per episode, plus the site that lists them.
 const swarm = spawn('go', ['run', './scripts/e2e-swarm',
-  '-src', join(LIB, 'Kuro Test Show - 01.mkv'), '-dir', join(LIB, '..', 'swarm'), '-title', title,
+  '-src', join(LIB, 'Yoru Test Show - 01.mkv'), '-dir', join(LIB, '..', 'swarm'), '-title', title,
   '-count', String(EPISODES), '-listen', String(SEED_PORT), '-peer', `127.0.0.1:${PEER_PORT}`,
   '-http', `127.0.0.1:${PORT + 2000}`,
 ], { cwd: REPO, stdio: ['ignore', 'pipe', 'inherit'] })

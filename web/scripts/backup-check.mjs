@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const shots = process.env.SHOTS ?? '.'
 
 let failures = 0
@@ -36,7 +36,7 @@ const href = await jsonLink.getAttribute('href')
 check(href?.startsWith('/api/library/export?format=json'), 'export link points at the API', href ?? '')
 const exported = await api('/api/library/export')
 check(
-  exported.ok && exported.body?.kind === 'kuro.library',
+  exported.ok && exported.body?.kind === 'yoru.library',
   'export answers with a library file',
   `${exported.body?.entries?.length ?? 0} entries`,
 )
@@ -45,9 +45,9 @@ check(
   'export is served as a download',
 )
 
-// Import a file: one entry the seeded catalogue knows, one it does not.
+// Import a file: one entry the seeded catalogue knows, one it does not. A backup kuro made, which still reads.
 const known = exported.body?.entries?.[0]?.animeId ?? 127230
-const file = join(tmpdir(), 'kuro-backup-check.json')
+const file = join(tmpdir(), 'yoru-backup-check.json')
 writeFileSync(
   file,
   JSON.stringify({
@@ -71,7 +71,7 @@ await page.screenshot({ path: join(shots, 'backup.png') })
 
 // ---------------------------------------------------------------- components
 await page.goto(`${BASE}/settings?tab=About`)
-await page.getByText('Programs kuro uses').waitFor({ timeout: 10_000 })
+await page.getByText('Programs Yoru uses').waitFor({ timeout: 10_000 })
 const rows = await page.locator('text=Torrent engine').count()
 check(rows === 1, 'components are listed in Settings, not only on the setup page')
 await page.screenshot({ path: join(shots, 'components.png') })

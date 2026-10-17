@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/library"
-	"kuro/internal/mal"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/library"
+	"yoru/internal/mal"
+	"yoru/internal/store"
 )
 
 func (h *harness) doJSON(t *testing.T, method, target string, body any) (*http.Response, map[string]any) {

@@ -5,7 +5,9 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { cx, relativeTime } from '../lib/format'
 import { useNotifications, type Notification } from '../lib/queries'
-import { ConfirmInline, useDismiss, useModalFocus } from './ui'
+import { ConfirmInline } from './ui'
+import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
+import { desktopNotifyWanted, notificationTarget } from '../lib/notifications'
 
 /** New episodes at a glance, handled in place, linking out only when there is more. */
 export function NotificationPanel() {
@@ -34,7 +36,7 @@ export function NotificationPanel() {
     onSuccess: refresh,
   })
 
-  const box = trigger.current?.getBoundingClientRect()
+  const box = useAnchorBox(trigger, open)
 
   return (
     <div className="relative shrink-0" ref={ref}>
@@ -189,16 +191,7 @@ function Row({
   )
 }
 
-export const DESKTOP_NOTIFY_KEY = 'kuro.notify.desktop'
-const SEEN_KEY = 'kuro.notify.seen'
-
-export function desktopNotifyWanted(): boolean {
-  try {
-    return localStorage.getItem(DESKTOP_NOTIFY_KEY) === '1'
-  } catch {
-    return false
-  }
-}
+const SEEN_KEY = 'yoru.notify.seen'
 
 // Raises a system notification per new unread item; the first poll only marks the spot, replaying nothing.
 function useDesktopNotifications(items?: Notification[]) {
@@ -219,7 +212,7 @@ function useDesktopNotifications(items?: Notification[]) {
     }
     if (!first && desktopNotifyWanted() && Notification.permission === 'granted') {
       for (const n of items.filter((n) => n.id > seen && !n.read).reverse()) {
-        const note = new Notification(n.title, { body: n.body, tag: `kuro-${n.id}` })
+        const note = new Notification(n.title, { body: n.body, tag: `yoru-${n.id}` })
         note.onclick = () => {
           window.focus()
           window.location.assign(notificationTarget(n))
@@ -234,11 +227,6 @@ function useDesktopNotifications(items?: Notification[]) {
       }
     }
   }, [items])
-}
-
-export function notificationTarget(n: Notification): string {
-  if (n.kind === 'update') return '/settings?tab=About'
-  return n.animeId ? `/watch/${n.animeId}/${n.episode || 1}` : '#'
 }
 
 function BellIcon() {

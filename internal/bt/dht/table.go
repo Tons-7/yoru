@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"kuro/internal/bt/dht/int160"
+	"yoru/internal/bt/dht/int160"
 )
 
 // Node table, with indexes on distance from root ID to bucket, and node addr.

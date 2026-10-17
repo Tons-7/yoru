@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/bt"
+	"yoru/internal/bt"
 )
 
 // Two releases with one name and different content live in their own folders; deleting one leaves the

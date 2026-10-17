@@ -9,9 +9,9 @@ import (
 	"net"
 
 	"github.com/anacrolix/missinggo/v2"
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 
-	"kuro/internal/bt/tracker/udp"
+	"yoru/internal/bt/tracker/udp"
 )
 
 type torrent struct {
@@ -26,7 +26,7 @@ type server struct {
 	t     map[[20]byte]torrent
 }
 
-func marshal(parts ...interface{}) (ret []byte, err error) {
+func marshal(parts ...any) (ret []byte, err error) {
 	var buf bytes.Buffer
 	for _, p := range parts {
 		err = binary.Write(&buf, binary.BigEndian, p)
@@ -38,8 +38,8 @@ func marshal(parts ...interface{}) (ret []byte, err error) {
 	return
 }
 
-func (s *server) respond(addr net.Addr, rh udp.ResponseHeader, parts ...interface{}) (err error) {
-	b, err := marshal(append([]interface{}{rh}, parts...)...)
+func (s *server) respond(addr net.Addr, rh udp.ResponseHeader, parts ...any) (err error) {
+	b, err := marshal(append([]any{rh}, parts...)...)
 	if err != nil {
 		return
 	}

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/indexer"
-	"kuro/internal/store"
+	"yoru/internal/indexer"
+	"yoru/internal/store"
 )
 
 // A show mid-cour: five episodes out, the sixth broadcasting tomorrow.
@@ -51,7 +51,7 @@ func pollWith(t *testing.T, st *store.Store, results []indexer.Torrent) WatchRep
 	return rep
 }
 
-// The reported bug: on Sunday kuro announced an episode airing the next Saturday, then failed to play it.
+// The reported bug: on Sunday the app announced an episode airing the next Saturday, then failed to play it.
 func TestNoNotificationBeforeTheEpisodeAirs(t *testing.T) {
 	tomorrow := time.Now().Add(24 * time.Hour).Unix()
 	st := airingStore(t, 6, tomorrow, 5)

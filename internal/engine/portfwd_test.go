@@ -21,7 +21,7 @@ func TestPortForwardingIsSaid(t *testing.T) {
 	for msg, want := range map[string]int{
 		"the router forwards the peer port":                                                           1,
 		"the router refused to forward the peer port":                                                 1,
-		"no router answered for port forwarding; peers reach kuro only if the peer port is forwarded": 1,
+		"no router answered for port forwarding; peers reach Yoru only if the peer port is forwarded": 1,
 	} {
 		if got := lines.count(msg); got != want {
 			t.Errorf("%q said %d times; want %d", msg, got, want)

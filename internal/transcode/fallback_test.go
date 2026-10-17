@@ -17,8 +17,8 @@ import (
 // The test binary doubles as an ffmpeg that refuses one encoder and passes the
 // rest to the real one. A batch file cannot carry "%d.mp4" through cmd.exe intact.
 func TestMain(m *testing.M) {
-	if real := os.Getenv("KURO_FAKE_FFMPEG"); real != "" {
-		os.Exit(fakeFFmpeg(real, os.Getenv("KURO_FAKE_FAIL"), os.Args[1:]))
+	if real := os.Getenv("YORU_FAKE_FFMPEG"); real != "" {
+		os.Exit(fakeFFmpeg(real, os.Getenv("YORU_FAKE_FAIL"), os.Args[1:]))
 	}
 	os.Exit(m.Run())
 }
@@ -43,8 +43,8 @@ func fakeFFmpeg(real, refuse string, args []string) int {
 // fakeBinary points the package at the test binary as ffmpeg, refusing one encoder.
 func fakeBinary(t *testing.T, ffmpeg, refuse string) string {
 	t.Helper()
-	t.Setenv("KURO_FAKE_FFMPEG", absolute(ffmpeg))
-	t.Setenv("KURO_FAKE_FAIL", refuse)
+	t.Setenv("YORU_FAKE_FFMPEG", absolute(ffmpeg))
+	t.Setenv("YORU_FAKE_FAIL", refuse)
 	return os.Args[0]
 }
 

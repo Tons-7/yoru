@@ -1,8 +1,8 @@
 // A release group preferred for one show only, and the release picking that follows.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 
 let failures = 0
 const check = (ok, label, detail = '') => {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/score"
-	"kuro/internal/store"
+	"yoru/internal/score"
+	"yoru/internal/store"
 )
 
 // A release chosen by hand is recorded as such, so the identity check cannot replace it on the next play.
@@ -74,7 +74,7 @@ func TestPrepareDoesNotRepeatAFreshResolve(t *testing.T) {
 	eventually(t, "a second resolve", func() bool { return idx.searches() > searched })
 }
 
-// A library row whose file was deleted outside kuro no longer stands in for the episode: the queue
+// A library row whose file was deleted outside Yoru no longer stands in for the episode: the queue
 // downloads it, and the row is marked missing.
 func TestAStaleLibraryRowDoesNotStandInForTheEpisode(t *testing.T) {
 	engine := newFakeEngine()

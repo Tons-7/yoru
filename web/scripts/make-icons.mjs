@@ -1,4 +1,4 @@
-// Renders public/icon.svg to the PNGs Android wants to install kuro as an app.
+// Renders public/icon.svg to the PNGs Android wants to install Yoru as an app.
 // Run from web/ after changing the icon: node scripts/make-icons.mjs
 import { readFileSync } from 'node:fs'
 import { chromium } from 'playwright'

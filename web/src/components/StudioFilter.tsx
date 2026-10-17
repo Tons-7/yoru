@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, query } from '../lib/api'
 import { cx } from '../lib/format'
-import { TextInput, useDebounced, useDismiss, useModalFocus } from './ui'
+import { TextInput } from './ui'
+import { useAnchorBox, useDebounced, useDismiss, useModalFocus } from '../lib/hooks'
 
 interface Studio {
   id: number
@@ -24,7 +25,7 @@ export function StudioFilter({
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
-  const box = trigger.current?.getBoundingClientRect()
+  const box = useAnchorBox(trigger, open)
   // As FilterMenu: focus goes in on open and back to the pill on close.
   const menuRef = useRef<HTMLDivElement>(null)
   useModalFocus(menuRef, open)

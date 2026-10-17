@@ -28,7 +28,7 @@ check(
 )
 check(parseNotes(''), [], 'empty notes are nothing')
 check(
-  spans('Use **Keep all** or `F`, as [the downloads page](https://github.com/Tons-7/kuro/pull/1) says.'),
+  spans('Use **Keep all** or `F`, as [the downloads page](https://github.com/Tons-7/yoru/pull/1) says.'),
   [
     { kind: 'text', text: 'Use ' },
     { kind: 'bold', text: 'Keep all' },

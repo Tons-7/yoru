@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/bt"
+	"yoru/internal/bt"
 )
 
 // While one downloads, complete torrents stay off the network and seed again after; a paused one wants nothing.

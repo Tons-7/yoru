@@ -15,13 +15,21 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
-	"kuro/internal/bt"
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/torrent"
 )
 
-// bigFile is one size-byte file of random data in pieces of pieceLen, served by a seeder at bps.
-func bigFile(t *testing.T, size, pieceLen int64, bps int) (metainfo.MetaInfo, *net.TCPAddr) {
+// bigFile is one size-byte file of random data in pieces of pieceLen, served by a seeder at each rate.
+func bigFile(t *testing.T, size, pieceLen int64, rates ...int) (metainfo.MetaInfo, []*net.TCPAddr) {
+	t.Helper()
+	mi, seeds, _ := bigFileSeeders(t, size, pieceLen, rates...)
+	return mi, seeds
+}
+
+// bigFileSeeders is bigFile with the seeding clients, to look at their peers.
+func bigFileSeeders(t *testing.T, size, pieceLen int64, rates ...int) (metainfo.MetaInfo, []*net.TCPAddr, []*bt.Client) {
 	t.Helper()
 	dir := t.TempDir()
 	data := make([]byte, size)
@@ -42,27 +50,34 @@ func bigFile(t *testing.T, size, pieceLen int64, bps int) (metainfo.MetaInfo, *n
 	if mi.InfoBytes, err = bencode.Marshal(info); err != nil {
 		t.Fatal(err)
 	}
-	s := seeder(t, dir, mi, func(cfg *bt.ClientConfig) {
-		cfg.UploadRateLimiter = rate.NewLimiter(rate.Limit(bps), 64<<10)
-	})
-	return mi, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: s.LocalPort()}
+	var seeds []*net.TCPAddr
+	var clients []*bt.Client
+	for _, bps := range rates {
+		s := seeder(t, dir, mi, func(cfg *bt.ClientConfig) {
+			cfg.UploadRateLimiter = rate.NewLimiter(rate.Limit(bps), 64<<10)
+		})
+		seeds = append(seeds, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: s.LocalPort()})
+		clients = append(clients, s)
+	}
+	return mi, seeds, clients
 }
 
-// A far read (a seek, MKV Cues) waited out a peer's whole queue: 4.8-11 s with 500 queued at 2 MiB/s.
-func TestFarReadIsNotQueuedBehindOtherPieces(t *testing.T) {
-	const pieceLen, size, target, bps = 256 << 10, 96 << 20, 80 << 20, 2 << 20
-	mi, peer := bigFile(t, size, pieceLen, bps)
-	var outstanding, useful, asked, got atomic.Int64
-	e, id := oneSeedEngine(t, mi, peer, nil, func(cfg *bt.ClientConfig) {
+// A far read (a seek, MKV Cues) waited for the next refill, then behind the peer's queue: about 1 s at 2 MiB/s.
+func TestFarReadIsNotQueuedBehindOtherPieces(t *testing.T) { farReads(t, 2<<20) }
+
+// Whichever peer hears of a seek first takes it; a quicker one takes it over rather than wait on a slow one.
+func TestFarReadGoesToTheQuickerPeer(t *testing.T) { farReads(t, 64<<10, 2<<20) }
+
+// farReads seeks three times while the file downloads from seeders at rates, each read timed to its chunk.
+func farReads(t *testing.T, rates ...int) {
+	const pieceLen, size, chunk = 1 << 20, 96 << 20, 16 << 10
+	mi, seeds := bigFile(t, size, pieceLen, rates...)
+	var outstanding, useful, wanted, asked atomic.Int64
+	e, id := seedEngine(t, mi, seeds, nil, func(cfg *bt.ClientConfig) {
 		cfg.Callbacks.SentRequest = append(cfg.Callbacks.SentRequest, func(ev bt.PeerRequestEvent) {
 			outstanding.Add(1)
-			if int(ev.Request.Index) == target/pieceLen {
+			if int64(ev.Request.Index)*pieceLen+int64(ev.Request.Begin) == wanted.Load() {
 				asked.CompareAndSwap(0, time.Now().UnixNano())
-			}
-		})
-		cfg.Callbacks.ReceivedUsefulData = append(cfg.Callbacks.ReceivedUsefulData, func(ev bt.ReceivedUsefulDataEvent) {
-			if int(ev.Message.Index) == target/pieceLen {
-				got.Store(time.Now().UnixNano())
 			}
 		})
 		cfg.Callbacks.DeletedRequest = append(cfg.Callbacks.DeletedRequest, func(bt.PeerRequestEvent) { outstanding.Add(-1) })
@@ -71,47 +86,64 @@ func TestFarReadIsNotQueuedBehindOtherPieces(t *testing.T) {
 		})
 	})
 
-	// The file downloads at full speed, so the peer's queue is as deep as it gets.
+	// The file downloads at full speed, so the queues are as deep as they get.
 	time.Sleep(4 * time.Second)
 	en, _ := e.entryByID(id)
-	if en.t.Piece(target / pieceLen).State().Complete {
-		t.Fatal("target piece already downloaded; move it further out")
+	var bound int64
+	for _, bps := range rates {
+		bound += int64(float64(bps)*bt.RequestQueueTime.Seconds()/chunk) + int64(bt.MinRequestQueue)
 	}
-	queued := outstanding.Load()
-	req, _ := http.NewRequest(http.MethodGet, e.Client().StreamURL(id, 0), nil)
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", target, target+16<<10-1))
-	before, start := useful.Load(), time.Now()
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	if outstanding.Load() > bound {
+		t.Errorf("%d requests queued; %s of the peers' speed is %d", outstanding.Load(), bt.RequestQueueTime, bound)
 	}
-	_, err = io.Copy(io.Discard, res.Body)
-	res.Body.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	took, ahead := time.Since(start), useful.Load()-before
-	since := func(ns int64) float64 { return time.Duration(ns - start.UnixNano()).Seconds() }
-	t.Logf("%d queued at the read; it took %.2fs, %.1f MiB arriving first; asked at %.2fs, last chunk at %.2fs",
-		queued, took.Seconds(), float64(ahead)/(1<<20), since(asked.Load()), since(got.Load()))
-	if bound := int64(bps*bt.RequestQueueTime.Seconds()/(16<<10)) + int64(bt.MinRequestQueue); queued > bound {
-		t.Errorf("%d requests queued to one peer; %s of its speed is %d", queued, bt.RequestQueueTime, bound)
-	}
-	// Asked for at once; the rest of the piece can trail by refills until it goes out whole, past the queue.
-	if asked.Load() == 0 || since(asked.Load()) > 1 {
-		t.Errorf("the far piece was asked for at %.2fs; want at once", since(asked.Load()))
-	}
-	if took > 20*time.Second {
-		t.Errorf("far read took %s", took)
+	// Mid-piece, as seeks land, and at uneven gaps so they fall at different points of the refill rhythm.
+	for i, target := range []int64{80<<20 + 768<<10, 60<<20 + 304<<10, 88<<20 + 912<<10} {
+		// Pieces come in a spread order, so the nearest one with nothing of it here yet, wrapping round.
+		for tries := 0; ; tries++ {
+			if s := en.t.Piece(int(target / pieceLen)).State(); !s.Complete && !s.Partial {
+				break
+			}
+			if tries == size/pieceLen {
+				t.Fatalf("seek %d: every piece has started downloading", i)
+			}
+			target = (target + pieceLen) % size
+		}
+		queued := outstanding.Load()
+		wanted.Store(target)
+		asked.Store(0)
+		req, _ := http.NewRequest(http.MethodGet, e.Client().StreamURL(id, 0), nil)
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", target, target+chunk-1))
+		before, start := useful.Load(), time.Now()
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		took, ahead := time.Since(start), useful.Load()-before
+		at := "before the seek"
+		if ns := asked.Load(); ns != 0 {
+			at = fmt.Sprintf("at %.2fs", time.Duration(ns-start.UnixNano()).Seconds())
+		}
+		t.Logf("seek %d: %d queued; took %.2fs with %.2f MiB arriving first; asked %s",
+			i, queued, took.Seconds(), float64(ahead)/(1<<20), at)
+		// Asked at once, ahead of the queue and from the seek on: only what was already on its way comes first.
+		if took > 250*time.Millisecond {
+			t.Errorf("seek %d took %s", i, took)
+		}
+		time.Sleep(time.Duration(700+600*i) * time.Millisecond)
 	}
 }
 
 // The queue must cost no speed: a peer 150 ms away still gives nearly all its rate.
 func TestFarPeerKeepsItsSpeed(t *testing.T) {
 	const bps = 3 << 20
-	mi, peer := bigFile(t, 64<<20, 256<<10, bps)
+	mi, seeds := bigFile(t, 64<<20, 256<<10, bps)
 	var useful atomic.Int64
-	oneSeedEngine(t, mi, peer, delayDialer{delay: 150 * time.Millisecond}, func(cfg *bt.ClientConfig) {
+	seedEngine(t, mi, seeds, delayDialer{delay: 150 * time.Millisecond}, func(cfg *bt.ClientConfig) {
 		cfg.Callbacks.ReceivedUsefulData = append(cfg.Callbacks.ReceivedUsefulData, func(ev bt.ReceivedUsefulDataEvent) {
 			useful.Add(int64(len(ev.Message.Piece)))
 		})
@@ -126,13 +158,48 @@ func TestFarPeerKeepsItsSpeed(t *testing.T) {
 	}
 }
 
-// oneSeedEngine adds the file to an engine whose only peer is the seeder; dialer replaces the plain ones.
-func oneSeedEngine(t *testing.T, mi metainfo.MetaInfo, peer *net.TCPAddr, dialer bt.Dialer,
-	configure func(*bt.ClientConfig)) (*Engine, int) {
+// Settings' download cap holds mid-download, and lifting it gives the speed back.
+func TestDownloadCap(t *testing.T) {
+	const bps, limit = 4 << 20, 1 << 20
+	mi, seeds := bigFile(t, 96<<20, 256<<10, bps)
+	var useful atomic.Int64
+	e, _ := seedEngine(t, mi, seeds, nil, func(cfg *bt.ClientConfig) {
+		cfg.Callbacks.ReceivedUsefulData = append(cfg.Callbacks.ReceivedUsefulData, func(ev bt.ReceivedUsefulDataEvent) {
+			useful.Add(int64(len(ev.Message.Piece)))
+		})
+	})
+	speed := func(over time.Duration) float64 {
+		// What was already on its way when the setting changed is not the new speed.
+		time.Sleep(time.Second)
+		from, at := useful.Load(), time.Now()
+		time.Sleep(over)
+		return float64(useful.Load()-from) / time.Since(at).Seconds()
+	}
+	e.SetLimits(torrent.Limits{DownloadBytes: limit, Upload: torrent.UploadWhileDownloading})
+	capped := speed(4 * time.Second)
+	e.SetLimits(torrent.Limits{Upload: torrent.UploadWhileDownloading})
+	free := speed(3 * time.Second)
+	t.Logf("%.2f MiB/s under a %.2f MiB/s cap, %.2f MiB/s without", capped/(1<<20), float64(limit)/(1<<20), free/(1<<20))
+	// The cap counts message overhead too, so useful data sits a little under it.
+	if capped > 1.1*limit || capped < 0.7*limit {
+		t.Errorf("%.2f MiB/s under a %.2f MiB/s cap", capped/(1<<20), float64(limit)/(1<<20))
+	}
+	if free < 2*limit {
+		t.Errorf("only %.2f MiB/s once the cap was lifted", free/(1<<20))
+	}
+}
+
+// seedEngine adds the file to an engine whose only peers are the seeders; dialer replaces the plain ones, and
+// setup runs before the engine starts.
+func seedEngine(t *testing.T, mi metainfo.MetaInfo, seeds []*net.TCPAddr, dialer bt.Dialer,
+	configure func(*bt.ClientConfig), setup ...func(*Engine)) (*Engine, int) {
 	t.Helper()
 	e, err := New(Options{CacheDir: t.TempDir(), SessionDir: t.TempDir()}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, f := range setup {
+		f(e)
 	}
 	e.configure = func(cfg *bt.ClientConfig) {
 		quietConfig(cfg)
@@ -141,7 +208,11 @@ func oneSeedEngine(t *testing.T, mi metainfo.MetaInfo, peer *net.TCPAddr, dialer
 			cfg.DialForPeerConns = false
 		}
 	}
-	e.onNew = func(tt *bt.Torrent) { tt.AddPeers([]bt.PeerInfo{{Addr: peer, Trusted: true}}) }
+	e.onNew = func(tt *bt.Torrent) {
+		for _, s := range seeds {
+			tt.AddPeers([]bt.PeerInfo{{Addr: s, Trusted: true}})
+		}
+	}
 	t.Cleanup(e.Stop)
 	cx := ctx(t)
 	if err := e.Ensure(cx); err != nil {

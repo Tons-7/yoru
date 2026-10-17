@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/store"
 )
 
 func TestPreferredGroupsSettingReachesPlaybackPreferences(t *testing.T) {

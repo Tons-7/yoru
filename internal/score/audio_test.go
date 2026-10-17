@@ -3,7 +3,7 @@ package score
 import (
 	"testing"
 
-	"kuro/internal/parse"
+	"yoru/internal/parse"
 )
 
 func TestAudioPreferenceFiltersDubOnlyReleases(t *testing.T) {

@@ -2,11 +2,12 @@ package krpc
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding"
 	"encoding/binary"
 	"fmt"
 	"math"
-	"math/rand"
+	mrand "math/rand/v2"
 	"net"
 )
 
@@ -27,7 +28,7 @@ func RandomNodeInfo(ipLen int) (ni NodeInfo) {
 	rand.Read(ni.ID[:])
 	ni.Addr.IP = make(net.IP, ipLen)
 	rand.Read(ni.Addr.IP)
-	ni.Addr.Port = rand.Intn(math.MaxUint16 + 1)
+	ni.Addr.Port = mrand.IntN(math.MaxUint16 + 1)
 	return
 }
 

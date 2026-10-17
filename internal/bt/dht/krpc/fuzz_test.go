@@ -1,5 +1,4 @@
 //go:build go1.18
-// +build go1.18
 
 package krpc
 
@@ -8,7 +7,7 @@ import (
 	"testing"
 
 	qt "github.com/frankban/quicktest"
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 // Check that if we can unmarshal a Msg that we can marshal it back without an error. We

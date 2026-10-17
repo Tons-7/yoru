@@ -1,6 +1,6 @@
 package webtorrent
 
 const (
-	tracerName        = "kuro.bt.webtorrent"
+	tracerName        = "yoru.bt.webtorrent"
 	webrtcConnTypeKey = "webtorrent.webrtc.conn.type"
 )

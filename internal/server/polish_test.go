@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/metadata"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/metadata"
+	"yoru/internal/store"
 )
 
 func TestLocalSearchAnswersFromTheLibrary(t *testing.T) {

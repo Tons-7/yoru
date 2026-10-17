@@ -1,4 +1,4 @@
-// Package firewall checks, and on request adds, the rule that lets other devices at home reach kuro.
+// Package firewall checks, and on request adds, the rule that lets other devices at home reach Yoru.
 package firewall
 
 import (
@@ -14,7 +14,7 @@ type Network struct {
 	Category  string `json:"category"`
 }
 
-// Rule is an inbound rule touching kuro: its port rule, or one Windows made for kuro.exe at its prompt.
+// Rule is an inbound rule touching Yoru: its port rule, or one Windows made for yoru.exe at its prompt.
 type Rule struct {
 	Name     string `json:"name"`
 	Action   string `json:"action"`
@@ -30,19 +30,19 @@ type Status struct {
 	Networks  []Network `json:"networks"`
 	// Port is the one these rules are judged for.
 	Port int `json:"port,omitempty"`
-	// PortRule is kuro's own rule for its port, if added.
+	// PortRule is Yoru's own rule for its port, if added.
 	PortRule *Rule `json:"portRule,omitempty"`
-	// Program lists the rules for kuro.exe; a Block among them beats any allow.
+	// Program lists the rules for yoru.exe; a Block among them beats any allow.
 	Program []Rule `json:"program"`
 
-	// Off Windows kuro only reports: which firewall is running, and what to do
-	// about it. Changing it there needs root and differs per distribution.
+	// Off Windows Yoru only reports which firewall runs and what to do; changing it there needs root and
+	// differs per distribution.
 	Firewall string `json:"firewall,omitempty"`
 	Hint     string `json:"hint,omitempty"`
 	Command  string `json:"command,omitempty"`
 }
 
-// Blocked reports a block rule for kuro.exe on a connected network's profile; it wins over every allow there.
+// Blocked reports a block rule for yoru.exe on a connected network's profile; it wins over every allow there.
 func (s Status) Blocked() bool {
 	for _, n := range s.Networks {
 		if s.blocks(profileOf(n)) {
@@ -133,10 +133,22 @@ func (s Status) Reachable() bool {
 }
 
 // RuleName carries the port, so a changed port gets a rule of its own.
-func RuleName(port int) string { return fmt.Sprintf("kuro (LAN, TCP %d)", port) }
+func RuleName(port int) string { return ruleName("Yoru", port) }
+
+// legacyRuleName is RuleName from before the rename; that rule names no program, so it still works.
+func legacyRuleName(port int) string { return ruleName("kuro", port) }
+
+func ruleName(app string, port int) string { return fmt.Sprintf("%s (LAN, TCP %d)", app, port) }
 
 // PeerRuleName names the pair of rules (TCP, UDP) for the torrent peer port.
-func PeerRuleName(port int) string { return fmt.Sprintf("kuro (torrent peers, %d)", port) }
+func PeerRuleName(port int) string { return peerRuleName("Yoru", port) }
+
+// legacyPeerRuleName's rules are for kuro.exe, so they no longer let peers in; allowing again replaces them.
+func legacyPeerRuleName(port int) string { return peerRuleName("kuro", port) }
+
+func peerRuleName(app string, port int) string {
+	return fmt.Sprintf("%s (torrent peers, %d)", app, port)
+}
 
 // ErrCancelled: the administrator prompt was declined.
 var ErrCancelled = fmt.Errorf("the administrator prompt was declined")

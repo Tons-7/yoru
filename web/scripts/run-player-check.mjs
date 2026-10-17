@@ -1,5 +1,5 @@
-// Builds, then runs a browser check (player-check.mjs by default) on a throwaway kuro, and tears it down.
-// Env: PORT=4399 (own scratch), KURO_ANIME=id, SKIP_BUILD=1, KEEP=1, BIN_ONLY=a,b|none, ANILIST_LIVE=1.
+// Builds, then runs a browser check (player-check.mjs by default) on a throwaway Yoru, and tears it down.
+// Env: PORT=4399 (own scratch), YORU_ANIME=id, SKIP_BUILD=1, KEEP=1, BIN_ONLY=a,b|none, ANILIST_LIVE=1.
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync, existsSync, openSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -14,7 +14,7 @@ const repo = resolve(webDir, '..')
 const PORT = process.env.PORT ?? '4399'
 // Which browser check to drive against the instance.
 const CHECK = process.argv[2] ?? process.env.CHECK ?? 'player-check.mjs'
-const ANIME = process.env.KURO_ANIME ?? '127230'
+const ANIME = process.env.YORU_ANIME ?? '127230'
 const SKIP_BUILD = process.env.SKIP_BUILD === '1'
 const KEEP = process.env.KEEP === '1'
 const URL = `http://127.0.0.1:${PORT}`
@@ -22,25 +22,25 @@ const URL = `http://127.0.0.1:${PORT}`
 const exe = (name) => (process.platform === 'win32' ? `${name}.exe` : name)
 const ffmpeg = join(repo, 'bin', exe('ffmpeg'))
 const DEFAULT_PORT = PORT === '4399'
-const scratch = join(tmpdir(), DEFAULT_PORT ? 'kuro-e2e' : `kuro-e2e-${PORT}`)
+const scratch = join(tmpdir(), DEFAULT_PORT ? 'yoru-e2e' : `yoru-e2e-${PORT}`)
 // Off the real app's 4240 and the other scripts' 4341–4347.
 const PEER_PORT = DEFAULT_PORT ? 4341 : Number(PORT) - 60
 const root = join(scratch, 'root')
 const appdata = join(scratch, 'appdata')
 const isolated = {
-  KURO_ROOT: root,
+  YORU_ROOT: root,
   // APPDATA too: the engine imports rqbit's per-user session when it has none.
   LOCALAPPDATA: appdata,
   APPDATA: appdata,
-  KURO_NO_WINDOW: '1',
+  YORU_NO_WINDOW: '1',
 }
 const lib = join(scratch, 'lib')
 const shots = join(scratch, 'shots')
 const serverLog = join(scratch, 'server.log')
 // The binary lives outside the scratch wiped each run, so SKIP_BUILD has something to reuse.
-// KURO_BIN_DIR: a build of its own, while another run still has the shared binary open.
-const binCache = process.env.KURO_BIN_DIR ?? join(tmpdir(), 'kuro-e2e-bin')
-const kuroExe = join(binCache, exe('kuro'))
+// YORU_BIN_DIR: a build of its own, while another run still has the shared binary open.
+const binCache = process.env.YORU_BIN_DIR ?? join(tmpdir(), 'yoru-e2e-bin')
+const yoruExe = join(binCache, exe('yoru'))
 
 let server
 // AniList answers come through a caching proxy (see anilist-cache.mjs) unless ANILIST_LIVE=1.
@@ -53,7 +53,7 @@ const run = (cmd, args, opts = {}) => {
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} exited ${r.status ?? r.signal}`)
 }
 
-// kuro also finds a program on PATH, so BIN_ONLY hides any copy installed there.
+// Yoru also finds a program on PATH, so BIN_ONLY hides any copy installed there.
 function binOnlyPath() {
   if (!process.env.BIN_ONLY) return {}
   const keep = process.env.BIN_ONLY.split(',')
@@ -110,7 +110,7 @@ ${cues.join('\n')}
         .join(''),
   )
 
-  const out = join(lib, 'Kuro Test Show - 01.mkv')
+  const out = join(lib, 'Yoru Test Show - 01.mkv')
   // Two audio tracks (low tone Japanese, high English) for the sub/dub switch to choose between.
   run(ffmpeg, [
     '-y', '-hide_banner', '-loglevel', 'error',
@@ -168,7 +168,7 @@ ${cues.join('\n')}
     '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-g', '48',
     '-c:a', 'aac', '-c:s', 'ass',
     '-metadata:s:s:0', 'language=eng', '-disposition:s:0', 'default',
-    join(lib, 'Kuro Test Show - 03.mkv'),
+    join(lib, 'Yoru Test Show - 03.mkv'),
   ])
 }
 
@@ -200,7 +200,7 @@ try {
   // there when a check starts it. The peer port is off the app's own.
   writeFileSync(
     join(root, 'config.toml'),
-    `addr = "127.0.0.1:${PORT}"\n${process.env.KURO_EXTRA_CONFIG ?? ''}\n[torrent]\nlisten_port = ${PEER_PORT}\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:${Number(PORT) + 2000}"\n`,
+    `addr = "127.0.0.1:${PORT}"\n${process.env.YORU_EXTRA_CONFIG ?? ''}\n[torrent]\nlisten_port = ${PEER_PORT}\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:${Number(PORT) + 2000}"\n`,
   )
 
   if (!SKIP_BUILD) {
@@ -209,9 +209,9 @@ try {
     run('npm run build', [], { cwd: webDir, shell: true })
     stage('building server (go)')
     mkdirSync(binCache, { recursive: true })
-    run('go', ['build', '-o', kuroExe, './cmd/kuro'], { cwd: repo })
+    run('go', ['build', '-o', yoruExe, './cmd/yoru'], { cwd: repo })
   }
-  if (!existsSync(kuroExe)) throw new Error(`no kuro binary at ${kuroExe}; run once without SKIP_BUILD`)
+  if (!existsSync(yoruExe)) throw new Error(`no Yoru binary at ${yoruExe}; run once without SKIP_BUILD`)
 
   stage('generating test episode')
   makeEpisode()
@@ -219,12 +219,12 @@ try {
   const upstream = {}
   if (process.env.ANILIST_LIVE !== '1') {
     anilist = spawn(process.execPath, [join(scriptDir, 'anilist-cache.mjs'), String(ANILIST_PORT)], { stdio: 'ignore' })
-    upstream.KURO_ANILIST_API = `http://127.0.0.1:${ANILIST_PORT}`
+    upstream.YORU_ANILIST_API = `http://127.0.0.1:${ANILIST_PORT}`
   }
 
   stage(`starting server on ${URL}`)
   const logFd = openSync(serverLog, 'w')
-  server = spawn(kuroExe, [], {
+  server = spawn(yoruExe, [], {
     cwd: root,
     // No app window: Playwright is the browser, and the window's profile blocks cleanup.
     env: { ...process.env, ...isolated, ...upstream, ...binOnlyPath() },
@@ -240,8 +240,8 @@ try {
     stdio: 'inherit',
     env: {
       ...process.env,
-      KURO_URL: URL, KURO_LIB: lib, KURO_ANIME: ANIME, SHOTS: shots,
-      KURO_DB: join(appdata, 'kuro', 'kuro.db'), KURO_REPO: repo,
+      YORU_URL: URL, YORU_LIB: lib, YORU_ANIME: ANIME, SHOTS: shots,
+      YORU_DB: join(appdata, 'yoru', 'yoru.db'), YORU_REPO: repo,
     },
   })
   process.exitCode = check.status ?? 1

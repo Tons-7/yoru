@@ -34,7 +34,7 @@ func TestOpenKeepsUnusualFolderNames(t *testing.T) {
 		if err := os.Mkdir(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		path := filepath.Join(dir, "kuro.db")
+		path := filepath.Join(dir, "yoru.db")
 		conn, err := Open(path)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

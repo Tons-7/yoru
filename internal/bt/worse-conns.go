@@ -101,14 +101,14 @@ func (me *worseConnSlice) Less(i, j int) bool {
 	return me.keys[i].Less(me.keys[j])
 }
 
-func (me *worseConnSlice) Pop() interface{} {
+func (me *worseConnSlice) Pop() any {
 	i := len(me.conns) - 1
 	ret := me.conns[i]
 	me.conns = me.conns[:i]
 	return ret
 }
 
-func (me *worseConnSlice) Push(x interface{}) {
+func (me *worseConnSlice) Push(x any) {
 	panic("not implemented")
 }
 

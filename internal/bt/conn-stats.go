@@ -3,7 +3,7 @@ package bt
 import (
 	"io"
 
-	pp "kuro/internal/bt/peer_protocol"
+	pp "yoru/internal/bt/peer_protocol"
 )
 
 // Various connection-level metrics. At the Torrent level these are aggregates. Chunks are messages

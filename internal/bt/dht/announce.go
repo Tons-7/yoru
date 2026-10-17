@@ -12,10 +12,10 @@ import (
 	"github.com/anacrolix/chansync/events"
 	"github.com/anacrolix/log"
 
-	"kuro/internal/bt/dht/int160"
-	dhtutil "kuro/internal/bt/dht/k-nearest-nodes"
-	"kuro/internal/bt/dht/krpc"
-	"kuro/internal/bt/dht/traversal"
+	"yoru/internal/bt/dht/int160"
+	dhtutil "yoru/internal/bt/dht/k-nearest-nodes"
+	"yoru/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/traversal"
 )
 
 // Maintains state for an ongoing Announce operation. An Announce is started by calling
@@ -130,14 +130,12 @@ func (s *Server) AnnounceTraversal(infoHash [20]byte, opts ...AnnounceOpt) (_ *A
 func (a *Announce) announceClosest() {
 	var wg sync.WaitGroup
 	a.traversal.Closest().Range(func(elem dhtutil.Elem) {
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			a.logger().Levelf(log.Debug,
 				"announce_peer to %v: %v",
 				elem, a.announcePeer(elem),
 			)
-			wg.Done()
-		}()
+		})
 	})
 	wg.Wait()
 }

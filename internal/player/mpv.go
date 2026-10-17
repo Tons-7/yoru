@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"kuro/internal/sound"
 	"log/slog"
 	"net"
 	"os"
@@ -16,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"yoru/internal/sound"
 )
 
 type EventKind string
@@ -97,7 +97,7 @@ func SubtitleLanguages(codes []string) string {
 
 type MPV struct {
 	binary string
-	// base names the IPC socket; each launch gets its own, so a dying mpv and a second kuro never answer.
+	// base names the IPC socket; each launch gets its own, so a dying mpv and a second Yoru never answer.
 	base     string
 	socket   string
 	launches atomic.Int64
@@ -160,7 +160,7 @@ func (m *MPV) Play(ctx context.Context, opts Options) error {
 		"--input-ipc-server=" + m.socket,
 		"--force-window=immediate",
 		"--keep-open=no",
-		"--title=" + orDefault(opts.Title, "kuro"),
+		"--title=" + orDefault(opts.Title, "Yoru"),
 		// The stream is served over HTTP by the engine; without a generous cache
 		// mpv re-requests aggressively and fights the piece scheduler.
 		"--cache=yes",

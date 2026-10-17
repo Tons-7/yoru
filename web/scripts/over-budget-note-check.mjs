@@ -2,8 +2,8 @@
 // The play answer and the downloads list are fed to the page, so no torrent is involved.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const ANIME = process.env.KURO_ANIME ?? '127230'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const ANIME = process.env.YORU_ANIME ?? '127230'
 const SHOTS = process.env.SHOTS ?? '.'
 
 let failures = 0

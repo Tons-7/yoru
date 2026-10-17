@@ -4,8 +4,19 @@ import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { api, hasFiller, type Episode } from '../lib/api'
 import { clockTime, cx, relativeTime } from '../lib/format'
-import { refreshDownloads, refreshListState, useDownloadQueue, useDownloads } from '../lib/queries'
-import { Badge, ConfirmInline, inputClass, TextInput, useDismiss } from './ui'
+import {
+  refreshDownloads,
+  refreshListState,
+  useDownloadQueue,
+  useDownloads,
+  useNow,
+  useUpNextEdit,
+} from '../lib/queries'
+import { isUnaired } from '../lib/episodes'
+import { Badge, ConfirmInline, inputClass, TextInput } from './ui'
+import { ListCheckGlyph, ListPlusGlyph } from './UpNext'
+import { useInUpNext } from '../lib/upnext'
+import { useAnchorBox, useDismiss } from '../lib/hooks'
 
 const PAGE_SIZE = 50
 
@@ -20,12 +31,6 @@ export function EpisodeKind({ episode }: { episode: Episode }) {
       {episode.recap && <Badge tone="recap">Recap</Badge>}
     </span>
   )
-}
-
-// An episode with an air date in the future has no release to find, so it is
-// shown as scheduled rather than offered as something to play or download.
-export function isUnaired(episode: Episode) {
-  return !!episode.airDate && episode.airDate * 1000 > Date.now()
 }
 
 function airDay(unix?: number) {
@@ -58,6 +63,7 @@ export function EpisodeList({
   /** The episode the page's main button would play. */
   upNext?: number
 }) {
+  const now = useNow()
   const [term, setTerm] = useState('')
   const [show, setShow] = useState<Show>('all')
   const [page, setPage] = useState(0)
@@ -82,6 +88,10 @@ export function EpisodeList({
     () => new Set((queue.data?.items ?? []).filter((q) => q.animeId === animeId && q.state === 'failed').map((q) => q.episode)),
     [queue.data, animeId],
   )
+  const listed = useInUpNext(animeId)
+  const upNextEdit = useUpNextEdit()
+  const toggleUpNext = (episode: number) =>
+    listed.has(episode) ? upNextEdit.remove.mutate({ animeId, episode }) : upNextEdit.add.mutate({ animeId, episode })
 
   const download = useMutation({
     meta: { inline: true },
@@ -111,21 +121,19 @@ export function EpisodeList({
 
   // Only the next unaired episode gets a row: it answers "when is the new one".
   const aired = useMemo(() => {
-    const now = Date.now() / 1000
     const out: Episode[] = []
     let shownUpcoming = false
     for (const e of episodes) {
-      const upcoming = !!e.airDate && e.airDate > now
-      if (upcoming) {
+      if (isUnaired(e, now)) {
         if (shownUpcoming) continue
         shownUpcoming = true
       }
       out.push(e)
     }
     return out
-  }, [episodes])
+  }, [episodes, now])
 
-  const released = aired.filter((e) => !isUnaired(e))
+  const released = aired.filter((e) => !isUnaired(e, now))
   const watchedCount = released.filter((e) => e.watched).length
   const downloadedCount = released.filter((e) => e.onDisk).length
 
@@ -146,7 +154,7 @@ export function EpisodeList({
   }, [aired, term, show])
 
   // Ticking N marks everything before it too; the first unwatched one says how far back that reaches.
-  const firstUnwatched = useMemo(() => aired.find((e) => !e.watched && !isUnaired(e)), [aired])
+  const firstUnwatched = useMemo(() => aired.find((e) => !e.watched && !isUnaired(e, now)), [aired, now])
   // Unticking N unwatches everything after it too, up to the last watched one.
   const lastWatched = useMemo(() => [...aired].reverse().find((e) => e.watched), [aired])
 
@@ -157,21 +165,24 @@ export function EpisodeList({
 
   // Open on the page holding the episode being watched, not on the first. Once
   // per episode: a refetch rebuilds `filtered` and would undo manual paging.
-  const placed = useRef<number | null>(null)
-  useEffect(() => {
-    if (!current || placed.current === current) return
+  // Set during render, so the first paint is already that page.
+  const [placedFor, setPlacedFor] = useState<number>()
+  if (current && placedFor !== current) {
     const index = filtered.findIndex((e) => e.number === current)
-    if (index < 0) return
-    placed.current = current
-    setPage(Math.floor(index / PAGE_SIZE))
-  }, [current, filtered])
-
-  // Not on mount: it would run after the effect above and undo it.
-  const typed = useRef(false)
-  useEffect(() => {
-    if (typed.current) setPage(0)
-    typed.current = true
-  }, [term, show])
+    if (index >= 0) {
+      setPlacedFor(current)
+      setPage(Math.floor(index / PAGE_SIZE))
+    }
+  }
+  // A new search or filter starts at its first page, from the change itself rather than an effect after it.
+  const search = (value: string) => {
+    setTerm(value)
+    setPage(0)
+  }
+  const filterBy = (value: Show) => {
+    setShow(value)
+    setPage(0)
+  }
 
   const searchable = episodes.length > 12
 
@@ -208,7 +219,7 @@ export function EpisodeList({
 
           <Filters
             value={show}
-            onChange={setShow}
+            onChange={filterBy}
             options={[
               { value: 'all', label: 'All' },
               { value: 'unwatched', label: 'Unwatched', hidden: watchedCount === 0 },
@@ -221,7 +232,7 @@ export function EpisodeList({
               <SearchGlyph />
               <input
                 value={term}
-                onChange={(e) => setTerm(e.target.value)}
+                onChange={(e) => search(e.target.value)}
                 placeholder={`Find an episode`}
                 aria-label="Search episodes"
                 className={cx(inputClass, 'w-full pl-8')}
@@ -234,7 +245,7 @@ export function EpisodeList({
       {compact && searchable && (
         <TextInput
           value={term}
-          onChange={(e) => setTerm(e.target.value)}
+          onChange={(e) => search(e.target.value)}
           placeholder={`Search ${episodes.length} episodes…`}
           aria-label="Search episodes"
           className="w-full"
@@ -253,7 +264,7 @@ export function EpisodeList({
                   onClick={() =>
                     setPicked((prev) => {
                       const next = new Set(prev)
-                      for (const e of paged) if (!isUnaired(e)) next.add(e.number)
+                      for (const e of paged) if (!isUnaired(e, now)) next.add(e.number)
                       return next
                     })
                   }
@@ -328,6 +339,7 @@ export function EpisodeList({
             key={episode.number}
             animeId={animeId}
             episode={episode}
+            unaired={isUnaired(episode, now)}
             watched={episode.watched}
             marksFrom={
               firstUnwatched && firstUnwatched.number < episode.number
@@ -345,6 +357,8 @@ export function EpisodeList({
             onToggle={selecting ? () => toggle(episode.number) : undefined}
             queued={busy.has(episode.number)}
             failed={failedEps.has(episode.number)}
+            listed={listed.has(episode.number)}
+            onUpNext={() => toggleUpNext(episode.number)}
           />
         ))}
         {paged.length === 0 && (
@@ -406,7 +420,7 @@ function RangeMenu({
   const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
 
-  const box = trigger.current?.getBoundingClientRect()
+  const box = useAnchorBox(trigger, open)
 
   return (
     <div className="relative" ref={ref}>
@@ -494,10 +508,18 @@ function EpisodeRow({
   onToggle,
   queued,
   failed,
+  unaired,
+  listed,
+  onUpNext,
 }: {
   animeId: number
   episode: Episode
   watched: boolean
+  /** On the Up next list; onUpNext adds or takes it off. */
+  listed: boolean
+  onUpNext: () => void
+  /** Not out yet, by the list's clock. */
+  unaired: boolean
   /** Ticking this one also marks every episode from here. */
   marksFrom?: number
   /** Unticking this one also unwatches every episode up to this one. */
@@ -532,7 +554,6 @@ function EpisodeRow({
     return () => cancelAnimationFrame(id)
   }, [active, compact])
 
-  const unaired = isUnaired(episode)
   const number = episode.display || episode.number
   const title = episode.titleEn || episode.titleJa || `Episode ${number}`
   // The server's rule, not the tick: a watched episode wound back is watched and resumable.
@@ -559,7 +580,7 @@ function EpisodeRow({
     <div
       className={cx(
         'relative shrink-0 overflow-hidden rounded-lg bg-base-850',
-        compact ? 'aspect-video w-24' : 'aspect-video w-28 sm:w-40',
+        compact ? 'aspect-video w-24' : 'aspect-video w-24 sm:w-40',
       )}
     >
       {(episode.still ?? cover) && (
@@ -605,7 +626,7 @@ function EpisodeRow({
       <div className="flex flex-wrap items-center gap-1.5">
         {upNext && !active && !unaired && (
           <span className="rounded-md bg-accent-500 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white uppercase">
-            Up next
+            Next
           </span>
         )}
         {active && (
@@ -631,6 +652,7 @@ function EpisodeRow({
           <span className="font-medium text-sky-300">Airs {relativeTime(episode.airDate!)}</span>
         ) : (
           <>
+            {listed && <span className="font-medium text-accent-300">In Up next</span>}
             {resumeAt !== undefined && (
               <span className="font-medium text-accent-300">Resume {clockTime(resumeAt)}</span>
             )}
@@ -691,7 +713,7 @@ function EpisodeRow({
         aria-label={tickLabel}
         title={mark.isError ? (mark.error as Error).message : tickLabel}
         className={cx(
-          'grid size-8 shrink-0 place-items-center rounded-full transition-colors pointer-coarse:size-11',
+          'tap relative grid size-8 shrink-0 place-items-center rounded-full transition-colors',
           mark.isError
             ? 'text-recap'
             : watched
@@ -727,13 +749,32 @@ function EpisodeRow({
         aria-label={isQueued ? `Episode ${number} queued` : `Download episode ${number}`}
         title={fetch.isError ? (fetch.error as Error).message : isQueued ? 'Queued' : 'Download'}
         className={cx(
-          'grid size-8 shrink-0 place-items-center rounded-full transition-colors pointer-coarse:size-11',
+          'tap relative grid size-8 shrink-0 place-items-center rounded-full transition-colors',
           fetch.isError ? 'text-recap' : isQueued ? 'text-emerald-300' : 'text-base-500 ring-1 ring-base-700 hover:bg-base-800 hover:text-base-100',
         )}
       >
         {isQueued ? <QueuedGlyph /> : <DownloadArrow />}
       </button>
     )
+
+  const queueUp = !unaired && !onToggle && (
+    <button
+      type="button"
+      onClick={onUpNext}
+      aria-pressed={listed}
+      aria-label={listed ? `Remove episode ${number} from Up next` : `Add episode ${number} to Up next`}
+      title={listed ? 'In Up next' : 'Add to Up next'}
+      // 32 px drawn, 44 px to a finger: three of these beside the title leave it room on a phone.
+      className={cx(
+        'tap relative grid size-8 shrink-0 place-items-center rounded-full transition-colors',
+        listed
+          ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
+          : 'text-base-500 ring-1 ring-base-700 hover:bg-base-800 hover:text-base-100',
+      )}
+    >
+      {listed ? <ListCheckGlyph /> : <ListPlusGlyph />}
+    </button>
+  )
 
   const shell = cx(
     'group/ep flex items-center gap-3 transition-colors',
@@ -784,6 +825,7 @@ function EpisodeRow({
             {thumb}
             {text}
           </Link>
+          {queueUp}
           {download}
           {tick}
         </div>

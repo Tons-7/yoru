@@ -20,7 +20,7 @@ export interface Character {
   voices?: Voice[]
 }
 
-export function useCharacters(animeId: number | undefined) {
+function useCharacters(animeId: number | undefined) {
   return useQuery({
     enabled: !!animeId,
     queryKey: ['characters', animeId],

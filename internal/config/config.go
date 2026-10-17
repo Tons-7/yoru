@@ -37,7 +37,7 @@ type Config struct {
 
 func (c Config) ConfigPath() string { return filepath.Join(c.root, "config.toml") }
 
-// StrayConfig is a "config.toml.txt" from Notepad's Save As, which kuro never reads.
+// StrayConfig is a "config.toml.txt" from Notepad's Save As, which Yoru never reads.
 func (c Config) StrayConfig() string {
 	p := c.ConfigPath() + ".txt"
 	if exists(p) {
@@ -49,7 +49,7 @@ func (c Config) StrayConfig() string {
 // Temporary: the root is in the temp directory (an exe run from a zip), where nothing written survives.
 func (c Config) Temporary() bool { return c.temporary }
 
-// Indexer is one torrent search site. None ship with kuro.
+// Indexer is one torrent search site. None ship with Yoru.
 type Indexer struct {
 	// Type is the feed format: "nyaa" or "tokyotosho".
 	Type string `toml:"type"`
@@ -176,7 +176,7 @@ func (c Config) TLSFiles() (cert, key string) {
 }
 
 func (c Config) DataDir() string      { return c.dataDir }
-func (c Config) DatabasePath() string { return filepath.Join(c.dataDir, "kuro.db") }
+func (c Config) DatabasePath() string { return c.dataFile(".db") }
 func (c Config) ProfileDir() string   { return filepath.Join(c.dataDir, "window") }
 func (c Config) Path(name string) string {
 	return filepath.Join(c.BinDir, name)
@@ -190,7 +190,7 @@ func ExeName(base string) string {
 	return base
 }
 
-// Tool finds a binary: kuro's bin/ copy, else one on PATH, else the bin/ path so an error says where.
+// Tool finds a binary: Yoru's bin/ copy, else one on PATH, else the bin/ path so an error says where.
 func (c Config) Tool(base string) string {
 	// ffprobe from the same install as ffmpeg: a mixed pair disagrees on streams and codecs.
 	if base == "ffprobe" {
@@ -243,10 +243,15 @@ func Load() (Config, error) {
 	}
 
 	cfg.root, cfg.temporary = root, underTemp(root)
-	cfg.dataDir = cfg.ResolveDataDir(cfg.Data)
+	if cfg.Data == "" {
+		cfg.dataDir = PrepareDataDir()
+	} else {
+		cfg.dataDir = cfg.ResolveDataDir(cfg.Data)
+		renameLegacyFiles(cfg.dataDir)
+	}
 	cfg.CacheDir = cfg.resolve(cfg.CacheDir, filepath.Join(root, "cache"))
 	cfg.BinDir = cfg.resolve(cfg.BinDir, filepath.Join(root, "bin"))
-	// The orphan cleanup deletes whatever sits in cache_dir that is not a download: kuro's own folders must not.
+	// The orphan cleanup deletes whatever sits in cache_dir that is not a download: Yoru's own folders must not.
 	for _, dir := range []string{root, cfg.dataDir, cfg.BinDir} {
 		if within(cfg.CacheDir, dir) {
 			return Config{}, fmt.Errorf("cache_dir %s holds %s; downloads need a folder of their own", cfg.CacheDir, dir)
@@ -260,9 +265,9 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-// Root holds config.toml, bin/ and cache/: beside the executable, or KURO_ROOT.
+// Root holds config.toml, bin/ and cache/: beside the executable, or YORU_ROOT (KURO_ROOT from before the rename).
 func rootDir() (string, error) {
-	if root := os.Getenv("KURO_ROOT"); root != "" {
+	if root := Env("ROOT"); root != "" {
 		return root, nil
 	}
 
@@ -295,26 +300,30 @@ func underTemp(dir string) bool {
 // DefaultDataDir is where the data lives when data_dir is empty: Local, since Roaming would sync the DB.
 func DefaultDataDir() string { return dataDir() }
 
-func dataDir() string {
+func dataDir() string { return appDataFor(Name) }
+
+func legacyDataDir() string { return appDataFor(Legacy) }
+
+func appDataFor(name string) string {
 	if d := os.Getenv("LOCALAPPDATA"); d != "" {
-		return filepath.Join(d, "kuro")
+		return filepath.Join(d, name)
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".kuro")
+	return filepath.Join(home, "."+name)
 }
 
 const template = `# Register an application at https://anilist.co/settings/developer
 # and set its redirect URL to exactly: http://localhost:4321/callback
 # Then visit http://localhost:4321/api/auth/login to connect your account.
 
-# Use 0.0.0.0:4321 to reach kuro from a phone or TV on the same network.
+# Use 0.0.0.0:4321 to reach Yoru from a phone or TV on the same network.
 # Off the host machine a token is required; GET /api/access prints the URL and
 # /api/access/qr.svg renders it as a QR code.
 addr = "127.0.0.1:4321"
 
-# Folders. Relative paths are beside kuro.exe; quote Windows paths with single
-# quotes ('D:\kuro\cache'). Restart after editing.
-# data_dir: database and window profile (default %LOCALAPPDATA%\kuro)
+# Folders. Relative paths are beside yoru.exe; quote Windows paths with single
+# quotes ('D:\Yoru\cache'). Restart after editing.
+# data_dir: database and window profile (default %LOCALAPPDATA%\yoru)
 # cache_dir: downloaded episodes, transcodes, thumbnails, updates
 # bin_dir: ffmpeg, mpv, shaders
 # data_dir = ""
@@ -324,7 +333,7 @@ addr = "127.0.0.1:4321"
 # VLC, when it is not on PATH or in Program Files: its folder or its binary.
 # vlc_path = 'E:\VideoLAN\VLC'
 
-# HTTPS, which a phone needs to install kuro as an app: a certificate and its key
+# HTTPS, which a phone needs to install Yoru as an app: a certificate and its key
 # (for example from "tailscale cert"). http://localhost keeps working beside it.
 # tls_cert = 'my-pc.tailnet.ts.net.crt'
 # tls_key = 'my-pc.tailnet.ts.net.key'
@@ -339,7 +348,7 @@ client_secret = ""
 client_id = ""
 client_secret = ""
 
-# Torrent search sites, one block each. kuro ships with none. type is the feed
+# Torrent search sites, one block each. Yoru ships with none. type is the feed
 # format ("nyaa" or "tokyotosho"); adult = true marks a site searched only for
 # adult titles. The first listed wins ties. Restart after editing.
 #

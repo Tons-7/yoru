@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"kuro/internal/indexer"
-	"kuro/internal/parse"
-	"kuro/internal/score"
-	"kuro/internal/store"
+	"yoru/internal/indexer"
+	"yoru/internal/parse"
+	"yoru/internal/score"
+	"yoru/internal/store"
 )
 
 // Watcher polls followed shows for new episodes, raises notifications, and optionally grabs them.

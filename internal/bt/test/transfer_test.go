@@ -15,9 +15,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 
-	"kuro/internal/bt"
-	"kuro/internal/bt/internal/testutil"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt"
+	"yoru/internal/bt/internal/testutil"
+	"yoru/internal/bt/storage"
 )
 
 type fileCacheClientStorageFactoryParams struct {
@@ -203,21 +203,17 @@ func testSeedAfterDownloading(t *testing.T, disableUtp bool) {
 		// Prioritize a region, and ensure it's been hashed, so we want connections.
 		r := llg.NewReader()
 		llg.VerifyData()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer r.Close()
 			qt.Check(t, qt.IsNil(iotest.TestReader(r, []byte(testutil.GreetingFileContents))))
-		}()
+		})
 	}
 	go leecherGreeting.AddClientPeer(seeder)
 	go leecherGreeting.AddClientPeer(leecherLeecher)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		leecherGreeting.DownloadAll()
 		leecher.WaitAll()
-	}()
+	})
 	wg.Wait()
 }
 

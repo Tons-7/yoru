@@ -5,7 +5,7 @@ import (
 
 	qt "github.com/go-quicktest/qt"
 
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 func TestIssue949LastPieceZeroPadding(t *testing.T) {

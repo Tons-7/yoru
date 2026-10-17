@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/db"
-	"kuro/internal/indexer"
-	"kuro/internal/score"
-	"kuro/internal/store"
+	"yoru/internal/db"
+	"yoru/internal/indexer"
+	"yoru/internal/score"
+	"yoru/internal/store"
 )
 
 const slimeS3 = 156822

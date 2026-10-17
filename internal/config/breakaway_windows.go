@@ -5,8 +5,8 @@ import (
 	"syscall"
 )
 
-// CREATE_BREAKAWAY_FROM_JOB. kuro runs in a job object so helpers cannot outlive
-// it; the user's own browser breaks away so it survives kuro quitting.
+// CREATE_BREAKAWAY_FROM_JOB. Yoru runs in a job object so helpers cannot outlive it; the user's own browser
+// breaks away so it survives Yoru quitting.
 const breakawayFromJob = 0x01000000
 
 func detach(cmd *exec.Cmd) {
@@ -16,5 +16,5 @@ func detach(cmd *exec.Cmd) {
 	cmd.SysProcAttr.CreationFlags |= breakawayFromJob
 }
 
-// Detach lets a child outlive kuro: the browser window, or the binary an update hands over to.
+// Detach lets a child outlive Yoru: the browser window, or the binary an update hands over to.
 func Detach(cmd *exec.Cmd) { detach(cmd) }

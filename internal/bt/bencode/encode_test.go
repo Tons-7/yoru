@@ -10,7 +10,7 @@ import (
 )
 
 type random_encode_test struct {
-	value    interface{}
+	value    any
 	expected string
 }
 

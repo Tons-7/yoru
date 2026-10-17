@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kuro/internal/db"
+	"yoru/internal/db"
 )
 
 func newTestStore(t *testing.T) *Store {

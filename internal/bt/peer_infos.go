@@ -1,10 +1,10 @@
 package bt
 
 import (
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 
-	"kuro/internal/bt/peer_protocol"
-	"kuro/internal/bt/tracker"
+	"yoru/internal/bt/peer_protocol"
+	"yoru/internal/bt/tracker"
 )
 
 // Helper-type used to bulk-manage PeerInfos.

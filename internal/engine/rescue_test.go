@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// A read stuck behind a peer that stopped sending waited 40-120 s; these run at a tenth of kuro's timings.
+// A read stuck behind a peer that stopped sending waited 40-120 s; these run at a tenth of Yoru's timings.
 func silentKnobsFast() silentKnobs {
 	return silentKnobs{mib: 32, pieceKiB: 256, healthyKiB: 384, slowKiB: 32, videoKiB: 96, reqq: 1024,
 		observe: 20 * time.Second, fast: true}

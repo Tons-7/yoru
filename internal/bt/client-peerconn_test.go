@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 
-	"kuro/internal/bt/internal/testutil"
+	"yoru/internal/bt/internal/testutil"
 )
 
 func TestPeerConnEstablished(t *testing.T) {

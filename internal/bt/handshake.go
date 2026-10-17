@@ -8,8 +8,8 @@ import (
 	"net"
 	"time"
 
-	"kuro/internal/bt/mse"
-	pp "kuro/internal/bt/peer_protocol"
+	"yoru/internal/bt/mse"
+	pp "yoru/internal/bt/peer_protocol"
 )
 
 // Wraps a raw connection and provides the interface we want for using the

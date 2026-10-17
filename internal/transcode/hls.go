@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"kuro/internal/sound"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -15,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"yoru/internal/sound"
 )
 
 // Six seconds: short enough to seek responsively, long enough that a film's playlist stays manageable.

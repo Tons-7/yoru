@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 func TestUnmarshalBadError(t *testing.T) {

@@ -15,10 +15,10 @@ import (
 
 	"github.com/anacrolix/missinggo/httptoo"
 
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/tracker/shared"
-	"kuro/internal/bt/tracker/udp"
-	"kuro/internal/bt/version"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/tracker/shared"
+	"yoru/internal/bt/tracker/udp"
+	"yoru/internal/bt/version"
 )
 
 var vars = expvar.NewMap("tracker/http")

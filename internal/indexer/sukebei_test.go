@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-// Sukebei's XML namespace still yields hashes. Opt-in: KURO_LIVE=1 KURO_SUKEBEI=<url> go test -run Sukebei
+// Sukebei's XML namespace still yields hashes. Opt-in: YORU_LIVE=1 YORU_SUKEBEI=<url> go test -run Sukebei
 func TestSukebeiReturnsUsableTorrents(t *testing.T) {
-	base := os.Getenv("KURO_SUKEBEI")
-	if os.Getenv("KURO_LIVE") == "" || base == "" {
-		t.Skip("set KURO_LIVE=1 and KURO_SUKEBEI to run against the network")
+	base := os.Getenv("YORU_SUKEBEI")
+	if os.Getenv("YORU_LIVE") == "" || base == "" {
+		t.Skip("set YORU_LIVE=1 and YORU_SUKEBEI to run against the network")
 	}
 
 	got, err := NewSukebei(base).Search(context.Background(), Query{Text: "Someya"})

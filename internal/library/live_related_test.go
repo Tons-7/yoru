@@ -5,13 +5,13 @@ import (
 	"os"
 	"testing"
 
-	"kuro/internal/anilist"
+	"yoru/internal/anilist"
 )
 
-// Conan (two TV entries, dozens of films) is the hard case. Opt-in: KURO_LIVE=1 go test -run LiveRelated -v
+// Conan (two TV entries, dozens of films) is the hard case. Opt-in: YORU_LIVE=1 go test -run LiveRelated -v
 func TestLiveRelatedFindsTheFilms(t *testing.T) {
-	if os.Getenv("KURO_LIVE") == "" {
-		t.Skip("set KURO_LIVE=1 to query AniList")
+	if os.Getenv("YORU_LIVE") == "" {
+		t.Skip("set YORU_LIVE=1 to query AniList")
 	}
 	const conan = 235
 

@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"kuro/internal/library"
-	"kuro/internal/mal"
+	"yoru/internal/library"
+	"yoru/internal/mal"
 )
 
 func (s *Server) malLogin(w http.ResponseWriter, r *http.Request) {

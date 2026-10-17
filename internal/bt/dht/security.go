@@ -4,7 +4,7 @@ import (
 	"hash/crc32"
 	"net"
 
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 )
 
 func maskForIP(ip net.IP) []byte {

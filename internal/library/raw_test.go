@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/indexer"
-	"kuro/internal/parse"
-	"kuro/internal/score"
+	"yoru/internal/indexer"
+	"yoru/internal/parse"
+	"yoru/internal/score"
 )
 
 func rawResult(title string) score.Result {

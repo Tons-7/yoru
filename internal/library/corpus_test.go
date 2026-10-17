@@ -9,10 +9,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"kuro/internal/anilist"
-	"kuro/internal/corpus"
-	"kuro/internal/db"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/corpus"
+	"yoru/internal/db"
+	"yoru/internal/store"
 )
 
 // A failed title fetch must leave discovery due, or the new ids wait a day.

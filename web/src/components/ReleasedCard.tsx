@@ -2,15 +2,18 @@ import { Link } from 'react-router-dom'
 import type { ScheduleItem } from '../lib/api'
 import { posterSet, relativeTime } from '../lib/format'
 import { HoverInfo } from './HoverInfo'
-import { PlayIcon, toCard } from './PosterCard'
+import { PlayIcon } from './PosterCard'
+import { toCard } from '../lib/cards'
 import { Badge } from './ui'
+import { UpNextToggle } from './UpNext'
 
-/** A just-aired episode: the art plays it, the title opens the show. */
-export function ReleasedCard({ item, tags }: { item: ScheduleItem; tags?: boolean }) {
+/** A just-aired episode: the art plays it, the title opens the show; addable puts a + for Up next on it. */
+export function ReleasedCard({ item, tags, addable }: { item: ScheduleItem; tags?: boolean; addable?: boolean }) {
   const watch = `/watch/${item.animeId}/${item.episode}`
 
   return (
-    <div className="group/released">
+    <div className="group/released relative">
+      {addable && <UpNextToggle animeId={item.animeId} episode={item.episode} title={item.title} />}
       {/* The usual panel; play is this release's episode. */}
       <HoverInfo
         anime={{

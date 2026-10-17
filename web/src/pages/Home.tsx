@@ -4,14 +4,16 @@ import { Link } from 'react-router-dom'
 import { api, type LibraryItem } from '../lib/api'
 import { clockTime } from '../lib/format'
 import { browseSeason, currentSeason, nextSeason } from '../lib/season'
-import { useAired, useDiscover, useHome, useNow } from '../lib/queries'
+import { useAired, useDiscover, useHome, useNow, useUpNext } from '../lib/queries'
 import { Hero } from '../components/Hero'
 import { HoverInfo } from '../components/HoverInfo'
-import { PlayIcon, PosterCard, toCard } from '../components/PosterCard'
+import { PlayIcon, PosterCard } from '../components/PosterCard'
+import { toCard } from '../lib/cards'
 import { Rail, RailItem } from '../components/Rail'
 import { ReleasedCard } from '../components/ReleasedCard'
 import { Popularity, ScheduleWidget } from '../components/Sidebar'
 import { ConfirmInline, ProgressBar, Skeleton } from '../components/ui'
+import { ListPlusGlyph, UpNextRail, UpNextSheet } from '../components/UpNext'
 
 export function Home() {
   const trending = useDiscover('trending', 20)
@@ -19,6 +21,9 @@ export function Home() {
   const upcoming = useDiscover('upcoming', 20)
   const continuing = useHome()
   const schedule = useAired(48)
+  const upNext = useUpNext()
+  const upNextEmpty = upNext.isSuccess && upNext.data.items.length === 0
+  const [editing, setEditing] = useState(false)
 
   // Everything already aired, newest first: the "recently released" strip.
   const now = useNow() / 1000
@@ -33,11 +38,29 @@ export function Home() {
 
       <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-8">
+          <UpNextRail onEdit={() => setEditing(true)} />
+
           {continuing.isPending ? (
             <RailSkeleton title="Continue watching" />
           ) : (
             continuing.data && continuing.data.items.length > 0 && (
-              <Rail title="Continue watching" more={{ to: '/library' }}>
+              <Rail
+                title="Continue watching"
+                more={{ to: '/library' }}
+                // The way into an empty Up next list, whose own row stays hidden until it has something.
+                action={
+                  upNextEmpty && (
+                    <button
+                      onClick={() => setEditing(true)}
+                      title="Line up episodes to play one after another"
+                      className="flex items-center gap-1.5 rounded-full bg-base-900 px-3 py-1 text-xs font-semibold text-base-300 ring-1 ring-white/[0.07] transition-colors hover:bg-base-800 hover:text-white"
+                    >
+                      <ListPlusGlyph className="size-3.5" />
+                      Up next
+                    </button>
+                  )
+                }
+              >
                 {continuing.data.items.map((item) => (
                   <RailItem key={item.id}>
                     <ContinueCard item={item} />
@@ -109,6 +132,7 @@ export function Home() {
           <ScheduleWidget />
         </aside>
       </div>
+      <UpNextSheet open={editing} onClose={() => setEditing(false)} />
     </div>
   )
 }
@@ -202,7 +226,7 @@ function ContinueCard({ item }: { item: LibraryItem }) {
                   ? `${clockTime(Math.max(0, resume.duration - resume.position))} left`
                   : resume && resume.position > 0
                     ? `Paused at ${clockTime(resume.position)}`
-                    : 'Up next'}
+                    : 'Next episode'}
               </p>
               {percent > 0 && <ProgressBar value={percent} className="h-1.5 bg-white/15" />}
             </div>

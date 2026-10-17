@@ -1,8 +1,8 @@
-// AniList's total is a placeholder for paged answers, so kuro measures it: the
+// AniList's total is a placeholder for paged answers, so Yoru measures it: the
 // pager says "Page 1 of N" from the first page and agrees with the server's count.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const SHOTS = process.env.SHOTS ?? '.'
 const PER_PAGE = 42
 

@@ -2,6 +2,7 @@
 package server
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -11,19 +12,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/certs"
-	"kuro/internal/config"
-	"kuro/internal/deps"
-	"kuro/internal/indexer"
-	"kuro/internal/jobs"
-	"kuro/internal/library"
-	"kuro/internal/mal"
-	"kuro/internal/parse"
-	"kuro/internal/store"
-	"kuro/internal/transcode"
-	"kuro/internal/update"
-	"kuro/web"
+	"yoru/internal/anilist"
+	"yoru/internal/certs"
+	"yoru/internal/config"
+	"yoru/internal/deps"
+	"yoru/internal/indexer"
+	"yoru/internal/jobs"
+	"yoru/internal/library"
+	"yoru/internal/mal"
+	"yoru/internal/parse"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
+	"yoru/internal/transcode"
+	"yoru/internal/update"
+	"yoru/web"
 )
 
 type Server struct {
@@ -52,7 +54,11 @@ type Server struct {
 	deps       *deps.Manager
 	downloader *library.Downloader
 	updater    *update.Updater
-	// relaunch restarts kuro, for a change that needs one.
+	// engine takes the download cap and upload choice as they change.
+	engine *torrent.Client
+	// presence shows what plays on Discord, when Settings say so.
+	presence *library.Presence
+	// relaunch restarts Yoru, for a change that needs one.
 	relaunch func()
 	log      *slog.Logger
 
@@ -79,6 +85,8 @@ type Server struct {
 	// Rotated from a handler while the guard reads it.
 	tokenMu sync.RWMutex
 	token   string
+	// grantSecret signs player-app links (see external.go); new each run, so a restart ends them.
+	grantSecret []byte
 	// Set by main, which owns the listener; nil in tests.
 	rebind func(addr string) error
 	// HTTPS certificates; nil in tests and builds that do not serve.
@@ -117,6 +125,8 @@ type Deps struct {
 	Deps       *deps.Manager
 	Downloader *library.Downloader
 	Updater    *update.Updater
+	Engine     *torrent.Client
+	Presence   *library.Presence
 	Relaunch   func()
 	Token      string
 	Log        *slog.Logger
@@ -128,31 +138,40 @@ func New(d Deps) *Server {
 		importer: d.Importer, ingester: d.Ingester,
 		indexer: d.Indexer, log: d.Log,
 		// Built once by the caller; a second one here lacked the real one's configuration.
-		finder:     d.Finder,
-		playback:   d.Playback,
-		watcher:    d.Watcher,
-		enricher:   d.Enricher,
-		relations:  d.Relations,
-		cache:      d.Cache,
-		streams:    d.Streams,
-		subtitles:  d.Subtitles,
-		thumbs:     d.Thumbs,
-		jobs:       d.Jobs,
-		mal:        d.MAL,
-		malSync:    d.MALSync,
-		scanner:    d.Scanner,
-		syncer:     d.Sync,
-		prefetch:   d.Prefetch,
-		player:     d.Player,
-		deps:       d.Deps,
-		downloader: d.Downloader,
-		updater:    d.Updater,
-		relaunch:   d.Relaunch,
-		token:      d.Token,
-		fonts:      map[string][]transcode.FontFile{},
-		fontJobs:   map[string]struct{}{},
-		deriving:   map[int]struct{}{},
+		finder:      d.Finder,
+		playback:    d.Playback,
+		watcher:     d.Watcher,
+		enricher:    d.Enricher,
+		relations:   d.Relations,
+		cache:       d.Cache,
+		streams:     d.Streams,
+		subtitles:   d.Subtitles,
+		thumbs:      d.Thumbs,
+		jobs:        d.Jobs,
+		mal:         d.MAL,
+		malSync:     d.MALSync,
+		scanner:     d.Scanner,
+		syncer:      d.Sync,
+		prefetch:    d.Prefetch,
+		player:      d.Player,
+		deps:        d.Deps,
+		downloader:  d.Downloader,
+		updater:     d.Updater,
+		engine:      d.Engine,
+		presence:    d.Presence,
+		relaunch:    d.Relaunch,
+		token:       d.Token,
+		grantSecret: randomBytes(32),
+		fonts:       map[string][]transcode.FontFile{},
+		fontJobs:    map[string]struct{}{},
+		deriving:    map[int]struct{}{},
 	}
+}
+
+func randomBytes(n int) []byte {
+	b := make([]byte, n)
+	rand.Read(b)
+	return b
 }
 
 func (s *Server) Handler() http.Handler {
@@ -192,6 +211,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/local/assign", s.assignLocalFile)
 	mux.HandleFunc("POST /api/local/forget", s.forgetMissing)
 	mux.HandleFunc("GET /api/local/{id}/stream", s.localStream)
+	mux.HandleFunc("GET /api/network", hostOnly(s.network))
+	mux.HandleFunc("POST /api/stream/external", s.externalLink)
+	mux.HandleFunc("GET /x/{grant}/{name}", s.externalStream)
 	mux.HandleFunc("GET /api/jobs", s.jobStatus)
 	mux.HandleFunc("POST /api/jobs/{name}", s.runJob)
 	mux.HandleFunc("GET /api/corpus", s.corpusStats)
@@ -221,6 +243,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/anilist/recheck", s.anilistRecheck)
 	mux.HandleFunc("POST /api/score", s.setScore)
 	mux.HandleFunc("POST /api/continue/dismiss", s.dismissResume)
+	mux.HandleFunc("GET /api/upnext", s.upNext)
+	mux.HandleFunc("POST /api/upnext", s.addUpNext)
+	mux.HandleFunc("DELETE /api/upnext", s.clearUpNext)
+	mux.HandleFunc("DELETE /api/upnext/{anime}", s.removeUpNext)
+	mux.HandleFunc("POST /api/upnext/move", s.moveUpNext)
+	mux.HandleFunc("POST /api/upnext/fill", s.fillUpNext)
+	mux.HandleFunc("GET /api/upnext/after", s.upNextAfter)
 	mux.HandleFunc("POST /api/download", s.download)
 	mux.HandleFunc("POST /api/download/all", s.downloadAll)
 	mux.HandleFunc("POST /api/download/episodes", s.downloadEpisodes)
@@ -379,7 +408,7 @@ func (s *Server) libraryCounts(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, counts)
 }
 
-// searchLocal answers from shows kuro holds, at once and offline; AniList is the slow path behind it.
+// searchLocal answers from shows Yoru holds, at once and offline; AniList is the slow path behind it.
 func (s *Server) searchLocal(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	results, err := s.store.SearchLocal(r.Context(), r.URL.Query().Get("q"), limit)

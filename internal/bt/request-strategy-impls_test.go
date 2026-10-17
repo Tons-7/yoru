@@ -11,10 +11,10 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-quicktest/qt"
 
-	requestStrategy "kuro/internal/bt/internal/request-strategy"
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/storage"
-	infohash_v2 "kuro/internal/bt/types/infohash-v2"
+	requestStrategy "yoru/internal/bt/internal/request-strategy"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/storage"
+	infohash_v2 "yoru/internal/bt/types/infohash-v2"
 )
 
 func makeRequestStrategyPiece(t requestStrategy.Torrent) requestStrategy.Piece {

@@ -2,7 +2,7 @@
 // finished one "13 eps"; both offer details, the trackers and play.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const SHOTS = process.env.SHOTS ?? '.'
 
 let failures = 0

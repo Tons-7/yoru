@@ -3,13 +3,12 @@ package nestedmaps
 import (
 	"testing"
 
-	g "github.com/anacrolix/generics"
 	qt "github.com/go-quicktest/qt"
 )
 
 func TestNestedMaps(t *testing.T) {
 	var nest map[string]map[*int]map[byte][]int64
-	intKey := g.PtrTo(420)
+	intKey := new(420)
 	var root = Begin(&nest)
 	var first = Next(root, "answer")
 	var second = Next(first, intKey)
@@ -24,7 +23,7 @@ func TestNestedMaps(t *testing.T) {
 	qt.Assert(t, qt.IsTrue(second.Exists()))
 	qt.Assert(t, qt.IsTrue(last.Exists()))
 	qt.Assert(t, qt.IsFalse(Next(second, 70).Exists()))
-	secondIntKey := g.PtrTo(1337)
+	secondIntKey := new(1337)
 	secondPath := Next(Next(Next(Begin(&nest), "answer"), secondIntKey), 42)
 	secondPath.Set(nil)
 	qt.Assert(t, qt.IsTrue(secondPath.Exists()))

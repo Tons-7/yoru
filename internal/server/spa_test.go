@@ -7,7 +7,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"kuro/internal/config"
+	"yoru/internal/config"
 )
 
 func spaFS() fstest.MapFS {

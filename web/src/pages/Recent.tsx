@@ -74,7 +74,7 @@ export function RecentPage() {
               </h2>
               <div className="grid grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
                 {group.map((item) => (
-                  <ReleasedCard key={`${item.animeId}-${item.episode}`} item={item} tags />
+                  <ReleasedCard key={`${item.animeId}-${item.episode}`} item={item} tags addable />
                 ))}
               </div>
             </section>

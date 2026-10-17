@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useDismiss, useModalFocus } from './ui'
+import { useDismiss, useModalFocus } from '../lib/hooks'
 import { plainKey, SHORTCUTS, SHOW_SHORTCUTS, usePortalHome } from './keys'
 
 /** Every keyboard shortcut, behind "?": keys nobody is told about are keys nobody uses. */

@@ -1,9 +1,9 @@
 package transcode
 
 import (
-	"kuro/internal/sound"
 	"strings"
 	"testing"
+	"yoru/internal/sound"
 )
 
 func dualAudioInfo() *MediaInfo {

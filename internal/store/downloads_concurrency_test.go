@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/db"
+	"yoru/internal/db"
 )
 
 // A second query while the rows cursor is open holds two connections from the

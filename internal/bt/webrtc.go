@@ -11,7 +11,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"kuro/internal/bt/webtorrent"
+	"yoru/internal/bt/webtorrent"
 )
 
 const webrtcNetwork = "webrtc"

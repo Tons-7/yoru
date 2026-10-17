@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/library"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/library"
+	"yoru/internal/store"
 )
 
 // localHarness is a server with a scanner and two library files on record: one

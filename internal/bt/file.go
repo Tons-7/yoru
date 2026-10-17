@@ -3,12 +3,12 @@ package bt
 import (
 	"iter"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/missinggo/v2/bitmap"
 
-	"kuro/internal/bt/metainfo"
-	infohash_v2 "kuro/internal/bt/types/infohash-v2"
+	"yoru/internal/bt/metainfo"
+	infohash_v2 "yoru/internal/bt/types/infohash-v2"
 )
 
 // Provides access to regions of torrent data that correspond to its files.
@@ -86,20 +86,14 @@ func fileBytesLeft(
 		if i == fileFirstPieceIndex {
 			beginOffset := fileTorrentOffset % torrentUsualPieceSize
 			beginSize := torrentUsualPieceSize - beginOffset
-			beginDownLoaded := pieceSizeCompleted - beginOffset
-			if beginDownLoaded < 0 {
-				beginDownLoaded = 0
-			}
+			beginDownLoaded := max(pieceSizeCompleted-beginOffset, 0)
 			left += beginSize - beginDownLoaded
 		} else if i == fileEndPieceIndex-1 {
 			endSize := (fileTorrentOffset + fileLength) % torrentUsualPieceSize
 			if endSize == 0 {
 				endSize = torrentUsualPieceSize
 			}
-			endDownloaded := pieceSizeCompleted
-			if endDownloaded > endSize {
-				endDownloaded = endSize
-			}
+			endDownloaded := min(pieceSizeCompleted, endSize)
 			left += endSize - endDownloaded
 		} else {
 			left += torrentUsualPieceSize - pieceSizeCompleted
@@ -156,10 +150,7 @@ func (f *File) State() (ret []FilePieceState) {
 		if remaining == 0 {
 			break
 		}
-		len1 := pieceSize - off
-		if len1 > remaining {
-			len1 = remaining
-		}
+		len1 := min(pieceSize-off, remaining)
 		ps := f.t.pieceState(i)
 		ret = append(ret, FilePieceState{len1, ps})
 		off = 0

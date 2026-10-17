@@ -1,5 +1,4 @@
 //go:build go1.18
-// +build go1.18
 
 package metainfo
 
@@ -8,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 func Fuzz(f *testing.F) {

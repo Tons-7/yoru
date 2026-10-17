@@ -1,7 +1,7 @@
 package metainfo
 
 import (
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 type UrlList []string

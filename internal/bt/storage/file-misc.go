@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/anacrolix/sync"
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/segments"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/segments"
 )
 
 // Returns the minimum file lengths required for the given extent to exist on disk. Returns false if

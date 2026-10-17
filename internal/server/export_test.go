@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/store"
 )
 
 func exportHarness(t *testing.T) *harness {
@@ -104,24 +104,28 @@ func TestExportAsText(t *testing.T) {
 	}
 }
 
+// Yoru's files apply, and so do the ones kuro exported before the rename.
 func TestImportAppliesAFile(t *testing.T) {
-	h := exportHarness(t)
+	for _, kind := range []string{libraryKind, legacyLibraryKind} {
+		t.Run(kind, func(t *testing.T) {
+			h := exportHarness(t)
+			rec := postLibrary(t, h, "/api/library/import", `{
+			  "kind":"`+kind+`","version":1,
+			  "entries":[{"animeId":100,"progress":20,"status":"CURRENT","score":80}]
+			}`)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+			}
 
-	rec := postLibrary(t, h, "/api/library/import", `{
-	  "kind":"kuro.library","version":1,
-	  "entries":[{"animeId":100,"progress":20,"status":"CURRENT","score":80}]
-	}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var rep store.ImportReport
-	json.Unmarshal(rec.Body.Bytes(), &rep)
-	if rep.Entries != 1 {
-		t.Fatalf("report = %+v", rep)
-	}
-	if e, _ := h.store.ListEntry(t.Context(), 100); e.Progress != 20 || e.Score != 80 {
-		t.Fatalf("entry = %+v", e)
+			var rep store.ImportReport
+			json.Unmarshal(rec.Body.Bytes(), &rep)
+			if rep.Entries != 1 {
+				t.Fatalf("report = %+v", rep)
+			}
+			if e, _ := h.store.ListEntry(t.Context(), 100); e.Progress != 20 || e.Score != 80 {
+				t.Fatalf("entry = %+v", e)
+			}
+		})
 	}
 }
 
@@ -133,9 +137,9 @@ func TestImportRejectsWhatItCannotRead(t *testing.T) {
 	tests := map[string]string{
 		"not json":       `nonsense`,
 		"another tool":   `{"kind":"someone-elses.export","entries":[{"animeId":1}]}`,
-		"newer version":  `{"kind":"kuro.library","version":99,"entries":[{"animeId":1}]}`,
-		"nothing in it":  `{"kind":"kuro.library","version":1,"entries":[]}`,
-		"entries absent": `{"kind":"kuro.library","version":1}`,
+		"newer version":  `{"kind":"yoru.library","version":99,"entries":[{"animeId":1}]}`,
+		"nothing in it":  `{"kind":"yoru.library","version":1,"entries":[]}`,
+		"entries absent": `{"kind":"yoru.library","version":1}`,
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {

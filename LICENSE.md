@@ -1,4 +1,4 @@
-Required Notice: Copyright (c) 2026 Tons (https://github.com/Tons-7/kuro)
+Required Notice: Copyright (c) 2026 Tons (https://github.com/Tons-7/yoru)
 
 # PolyForm Noncommercial License 1.0.0
 

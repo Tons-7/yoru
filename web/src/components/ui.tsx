@@ -1,8 +1,6 @@
 import {
-  createContext,
   useContext,
   useEffect,
-  useRef,
   useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
@@ -10,35 +8,7 @@ import {
 } from 'react'
 import { Link } from 'react-router-dom'
 import { cx } from '../lib/format'
-
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
-export type ButtonSize = 'sm' | 'md' | 'lg'
-
-// The brand colour leads the main action; white read as a generic button.
-const VARIANTS: Record<ButtonVariant, string> = {
-  primary:
-    'bg-gradient-to-b from-accent-400 to-accent-500 text-white shadow-[0_6px_20px_-6px_rgb(111_92_255/0.6)] hover:brightness-110 active:scale-[0.98]',
-  secondary:
-    'bg-base-800 text-base-100 shadow-[inset_0_1px_0_rgb(255_255_255/0.05)] ring-1 ring-white/[0.07] hover:bg-base-750',
-  ghost: 'text-base-300 hover:bg-base-850 hover:text-white',
-  danger: 'bg-red-500/90 text-white hover:bg-red-500',
-}
-
-// The radius is the size's: a page's lead action (lg) is rounder than the rest.
-const SIZES: Record<ButtonSize, string> = {
-  sm: 'rounded-lg px-2.5 py-1 text-xs',
-  md: 'rounded-lg px-4 py-2 text-sm',
-  lg: 'rounded-xl px-5 py-2.5 text-sm',
-}
-
-/** Class list for something that should look like a button but is a link. */
-export function buttonClass(variant: ButtonVariant = 'secondary', size: ButtonSize = 'md') {
-  return cx(
-    'inline-flex shrink-0 items-center justify-center gap-1.5 font-medium whitespace-nowrap transition-[background-color,color,transform,filter] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 disabled:pointer-events-none disabled:opacity-50',
-    VARIANTS[variant],
-    SIZES[size],
-  )
-}
+import { buttonClass, ControlLabel, type ButtonSize, type ButtonVariant } from '../lib/ui'
 
 export function Button({
   variant = 'secondary',
@@ -242,14 +212,6 @@ export function Pager({
   )
 }
 
-/** A page whose last item went: back to the last page that still has some, not a false "nothing here". */
-export function useClampPage(empty: boolean, page: number, total: number | undefined, perPage: number, onPage: (page: number) => void) {
-  useEffect(() => {
-    // Only ever down, so a stale total can't bounce it between pages.
-    if (empty && page > 1 && total !== undefined) onPage(Math.max(1, Math.min(page - 1, Math.ceil(total / perPage))))
-  }, [empty, page, total, perPage, onPage])
-}
-
 export function Spinner({ className }: { className?: string }) {
   return (
     <div
@@ -339,13 +301,14 @@ interface SaveState {
 
 /** A blur-saved field's state beside it: Saving…, Saved for a moment, or what failed. */
 export function SaveHint({ state }: { state: SaveState }) {
-  const [shown, setShown] = useState(false)
+  // Saved shows until its two seconds pass; only the timer sets state, so a save draws once.
+  const [faded, setFaded] = useState<number>()
   useEffect(() => {
     if (!state.isSuccess) return
-    setShown(true)
-    const t = window.setTimeout(() => setShown(false), 2000)
+    const t = window.setTimeout(() => setFaded(state.submittedAt), 2000)
     return () => window.clearTimeout(t)
   }, [state.isSuccess, state.submittedAt])
+  const shown = state.isSuccess && faded !== state.submittedAt
   if (state.isPending) return <span className="text-xs text-base-500">Saving…</span>
   if (state.isError) {
     return <span className="text-xs text-recap">{state.error instanceof Error ? state.error.message : 'Not saved'}</span>
@@ -434,96 +397,6 @@ export function Segmented<T extends string>({
   )
 }
 
-/** A modal's keyboard contract: focus moves in, Tab stays inside, and returns to the opener on close. */
-export function useModalFocus<T extends HTMLElement>(ref: React.RefObject<T | null>, open = true) {
-  useEffect(() => {
-    if (!open) return
-    const opener = document.activeElement as HTMLElement | null
-    const focusables = () =>
-      Array.from(
-        ref.current?.querySelectorAll<HTMLElement>(
-          // iframe: a trailer's player takes keys and Tab too.
-          'button:not([disabled]), a[href], input:not([disabled]), select, textarea, iframe, [tabindex]:not([tabindex="-1"])',
-        ) ?? [],
-      )
-    focusables()[0]?.focus()
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab') return
-      const items = focusables()
-      if (items.length === 0) return
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    const panel = ref.current
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      // Not when the click that closed it put focus somewhere else on purpose.
-      const now = document.activeElement
-      if (!now || now === document.body || panel?.contains(now)) opener?.focus?.()
-    }
-  }, [ref, open])
-}
-
-/** Closes on an outside click or Escape — both matter for a menu to feel right. */
-// active: listening only while the menu is open, not for every closed one on the page.
-export function useDismiss<T extends HTMLElement>(onClose: () => void, active = true) {
-  const ref = useRef<T>(null)
-
-  useEffect(() => {
-    if (!active) return
-    function onPointer(e: MouseEvent | TouchEvent) {
-      const target = e.target as Node | null
-      if (!ref.current || ref.current.contains(target)) return
-      // A portal menu isn't inside the trigger, so without this a click on it reads as outside and closes it.
-      if (target instanceof Element && target.closest('[data-portal-menu]')) return
-      onClose()
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', onPointer)
-    document.addEventListener('touchstart', onPointer)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onPointer)
-      document.removeEventListener('touchstart', onPointer)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [onClose, active])
-
-  return ref
-}
-
-/** The window's title, which the taskbar and the picture-in-picture window show. */
-export function useDocumentTitle(title?: string) {
-  useEffect(() => {
-    if (!title) return
-    document.title = `${title} · kuro`
-    return () => {
-      document.title = 'kuro'
-    }
-  }, [title])
-}
-
-/** Debounced value, for search-as-you-type against a rate-limited API. */
-export function useDebounced<T>(value: T, delay = 300): T {
-  const [debounced, setDebounced] = useState(value)
-  useEffect(() => {
-    const id = setTimeout(() => setDebounced(value), delay)
-    return () => clearTimeout(id)
-  }, [value, delay])
-  return debounced
-}
-
 export function ProgressBar({ value, className }: { value: number; className?: string }) {
   return (
     <div className={cx('h-1 w-full overflow-hidden rounded-full bg-base-800', className)}>
@@ -563,9 +436,6 @@ export function Badge({
     </span>
   )
 }
-
-/** Names an unlabelled control after the settings row holding it. */
-export const ControlLabel = createContext<string | undefined>(undefined)
 
 /** A styled select keeping the real element, for the native keyboard and phone picker. */
 export function Select({

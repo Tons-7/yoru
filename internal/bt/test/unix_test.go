@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kuro/internal/bt"
-	"kuro/internal/bt/dialer"
+	"yoru/internal/bt"
+	"yoru/internal/bt/dialer"
 )
 
 func TestUnixConns(t *testing.T) {

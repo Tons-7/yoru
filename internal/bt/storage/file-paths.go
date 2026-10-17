@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 // Determines the filepath to be used for each file in a torrent.

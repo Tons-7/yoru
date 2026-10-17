@@ -1,8 +1,8 @@
-// A "phone" reaches kuro over HTTPS by name, waits, and gets in once the host accepts it.
-// Needs KURO_EXTRA_CONFIG with tls_cert/tls_key for a certificate naming phone.test.
+// A "phone" reaches Yoru over HTTPS by name, waits, and gets in once the host accepts it.
+// Needs YORU_EXTRA_CONFIG with tls_cert/tls_key for a certificate naming phone.test.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const PORT = new URL(BASE).port
 const PHONE = `https://phone.test:${PORT}`
 const SHOTS = process.env.SHOTS ?? '.'
@@ -23,7 +23,7 @@ const access = await host('/api/access')
 check(access.urls[0] === `${PHONE}/?token=${access.token}`, 'the pairing link uses https and the certificate name', access.urls[0])
 check((await host('/api/access/approval', 'POST', { mode: 'once' })).mode === 'once', 'approval switched on')
 
-// phone.test is this machine, but not by a loopback name: kuro treats it as another device.
+// phone.test is this machine, but not by a loopback name: Yoru treats it as another device.
 const browser = await chromium.launch({ args: ['--host-resolver-rules=MAP phone.test 127.0.0.1'] })
 const hostPage = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const phone = await browser.newContext({
@@ -62,7 +62,7 @@ check(await phonePage.getByText('Waiting for the host').isVisible(), 'with the l
 await phonePage.screenshot({ path: `${SHOTS}/approval-waiting.png` })
 check((await phoneFetch('/api/health')).status === 403, 'the app stays closed to it while it waits')
 
-const prompt = hostPage.getByText('A device wants to use kuro')
+const prompt = hostPage.getByText('A device wants to use Yoru')
 check(await prompt.waitFor({ timeout: 15000 }).then(() => true, () => false), 'the host is asked on whatever page it is on')
 check(await hostPage.getByText('Chrome on Android').isVisible(), 'the request names the device')
 await hostPage.screenshot({ path: `${SHOTS}/approval-prompt.png` })
@@ -70,7 +70,7 @@ await hostPage.getByRole('button', { name: 'Accept' }).click()
 
 // The waiting page polls and reloads into the app on its own.
 const opened = await phonePage.locator('#root').waitFor({ state: 'attached', timeout: 15000 }).then(() => true, () => false)
-check(opened, 'the phone opens kuro by itself once accepted')
+check(opened, 'the phone opens Yoru by itself once accepted')
 check((await phoneFetch('/api/health')).status === 200, 'and the app answers it')
 check(await prompt.waitFor({ state: 'hidden', timeout: 10000 }).then(() => true, () => false), 'the prompt goes away')
 check(await phonePage.evaluate(() => window.isSecureContext), 'the phone is on a secure context, which install needs')

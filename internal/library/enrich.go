@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/metadata"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/metadata"
+	"yoru/internal/store"
 )
 
 // Enricher fills in what AniList lacks: episode titles and stills, filler flags, op/ed times.

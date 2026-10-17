@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 func TestUnmarshalPex(t *testing.T) {

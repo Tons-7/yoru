@@ -5,7 +5,7 @@ import (
 
 	"github.com/anacrolix/missinggo/v2/panicif"
 
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/storage"
 )
 
 func (t *Torrent) storageReader() storageReader {

@@ -3,7 +3,7 @@ package peer_protocol
 import (
 	"net"
 
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 // Marshals to the smallest compact byte representation.

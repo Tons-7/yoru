@@ -1,5 +1,4 @@
 //go:build !wasm
-// +build !wasm
 
 package bt
 
@@ -11,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 
-	"kuro/internal/bt/internal/testutil"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/internal/testutil"
+	"yoru/internal/bt/storage"
 )
 
 func TestDropTorrentWithMmapStorageWhileHashing(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/anacrolix/chansync"
 	. "github.com/anacrolix/generics"
 	"github.com/anacrolix/log"
@@ -19,9 +19,9 @@ import (
 	"github.com/anacrolix/missinggo/v2/panicif"
 	"github.com/anacrolix/multiless"
 
-	"kuro/internal/bt/mse"
-	pp "kuro/internal/bt/peer_protocol"
-	typedRoaring "kuro/internal/bt/typed-roaring"
+	"yoru/internal/bt/mse"
+	pp "yoru/internal/bt/peer_protocol"
+	typedRoaring "yoru/internal/bt/typed-roaring"
 )
 
 type (

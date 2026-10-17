@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 
-	"kuro/internal/bt/dht/int160"
+	"yoru/internal/bt/dht/int160"
 )
 
 func RandomNodeID() (id ID) {

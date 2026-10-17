@@ -3,9 +3,9 @@ package testutil
 import (
 	"github.com/anacrolix/generics"
 
-	"kuro/internal/bt/dht/int160"
-	"kuro/internal/bt/dht/krpc"
-	"kuro/internal/bt/dht/types"
+	"yoru/internal/bt/dht/int160"
+	"yoru/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/types"
 )
 
 func Int160WithBitSet(bit int) *int160.T {

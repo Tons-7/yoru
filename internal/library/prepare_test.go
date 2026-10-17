@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/db"
-	"kuro/internal/score"
-	"kuro/internal/store"
+	"yoru/internal/db"
+	"yoru/internal/score"
+	"yoru/internal/store"
 )
 
 func prefetchStore(t *testing.T) *store.Store {

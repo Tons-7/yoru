@@ -7,9 +7,9 @@ import (
 
 	"github.com/anacrolix/log"
 	"github.com/stretchr/testify/require"
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 
-	"kuro/internal/bt/dht/bep44"
+	"yoru/internal/bt/dht/bep44"
 )
 
 func TestPutGet(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 
 	g "github.com/anacrolix/generics"
 
-	infohash_v2 "kuro/internal/bt/types/infohash-v2"
+	infohash_v2 "yoru/internal/bt/types/infohash-v2"
 )
 
 // Information specific to a single file inside the MetaInfo structure.
@@ -18,7 +18,7 @@ type FileInfo struct {
 	// be a safer bet when available.
 	PathUtf8 []string `bencode:"path.utf-8,omitempty" json:"path.utf-8,omitempty"`
 
-	ExtendedFileAttrs `json:",omitempty"`
+	ExtendedFileAttrs
 
 	// BEP 52. This isn't encoded in a v1 FileInfo, but is exposed here for APIs that expect to deal
 	// v1 files.

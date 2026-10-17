@@ -3,7 +3,7 @@ package bt
 import (
 	"testing"
 
-	typedRoaring "kuro/internal/bt/typed-roaring"
+	typedRoaring "yoru/internal/bt/typed-roaring"
 )
 
 func BenchmarkIterUndirtiedRequestIndexesInPiece(b *testing.B) {

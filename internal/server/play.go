@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"kuro/internal/library"
+	"yoru/internal/library"
 )
 
 type playBody struct {

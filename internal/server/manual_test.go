@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/store"
 )
 
 func (h *harness) postJSON(t *testing.T, target string, body any) (*http.Response, map[string]any) {

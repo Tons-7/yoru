@@ -7,17 +7,17 @@ import (
 	"iter"
 	"sync"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/anacrolix/chansync"
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/missinggo/v2/bitmap"
 	"github.com/anacrolix/missinggo/v2/panicif"
 
-	"kuro/internal/bt/merkle"
-	"kuro/internal/bt/metainfo"
-	pp "kuro/internal/bt/peer_protocol"
-	"kuro/internal/bt/segments"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/merkle"
+	"yoru/internal/bt/metainfo"
+	pp "yoru/internal/bt/peer_protocol"
+	"yoru/internal/bt/segments"
+	"yoru/internal/bt/storage"
 )
 
 // Why is it an int64?

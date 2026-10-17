@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/metadata"
+	"yoru/internal/metadata"
 )
 
 func seedFillerShow(t *testing.T, s *Store) {

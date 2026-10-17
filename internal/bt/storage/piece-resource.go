@@ -14,7 +14,7 @@ import (
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/missinggo/v2/resource"
 
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 type piecePerResource struct {

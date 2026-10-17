@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"kuro/internal/anilist"
-	"kuro/internal/db"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/db"
+	"yoru/internal/store"
 )
 
 // An expired token used to read as a successful sync with the tracker still

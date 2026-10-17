@@ -1,7 +1,7 @@
 package bt
 
 import (
-	pp "kuro/internal/bt/peer_protocol"
+	pp "yoru/internal/bt/peer_protocol"
 )
 
 func makeCancelMessage(r Request) pp.Message {

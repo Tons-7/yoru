@@ -4,7 +4,7 @@ import (
 	"io"
 	"time"
 
-	"kuro/internal/bt"
+	"yoru/internal/bt"
 )
 
 // readWait is a stream read in progress: the piece it needs, since when, and whether a no-holder line went out.

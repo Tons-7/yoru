@@ -15,8 +15,8 @@ import (
 	"github.com/pion/webrtc/v4"
 	"go.opentelemetry.io/otel/trace"
 
-	"kuro/internal/bt/tracker"
-	"kuro/internal/bt/types/infohash"
+	"yoru/internal/bt/tracker"
+	"yoru/internal/bt/types/infohash"
 )
 
 type TrackerClientStats struct {

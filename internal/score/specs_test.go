@@ -3,7 +3,7 @@ package score
 import (
 	"testing"
 
-	"kuro/internal/film"
+	"yoru/internal/film"
 )
 
 func rejectionRules(c Candidate, prefs Preferences) []string {

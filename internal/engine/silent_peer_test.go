@@ -21,10 +21,10 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
-	"kuro/internal/bt"
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/metainfo"
-	pp "kuro/internal/bt/peer_protocol"
+	"yoru/internal/bt"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/metainfo"
+	pp "yoru/internal/bt/peer_protocol"
 )
 
 // Local repro: a stream read stuck on a chunk a silent peer holds while a healthy peer keeps delivering others.
@@ -115,7 +115,7 @@ func TestSilentPeer(t *testing.T) {
 type silentKnobs struct {
 	mib, pieceKiB, healthyKiB, slowKiB, videoKiB, reqq int
 	observe                                            time.Duration
-	// fast: a tenth of kuro's drop and rescue timings, so a regression test runs in seconds.
+	// fast: a tenth of Yoru's drop and rescue timings, so a regression test runs in seconds.
 	fast bool
 }
 
@@ -151,7 +151,7 @@ func silentTorrent(t *testing.T, k silentKnobs) (string, metainfo.MetaInfo, []by
 	return dir, mi, data
 }
 
-// silentRun is one scenario: kuro's engine, its peers, a paced reader on the stream URL and what was seen.
+// silentRun is one scenario: Yoru's engine, its peers, a paced reader on the stream URL and what was seen.
 type silentRun struct {
 	t        *testing.T
 	k        silentKnobs
@@ -202,7 +202,7 @@ type silentStarve struct {
 
 func silentStart(t *testing.T, k silentKnobs, dir string, mi metainfo.MetaInfo, data []byte) *silentRun {
 	t.Helper()
-	// kuro's own timings, or a tenth of them for the regression tests; TestMain shortens some for the others.
+	// Yoru's own timings, or a tenth of them for the regression tests; TestMain shortens some for the others.
 	j, sh, re, g, c := janitorEvery, shedAfter, rescueAfter, regroupAfter, censusEvery
 	janitorEvery, shedAfter, rescueAfter, regroupAfter, censusEvery = 5*time.Second, 15*time.Second, 8*time.Second, 20*time.Second, 30*time.Second
 	if k.fast {
@@ -510,7 +510,7 @@ func (r *silentRun) report() {
 		r.starved.holder, mib(r.pos.Load()), mib(r.size), r.drops.Load(), r.led.stealCounts(), strings.Join(peers, "; "))
 }
 
-// silentLog passes kuro's info lines to the test log and counts the peers kuro dropped.
+// silentLog passes Yoru's info lines to the test log and counts the peers it dropped.
 type silentLog struct{ r *silentRun }
 
 func (h *silentLog) Enabled(_ context.Context, l slog.Level) bool { return l >= slog.LevelInfo }
@@ -542,7 +542,7 @@ type silentHolding struct {
 	since time.Time
 }
 
-// silentLedger follows every request kuro's client sends, through bt's callbacks (called under its lock).
+// silentLedger follows every request Yoru's client sends, through bt's callbacks (called under its lock).
 type silentLedger struct {
 	mu     sync.Mutex
 	names  map[string]string

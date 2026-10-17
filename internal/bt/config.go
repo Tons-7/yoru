@@ -10,18 +10,18 @@ import (
 
 	"github.com/anacrolix/log"
 	"github.com/anacrolix/missinggo/v2"
-	"kuro/internal/bt/dht"
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht"
+	"yoru/internal/bt/dht/krpc"
 
 	"github.com/pion/webrtc/v4"
 	"golang.org/x/time/rate"
 
-	"kuro/internal/bt/iplist"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/iplist"
+	"yoru/internal/bt/metainfo"
 
-	"kuro/internal/bt/mse"
-	"kuro/internal/bt/storage"
-	"kuro/internal/bt/version"
+	"yoru/internal/bt/mse"
+	"yoru/internal/bt/storage"
+	"yoru/internal/bt/version"
 )
 
 // Contains config elements that are exclusive to tracker handling. There may be other fields in
@@ -80,6 +80,8 @@ type ClientConfig struct {
 	// Upload even after there's nothing in it for us. By default uploading is
 	// not altruistic, we'll only upload to encourage the peer to reciprocate.
 	Seed bool `long:"seed"`
+	// StopSeedingWhenComplete limits Seed to while a torrent still wants data: done, it uploads nothing.
+	StopSeedingWhenComplete bool
 	// Only applies to chunks uploaded to peers, to maintain responsiveness communicating local
 	// Client state to peers. Each limiter token represents one byte. The Limiter's burst must be
 	// large enough to fit a whole chunk, which is usually 16 KiB (see TorrentSpec.ChunkSize). If

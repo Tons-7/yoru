@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"kuro/internal/sound"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+	"yoru/internal/sound"
 )
 
 type Stream struct {

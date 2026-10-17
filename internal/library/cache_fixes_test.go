@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/store"
+	"yoru/internal/store"
 )
 
 // A finished show played again is a rewatch: only what was watched this time around goes, never the

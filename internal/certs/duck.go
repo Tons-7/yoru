@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -16,6 +15,8 @@ import (
 	"github.com/caddyserver/certmagic"
 	"github.com/libdns/duckdns"
 	"go.uber.org/zap"
+
+	"yoru/internal/config"
 )
 
 const duckSuffix = ".duckdns.org"
@@ -101,7 +102,7 @@ func (s *Source) Status() Status {
 
 var duckName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
-// DuckDomain turns what a person types ("mykuro", "MyKuro.duckdns.org", a pasted URL) into the full name.
+// DuckDomain turns what a person types ("myyoru", "MyYoru.duckdns.org", a pasted URL) into the full name.
 func DuckDomain(typed string) (string, error) {
 	name := strings.ToLower(strings.TrimSpace(typed))
 	name = strings.TrimPrefix(strings.TrimPrefix(name, "https://"), "http://")
@@ -156,7 +157,7 @@ func (s *Source) UseDuckDNS(typed, token string) error {
 	})
 	ca := certmagic.LetsEncryptProductionCA
 	// Let's Encrypt's staging CA, for trying the flow without spending real issuance limits.
-	if os.Getenv("KURO_ACME_STAGING") == "1" {
+	if config.Env("ACME_STAGING") == "1" {
 		ca = certmagic.LetsEncryptStagingCA
 	}
 	d.config.Issuers = []certmagic.Issuer{certmagic.NewACMEIssuer(d.config, certmagic.ACMEIssuer{
@@ -215,7 +216,7 @@ func (s *Source) runDuck(ctx context.Context, d *duck) {
 		s.log.Info("https certificate ready", "name", d.domain)
 	}
 
-	// Until it succeeds, soon at first: Wi-Fi comes up a moment after kuro does.
+	// Until it succeeds, soon at first: Wi-Fi comes up a moment after Yoru does.
 	wait := duckFirstRetry
 	for {
 		err := s.pointDuck(ctx, d)

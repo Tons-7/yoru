@@ -16,9 +16,9 @@ import (
 	_ "github.com/anacrolix/envpprof"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 
-	"kuro/internal/bt/tracker/udp"
+	"yoru/internal/bt/tracker/udp"
 )
 
 var trackers = []string{
@@ -88,9 +88,10 @@ func TestUDPTracker(t *testing.T) {
 		Request:    req,
 		Context:    ctx,
 	}.Do()
-	// Skip any net errors as we don't control the server.
+	// Skip any net errors, or the tracker turning us down, as we don't control the server.
 	var ne net.Error
-	if errors.As(err, &ne) {
+	var refused udp.ErrorResponse
+	if errors.As(err, &ne) || errors.As(err, &refused) {
 		t.Skip(err)
 	}
 	require.NoError(t, err)

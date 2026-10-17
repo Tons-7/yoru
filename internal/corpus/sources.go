@@ -21,7 +21,7 @@ const (
 	AnimeAPIURL = "https://raw.githubusercontent.com/nattadasu/animeApi/v3/database/animeapi.tsv"
 	DeadIDsURL  = "https://github.com/manami-project/anime-offline-database/releases/download/latest/anilist-minified.json.zst"
 
-	userAgent = "kuro/0.1 (personal media library)"
+	userAgent = "yoru/0.1 (personal media library)"
 )
 
 type Entry struct {

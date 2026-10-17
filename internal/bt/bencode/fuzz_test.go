@@ -1,5 +1,4 @@
 //go:build go1.18
-// +build go1.18
 
 package bencode
 
@@ -16,14 +15,14 @@ func Fuzz(f *testing.F) {
 		f.Add([]byte(ret.expected))
 	}
 	f.Fuzz(func(t *testing.T, b []byte) {
-		var d interface{}
+		var d any
 		err := Unmarshal(b, &d)
 		if err != nil {
 			t.Skip()
 		}
 		b0, err := Marshal(d)
 		qt.Assert(t, qt.IsNil(err))
-		var d0 interface{}
+		var d0 any
 		err = Unmarshal(b0, &d0)
 		qt.Assert(t, qt.IsNil(err))
 		qt.Assert(t, qt.CmpEquals(d0, d, cmp.Comparer(func(a, b *big.Int) bool {
@@ -37,7 +36,7 @@ func FuzzInterfaceRoundTrip(f *testing.F) {
 		f.Add([]byte(ret.expected))
 	}
 	f.Fuzz(func(t *testing.T, b []byte) {
-		var d interface{}
+		var d any
 		err := Unmarshal(b, &d)
 		if err != nil {
 			t.Skip(err)

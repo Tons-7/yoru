@@ -1,4 +1,4 @@
-// Package deps fetches the programs kuro shells out to on demand, from scripts/fetch-deps.ps1's sources.
+// Package deps fetches the programs Yoru shells out to on demand, from scripts/fetch-deps.ps1's sources.
 package deps
 
 import (
@@ -330,7 +330,7 @@ func (m *Manager) download(ctx context.Context, name, url, dest, digest string) 
 	}
 
 	// ffmpeg is 420 MB and people report it as "slow" without a number. Said
-	// plainly here it separates a slow line from a slow disk from kuro.
+	// plainly here it separates a slow line from a slow disk from Yoru.
 	took := time.Since(started)
 	m.log.Info("downloaded", "component", name,
 		"mb", n>>20, "seconds", took.Round(time.Second).Seconds(),
@@ -555,7 +555,7 @@ func findAll(root, pattern string) ([]string, error) {
 	return out, err
 }
 
-// obsolete are components kuro no longer uses: rqbit, replaced by the built-in engine.
+// obsolete are components Yoru no longer uses: rqbit, replaced by the built-in engine.
 var obsolete = []string{"rqbit"}
 
 // RemoveObsolete deletes dropped components and what a killed install left behind, returning what went.

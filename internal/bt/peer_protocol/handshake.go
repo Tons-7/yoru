@@ -11,8 +11,8 @@ import (
 
 	"github.com/anacrolix/missinggo/v2/panicif"
 
-	"kuro/internal/bt/internal/ctxrw"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/internal/ctxrw"
+	"yoru/internal/bt/metainfo"
 )
 
 type ExtensionBit uint

@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/certs"
-	"kuro/internal/config"
+	"yoru/internal/certs"
+	"yoru/internal/config"
 )
 
 const phone = "192.168.1.50:5555"
@@ -50,6 +50,10 @@ func (d *device) get(target string, page bool) *http.Response {
 	d.h.handler.ServeHTTP(rec, req)
 	res := rec.Result()
 	for _, c := range res.Cookies() {
+		if c.MaxAge < 0 {
+			delete(d.cookies, c.Name)
+			continue
+		}
 		d.cookies[c.Name] = c.Value
 	}
 	return res
@@ -132,6 +136,37 @@ func TestDeviceWaitsUntilTheHostAccepts(t *testing.T) {
 	h.host(t, "DELETE", "/api/access/devices/"+id, "")
 	if res := d.get("/api/health", false); res.StatusCode != http.StatusForbidden {
 		t.Fatalf("after removal: %d, want 403", res.StatusCode)
+	}
+}
+
+// A phone paired under kuro stays paired and approved: its cookies move to Yoru's names on its first visit.
+func TestKuroCookiesCarryOver(t *testing.T) {
+	h := approvalHarness(t, approvalOnce)
+	d := newDevice(t, h)
+	d.get("/?token=s3cret", true)
+	id := h.devices(t)[0]["id"].(string)
+	h.host(t, "POST", "/api/access/devices/"+id, `{"status":"approved"}`)
+
+	// The same phone, holding what kuro set.
+	old := &device{h: h, t: t, ua: d.ua, cookies: map[string]string{
+		legacyAccessCookie: d.cookies[accessCookie], legacyDeviceCookie: d.cookies[deviceCookie],
+	}}
+	if res := old.get("/api/health", false); res.StatusCode != http.StatusOK {
+		t.Fatalf("with kuro's cookies: %d, want 200", res.StatusCode)
+	}
+	if old.cookies[accessCookie] != d.cookies[accessCookie] || old.cookies[deviceCookie] != d.cookies[deviceCookie] {
+		t.Errorf("cookies now %v, want the same values under Yoru's names", old.cookies)
+	}
+	for _, name := range []string{legacyAccessCookie, legacyDeviceCookie} {
+		if _, left := old.cookies[name]; left {
+			t.Errorf("%s was left behind", name)
+		}
+	}
+	if list := h.devices(t); len(list) != 1 {
+		t.Errorf("the phone was asked about again: %v", list)
+	}
+	if res := old.get("/api/health", false); res.StatusCode != http.StatusOK {
+		t.Fatalf("on Yoru's cookies: %d, want 200", res.StatusCode)
 	}
 }
 
@@ -259,7 +294,7 @@ func selfSigned(t *testing.T, name string) (certPath, keyPath string) {
 	}
 	keyDER, _ := x509.MarshalECPrivateKey(key)
 	dir := t.TempDir()
-	certPath, keyPath = filepath.Join(dir, "kuro.crt"), filepath.Join(dir, "kuro.key")
+	certPath, keyPath = filepath.Join(dir, "yoru.crt"), filepath.Join(dir, "yoru.key")
 	os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600)
 	os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600)
 	return certPath, keyPath

@@ -12,12 +12,13 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 
-	"kuro/internal/bt/internal/testutil"
-	"kuro/internal/bt/tracker"
+	"yoru/internal/bt/internal/testutil"
+	"yoru/internal/bt/tracker"
 )
 
 func TestClientInvalidTracker(t *testing.T) {
-	timeout := time.NewTimer(3 * time.Second)
+	// Ends at the event; the margin is for a slow lookup of the .invalid name under a busy test run.
+	timeout := time.NewTimer(20 * time.Second)
 	receivedStatusUpdate := make(chan bool)
 	gotTrackerDisconnectedEvt := false
 	cfg := TestingConfig(t)

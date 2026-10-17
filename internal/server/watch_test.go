@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/store"
 )
 
 // watchHarness is a server knowing one twelve-episode show, id 1.

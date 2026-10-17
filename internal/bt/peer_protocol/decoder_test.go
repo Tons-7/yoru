@@ -29,7 +29,7 @@ func BenchmarkDecodePieces(t *testing.B) {
 		R:         bufio.NewReaderSize(&r, 1<<10),
 		MaxLength: 1 << 18,
 		Pool: &sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				b := make([]byte, pieceLen)
 				return &b
 			},
@@ -62,7 +62,7 @@ func TestDecodeShortPieceEOF(t *testing.T) {
 	d := Decoder{
 		R:         bufio.NewReader(r),
 		MaxLength: 1 << 15,
-		Pool: &sync.Pool{New: func() interface{} {
+		Pool: &sync.Pool{New: func() any {
 			b := make([]byte, 2)
 			return &b
 		}},
@@ -82,7 +82,7 @@ func TestDecodeOverlongPiece(t *testing.T) {
 	d := Decoder{
 		R:         bufio.NewReader(r),
 		MaxLength: 1 << 15,
-		Pool: &sync.Pool{New: func() interface{} {
+		Pool: &sync.Pool{New: func() any {
 			b := make([]byte, 2)
 			return &b
 		}},

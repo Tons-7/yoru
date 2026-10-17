@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { LIST_STATUSES, type LibraryItem } from '../lib/api'
 import { useFavourites, useLibrary, useLibraryCounts } from '../lib/queries'
-import { PosterCard, PosterGrid, toCard } from '../components/PosterCard'
+import { PosterCard, PosterGrid } from '../components/PosterCard'
+import { toCard } from '../lib/cards'
 import {
   Empty,
   ErrorState,
@@ -14,9 +15,8 @@ import {
   Segmented,
   Select,
   Skeleton,
-  useClampPage,
-  useDebounced,
 } from '../components/ui'
+import { useClampPage, useDebounced } from '../lib/hooks'
 
 const FAVOURITES = 'favourites'
 
@@ -30,7 +30,7 @@ export function Library() {
   const status = params.get('status') ?? ''
   const page = Number(params.get('page') ?? 1)
 
-  // Favourites are kuro's own shelf, not a tracker status.
+  // Favourites are Yoru's own shelf, not a tracker status.
   const favourites = status === FAVOURITES
   const sort = params.get('sort') ?? 'updated'
   const [text, setText] = useState(params.get('q') ?? '')

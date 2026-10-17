@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/parse"
-	"kuro/internal/store"
+	"yoru/internal/parse"
+	"yoru/internal/store"
 )
 
 // A dual-audio release satisfies both preferences; the track is chosen at playback.

@@ -6,8 +6,8 @@ import (
 
 	g "github.com/anacrolix/generics"
 
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/types/infohash"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/types/infohash"
 )
 
 type mapPieceCompletion struct {

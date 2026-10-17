@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"kuro/internal/corpus"
-	"kuro/internal/match"
-	"kuro/internal/metadata"
-	"kuro/internal/parse"
+	"yoru/internal/corpus"
+	"yoru/internal/match"
+	"yoru/internal/metadata"
+	"yoru/internal/parse"
 )
 
 type CorpusEntry struct {

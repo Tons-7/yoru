@@ -10,11 +10,11 @@ import (
 	"sync"
 	"testing"
 
-	"kuro/internal/db"
-	"kuro/internal/indexer"
-	"kuro/internal/score"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/db"
+	"yoru/internal/indexer"
+	"yoru/internal/score"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // The Garden of Sinners as AniList has it: ten entries of one film each, chained by sequel

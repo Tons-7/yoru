@@ -10,10 +10,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"kuro/internal/db"
-	"kuro/internal/metadata"
-	"kuro/internal/store"
-	"kuro/internal/transcode"
+	"yoru/internal/db"
+	"yoru/internal/metadata"
+	"yoru/internal/store"
+	"yoru/internal/transcode"
 )
 
 func skipStore(t *testing.T) *store.Store {

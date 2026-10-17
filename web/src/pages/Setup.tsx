@@ -7,7 +7,7 @@ import { ComponentState } from '../components/ComponentState'
 import { WhereThingsGo } from '../components/WhereThingsGo'
 import { Badge, Button, ErrorState, LinkButton, PageHeader, Skeleton } from '../components/ui'
 
-/** What kuro needs before it can play anything, and what each piece is for. */
+/** What Yoru needs before it can play anything, and what each piece is for. */
 export function SetupPage() {
   const qc = useQueryClient()
   const { data, isPending, isError, error, refetch } = useSetup({
@@ -42,7 +42,7 @@ export function SetupPage() {
     <div className="mx-auto max-w-3xl space-y-6">
       <PageHeader
         title="Setting up"
-        subtitle="kuro shells out to a few external programs. None are bundled: together they are far larger than the app itself."
+        subtitle="Yoru shells out to a few external programs. None are bundled: together they are far larger than the app itself."
       />
 
       <section className="surface overflow-hidden">
@@ -94,11 +94,11 @@ export function SetupPage() {
 
       {data.temporary && (
         <section className="rounded-xl border border-recap/40 bg-recap/10 p-4 text-sm">
-          <p className="font-semibold text-base-100">kuro is running from a temporary folder</p>
+          <p className="font-semibold text-base-100">Yoru is running from a temporary folder</p>
           <p className="mt-1 text-base-300">
-            That happens when kuro.exe is opened from inside the zip. Windows deletes
+            That happens when yoru.exe is opened from inside the zip. Windows deletes
             the folder when the zip window closes, so settings saved beside it are
-            lost each time. Extract the zip to a folder of its own and run kuro.exe
+            lost each time. Extract the zip to a folder of its own and run yoru.exe
             from there.
           </p>
           <p className="mt-1 truncate text-xs text-base-500" title={data.configPath}>
@@ -111,7 +111,7 @@ export function SetupPage() {
         <section className="rounded-xl border border-recap/40 bg-recap/10 p-4 text-sm">
           <p className="font-semibold text-base-100">There is a config.toml.txt next to config.toml</p>
           <p className="mt-1 text-base-300">
-            Notepad adds .txt when saving as a new file, and kuro only reads{' '}
+            Notepad adds .txt when saving as a new file, and Yoru only reads{' '}
             <code className="text-base-300">config.toml</code>. Move your changes into that
             file, delete the .txt one, and restart.
           </p>
@@ -131,7 +131,7 @@ export function SetupPage() {
         ) : (
           <>
             <p className="mt-1 text-sm text-base-400">
-              kuro ships with no torrent sites. Add one block per site to{' '}
+              Yoru ships with no torrent sites. Add one block per site to{' '}
               <code className="text-base-300">{data.configPath}</code> and restart.{' '}
               <code className="text-base-300">type</code> is the feed format
               (<code className="text-base-300">nyaa</code> or{' '}

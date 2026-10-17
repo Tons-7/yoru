@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 func NewFileWithCompletion(baseDir string, completion PieceCompletion) ClientImplCloser {

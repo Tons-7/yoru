@@ -9,11 +9,11 @@ import (
 	"github.com/anacrolix/chansync/events"
 	"github.com/anacrolix/sync"
 
-	"kuro/internal/bt/dht/containers"
-	"kuro/internal/bt/dht/int160"
-	k_nearest_nodes "kuro/internal/bt/dht/k-nearest-nodes"
-	"kuro/internal/bt/dht/krpc"
-	"kuro/internal/bt/dht/types"
+	"yoru/internal/bt/dht/containers"
+	"yoru/internal/bt/dht/int160"
+	k_nearest_nodes "yoru/internal/bt/dht/k-nearest-nodes"
+	"yoru/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/types"
 )
 
 type QueryResult struct {
@@ -23,7 +23,7 @@ type QueryResult struct {
 	// Data associated with a closest node. Is this ever not a string? I think using generics for
 	// this leaks throughout the entire Operation. Hardly worth it. It's still possible to handle
 	// invalid token types at runtime.
-	ClosestData interface{}
+	ClosestData any
 	Nodes       []krpc.NodeInfo
 	Nodes6      []krpc.NodeInfo
 }
@@ -210,7 +210,7 @@ func (op *Operation) run() {
 	}
 }
 
-func (op *Operation) addClosest(node krpc.NodeInfo, data interface{}) {
+func (op *Operation) addClosest(node krpc.NodeInfo, data any) {
 	var ami types.AddrMaybeId
 	ami.FromNodeInfo(node)
 	if !op.input.NodeFilter(ami) {

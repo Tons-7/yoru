@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/sound"
+	"yoru/internal/sound"
 )
 
 func TestMPVAndVLCCarryTheSoundOptions(t *testing.T) {
@@ -24,7 +24,7 @@ func TestMPVAndVLCCarryTheSoundOptions(t *testing.T) {
 	}
 }
 
-// mpv runs ffmpeg's filters itself: the graph kuro hands it must be one its build accepts.
+// mpv runs ffmpeg's filters itself: the graph Yoru hands it must be one its build accepts.
 func TestMPVAcceptsTheSoundGraph(t *testing.T) {
 	mpv, ffmpeg := binaries(t)
 	clip := testClip(t, ffmpeg, 3)

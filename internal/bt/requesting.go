@@ -7,14 +7,14 @@ import (
 	"runtime/pprof"
 	"time"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/generics/heap"
 	"github.com/anacrolix/multiless"
 
-	requestStrategy "kuro/internal/bt/internal/request-strategy"
-	"kuro/internal/bt/metainfo"
-	typedRoaring "kuro/internal/bt/typed-roaring"
+	requestStrategy "yoru/internal/bt/internal/request-strategy"
+	"yoru/internal/bt/metainfo"
+	typedRoaring "yoru/internal/bt/typed-roaring"
 )
 
 type (
@@ -45,6 +45,18 @@ type desiredPeerRequests struct {
 	requestIndexes []RequestIndex
 	peer           *PeerConn
 	pieceStates    []g.Option[requestStrategy.PieceRequestOrderState]
+	// Where each reader is: a Now piece is fetched from there on, then what's before it.
+	readerAt []RequestIndex
+}
+
+// readFrom is the chunk a reader in this piece waits on.
+func (p *desiredPeerRequests) readFrom(piece pieceIndex) (RequestIndex, bool) {
+	for _, r := range p.readerAt {
+		if p.peer.t.pieceIndexOfRequestIndex(r) == piece {
+			return r, true
+		}
+	}
+	return 0, false
 }
 
 func (p *desiredPeerRequests) lessByValue(leftRequest, rightRequest RequestIndex) bool {
@@ -84,6 +96,15 @@ func (p *desiredPeerRequests) lessByValue(leftRequest, rightRequest RequestIndex
 	}()
 	if ml.Ok() {
 		return ml.MustLess()
+	}
+	// Peers serve in the order asked: a piece at a time, each from its reader on and then its start, whoever
+	// holds the chunks, so the chunk a reader waits on is taken over from a slow peer before the rest.
+	if priority == PiecePriorityNow {
+		ml = ml.Int(leftPieceIndex, rightPieceIndex)
+		if from, ok := p.readFrom(leftPieceIndex); ok && !ml.Ok() {
+			ml = ml.Bool(leftRequest < from, rightRequest < from)
+		}
+		return multiless.EagerOrdered(ml, leftRequest, rightRequest).MustLess()
 	}
 	leftRequestState := t.requestState[leftRequest]
 	rightRequestState := t.requestState[rightRequest]
@@ -174,6 +195,7 @@ func (p *PeerConn) getDesiredRequestState() (desired desiredRequestState) {
 		peer:           p,
 		pieceStates:    t.requestPieceStates,
 		requestIndexes: t.requestIndexes,
+		readerAt:       t.readerRequests(),
 	}
 	clear(requestHeap.pieceStates)
 	t.logPieceRequestOrder()
@@ -311,13 +333,24 @@ func (p *PeerConn) applyRequestState(next desiredRequestState) {
 	heap.Init(requestHeap)
 
 	t := p.t
+	cancels := 0
+	if requestHeap.Len() > 0 && p.needRequestUpdate != peerUpdateRequestsRemoteRejectReason {
+		cancels = p.jumpQueue(&next.Requests, next.Requests.requestIndexes[0])
+	}
 	originalRequestCount := current.Requests.GetCardinality()
 	for {
 		if requestHeap.Len() == 0 {
 			break
 		}
+		// Cancels and requests share the write buffer, which has room for maxLocalToRemoteRequests.
+		if cancels+maxRequests(current.Requests.GetCardinality()-originalRequestCount) >= maxLocalToRemoteRequests {
+			break
+		}
 		numPending := maxRequests(current.Requests.GetCardinality() + current.Cancelled.GetCardinality())
-		if numPending >= p.nominalMaxRequests() {
+		// Cancels not yet acknowledged still count, except against a Now piece: they're gone from ahead of it.
+		if numPending >= p.nominalMaxRequests() && (cancels == 0 ||
+			maxRequests(current.Requests.GetCardinality()) >= p.nominalMaxRequests() ||
+			!next.Requests.isNow(next.Requests.requestIndexes[0])) {
 			break
 		}
 		req := heap.Pop(requestHeap)
@@ -330,6 +363,10 @@ func (p *PeerConn) applyRequestState(next desiredRequestState) {
 		// the peer can handle more requests it will send an "unchoked" message - which
 		// will cause it to get added back to the request queue
 		if p.needRequestUpdate == peerUpdateRequestsRemoteRejectReason {
+			continue
+		}
+		// jumpQueue cancelled it in this pass; it waits for the peer's reject before it can be asked again.
+		if cancels > 0 && current.Cancelled.Contains(req) {
 			continue
 		}
 
@@ -371,6 +408,34 @@ func (p *PeerConn) applyRequestState(next desiredRequestState) {
 	// 	"requests %v->%v (peak %v->%v) reason %q (peer %v)",
 	// 	originalRequestCount, current.Requests.GetCardinality(), p.peakRequests, newPeakRequests, p.needRequestUpdate, p)
 	p.peakRequests = newPeakRequests
+}
+
+func (p *desiredPeerRequests) isNow(r RequestIndex) bool {
+	return p.pieceStates[p.peer.t.pieceIndexOfRequestIndex(r)].UnwrapPtr().Priority == PiecePriorityNow
+}
+
+// jumpQueue: a Now piece (a reader waits on it) not yet asked of anyone, or held by a peer half as quick,
+// goes ahead of this peer's queue. Peers serve in the order asked, so lesser requests are cancelled first.
+func (p *PeerConn) jumpQueue(next *desiredPeerRequests, top RequestIndex) (cancels int) {
+	t := p.t
+	piece := t.pieceIndexOfRequestIndex(top)
+	if !next.isNow(top) || p.peerChoking && !p.peerAllowedFast.Contains(piece) {
+		return 0
+	}
+	if holder := t.requestingPeer(top); !t.pieceHasUnrequestedChunks(piece) &&
+		(holder == nil || holder == p || holder.queue.rate <= 0 || p.queue.rate <= 2*holder.queue.rate) {
+		return 0
+	}
+	// At most half the write buffer, so the requests behind them still fit.
+	budget := maxLocalToRemoteRequests / 2
+	p.requestState.Requests.IterateSnapshot(func(r RequestIndex) bool {
+		if t.piece(t.pieceIndexOfRequestIndex(r)).purePriority() < PiecePriorityNow {
+			p.cancel(r)
+			cancels++
+		}
+		return cancels < budget
+	})
+	return cancels
 }
 
 // This could be set to 10s to match the unchoke/request update interval recommended by some

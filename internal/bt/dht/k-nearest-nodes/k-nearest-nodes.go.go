@@ -6,15 +6,15 @@ import (
 	"github.com/anacrolix/multiless"
 	"github.com/benbjohnson/immutable"
 
-	"kuro/internal/bt/dht/int160"
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/int160"
+	"yoru/internal/bt/dht/krpc"
 )
 
 type Key = krpc.NodeInfoAddrPort
 
 type Elem struct {
 	Key
-	Data interface{}
+	Data any
 }
 
 type Type struct {

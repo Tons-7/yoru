@@ -6,15 +6,15 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/score"
+	"yoru/internal/anilist"
+	"yoru/internal/score"
 )
 
 // Hitting play on the kinds that break differently: long-runner, split cour,
-// film. Opt-in: KURO_LIVE=1 go test ./internal/library -run LivePlays -v
+// film. Opt-in: YORU_LIVE=1 go test ./internal/library -run LivePlays -v
 func TestLivePlaysAcrossShows(t *testing.T) {
-	if os.Getenv("KURO_LIVE") == "" {
-		t.Skip("set KURO_LIVE=1 to search the live indexers")
+	if os.Getenv("YORU_LIVE") == "" {
+		t.Skip("set YORU_LIVE=1 to search the live indexers")
 	}
 
 	// numbers a release may carry for the episode (a later cour also goes by its absolute one).

@@ -1,16 +1,16 @@
 package bt_test
 
 import (
-	"math/rand"
+	"crypto/rand"
 	"strconv"
 	"testing"
 
 	"github.com/anacrolix/sync"
 	qt "github.com/go-quicktest/qt"
 
-	. "kuro/internal/bt"
-	"kuro/internal/bt/internal/testutil"
-	pp "kuro/internal/bt/peer_protocol"
+	. "yoru/internal/bt"
+	"yoru/internal/bt/internal/testutil"
+	pp "yoru/internal/bt/peer_protocol"
 )
 
 const (

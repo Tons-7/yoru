@@ -1,7 +1,7 @@
 package krpc
 
 import (
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 type Bep46Payload struct {

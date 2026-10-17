@@ -36,7 +36,7 @@ var toAniList = map[string]string{
 	StatusPlanToWatch: "PLANNING",
 }
 
-// Status maps a kuro status to MAL's; rewatching is only a flag there, so it reports as watching.
+// Status maps a Yoru status to MAL's; rewatching is only a flag there, so it reports as watching.
 func Status(status string) string {
 	if s, ok := fromAniList[strings.ToUpper(status)]; ok {
 		return s
@@ -61,7 +61,7 @@ type Entry struct {
 	Updated    time.Time
 }
 
-// LocalScore is the entry's score on kuro's 0-100 scale; MAL rates 0-10.
+// LocalScore is the entry's score on Yoru's 0-100 scale; MAL rates 0-10.
 func (e Entry) LocalScore() int { return e.Score * 10 }
 
 // MALScore converts a 0-100 score to MAL's 0-10, rounding to nearest.
@@ -72,8 +72,8 @@ func MALScore(score int) int {
 	return min(10, (score+5)/10)
 }
 
-// ListStatus is the entry's status in AniList's vocabulary, which is what kuro
-// stores: a rewatch is REPEATING there, while MAL says watching + is_rewatching.
+// ListStatus is the entry's status in AniList's vocabulary, which Yoru stores: a rewatch is REPEATING there,
+// while MAL says watching + is_rewatching.
 func (e Entry) ListStatus() string {
 	if e.Rewatching && strings.EqualFold(e.Status, StatusWatching) {
 		return "REPEATING"

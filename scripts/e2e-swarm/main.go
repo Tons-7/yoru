@@ -1,5 +1,5 @@
 // A local swarm for the browser checks: seeds copies of the test episode (one torrent each), dials the
-// throwaway kuro's engine, and answers as a nyaa site listing them. One JSON line once ready, then runs.
+// throwaway Yoru's engine, and answers as a nyaa site listing them. One JSON line once ready, then runs.
 package main
 
 import (
@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/bt"
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/metainfo"
 )
 
 type seeded struct {
@@ -32,10 +32,10 @@ type seeded struct {
 func main() {
 	src := flag.String("src", "", "episode file to seed copies of")
 	dir := flag.String("dir", "", "where the copies live")
-	title := flag.String("title", "Kuro Test Show", "the show the releases name")
+	title := flag.String("title", "Yoru Test Show", "the show the releases name")
 	count := flag.Int("count", 3, "how many episodes")
 	listen := flag.Int("listen", 0, "peer port to seed on")
-	peer := flag.String("peer", "", "host:port of the kuro engine to dial")
+	peer := flag.String("peer", "", "host:port of the Yoru engine to dial")
 	httpAddr := flag.String("http", "", "address to answer indexer searches on")
 	flag.Parse()
 	if *src == "" || *dir == "" || *listen == 0 || *peer == "" || *httpAddr == "" {

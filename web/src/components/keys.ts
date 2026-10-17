@@ -21,7 +21,7 @@ export function usePortalHome(): HTMLElement {
 }
 
 /** Asks the shortcuts list to open, from a menu that does not own it. */
-export const SHOW_SHORTCUTS = 'kuro:shortcuts'
+export const SHOW_SHORTCUTS = 'yoru:shortcuts'
 
 export interface Shortcut {
   keys: string[]

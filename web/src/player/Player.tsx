@@ -20,7 +20,9 @@ import { clockTime, cx, languageName } from '../lib/format'
 import { refreshDownloads } from '../lib/queries'
 import { SHOW_SHORTCUTS } from '../components/keys'
 import { PlayIcon } from '../components/PosterCard'
-import { buttonClass, Spinner, useDismiss } from '../components/ui'
+import { Spinner } from '../components/ui'
+import { useDismiss } from '../lib/hooks'
+import { buttonClass } from '../lib/ui'
 import { useAnime4K, type UpscaleTier } from './anime4k'
 import {
   skipKind,
@@ -75,7 +77,7 @@ const LANGUAGE_TAGS: Record<string, string[]> = {
 const SIGNS = /\b(signs?|songs?|s&s|forced)\b/i
 
 /** The track to show: first preferred language, dialogue over signs; the file's default flag comes last. */
-export function chooseTrack(tracks: SubtitleTrack[], languages: string[] = ['en']): SubtitleTrack {
+function chooseTrack(tracks: SubtitleTrack[], languages: string[] = ['en']): SubtitleTrack {
   const dialogue = (t: SubtitleTrack) => !SIGNS.test(t.title ?? '')
   const speaks = (code: string) => (t: SubtitleTrack) =>
     (LANGUAGE_TAGS[code] ?? [code]).includes((t.language ?? '').toLowerCase())
@@ -99,7 +101,7 @@ export function chooseTrack(tracks: SubtitleTrack[], languages: string[] = ['en'
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2]
 
 // Volume, mute, speed and subtitle size carry over; the element alone starts at full volume.
-const PERSIST_KEY = 'kuro.player'
+const PERSIST_KEY = 'yoru.player'
 interface Persisted {
   volume?: number
   muted?: boolean
@@ -149,7 +151,7 @@ export interface PlayerProps {
   artwork?: string
   /** played is media time that actually played since the last report. */
   /** final: the episode's last report (its end, Next, leaving the page), worth waiting on. */
-  onProgress: (position: number, duration: number, played: number, final: boolean) => void
+  onProgress: (position: number, duration: number, played: number, final: boolean, paused: boolean) => void
   onEnded: () => void
   onNext?: () => void
   /** Playing or seeking again, which after the end means the viewer went back. */
@@ -434,13 +436,14 @@ export function Player({
     }
 
     const report = (at: number, final = false) => {
-      reporter(at, duration, played, final)
+      reporter(at, duration, played, final, video.paused)
       played = 0
     }
     const id = window.setInterval(() => {
       if (!video.paused && duration > 0) report(position)
     }, 10_000)
 
+    // On pause and on play alike, so the Discord card turns over at once.
     const flush = () => {
       if (duration > 0) report(position)
     }
@@ -451,6 +454,7 @@ export function Player({
     video.addEventListener('timeupdate', onTime)
     video.addEventListener('seeking', onSeeking)
     video.addEventListener('pause', flush)
+    video.addEventListener('play', flush)
     video.addEventListener('ended', ended)
     window.addEventListener('pagehide', flush)
     return () => {
@@ -458,6 +462,7 @@ export function Player({
       video.removeEventListener('timeupdate', onTime)
       video.removeEventListener('seeking', onSeeking)
       video.removeEventListener('pause', flush)
+      video.removeEventListener('play', flush)
       video.removeEventListener('ended', ended)
       window.removeEventListener('pagehide', flush)
       if (duration > 0) report(position, true)
@@ -1148,9 +1153,9 @@ function Scrubber({
 // The stretches that will play without waiting on the network, as [from, to] seconds: the lighter part of
 // the bar. Asked of the server; the browser's own buffer is a small window around the playhead, no more.
 function useLoadedRanges(streamId: string | undefined, video: HTMLVideoElement | null): Array<[number, number]> {
-  const [ranges, setRanges] = useState<Array<[number, number]>>([])
+  // Tagged with their stream, so another stream's ranges never show and nothing has to be cleared.
+  const [loaded, setLoaded] = useState<{ stream?: string; ranges: Array<[number, number]> }>({ ranges: [] })
   useEffect(() => {
-    setRanges([])
     if (!streamId) return
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -1158,7 +1163,7 @@ function useLoadedRanges(streamId: string | undefined, video: HTMLVideoElement |
       try {
         const res = await api.get<{ complete: boolean; ranges: Array<[number, number]> }>(`/api/stream/${streamId}/loaded`)
         if (stopped) return
-        setRanges(res.ranges)
+        setLoaded({ stream: streamId, ranges: res.ranges })
         // Asked again every few seconds while downloading, only while watched: a poll keeps the session alive.
         if (!res.complete) timer = setTimeout(() => void untilWatching(video, () => stopped).then(read), 4000)
       } catch {
@@ -1171,7 +1176,7 @@ function useLoadedRanges(streamId: string | undefined, video: HTMLVideoElement |
       clearTimeout(timer)
     }
   }, [streamId, video])
-  return ranges
+  return loaded.stream === streamId ? loaded.ranges : []
 }
 
 /** The frame under the pointer, cut from one sprite sheet (no requests), with its time; the time alone until then. */

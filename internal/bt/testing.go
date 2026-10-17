@@ -6,7 +6,7 @@ import (
 
 	"github.com/anacrolix/log"
 
-	pp "kuro/internal/bt/peer_protocol"
+	pp "yoru/internal/bt/peer_protocol"
 )
 
 func TestingConfig(t testing.TB) *ClientConfig {

@@ -14,11 +14,11 @@ import (
 
 	qrcode "github.com/yeqown/go-qrcode/v2"
 
-	"kuro/internal/config"
-	"kuro/internal/library"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
-	"kuro/internal/transcode"
+	"yoru/internal/config"
+	"yoru/internal/library"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
+	"yoru/internal/transcode"
 )
 
 // from sets the client address, which is what decides whether the token is demanded at all.
@@ -137,7 +137,7 @@ func TestForeignHostOnLoopbackStillNeedsTheToken(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
 
-	for _, host := range []string{"evil.example", "kuro.attacker.test:4321"} {
+	for _, host := range []string{"evil.example", "yoru.attacker.test:4321"} {
 		req := httptest.NewRequest("GET", "/api/access", nil)
 		req.RemoteAddr = "127.0.0.1:5555"
 		req.Host = host
@@ -239,7 +239,7 @@ func TestCrossSitePostsAreRefused(t *testing.T) {
 		{}, // a script or the harness, not a browser
 	} {
 		if code := post(header); code == http.StatusForbidden {
-			t.Errorf("%v: refused kuro's own request", header)
+			t.Errorf("%v: refused Yoru's own request", header)
 		}
 	}
 }

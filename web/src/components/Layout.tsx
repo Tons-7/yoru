@@ -20,7 +20,7 @@ import { SHOW_SHORTCUTS } from './keys'
 import { NotificationPanel } from './NotificationPanel'
 import { Shortcuts } from './Shortcuts'
 import { SavedCopyNotice } from './SavedCopyNotice'
-import { useDebounced, useDismiss } from './ui'
+import { useDebounced, useDismiss } from '../lib/hooks'
 
 const TABS = [
   { to: '/', label: 'Home', end: true },
@@ -105,7 +105,7 @@ function Header() {
           <BackButton />
         </span>
         <Link to="/" className="group flex shrink-0 items-baseline gap-1">
-          <span className="font-display text-2xl font-bold tracking-tight text-white">kuro</span>
+          <span className="font-display text-2xl font-bold tracking-tight text-white">Yoru</span>
           <span className="size-1.5 rounded-full bg-accent-500 transition-colors group-hover:bg-accent-400" />
         </Link>
 
@@ -207,14 +207,14 @@ function SearchBox() {
       const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA'
       if (e.key === '/' && !typing) {
         e.preventDefault()
-        document.getElementById('kuro-search')?.focus()
+        document.getElementById('yoru-search')?.focus()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // Instant results from what kuro already holds; AniList is the slow path behind Enter or the last row.
+  // Instant results from what Yoru already holds; AniList is the slow path behind Enter or the last row.
   const q = useDebounced(value.trim(), 200)
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(-1)
@@ -253,7 +253,7 @@ function SearchBox() {
       <div className="relative w-full max-w-56 sm:max-w-none">
         <SearchIcon />
         <input
-          id="kuro-search"
+          id="yoru-search"
           value={value}
           onChange={(e) => {
             setValue(e.target.value)
@@ -274,7 +274,7 @@ function SearchBox() {
           }}
           role="combobox"
           aria-expanded={showMenu}
-          aria-controls="kuro-search-results"
+          aria-controls="yoru-search-results"
           autoComplete="off"
           placeholder="Search…"
           aria-label="Search anime"
@@ -295,7 +295,7 @@ function SearchBox() {
             aria-label="Clear search"
             onClick={() => {
               setValue('')
-              document.getElementById('kuro-search')?.focus()
+              document.getElementById('yoru-search')?.focus()
             }}
             className="tap absolute top-1/2 right-1 grid size-6 -translate-y-1/2 place-items-center rounded text-base-500 transition-colors hover:text-base-100"
           >
@@ -314,7 +314,7 @@ function SearchBox() {
 
       {showMenu && (
         <ul
-          id="kuro-search-results"
+          id="yoru-search-results"
           role="listbox"
           // Anchored to the box it ran off the left edge of a phone; there it spans the screen instead.
           className="absolute top-full right-0 z-50 mt-1.5 w-80 max-w-[90vw] animate-rise overflow-hidden rounded-xl border border-base-750 bg-base-850 p-1 shadow-panel max-sm:fixed max-sm:inset-x-2 max-sm:top-14 max-sm:w-auto max-sm:max-w-none"

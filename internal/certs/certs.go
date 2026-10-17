@@ -1,4 +1,4 @@
-// Package certs gets kuro an HTTPS certificate: the owner's files, or Let's Encrypt's for a DuckDNS name.
+// Package certs gets Yoru an HTTPS certificate: the owner's files, or Let's Encrypt's for a DuckDNS name.
 package certs
 
 import (

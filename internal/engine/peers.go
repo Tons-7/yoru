@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/bt"
+	"yoru/internal/bt"
 )
 
 // Vars so tests need not wait.

@@ -1,5 +1,4 @@
 //go:build !wasm
-// +build !wasm
 
 package bt
 
@@ -10,8 +9,8 @@ import (
 	qt "github.com/go-quicktest/qt"
 	"github.com/stretchr/testify/require"
 
-	"kuro/internal/bt/internal/testutil"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/internal/testutil"
+	"yoru/internal/bt/storage"
 )
 
 func TestBoltPieceCompletionClosedWhenClientClosed(t *testing.T) {

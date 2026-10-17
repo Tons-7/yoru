@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/anilist"
-	"kuro/internal/db"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/db"
+	"yoru/internal/store"
 )
 
 // AniList answers 50 ids at a time, so all 61 films of a franchise need a second request.

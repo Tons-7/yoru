@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/db"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/db"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 func restartFixture(t *testing.T, age time.Duration) (*Cache, *store.Store, *fakeEngine) {

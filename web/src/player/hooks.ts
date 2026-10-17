@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useEffect, useEffectEvent, useRef, useState, type RefObject } from 'react'
 import type Hls from 'hls.js'
 import type JASSUB from 'jassub'
 // ?worker&url, not ?url: the plain form copies worker.js verbatim, leaving its
@@ -15,18 +15,17 @@ export function useHlsSource(
   startAt = 0,
   onGone?: () => void,
 ) {
-  const [error, setError] = useState<string | null>(null)
+  // Tagged with what it was about: the last episode's error never sits over the next one's search.
+  const [failure, setFailure] = useState<{ video: HTMLVideoElement; playlist: string; message: string } | null>(null)
+  const error = failure && failure.video === video && failure.playlist === playlist ? failure.message : null
   const hls = useRef<Hls | null>(null)
   // Read at attach time, not tracked: a resume update mid-episode must not tear the player down.
-  const startRef = useRef(startAt)
-  startRef.current = startAt
-  const goneRef = useRef(onGone)
-  goneRef.current = onGone
+  const readStart = useEffectEvent(() => startAt)
+  const gone = useEffectEvent(() => onGone?.())
 
   useEffect(() => {
-    // Cleared before the early return too: the last episode's error must not sit over the next one's search.
-    setError(null)
     if (!video || !playlist) return
+    const setError = (message: string) => setFailure({ video, playlist, message })
 
     let cancelled = false
     let native = false
@@ -55,9 +54,9 @@ export function useHlsSource(
           return
         }
         native = true
-        video.src = playlist
+        video.setAttribute('src', playlist)
         // A plain src reload starts at zero unless seeked by hand.
-        const at = startRef.current
+        const at = readStart()
         if (at > 0) {
           seek = () => {
             if (Math.abs(video.currentTime - at) > 2) video.currentTime = at
@@ -67,9 +66,10 @@ export function useHlsSource(
         return
       }
 
+      const start = readStart()
       const instance = new HlsCtor({
         // The resume segment first, so the encoder started there isn't restarted from zero.
-        startPosition: startRef.current > 0 ? startRef.current : -1,
+        startPosition: start > 0 ? start : -1,
         // A modest lookahead: asking far past one in-order encoder reads as a stall.
         maxBufferLength: 20,
         maxMaxBufferLength: 60,
@@ -89,7 +89,7 @@ export function useHlsSource(
             // can never succeed. Stop and let the reopen rebuild the player.
             if (data.response?.code === 404) {
               instance.stopLoad()
-              goneRef.current?.()
+              gone()
             } else {
               instance.startLoad()
             }
@@ -219,8 +219,7 @@ export function useKeepAlive(
   playlist?: string,
   onLost?: () => void,
 ) {
-  const lostRef = useRef(onLost)
-  lostRef.current = onLost
+  const lost = useEffectEvent(() => onLost?.())
 
   useEffect(() => {
     if (!video || !playlist) return
@@ -229,7 +228,7 @@ export function useKeepAlive(
     const ping = async () => {
       try {
         const res = await fetch(playlist, { credentials: 'same-origin' })
-        if (!cancelled && res.status === 404) lostRef.current?.()
+        if (!cancelled && res.status === 404) lost()
       } catch {
         // Offline or mid-restart; the next ping tries again.
       }
@@ -571,7 +570,7 @@ async function keepFilling(
       if (res.status === 404) return
       if (!res.ok) continue
 
-      const complete = res.headers.get('X-Kuro-Complete') === 'true'
+      const complete = res.headers.get('X-Yoru-Complete') === 'true'
       const text = await res.text()
       const got = cueCount(text)
       if (got > cues) {
@@ -748,13 +747,13 @@ export function useDocumentPiP(container: HTMLElement | null) {
     placeholder.textContent = 'Playing in picture in picture'
 
     container.replaceWith(placeholder)
-    container.style.height = '100%'
+    container.style.setProperty('height', '100%')
     pip.document.body.append(container)
     setActive(true)
     setWin(pip)
 
     pip.addEventListener('pagehide', () => {
-      container.style.height = ''
+      container.style.removeProperty('height')
       placeholder.replaceWith(container)
       setActive(false)
       setWin(null)
@@ -805,10 +804,10 @@ export interface Sheet {
 
 /** Asks for the preview sheet, polling while it is built; it needs the whole file. */
 export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null): Sheet | undefined {
-  const [sheet, setSheet] = useState<Sheet | undefined>()
+  // Tagged with its stream, so another episode never shows this one's sheet while it asks for its own.
+  const [found, setFound] = useState<{ stream: string; sheet: Sheet }>()
 
   useEffect(() => {
-    setSheet(undefined)
     if (!streamId) return
 
     let timer = 0
@@ -827,7 +826,7 @@ export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null
         if (cancelled || !body.interval) return
 
         if (body.ready) {
-          setSheet({ ...body, url: `/api/stream/${streamId}/thumbs.jpg` })
+          setFound({ stream: streamId, sheet: { ...body, url: `/api/stream/${streamId}/thumbs.jpg` } })
           return
         }
         // The sheet is only built once the file is whole, which for a torrent
@@ -845,7 +844,7 @@ export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null
     }
   }, [streamId, video])
 
-  return sheet
+  return found && found.stream === streamId ? found.sheet : undefined
 }
 
 /** Whether the upscaler's canvas holds the video's current frame, which a pause, seek or lost device spoils. */
@@ -853,7 +852,6 @@ export function useFreshFrames(video: HTMLVideoElement | null, enabled: boolean)
   const [fresh, setFresh] = useState(false)
 
   useEffect(() => {
-    setFresh(false)
     if (!video || !enabled) return
 
     // Without it the canvas never claims to be current, costing upscaling, not the picture.
@@ -880,6 +878,8 @@ export function useFreshFrames(video: HTMLVideoElement | null, enabled: boolean)
       video.cancelVideoFrameCallback?.(handle)
       video.removeEventListener('seeking', stale)
       video.removeEventListener('emptied', stale)
+      // Another video, or upscaling off, leaves the canvas on this one's last frame.
+      setFresh(false)
     }
   }, [video, enabled])
 

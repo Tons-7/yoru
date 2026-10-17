@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/torrent"
+	"yoru/internal/torrent"
 )
 
 // Every wait shrunk to milliseconds, so a dead swarm is found and tried again within the test.

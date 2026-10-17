@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/store"
 )
 
 func csv(v string) []string {

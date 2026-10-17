@@ -1,18 +1,17 @@
 package dht
 
 import (
-	"io/ioutil"
 	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 )
 
 func TestSaveLoadNodesFile(t *testing.T) {
-	f, err := ioutil.TempFile("", "")
+	f, err := os.CreateTemp("", "")
 	require.NoError(t, err)
 	defer os.Remove(f.Name())
 	f.Close()

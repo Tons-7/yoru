@@ -102,6 +102,9 @@ func listenTcp(network, address string) (s socket, err error) {
 	}
 	if dialTcpFromListenPort {
 		netDialer.LocalAddr = l.Addr()
+	} else if a, ok := l.Addr().(*net.TCPAddr); ok && !a.IP.IsUnspecified() {
+		// Listening on one address (a chosen adapter's): peers are dialled from it too, never another route.
+		netDialer.LocalAddr = &net.TCPAddr{IP: a.IP}
 	}
 	s = tcpSocket{
 		Listener: l,

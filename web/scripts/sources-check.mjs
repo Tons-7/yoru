@@ -1,5 +1,5 @@
 // Release sources on a fresh install, an updating one, and one with sites set (skipped without them).
-//   KURO_NYAA=<url> KURO_TOKYOTOSHO=<url> [SKIP_BUILD=1] [KEEP=1] node scripts/sources-check.mjs
+//   YORU_NYAA=<url> YORU_TOKYOTOSHO=<url> [SKIP_BUILD=1] [KEEP=1] node scripts/sources-check.mjs
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, openSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -17,16 +17,16 @@ const PORT = process.env.PORT ?? '4321'
 const URL = `http://127.0.0.1:${PORT}`
 const ANIME = 185874 // Bleach TYBW: The Calamity, a later cour: the hard case
 const EPISODE = 2
-const NYAA = process.env.KURO_NYAA
-const TOKYO = process.env.KURO_TOKYOTOSHO
+const NYAA = process.env.YORU_NYAA
+const TOKYO = process.env.YORU_TOKYOTOSHO
 
 const exe = (name) => (process.platform === 'win32' ? `${name}.exe` : name)
-const scratch = join(tmpdir(), 'kuro-sources-e2e')
+const scratch = join(tmpdir(), 'yoru-sources-e2e')
 const root = join(scratch, 'root')
 const appdata = join(scratch, 'appdata')
 const shots = join(scratch, 'shots')
-const binCache = join(tmpdir(), 'kuro-e2e-bin')
-const kuroExe = join(binCache, exe('kuro'))
+const binCache = join(tmpdir(), 'yoru-e2e-bin')
+const yoruExe = join(binCache, exe('yoru'))
 const configPath = join(root, 'config.toml')
 
 let server
@@ -67,9 +67,9 @@ function killTree(child) {
 
 async function start(name) {
   const logFd = openSync(join(scratch, `${name}.log`), 'w')
-  server = spawn(kuroExe, [], {
+  server = spawn(yoruExe, [], {
     cwd: root,
-    env: { ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, APPDATA: appdata, KURO_NO_WINDOW: '1' },
+    env: { ...process.env, YORU_ROOT: root, LOCALAPPDATA: appdata, APPDATA: appdata, YORU_NO_WINDOW: '1' },
     stdio: ['ignore', logFd, logFd],
     detached: process.platform !== 'win32',
   })
@@ -134,7 +134,7 @@ async function expectUnconfigured(page, label) {
 }
 
 try {
-  // Another kuro on the port would answer instead, and take every write below.
+  // Another Yoru on the port would answer instead, and take every write below.
   if (await fetch(`${URL}/api/setup`).then((r) => r.ok).catch(() => false)) {
     throw new Error(`something already answers on ${URL}; close it or set PORT`)
   }
@@ -149,7 +149,7 @@ try {
     const r1 = spawnSync('npm run build', [], { cwd: webDir, shell: true, stdio: 'inherit' })
     if (r1.status !== 0) throw new Error('web build failed')
     mkdirSync(binCache, { recursive: true })
-    const r2 = spawnSync('go', ['build', '-o', kuroExe, './cmd/kuro'], { cwd: repo, stdio: 'inherit' })
+    const r2 = spawnSync('go', ['build', '-o', yoruExe, './cmd/yoru'], { cwd: repo, stdio: 'inherit' })
     if (r2.status !== 0) throw new Error('go build failed')
   }
 
@@ -184,7 +184,7 @@ try {
 
   // C: the block filled in, restarted.
   if (!NYAA || !TOKYO) {
-    console.log('\nSKIP configured: set KURO_NYAA and KURO_TOKYOTOSHO to run it')
+    console.log('\nSKIP configured: set YORU_NYAA and YORU_TOKYOTOSHO to run it')
   } else {
     stage('sites configured, restarted')
     writeFileSync(
@@ -244,8 +244,8 @@ try {
     await stop()
     await start('moved')
     const home = (await api('/api/setup')).body ?? {}
-    check(home.dataDir === join(root, 'data'), 'move: kuro now runs from the chosen folder', home.dataDir)
-    check(existsSync(join(root, 'data', 'kuro.db')), 'move: kuro.db is in it')
+    check(home.dataDir === join(root, 'data'), 'move: Yoru now runs from the chosen folder', home.dataDir)
+    check(existsSync(join(root, 'data', 'yoru.db')), 'move: yoru.db is in it')
     const kept = (await api('/api/prefs')).body?.effective ?? {}
     check(kept['playback.autonext'] === 'true', 'move: history and settings came along', String(kept['playback.autonext']))
     check((home.libraryPaths ?? []).includes(scratch), 'move: the library folder came along')

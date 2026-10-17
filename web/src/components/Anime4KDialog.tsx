@@ -1,7 +1,9 @@
 import { useCallback } from 'react'
 import { cx } from '../lib/format'
 import type { DeviceUpscale } from '../player/anime4k'
-import { Segmented, useDismiss, useModalFocus } from './ui'
+import { ANIME4K_MODES } from '../lib/anime4k'
+import { Segmented } from './ui'
+import { useDismiss, useModalFocus } from '../lib/hooks'
 
 const DEVICE_CHOICES: ReadonlyArray<{ value: DeviceUpscale; label: string }> = [
   { value: 'auto', label: 'Auto' },
@@ -18,24 +20,6 @@ const DEVICE_HINTS: Record<DeviceUpscale, string> = {
   balanced: 'The medium networks: about a quarter of the work of Full.',
   full: 'The very large networks. For a dedicated graphics card.',
 }
-
-export const ANIME4K_MODES = [
-  { id: 'A', title: 'A · Restore', hint: 'Sharpens soft, blurry lines. Safe default for most 1080p web releases.' },
-  { id: 'B', title: 'B · Soft restore', hint: 'Gentler. Better when the source is noisy rather than blurry, since it will not harden compression artefacts.' },
-  { id: 'C', title: 'C · Denoise only', hint: 'Upscales and denoises without touching linework. Cheapest, and the right pick for clean Blu-ray sources.' },
-  { id: 'A+A', title: 'A+A · Restore twice', hint: 'Mode A run again. For heavily degraded or low-resolution sources like 480p.' },
-  { id: 'B+B', title: 'B+B · Soft restore twice', hint: 'Mode B run again, for low-resolution sources that are noisy rather than blurry.' },
-  { id: 'C+A', title: 'C+A · Denoise then restore', hint: 'Cleans the noise first, then rebuilds lines. For sources that are both noisy and soft.' },
-] as const
-
-// mpv only; the browser build ships fixed networks. Each step doubles GPU cost.
-export const ANIME4K_SIZES = [
-  { id: 'S', hint: 'Integrated graphics' },
-  { id: 'M', hint: 'Balanced default' },
-  { id: 'L', hint: 'Dedicated GPU' },
-  { id: 'VL', hint: 'Strong GPU' },
-  { id: 'UL', hint: 'High end only; diminishing returns' },
-] as const
 
 export function Anime4KDialog({
   open,

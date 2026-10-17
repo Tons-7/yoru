@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"kuro/internal/library"
+	"yoru/internal/library"
 )
 
 type trackerStatus struct {

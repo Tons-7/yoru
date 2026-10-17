@@ -7,9 +7,9 @@ import (
 
 	"github.com/anacrolix/log"
 
-	trHttp "kuro/internal/bt/tracker/http"
-	"kuro/internal/bt/tracker/udp"
-	"kuro/internal/bt/types/infohash"
+	trHttp "yoru/internal/bt/tracker/http"
+	"yoru/internal/bt/tracker/udp"
+	"yoru/internal/bt/types/infohash"
 )
 
 type Client interface {

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/anilist"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/store"
 )
 
 // The walk records ids; matching needs names. A sibling with no title anywhere

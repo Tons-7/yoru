@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/config"
+	"yoru/internal/config"
 )
 
 // A studio of five anime and a manga, two pages: the first has the TV series, the film and the manga.

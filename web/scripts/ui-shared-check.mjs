@@ -1,7 +1,7 @@
 // The shared pieces: inline confirms, the pager's clamp, Settings tabs, folder refusals, a job that didn't start.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 
 let failures = 0
 const check = (ok, label, detail = '') => {
@@ -78,7 +78,7 @@ await page.unroute('**/api/jobs/*')
 await tab('Library').click()
 const folder = page.getByRole('textbox', { name: 'Folder to add' })
 await folder.waitFor({ timeout: 8000 })
-const bad = 'Z:\\no\\such\\folder\\kuro-check'
+const bad = 'Z:\\no\\such\\folder\\yoru-check'
 await folder.fill(bad)
 await page.getByRole('button', { name: 'Add', exact: true }).click()
 check(await until(() => page.getByText(`${bad}: not readable`).isVisible()), 'the refused folder is named with its reason')

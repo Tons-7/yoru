@@ -1,5 +1,5 @@
 package bt
 
-import "kuro/internal/bt/types"
+import "yoru/internal/bt/types"
 
 type PeerID = types.PeerID

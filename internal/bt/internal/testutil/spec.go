@@ -6,8 +6,8 @@ import (
 
 	"github.com/anacrolix/missinggo/expect"
 
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/metainfo"
 )
 
 type File struct {

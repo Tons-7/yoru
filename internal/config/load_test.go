@@ -10,7 +10,7 @@ import (
 func inTempDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("KURO_ROOT", dir)
+	t.Setenv("YORU_ROOT", dir)
 	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "appdata"))
 	return dir
 }
@@ -169,7 +169,7 @@ func TestLoadKnowsATemporaryRoot(t *testing.T) {
 func TestDataDirIsChosenAndWrittenBack(t *testing.T) {
 	dir := inTempDir(t)
 	cfg, err := Load()
-	if err != nil || cfg.DataDir() != filepath.Join(dir, "appdata", "kuro") {
+	if err != nil || cfg.DataDir() != filepath.Join(dir, "appdata", "yoru") {
 		t.Fatalf("default data dir = %q (%v)", cfg.DataDir(), err)
 	}
 
@@ -184,7 +184,7 @@ func TestDataDirIsChosenAndWrittenBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DataDir() != filepath.Join(dir, "data") || cfg.DatabasePath() != filepath.Join(dir, "data", "kuro.db") {
+	if cfg.DataDir() != filepath.Join(dir, "data") || cfg.DatabasePath() != filepath.Join(dir, "data", "yoru.db") {
 		t.Errorf("data dir = %q", cfg.DataDir())
 	}
 	if len(cfg.Indexers) != 1 {
@@ -199,7 +199,7 @@ func TestDataDirIsChosenAndWrittenBack(t *testing.T) {
 	if strings.Count(string(raw), "data_dir") != 1 {
 		t.Errorf("data_dir written more than once:\n%s", raw)
 	}
-	if cfg, _ = Load(); cfg.DataDir() != filepath.Join(dir, "appdata", "kuro") {
+	if cfg, _ = Load(); cfg.DataDir() != filepath.Join(dir, "appdata", "yoru") {
 		t.Errorf("empty should mean the default, got %q", cfg.DataDir())
 	}
 }
@@ -271,7 +271,7 @@ func TestDatabaseLivesUnderLocalAppData(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := filepath.Join(dir, "appdata", "kuro", "kuro.db")
+	want := filepath.Join(dir, "appdata", "yoru", "yoru.db")
 	if cfg.DatabasePath() != want {
 		t.Fatalf("database at %q, want %q", cfg.DatabasePath(), want)
 	}

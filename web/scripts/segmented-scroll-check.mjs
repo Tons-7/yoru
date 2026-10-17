@@ -2,8 +2,8 @@
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 let failures = 0
@@ -12,7 +12,7 @@ const check = (ok, label, detail = '') => {
   if (!ok) failures++
 }
 
-check(await prepareLocalEpisode({ base: BASE, lib: process.env.KURO_LIB, anime: ANIME }), 'test episode ready')
+check(await prepareLocalEpisode({ base: BASE, lib: process.env.YORU_LIB, anime: ANIME }), 'test episode ready')
 
 const browser = await chromium.launch()
 // A phone: short enough that the dialog has to scroll.

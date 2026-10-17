@@ -7,10 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/library"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/config"
+	"yoru/internal/library"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // The callback installs the new token only once the account is known and saved: a failure halfway

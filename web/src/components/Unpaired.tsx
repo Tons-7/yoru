@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { UNPAIRED_EVENT } from '../lib/api'
+import { TOKEN_KEY, UNPAIRED_EVENT } from '../lib/api'
 import { cx } from '../lib/format'
-import { buttonClass } from './ui'
+import { buttonClass } from '../lib/ui'
 
 /** Over everything once the server refuses this device's token. */
 export function Unpaired() {
@@ -12,7 +12,7 @@ export function Unpaired() {
     const on = () => {
       setUnpaired(true)
       try {
-        setRefused(localStorage.getItem('kuro.token'))
+        setRefused(localStorage.getItem(TOKEN_KEY))
       } catch {
         // Unreadable storage: nothing to clear later either.
       }
@@ -27,13 +27,13 @@ export function Unpaired() {
       <div className="max-w-sm">
         <p className="text-lg font-semibold text-white">This device needs pairing again</p>
         <p className="mt-2 text-sm text-base-300">
-          The link it was using was signed out. On the computer running kuro, open Settings › Watch on
+          The link it was using was signed out. On the computer running Yoru, open Settings › Watch on
           your phone and scan the code again.
         </p>
         <button
           onClick={() => {
             try {
-              if (localStorage.getItem('kuro.token') === refused) localStorage.removeItem('kuro.token')
+              if (localStorage.getItem(TOKEN_KEY) === refused) localStorage.removeItem(TOKEN_KEY)
             } catch {
               // Nothing stored is fine.
             }

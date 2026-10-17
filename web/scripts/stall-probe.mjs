@@ -3,10 +3,10 @@ import { copyFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const LIB = process.env.KURO_LIB
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const LIB = process.env.YORU_LIB
 const SRC = process.env.STALL_FILE
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const EP = 4
 
 const api = async (path, init) => {
@@ -21,14 +21,14 @@ const api = async (path, init) => {
 const post = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body) })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-const copy = join(LIB, 'Kuro Real Show - 04.mkv')
+const copy = join(LIB, 'Yoru Real Show - 04.mkv')
 if (!existsSync(copy)) copyFileSync(SRC, copy)
 await post('/api/local/paths', { paths: [LIB] })
 await post('/api/local/scan', {})
 let file
 for (let i = 0; i < 60 && !file; i++) {
   await sleep(1000)
-  file = ((await api('/api/local/files?perPage=200')).body.items ?? []).find((f) => String(f.path).includes('Kuro Real Show'))
+  file = ((await api('/api/local/files?perPage=200')).body.items ?? []).find((f) => String(f.path).includes('Yoru Real Show'))
 }
 if (!file) throw new Error('real file not scanned')
 await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: EP })

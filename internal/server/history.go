@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"kuro/internal/store"
+	"yoru/internal/store"
 )
 
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {

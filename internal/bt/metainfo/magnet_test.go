@@ -2,6 +2,7 @@ package metainfo
 
 import (
 	"encoding/hex"
+	"slices"
 	"testing"
 
 	"github.com/davecgh/go-spew/spew"
@@ -107,12 +108,7 @@ func TestMagnetize(t *testing.T) {
 }
 
 func contains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(haystack, needle)
 }
 
 // Check that we can parse the magnet link generated from a real-world torrent. This was added due

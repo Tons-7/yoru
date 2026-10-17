@@ -2,9 +2,9 @@
 // theirs, and a cast rail of single portraits. Detective Conan is the hard case.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const SHOTS = process.env.SHOTS ?? '.'
-const ANIME = Number(process.env.KURO_RELATED ?? 235)
+const ANIME = Number(process.env.YORU_RELATED ?? 235)
 const RAIL = /^(Related|Movies?|Specials?|OVAs?|ONAs?|Spin-offs?|Alternatives?|Recaps?)(\s·\s\d+)?$/
 
 let failures = 0

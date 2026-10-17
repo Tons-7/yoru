@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"kuro/internal/bt/internal/testutil"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/internal/testutil"
+	"yoru/internal/bt/storage"
 )
 
 // Hashing went by piece index: a seek's piece waited behind every earlier piece queued before it.

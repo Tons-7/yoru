@@ -4,13 +4,13 @@ import (
 	"net/http"
 	"strconv"
 
-	"kuro/internal/anilist"
+	"yoru/internal/anilist"
 )
 
 // Where a response's AniList data came from: live, or a saved copy and its age.
 const (
-	headerLive  = "X-Kuro-Live"
-	headerSaved = "X-Kuro-Saved"
+	headerLive  = "X-Yoru-Live"
+	headerSaved = "X-Yoru-Saved"
 )
 
 // served lets page reads fall back to saved answers and says so in a header.

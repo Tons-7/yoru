@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "typecheck": "tsgo -b --force",
-    "build": "tsgo --noEmit && vite build",
+    "typecheck": "tsc -b --force",
+    "build": "tsc -b && vite build",
     "lint": "oxlint src",
     "preview": "vite preview",
     "e2e:player": "node scripts/run-player-check.mjs",
@@ -30,15 +30,14 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
-    "@types/node": "^24.19.2",
+    "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "@vitejs/plugin-react": "^6.1.2",
     "oxlint": "^1.88.0",
-    "playwright": "1.63",
+    "playwright": "1.64",
     "tailwindcss": "^4.3.3",
-    "typescript": "~6.0.2",
+    "typescript": "^7.0.2",
     "vite": "^8.3.4"
   }
 }

@@ -31,7 +31,7 @@ type Decoder struct {
 	buf    bytes.Buffer
 }
 
-func (d *Decoder) Decode(v interface{}) (err error) {
+func (d *Decoder) Decode(v any) (err error) {
 	defer func() {
 		if err != nil {
 			return
@@ -55,7 +55,7 @@ func (d *Decoder) Decode(v interface{}) (err error) {
 	}()
 
 	pv := reflect.ValueOf(v)
-	if pv.Kind() != reflect.Ptr || pv.IsNil() {
+	if pv.Kind() != reflect.Pointer || pv.IsNil() {
 		return &UnmarshalInvalidArgError{reflect.TypeOf(v)}
 	}
 
@@ -346,14 +346,14 @@ func parseStructFields(struct_ reflect.Type, each func(key string, df dictField)
 		f := struct_.Field(i)
 		if f.Anonymous {
 			t := f.Type
-			if t.Kind() == reflect.Ptr {
+			if t.Kind() == reflect.Pointer {
 				t = t.Elem()
 			}
 			parseStructFields(t, func(key string, df dictField) {
 				innerGet := df.Get
 				df.Get = func(value reflect.Value) func(reflect.Value) {
 					anonPtr := value.Field(i)
-					if anonPtr.Kind() == reflect.Ptr && anonPtr.IsNil() {
+					if anonPtr.Kind() == reflect.Pointer && anonPtr.IsNil() {
 						anonPtr.Set(reflect.New(f.Type.Elem()))
 						anonPtr = anonPtr.Elem()
 					}
@@ -394,7 +394,7 @@ func getStructFieldForKey(struct_ reflect.Type, key string) (f dictField) {
 	f, ok := structFields[struct_][key]
 	structFieldsMu.Unlock()
 	if !ok {
-		var discard interface{}
+		var discard any
 		return dictField{
 			Type: reflect.TypeOf(discard),
 			Get:  func(reflect.Value) func(reflect.Value) { return func(reflect.Value) {} },
@@ -443,7 +443,7 @@ func (d *Decoder) parseDict(v reflect.Value) error {
 		// now we need to actually parse it
 		if df.Type == nil {
 			// Discard the value, there's nowhere to put it.
-			var if_ interface{}
+			var if_ any
 			if_, ok = d.parseValueInterface()
 			if if_ == nil {
 				return fmt.Errorf("error parsing value for key %q", keyValue)
@@ -602,7 +602,7 @@ func (d *Decoder) parseUnmarshaler(v reflect.Value) bool {
 // ("e") and no value was stored.
 func (d *Decoder) parseValue(v reflect.Value) (bool, error) {
 	// we support one level of indirection at the moment
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		// if the pointer is nil, allocate a new element of the type it
 		// points to
 		if v.IsNil() {
@@ -659,7 +659,7 @@ func (d *Decoder) raiseUnknownValueType(b byte, offset int64) {
 	})
 }
 
-func (d *Decoder) parseValueInterface() (interface{}, bool) {
+func (d *Decoder) parseValueInterface() (any, bool) {
 	b, err := d.r.ReadByte()
 	if err != nil {
 		panic(err)
@@ -689,7 +689,7 @@ func (d *Decoder) parseValueInterface() (interface{}, bool) {
 }
 
 // Called after 'i', for an arbitrary integer size.
-func (d *Decoder) parseIntInterface() (ret interface{}) {
+func (d *Decoder) parseIntInterface() (ret any) {
 	start := d.Offset - 1
 
 	if err := d.readInt(); err != nil {
@@ -739,8 +739,8 @@ func (d *Decoder) parseStringInterface() string {
 	return bytesAsString(b)
 }
 
-func (d *Decoder) parseDictInterface() interface{} {
-	dict := make(map[string]interface{})
+func (d *Decoder) parseDictInterface() any {
+	dict := make(map[string]any)
 	var lastKey string
 	lastKeyOk := false
 	for {
@@ -773,8 +773,8 @@ func (d *Decoder) parseDictInterface() interface{} {
 	return dict
 }
 
-func (d *Decoder) parseListInterface() (list []interface{}) {
-	list = []interface{}{}
+func (d *Decoder) parseListInterface() (list []any) {
+	list = []any{}
 	valuei, ok := d.parseValueInterface()
 	for ok {
 		list = append(list, valuei)

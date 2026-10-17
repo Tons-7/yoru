@@ -18,12 +18,12 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
-	"kuro/internal/bt"
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/storage"
 
-	"kuro/internal/torrent"
+	"yoru/internal/torrent"
 )
 
 // pack is three episodes off piece boundaries, so episode 2 starts mid-piece as in a real pack.
@@ -394,7 +394,7 @@ func TestCarriesOverRqbitDownloads(t *testing.T) {
 	}
 }
 
-// kuro's own rqbit session, in the cache, goes once the engine's holds it all.
+// The old rqbit session, in the cache, goes once the engine's holds it all.
 func TestImportedSessionInTheCacheIsRemoved(t *testing.T) {
 	seedDir := t.TempDir()
 	mi, content := makePack(t, seedDir)
@@ -548,7 +548,7 @@ func seederOn(t *testing.T, dir string, mi metainfo.MetaInfo, port int) *bt.Clie
 }
 
 // Losing the network drops every peer. When it is back the peers are where they were, and the download
-// must find them again by itself: restarting kuro was the only thing that did.
+// must find them again by itself: restarting the app was the only thing that did.
 func TestDownloadResumesWhenItsPeersComeBack(t *testing.T) {
 	seedDir := t.TempDir()
 	mi, content := makePack(t, seedDir)

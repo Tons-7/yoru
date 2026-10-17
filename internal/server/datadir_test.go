@@ -8,15 +8,15 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/db"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/db"
+	"yoru/internal/store"
 )
 
 // A chosen data folder gets the database and config.toml's entry; one already holding a database is kept.
 func TestSetDataDirCopiesTheDatabaseAndWritesConfig(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("KURO_ROOT", root)
+	t.Setenv("YORU_ROOT", root)
 	t.Setenv("LOCALAPPDATA", filepath.Join(root, "appdata"))
 	cfg, err := config.Load()
 	if err != nil {
@@ -41,7 +41,7 @@ func TestSetDataDirCopiesTheDatabaseAndWritesConfig(t *testing.T) {
 	if rec := post("data"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"copied":true`) {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	copied, err := db.Open(filepath.Join(root, "data", "kuro.db"))
+	copied, err := db.Open(filepath.Join(root, "data", "yoru.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestSetDataDirCopiesTheDatabaseAndWritesConfig(t *testing.T) {
 	}
 
 	// A second folder with its own database keeps it, and switching to it
-	// has to be confirmed: it would open that history instead of this one.
+	// has to be confirmed: it would open that history instead of this one. kuro's counts too.
 	other := filepath.Join(root, "other")
 	os.Mkdir(other, 0o755)
 	os.WriteFile(filepath.Join(other, "kuro.db"), []byte("theirs"), 0o600)

@@ -2,10 +2,11 @@ import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { api, ApiError } from '../lib/api'
 import { bytes } from '../lib/format'
-import { buttonClass, TextInput } from './ui'
+import { TextInput } from './ui'
+import { buttonClass } from '../lib/ui'
 import type { SetupState } from '../lib/queries'
 
-/** Every folder kuro uses and its config.toml key. */
+/** Every folder Yoru uses and its config.toml key. */
 export function WhereThingsGo({ setup }: { setup: SetupState }) {
   const [picking, setPicking] = useState(false)
   const libraryPaths = setup.libraryPaths ?? []
@@ -103,7 +104,7 @@ function DataDirPicker({ fallback }: { fallback: string }) {
       <p className="mt-2 text-xs text-accent-400">
         {move.data.restart === false
           ? 'Already using that folder.'
-          : `Saved: ${move.data.dataDir}. Restart kuro to use it${
+          : `Saved: ${move.data.dataDir}. Restart Yoru to use it${
               move.data.copied ? '. Your history was copied there.' : '.'
             }`}
       </p>
@@ -112,17 +113,17 @@ function DataDirPicker({ fallback }: { fallback: string }) {
   return (
     <div className="mt-2 space-y-2 text-xs">
       <p className="text-base-400">
-        Empty means the default ({fallback}). A relative path is beside kuro.exe:{' '}
+        Empty means the default ({fallback}). A relative path is beside yoru.exe:{' '}
         <button onClick={() => setPath('data')} className="text-accent-400 hover:underline">
           data
         </button>{' '}
-        keeps everything in kuro's own folder.
+        keeps everything in Yoru's own folder.
       </p>
       <div className="flex gap-2">
         <TextInput
           value={path}
           onChange={(e) => setPath(e.target.value)}
-          placeholder="D:\kuro\data"
+          placeholder="D:\Yoru\data"
           aria-label="Data folder"
           className="min-w-0 flex-1"
         />
@@ -137,7 +138,7 @@ function DataDirPicker({ fallback }: { fallback: string }) {
       {existing ? (
         <div className="space-y-2 rounded-md border border-recap/40 bg-recap/10 p-2.5 text-base-200">
           <p>
-            That folder already has a kuro history
+            That folder already has a Yoru history
             {existing.modified
               ? `, last changed ${new Date(existing.modified * 1000).toLocaleDateString()}`
               : ''}

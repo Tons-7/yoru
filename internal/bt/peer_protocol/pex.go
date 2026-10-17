@@ -1,9 +1,9 @@
 package peer_protocol
 
 import (
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 type PexMsg struct {

@@ -58,6 +58,16 @@ var Defaults = map[string]string{
 	"cache.prefetch_full": "true",
 	// "pause": downloads stand down while the episode on screen is still arriving; "continue": never.
 	"downloads.while_watching": "pause",
+	// Download cap in bytes a second, 0 for none; streams count against it too.
+	"downloads.limit_bytes": "0",
+	// "while_downloading": share pieces of what downloads, never once it's done; "never": share nothing.
+	"downloads.upload": "while_downloading",
+	// The network adapter torrents keep to, a VPN's; empty is any. They wait while it's down.
+	"downloads.adapter": "",
+
+	// Discord shows what plays (needs the Discord desktop app here); everywhere adds other devices' playback.
+	"discord.enabled":    "false",
+	"discord.everywhere": "false",
 	// off | now (gone once watched) | keep2 (gone once the two after it are watched).
 	"cache.autodelete": "off",
 	// Kept downloads are never evicted, so this is their only automatic cleanup.

@@ -16,11 +16,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/internal/testutil"
-	"kuro/internal/bt/metainfo"
-	pp "kuro/internal/bt/peer_protocol"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/internal/testutil"
+	"yoru/internal/bt/metainfo"
+	pp "yoru/internal/bt/peer_protocol"
+	"yoru/internal/bt/storage"
 )
 
 func r(i, b, l pp.Integer) Request {
@@ -204,7 +204,7 @@ func TestTorrentMetainfoIncompleteMetadata(t *testing.T) {
 				Type:       pp.Extended,
 				ExtendedID: pp.HandshakeExtendedID,
 				ExtendedPayload: func() []byte {
-					d := map[string]interface{}{
+					d := map[string]any{
 						"metadata_size": len(mi.InfoBytes),
 					}
 					b, err := bencode.Marshal(d)
@@ -248,4 +248,40 @@ func TestRelativeAvailabilityHaveNone(t *testing.T) {
 	qt.Assert(t, qt.IsNil(err))
 	tt.Drop()
 	tt.assertAllPiecesRelativeAvailabilityZero()
+}
+
+// Uploads while it downloads; done, StopSeedingWhenComplete stops it, and SetUploads changes it live.
+func TestStopSeedingWhenComplete(t *testing.T) {
+	cl := newTestingClient(t)
+	tor := cl.newTorrentForTesting()
+	qt.Assert(t, qt.IsNil(tor.setInfoUnlocked(&metainfo.Info{
+		Pieces: make([]byte, metainfo.HashSize), Name: "x", PieceLength: 1 << 14, Length: 1 << 14,
+	})))
+	// As Yoru runs it.
+	cl.lock()
+	cl.config.Seed = true
+	cl.unlock()
+	want := func(prio PiecePriority) {
+		cl.lock()
+		defer cl.unlock()
+		tor.piece(0).storageCompletionOk = true
+		tor.piece(0).priority = prio
+		tor.updatePiecePriority(0, "test")
+	}
+	seeding := func() bool {
+		cl.lock()
+		defer cl.unlock()
+		return tor.seeding()
+	}
+
+	want(PiecePriorityNormal)
+	cl.SetUploads(true, true)
+	qt.Check(t, qt.IsTrue(seeding()), qt.Commentf("still downloading"))
+	want(PiecePriorityNone)
+	qt.Check(t, qt.IsFalse(seeding()), qt.Commentf("has all it wants"))
+	cl.SetUploads(true, false)
+	qt.Check(t, qt.IsTrue(seeding()), qt.Commentf("seeding when done"))
+	want(PiecePriorityNormal)
+	cl.SetUploads(false, true)
+	qt.Check(t, qt.IsFalse(seeding()), qt.Commentf("uploads off"))
 }

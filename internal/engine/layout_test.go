@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/metainfo"
 )
 
 // A single-file release lands straight in the cache, as rqbit put it.

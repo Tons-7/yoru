@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"kuro/internal/sound"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"yoru/internal/sound"
 )
 
 func TestVoiceForcesAnEncodeAndShapesTheFilterByLayout(t *testing.T) {

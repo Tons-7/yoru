@@ -9,7 +9,7 @@ import (
 	"github.com/anacrolix/log"
 	"github.com/anacrolix/sync"
 
-	pp "kuro/internal/bt/peer_protocol"
+	pp "yoru/internal/bt/peer_protocol"
 )
 
 func (pc *PeerConn) initMessageWriter() {

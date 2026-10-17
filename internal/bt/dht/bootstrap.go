@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"kuro/internal/bt/dht/krpc"
-	"kuro/internal/bt/dht/traversal"
+	"yoru/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/traversal"
 )
 
 type TraversalStats = traversal.Stats

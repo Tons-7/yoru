@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { cx, episodeCount, readableTint, relativeTime, tint } from '../lib/format'
+import { useNow } from '../lib/queries'
 import { ProgressBar } from './ui'
 
 export interface HoverAnime {
@@ -144,6 +145,7 @@ function Panel({
   onEnter: () => void
   onLeave: () => void
 }) {
+  const now = useNow()
   // The show's own colour carries the panel: glow, synopsis rule, values.
   const hue = readableTint(anime.color) ?? '#8b7cff'
   const glow = tint(anime.color, 0.45) ?? 'rgba(111,92,255,0.35)'
@@ -153,7 +155,7 @@ function Panel({
   const other = anime.romaji && anime.romaji !== anime.title ? anime.romaji : anime.english
   const synopsis = anime.description?.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
   const upcoming =
-    anime.nextEpisode && anime.nextAiringAt && anime.nextAiringAt * 1000 > Date.now()
+    anime.nextEpisode && anime.nextAiringAt && anime.nextAiringAt * 1000 > now
       ? `Ep ${anime.nextEpisode} ${relativeTime(anime.nextAiringAt)}`
       : null
   const total = anime.episodes ?? anime.aired

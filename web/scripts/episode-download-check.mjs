@@ -2,8 +2,8 @@
 import { spawnSync } from 'node:child_process'
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const ANIME = process.env.KURO_ANIME ?? '127230'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const ANIME = process.env.YORU_ANIME ?? '127230'
 const SHOTS = process.env.SHOTS ?? '.'
 
 
@@ -22,8 +22,8 @@ const until = async (fn, ms = 30_000) => {
 }
 
 // A kept season pack holding episodes 4 and 5, planted the way the features check does.
-const seeded = spawnSync('go', ['run', './scripts/e2e-seed', '-db', process.env.KURO_DB, '-anime', ANIME, '-pack'], {
-  cwd: process.env.KURO_REPO, stdio: 'inherit',
+const seeded = spawnSync('go', ['run', './scripts/e2e-seed', '-db', process.env.YORU_DB, '-anime', ANIME, '-pack'], {
+  cwd: process.env.YORU_REPO, stdio: 'inherit',
 }).status === 0
 check(seeded, 'download rows seeded')
 

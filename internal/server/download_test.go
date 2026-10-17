@@ -14,10 +14,10 @@ import (
 	"sync"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/library"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/config"
+	"yoru/internal/library"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // An engine holding one torrent in the cache folder, recording what it is told to do with it.

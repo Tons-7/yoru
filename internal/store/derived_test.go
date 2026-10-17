@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"kuro/internal/metadata"
+	"yoru/internal/metadata"
 )
 
 // A show no metadata source has catalogued gets rows invented from its episode

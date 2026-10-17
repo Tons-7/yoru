@@ -3,10 +3,10 @@ package udp
 import (
 	"encoding"
 
-	"kuro/internal/bt/dht/krpc"
-	"kuro/internal/bt/tracker/shared"
-	"kuro/internal/bt/types"
-	"kuro/internal/bt/types/infohash"
+	"yoru/internal/bt/dht/krpc"
+	"yoru/internal/bt/tracker/shared"
+	"yoru/internal/bt/types"
+	"yoru/internal/bt/types/infohash"
 )
 
 // Marshalled as binary by the UDP client, so be careful making changes.

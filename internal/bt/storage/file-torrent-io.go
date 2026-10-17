@@ -7,7 +7,7 @@ import (
 
 	"github.com/anacrolix/missinggo/v2/panicif"
 
-	"kuro/internal/bt/segments"
+	"yoru/internal/bt/segments"
 )
 
 // Exposes file-based storage of a torrent, as one big ReadWriterAt.

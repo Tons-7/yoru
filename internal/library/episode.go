@@ -16,11 +16,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"kuro/internal/film"
-	"kuro/internal/indexer"
-	"kuro/internal/parse"
-	"kuro/internal/score"
-	"kuro/internal/store"
+	"yoru/internal/film"
+	"yoru/internal/indexer"
+	"yoru/internal/parse"
+	"yoru/internal/score"
+	"yoru/internal/store"
 )
 
 // Finder locates releases for an anime already chosen, so parsing verifies a

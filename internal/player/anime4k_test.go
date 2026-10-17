@@ -129,7 +129,7 @@ func TestEveryChainNameIsAKnownShader(t *testing.T) {
 
 func newMPV(t *testing.T, shaders string) *MPV {
 	t.Helper()
-	m := New(filepath.Join(t.TempDir(), "mpv.exe"), `\\.\pipe\kuro-test`,
+	m := New(filepath.Join(t.TempDir(), "mpv.exe"), `\\.\pipe\yoru-test`,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	m.shaders = shaders
 	return m
@@ -178,10 +178,10 @@ func TestMissingShadersDisableUpscalingRatherThanFailing(t *testing.T) {
 }
 
 func TestShadersDirectoryDefaultsBesideTheBinary(t *testing.T) {
-	m := New(filepath.Join("C:", "kuro", "bin", "mpv.exe"), "",
+	m := New(filepath.Join("C:", "yoru", "bin", "mpv.exe"), "",
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 
-	want := filepath.Join("C:", "kuro", "bin", "shaders")
+	want := filepath.Join("C:", "yoru", "bin", "shaders")
 	if m.shaders != want {
 		t.Errorf("shaders dir = %q, want %q", m.shaders, want)
 	}

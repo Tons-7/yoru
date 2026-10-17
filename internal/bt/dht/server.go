@@ -18,17 +18,17 @@ import (
 	"github.com/anacrolix/missinggo"
 	"github.com/anacrolix/sync"
 	"golang.org/x/time/rate"
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/iplist"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/iplist"
+	"yoru/internal/bt/metainfo"
 
-	"kuro/internal/bt/dht/bep44"
-	"kuro/internal/bt/dht/int160"
-	"kuro/internal/bt/dht/krpc"
-	peer_store "kuro/internal/bt/dht/peer-store"
-	"kuro/internal/bt/dht/transactions"
-	"kuro/internal/bt/dht/traversal"
-	"kuro/internal/bt/dht/types"
+	"yoru/internal/bt/dht/bep44"
+	"yoru/internal/bt/dht/int160"
+	"yoru/internal/bt/dht/krpc"
+	peer_store "yoru/internal/bt/dht/peer-store"
+	"yoru/internal/bt/dht/transactions"
+	"yoru/internal/bt/dht/traversal"
+	"yoru/internal/bt/dht/types"
 )
 
 // A Server defines parameters for a DHT node server that is able to send
@@ -400,12 +400,7 @@ func (s *Server) AddNode(ni krpc.NodeInfo) error {
 }
 
 func wantsContain(ws []krpc.Want, w krpc.Want) bool {
-	for _, _w := range ws {
-		if _w == w {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ws, w)
 }
 
 func shouldReturnNodes(queryWants []krpc.Want, querySource net.IP) bool {
@@ -1393,14 +1388,12 @@ func (s *Server) pingQuestionableNodesInBucket(bucketIndex int) {
 	var wg sync.WaitGroup
 	b.EachNode(func(n *node) bool {
 		if s.IsQuestionable(n) {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				err := s.questionableNodePing(context.TODO(), n.Addr, n.Id.AsByteArray()).Err
 				if err != nil {
 					s.logger().WithDefaultLevel(log.Debug).Printf("error pinging questionable node in bucket %v: %v", bucketIndex, err)
 				}
-			}()
+			})
 		}
 		return true
 	})

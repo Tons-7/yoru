@@ -16,7 +16,6 @@ import {
 import {
   Badge,
   Button,
-  buttonClass,
   Empty,
   ErrorState,
   FilterToggle,
@@ -28,10 +27,10 @@ import {
   RefreshFailed,
   Skeleton,
   TextInput,
-  useClampPage,
-  useDebounced,
 } from '../components/ui'
-import { notificationTarget } from '../components/NotificationPanel'
+import { useClampPage, useDebounced } from '../lib/hooks'
+import { buttonClass } from '../lib/ui'
+import { notificationTarget } from '../lib/notifications'
 import { ReleasePicker } from '../components/ReleasePicker'
 
 export function Notifications() {

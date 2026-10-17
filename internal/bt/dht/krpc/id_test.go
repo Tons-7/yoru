@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 func TestMarshalID(t *testing.T) {

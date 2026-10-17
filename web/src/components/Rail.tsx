@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { cx } from '../lib/format'
 
@@ -12,30 +12,27 @@ function useScrollState(track: React.RefObject<HTMLDivElement | null>) {
     visible: 1,
   })
 
-  const measure = useCallback(() => {
-    const el = track.current
-    if (!el) return
-    const max = el.scrollWidth - el.clientWidth
-    const next = {
-      // A pixel of slack, or sub-pixel widths give short rows arrows.
-      scrollable: max > 1,
-      atStart: el.scrollLeft <= 1,
-      atEnd: el.scrollLeft >= max - 1,
-      progress: max > 1 ? el.scrollLeft / max : 0,
-      visible: el.scrollWidth > 0 ? el.clientWidth / el.scrollWidth : 1,
-    }
-    // The observers fire on every image that loads; most say nothing new.
-    setState((prev) =>
-      (Object.keys(next) as (keyof typeof next)[]).every((k) => prev[k] === next[k]) ? prev : next,
-    )
-  }, [track])
-
   useEffect(() => {
     const el = track.current
     if (!el) return
-    measure()
+    const measure = () => {
+      const max = el.scrollWidth - el.clientWidth
+      const next = {
+        // A pixel of slack, or sub-pixel widths give short rows arrows.
+        scrollable: max > 1,
+        atStart: el.scrollLeft <= 1,
+        atEnd: el.scrollLeft >= max - 1,
+        progress: max > 1 ? el.scrollLeft / max : 0,
+        visible: el.scrollWidth > 0 ? el.clientWidth / el.scrollWidth : 1,
+      }
+      // The observers fire on every image that loads; most say nothing new.
+      setState((prev) =>
+        (Object.keys(next) as (keyof typeof next)[]).every((k) => prev[k] === next[k]) ? prev : next,
+      )
+    }
     el.addEventListener('scroll', measure, { passive: true })
 
+    // A ResizeObserver reports once as it starts, so this also takes the first measure.
     const resize = new ResizeObserver(measure)
     resize.observe(el)
     // Cards replacing skeletons change scrollWidth but not the track's box, so this watches both.
@@ -47,19 +44,22 @@ function useScrollState(track: React.RefObject<HTMLDivElement | null>) {
       resize.disconnect()
       swap.disconnect()
     }
-  }, [measure, track])
+  }, [track])
 
-  return { ...state, measure }
+  return state
 }
 
 /** A horizontal strip of cards; arrows on pointer devices only, as touch swipes. */
 export function Rail({
   title,
+  meta,
   more,
   action,
   children,
 }: {
   title: string
+  /** A quiet line beside the title, such as how long the row runs. */
+  meta?: ReactNode
   more?: { to: string; label?: string }
   /** A control beside the arrows, where "more" would be a link to a page. */
   action?: ReactNode
@@ -78,8 +78,11 @@ export function Rail({
     <section className="group/rail">
       <div className="mb-3 flex items-center justify-between gap-4">
         {/* Big enough to read across the row it labels. */}
-        <h2 className="section-title">{title}</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          <h2 className="section-title">{title}</h2>
+          {meta && <span className="text-sm text-base-500">{meta}</span>}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
           {more && (
             <Link
               to={more.to}

@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"time"
 
-	"kuro/internal/library"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/library"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 func (s *Server) localStats(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +124,7 @@ func (s *Server) setLibraryPaths(w http.ResponseWriter, r *http.Request) {
 		case !info.IsDir():
 			problems[p] = "not a directory"
 		case s.cfg.CacheDir != "" && (torrent.Within(s.cfg.CacheDir, abs) || torrent.Within(abs, s.cfg.CacheDir)):
-			problems[p] = "holds kuro's own downloads; a library folder must be elsewhere"
+			problems[p] = "holds Yoru's own downloads; a library folder must be elsewhere"
 		default:
 			clean = append(clean, abs)
 		}

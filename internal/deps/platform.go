@@ -47,7 +47,7 @@ func ffmpegLinuxURLFor(goarch string) (string, error) {
 	return "", fmt.Errorf("no static ffmpeg build for linux/%s", goarch)
 }
 
-// ManualCommand is the package-manager command for a component kuro cannot fetch here, or "".
+// ManualCommand is the package-manager command for a component Yoru cannot fetch here, or "".
 func ManualCommand(name string) string {
 	if runtime.GOOS == "windows" || name == "anime4k" {
 		return ""
@@ -72,6 +72,6 @@ func manualInstall(name string) error {
 	if how == "" {
 		how = "your package manager"
 	}
-	return fmt.Errorf("kuro cannot download %s on %s; install it with `%s` (kuro finds it on PATH)",
+	return fmt.Errorf("Yoru cannot download %s on %s; install it with `%s` (Yoru finds it on PATH)",
 		name, runtime.GOOS, how)
 }

@@ -18,7 +18,7 @@ export function ReleaseNotesList({ notes }: { notes: Notes[] }) {
             <span aria-hidden className="text-base-500 transition-transform group-open:rotate-90">
               ›
             </span>
-            kuro {n.version}
+            Yoru {n.version}
             {n.published && <span className="text-xs font-normal text-base-500">{day(n.published)}</span>}
           </summary>
           <div className="px-3 pb-3">

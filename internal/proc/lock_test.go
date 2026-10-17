@@ -7,7 +7,7 @@ import (
 
 // One holder at a time; the lock is free again once released.
 func TestLockIsExclusiveUntilReleased(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "kuro.lock")
+	path := filepath.Join(t.TempDir(), "yoru.lock")
 	release, err := Lock(path)
 	if err != nil {
 		t.Fatal(err)

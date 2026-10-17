@@ -1,5 +1,8 @@
 package main
 
+// The exe's icon for Explorer and the taskbar, linked into Windows builds; rerun after an icon change.
+//go:generate go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64,arm64 --manifest none --icon ../../web/public/icon-512.png --out rsrc
+
 import (
 	"context"
 	"crypto/tls"
@@ -21,30 +24,31 @@ import (
 	"syscall"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/certs"
-	"kuro/internal/config"
-	"kuro/internal/corpus"
-	"kuro/internal/db"
-	"kuro/internal/deps"
-	"kuro/internal/engine"
-	"kuro/internal/indexer"
-	"kuro/internal/jobs"
-	"kuro/internal/library"
-	"kuro/internal/mal"
-	"kuro/internal/metadata"
-	"kuro/internal/player"
-	"kuro/internal/proc"
-	"kuro/internal/score"
-	"kuro/internal/server"
-	"kuro/internal/store"
-	"kuro/internal/transcode"
-	"kuro/internal/update"
+	"yoru/internal/anilist"
+	"yoru/internal/certs"
+	"yoru/internal/config"
+	"yoru/internal/corpus"
+	"yoru/internal/db"
+	"yoru/internal/deps"
+	"yoru/internal/engine"
+	"yoru/internal/indexer"
+	"yoru/internal/jobs"
+	"yoru/internal/library"
+	"yoru/internal/mal"
+	"yoru/internal/metadata"
+	"yoru/internal/player"
+	"yoru/internal/proc"
+	"yoru/internal/score"
+	"yoru/internal/server"
+	"yoru/internal/shortcut"
+	"yoru/internal/store"
+	"yoru/internal/transcode"
+	"yoru/internal/update"
 )
 
-// A window is unwanted on a headless box or when kuro runs as a service.
+// A window is unwanted on a headless box or when Yoru runs as a service.
 func windowWanted() bool {
-	if v := strings.ToLower(os.Getenv("KURO_NO_WINDOW")); v == "1" || v == "true" {
+	if v := strings.ToLower(config.Env("NO_WINDOW")); v == "1" || v == "true" {
 		return false
 	}
 	for _, arg := range os.Args[1:] {
@@ -71,7 +75,7 @@ func newTorrentEngine(cfg config.Config, log *slog.Logger) (*engine.Engine, erro
 	if upload == 0 {
 		upload = 4 << 20 // enough to stay unchoked
 	}
-	// rqbit-era downloads: kuro's own session for it, else the per-user one rqbit kept.
+	// rqbit-era downloads: Yoru's own session for it, else the per-user one rqbit kept.
 	legacy := []string{filepath.Join(cfg.CacheDir, library.SessionDirName)}
 	if dir, err := os.UserConfigDir(); err == nil && runtime.GOOS == "windows" {
 		legacy = append(legacy, filepath.Join(dir, "rqbit", "session", "data"))
@@ -170,28 +174,45 @@ func newMAL(ctx context.Context, cfg config.Config, st *store.Store, log *slog.L
 }
 
 func main() {
+	// Started by an update: first the old process goes, as it holds the port and the data folder.
+	update.WaitFor(os.Args[1:], 30*time.Second)
 	// To the console and to a file in the data folder: a double-clicked console closes with its last words.
 	log := slog.New(slog.NewTextHandler(logOutput(), nil))
 	if err := run(log); err != nil {
 		log.Error("fatal", "err", err)
-		proc.Alert("kuro could not start", err.Error())
+		proc.Alert("Yoru could not start", err.Error())
 		os.Exit(1)
 	}
 }
 
-// logOutput is stdout plus kuro.log in the data folder, the last run kept aside as kuro.log.1.
+// logOutput is stdout plus yoru.log in the data folder, the last run kept aside as yoru.log.1.
 func logOutput() io.Writer {
-	dir := config.DefaultDataDir()
+	// Moved from kuro's folder first, or the log would make the new one and strand the data in the old.
+	dir := config.PrepareDataDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return os.Stdout
 	}
-	path := filepath.Join(dir, "kuro.log")
+	path := filepath.Join(dir, config.Name+".log")
 	os.Rename(path, path+".1")
 	f, err := os.Create(path)
 	if err != nil {
 		return os.Stdout
 	}
 	return io.MultiWriter(os.Stdout, f)
+}
+
+// retargetShortcuts points the user's shortcuts and pins to kuro.exe, which would open nothing now, at yoru.exe.
+func retargetShortcuts(log *slog.Logger, from, to string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	n, err := shortcut.Retarget(ctx, from, to)
+	if err != nil {
+		log.Warn("point shortcuts at Yoru", "err", err)
+		return
+	}
+	if n > 0 {
+		log.Info("shortcuts now open Yoru", "count", n)
+	}
 }
 
 func run(log *slog.Logger) error {
@@ -202,9 +223,15 @@ func run(log *slog.Logger) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Started by an update: the old process still holds the port.
-	update.WaitFor(os.Args[1:], 30*time.Second)
 	exe, _ := os.Executable()
+	// kuro.exe running this code, from the old updater: renamed before anything takes its path.
+	if exe != "" {
+		if named := update.TakeName(exe); named != exe {
+			log.Info("renamed to Yoru", "from", exe, "to", named)
+			go retargetShortcuts(log, exe, named)
+			exe = named
+		}
+	}
 	// A new version that dies before serving hands back to the previous one.
 	serving := false
 	if exe != "" && update.Handover(os.Args[1:]) {
@@ -212,17 +239,18 @@ func run(log *slog.Logger) error {
 			if serving {
 				return
 			}
-			if err := update.Rollback(exe); err != nil {
+			back, err := update.Rollback(exe)
+			if err != nil {
 				log.Error("restore the previous version", "err", err)
 				return
 			}
 			log.Warn("this version failed to start; the previous one is back")
-			if err := update.Relaunch(exe); err != nil {
+			if err := update.Relaunch(back); err != nil {
 				log.Error("start the previous version", "err", err)
 			}
 		}()
 	}
-	log.Info("kuro", "version", update.Version)
+	log.Info("Yoru", "version", update.Version)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -231,16 +259,16 @@ func run(log *slog.Logger) error {
 
 	// Claimed first, so a second launch can't touch the running one's state; the port alone doesn't guard it.
 	showRunning := func() error {
-		if !kuroAnswers(cfg.LocalURL()) {
-			return fmt.Errorf("kuro is already running on this data folder, or another program holds %s", cfg.Addr)
+		if !yoruAnswers(cfg.LocalURL()) {
+			return fmt.Errorf("Yoru is already running on this data folder, or another program holds %s", cfg.Addr)
 		}
-		log.Info("kuro is already running; showing it", "url", cfg.LocalURL())
+		log.Info("Yoru is already running; showing it", "url", cfg.LocalURL())
 		if windowWanted() {
 			config.OpenApp(ctx, cfg.LocalURL(), cfg.ProfileDir())
 		}
 		return nil
 	}
-	unlock, err := proc.Lock(filepath.Join(cfg.DataDir(), "kuro.lock"))
+	unlock, err := proc.Lock(cfg.LockPath())
 	if err != nil {
 		return showRunning()
 	}
@@ -250,7 +278,7 @@ func run(log *slog.Logger) error {
 		return showRunning()
 	}
 
-	// The OS ends ffmpeg/mpv if kuro is killed; only now, or a hand-off would take its window down too.
+	// The OS ends ffmpeg/mpv if Yoru is killed; only now, or a hand-off would take its window down too.
 	if err := proc.KillChildrenOnExit(); err != nil {
 		log.Warn("helpers may outlive an abrupt exit", "err", err)
 	}
@@ -270,7 +298,7 @@ func run(log *slog.Logger) error {
 	st := store.New(conn)
 	var alOpts []anilist.Option
 	// The browser checks point their throwaway instances at a caching proxy, so they are not rate limited.
-	if override := os.Getenv("KURO_ANILIST_API"); override != "" {
+	if override := config.Env("ANILIST_API"); override != "" {
 		alOpts = append(alOpts, anilist.WithEndpoint(override))
 	}
 	al := anilist.New(log, alOpts...)
@@ -303,7 +331,7 @@ func run(log *slog.Logger) error {
 	// In the user's order (the first wins a shared torrent); cached, as one episode is six queries a site.
 	var sites, adultSites []indexer.Source
 	for _, in := range cfg.Indexers {
-		// Skipped, not fatal: kuro then starts and Setup names the bad block.
+		// Skipped, not fatal: Yoru then starts and Setup names the bad block.
 		src, err := indexer.Build(in.Type, in.URL, in.Adult)
 		if err != nil {
 			log.Warn("config.toml: skipping an [[indexer]] block", "err", err)
@@ -324,7 +352,7 @@ func run(log *slog.Logger) error {
 			"add", "[[indexer]] blocks", "config", cfg.ConfigPath())
 	}
 	if stray := cfg.StrayConfig(); stray != "" {
-		log.Warn("config.toml.txt found; kuro reads only config.toml", "path", stray)
+		log.Warn("config.toml.txt found; Yoru reads only config.toml", "path", stray)
 	}
 	finder := library.NewFinder(st, sources, log)
 	if len(adultSites) > 0 {
@@ -348,6 +376,12 @@ func run(log *slog.Logger) error {
 
 	// A failed start (say, the peer port taken) is retried by the next call.
 	torrents := torrentEngine.Client()
+	// Before the first start, so no upload or uncapped read happens against the user's settings.
+	presence := library.NewPresence(st, log)
+	if prefs, err := st.Prefs(ctx, 0); err == nil {
+		torrents.SetLimits(library.TorrentLimits(prefs))
+		presence.Apply(prefs)
+	}
 	if err := torrentEngine.Ensure(ctx); err != nil {
 		log.Warn("torrent engine not running; it starts when something needs it", "err", err)
 	}
@@ -367,6 +401,7 @@ func run(log *slog.Logger) error {
 		WithPrefetcher(prefetcher).
 		WithProber(transcode.NewProber(cfg.Tool("ffprobe"))).
 		WithRelations(relations).
+		WithPresence(presence).
 		WithPlayer("vlc", player.NewVLC(vlcBinary, log))
 
 	// Downloads run one at a time: parallel ones share the line, and the awaited one finishes last.
@@ -466,7 +501,7 @@ func run(log *slog.Logger) error {
 	// software encoding for the rest of the session is not what was chosen.
 	depsManager := deps.New(cfg.BinDir, log)
 	if removed := depsManager.RemoveObsolete(); len(removed) > 0 {
-		log.Info("removed tools kuro no longer uses", "files", removed)
+		log.Info("removed tools Yoru no longer uses", "files", removed)
 	}
 	depsManager.OnInstalled(func(name string) {
 		if name != "ffmpeg" {
@@ -549,6 +584,8 @@ func run(log *slog.Logger) error {
 		Prefetch:   prefetcher,
 		Downloader: downloader,
 		Updater:    updater,
+		Engine:     torrents,
+		Presence:   presence,
 		Relaunch:   relaunchSelf(exe, cancel),
 		Token:      token,
 		Player:     mpv,
@@ -749,7 +786,7 @@ func (b *binder) takeClaim(addr string) net.Listener {
 	return nil
 }
 
-// relaunchSelf starts a fresh kuro that waits for this one, then ends this one; nil for a build with no exe.
+// relaunchSelf starts a fresh Yoru that waits for this one, then ends this one; nil for a build with no exe.
 func relaunchSelf(exe string, cancel context.CancelFunc) func() {
 	if exe == "" {
 		return nil
@@ -761,8 +798,8 @@ func relaunchSelf(exe string, cancel context.CancelFunc) func() {
 	}
 }
 
-// kuroAnswers tells a running kuro from another program holding the port.
-func kuroAnswers(base string) bool {
+// yoruAnswers tells a running Yoru (or kuro, before the rename) from another program holding the port.
+func yoruAnswers(base string) bool {
 	client := http.Client{Timeout: 2 * time.Second}
 	res, err := client.Get(strings.TrimSuffix(base, "/") + "/api/health")
 	if err != nil {
@@ -775,7 +812,7 @@ func kuroAnswers(base string) bool {
 	return res.StatusCode == http.StatusOK && json.NewDecoder(res.Body).Decode(&body) == nil && body.Version != ""
 }
 
-// warnSlowDisk warns when kuro sits on a network share or USB stick: all of it is slow, and looks broken.
+// warnSlowDisk warns when Yoru sits on a network share or USB stick: all of it is slow, and looks broken.
 func warnSlowDisk(log *slog.Logger, dirs ...string) {
 	seen := map[string]bool{}
 	for _, dir := range dirs {
@@ -789,9 +826,9 @@ func warnSlowDisk(log *slog.Logger, dirs ...string) {
 		seen[root] = true
 
 		if d := proc.DriveOf(dir); d.Slow {
-			log.Warn("kuro is running from a slow disk; downloads and playback will be slow",
+			log.Warn("Yoru is running from a slow disk; downloads and playback will be slow",
 				"path", dir, "disk", d.Kind,
-				"fix", "move the kuro folder to an internal drive")
+				"fix", "move the Yoru folder to an internal drive")
 		}
 	}
 }

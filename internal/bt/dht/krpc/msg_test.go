@@ -1,10 +1,10 @@
 package krpc
 
 import (
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"math"
-	"math/rand"
 	"net"
 	"strings"
 	"testing"
@@ -12,7 +12,7 @@ import (
 	qt "github.com/frankban/quicktest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 func testMarshalUnmarshalMsg(t *testing.T, m Msg, expected string) {
@@ -128,7 +128,7 @@ func TestMarshalUnmarshalMsg(t *testing.T) {
 	testMarshalUnmarshalMsg(t, Msg{
 		R: &Return{
 			Bep44Return: Bep44Return{
-				V:   bencode.MustMarshal([]interface{}{"tee", "hee"}),
+				V:   bencode.MustMarshal([]any{"tee", "hee"}),
 				Seq: new(int64),
 				K:   k,
 				Sig: sig,

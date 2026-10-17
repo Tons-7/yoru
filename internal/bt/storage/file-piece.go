@@ -13,8 +13,8 @@ import (
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/missinggo/v2/panicif"
 
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/segments"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/segments"
 )
 
 // Piece within File storage. This is created on demand.

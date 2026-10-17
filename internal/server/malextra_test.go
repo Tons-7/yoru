@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/store"
 )
 
 const malXML = `<?xml version="1.0" encoding="UTF-8" ?>

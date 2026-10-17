@@ -8,8 +8,7 @@ import (
 
 	"github.com/anacrolix/missinggo/v2/panicif"
 	"github.com/go-quicktest/qt"
-	"golang.org/x/exp/constraints"
-	"kuro/internal/bt/internal/extracmp"
+	"yoru/internal/bt/internal/extracmp"
 )
 
 type overdueRecord struct {
@@ -83,7 +82,7 @@ func TestOverdue(t *testing.T) {
 	qt.Assert(t, qt.CmpEquals([]int{0, 5, 6, 1, 3, 2, 4, 7}, slices.Collect(MapPairIterRight(idx.Iter))))
 }
 
-type orderedPrimaryKey[T constraints.Ordered] struct {
+type orderedPrimaryKey[T cmp.Ordered] struct {
 	inner T
 }
 

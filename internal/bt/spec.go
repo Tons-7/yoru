@@ -5,8 +5,8 @@ import (
 
 	g "github.com/anacrolix/generics"
 
-	"kuro/internal/bt/metainfo"
-	infohash_v2 "kuro/internal/bt/types/infohash-v2"
+	"yoru/internal/bt/metainfo"
+	infohash_v2 "yoru/internal/bt/types/infohash-v2"
 )
 
 // Specifies a new torrent for adding to a client, or additions to an existing Torrent. There are

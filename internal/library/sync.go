@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"kuro/internal/anilist"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/store"
 )
 
 // Sync keeps the local database and AniList in agreement. Local is authoritative:
@@ -261,7 +261,7 @@ func (s *Sync) Remove(ctx context.Context, animeID int) error {
 	if err != nil {
 		return err
 	}
-	// A negative id is a row only kuro has; AniList never saw it.
+	// A negative id is a row only Yoru has; AniList never saw it.
 	if entry.ID > 0 && s.al.Authenticated() {
 		if err := s.al.DeleteEntry(ctx, entry.ID); err != nil {
 			return fmt.Errorf("remove from AniList: %w", err)

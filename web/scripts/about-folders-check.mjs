@@ -1,7 +1,7 @@
 // Settings → About shows where things go and lets the data folder be moved.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const SHOTS = process.env.SHOTS ?? '.'
 let failures = 0
 const check = (ok, label, detail = '') => {

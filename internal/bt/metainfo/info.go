@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"kuro/internal/bt/segments"
+	"yoru/internal/bt/segments"
 )
 
 // The info dictionary. See BEP 3 and BEP 52.

@@ -7,8 +7,8 @@ import (
 	"slices"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/store"
 )
 
 // Relations builds the franchise graph. AniList models each season as its own

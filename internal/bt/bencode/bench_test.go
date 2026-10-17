@@ -5,9 +5,9 @@ import (
 	"reflect"
 	"testing"
 
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 func marshalAndUnmarshal(tb testing.TB, orig krpc.Msg) (ret krpc.Msg) {

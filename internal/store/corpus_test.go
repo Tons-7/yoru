@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"kuro/internal/match"
+	"yoru/internal/match"
 )
 
 func corpusEntry(id int, titles ...string) CorpusEntry {

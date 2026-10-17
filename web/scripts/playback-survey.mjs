@@ -1,6 +1,22 @@
 // Real releases without a browser: what is offered, what auto-play picks, whether it streams (live indexers).
 //   SURVEY="19:1,37;185875:1,6" PLAY=1 node scripts/run-player-check.mjs playback-survey.mjs
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+import { request } from 'node:http'
+
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+
+// The engine turns away anything with browser headers, which fetch adds, so its streams are read plainly.
+const ranged = (url, from, to) =>
+  new Promise((resolve, reject) => {
+    const req = request(url, { headers: { Range: `bytes=${from}-${to}` }, timeout: 120000 }, (res) => {
+      let bytes = 0
+      res.on('data', (c) => (bytes += c.length))
+      res.on('end', () => resolve({ status: res.statusCode, range: res.headers['content-range'], bytes }))
+      res.on('error', reject)
+    })
+    req.on('timeout', () => req.destroy(new Error('timed out')))
+    req.on('error', reject)
+    req.end()
+  })
 const PLAY = process.env.PLAY === '1'
 const cases = (process.env.SURVEY ?? '19:1;185875:1').split(';').map((c) => {
   const [id, eps] = c.split(':')
@@ -60,7 +76,7 @@ for (const { id, episodes } of cases) {
     // PICK plays the release whose title matches, as the manual picker does.
     const picked = process.env.PICK && results.find((r) => new RegExp(process.env.PICK, 'i').test((r.Torrent ?? r.torrent).title))
     const infoHash = picked ? (picked.Torrent ?? picked.torrent).infoHash : undefined
-    // Outlasts kuro's own 6 min wait.
+    // Outlasts Yoru's own 6 min wait.
     const play = await call('POST', '/api/play', { animeId: id, episode: ep, infoHash }, 8 * 60000)
     if (play.status !== 200) {
       note(false, 'play', `${play.status} ${JSON.stringify(play.json).slice(0, 400)}`)
@@ -68,6 +84,29 @@ for (const { id, episodes } of cases) {
     }
     const s = play.json
     note(true, `play started in ${((Date.now() - t1) / 1000).toFixed(1)}s`, `${s.title} [file ${s.fileIndex}]`)
+
+    // SEEKS=n: n far reads of the raw file while it downloads, each timed, as a seek or an MKV Cues lookup asks.
+    const seeks = Number(process.env.SEEKS ?? 0)
+    if (seeks > 0) {
+      const url = s.streamUrl.startsWith('http') ? s.streamUrl : BASE + s.streamUrl
+      const first = await ranged(url, 0, 0)
+      const total = Number((first.range ?? '').split('/')[1] ?? 0)
+      if (!total) note(false, 'seek probe', `${first.status}, content-range ${first.range}`)
+      const times = []
+      for (let i = 0; i < seeks && total > 0; i++) {
+        // The same spread every run (15-85% of the file, off piece boundaries), so builds compare.
+        const at = Math.floor(total * (0.15 + 0.7 * ((i * 0.618) % 1))) + 12345
+        await new Promise((r) => setTimeout(r, 4000))
+        const t = Date.now()
+        const res = await ranged(url, at, at + 16383)
+        times.push((Date.now() - t) / 1000)
+        console.log(`  seek ${i + 1} to ${Math.round((at / total) * 100)}%: ${times.at(-1).toFixed(2)}s (${res.status}, ${res.bytes} B)`)
+      }
+      const sorted = [...times].sort((a, b) => a - b)
+      if (sorted.length) {
+        console.log(`  seeks: median ${sorted[Math.floor(sorted.length / 2)].toFixed(2)}s, worst ${sorted.at(-1).toFixed(2)}s`)
+      }
+    }
     if (process.env.PLAY_ONLY === '1') continue
 
     const open = await call(

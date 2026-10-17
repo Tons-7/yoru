@@ -4,11 +4,11 @@ import (
 	"crypto/ed25519"
 	"crypto/sha1"
 
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 type Put struct {
-	V    interface{}
+	V    any
 	K    *[32]byte
 	Salt []byte
 	Sig  [64]byte

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/metadata"
+	"yoru/internal/metadata"
 )
 
 // The caches hold at most cacheShows shows, the oldest going first, and drop what has expired.

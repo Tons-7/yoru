@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// ExportEntry is a library file row: what a tracker holds, plus kuro's favourite and note.
+// ExportEntry is a library file row: what a tracker holds, plus Yoru's favourite and note.
 type ExportEntry struct {
 	AnimeID     int    `json:"animeId"`
 	MalID       *int   `json:"malId,omitempty"`

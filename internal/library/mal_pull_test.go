@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
-	"kuro/internal/store"
+	"yoru/internal/store"
 )
 
 func malEntry(malID, watched, score int, status string, updated time.Time) string {
@@ -17,14 +18,7 @@ func malEntry(malID, watched, score int, status string, updated time.Time) strin
 }
 
 func malList(entries ...string) string {
-	out := `{"data":[`
-	for i, e := range entries {
-		if i > 0 {
-			out += ","
-		}
-		out += e
-	}
-	return out + `],"paging":{}}`
+	return `{"data":[` + strings.Join(entries, ",") + `],"paging":{}}`
 }
 
 func pull(t *testing.T, sync *MALSync) MALImport {
@@ -91,7 +85,7 @@ func TestLocalEditBeatsASiteEditMadeMeanwhile(t *testing.T) {
 	}
 }
 
-// Connecting MAL to a list kuro already holds merges: MAL's score stays, the newer side's progress wins.
+// Connecting MAL to a list Yoru already holds merges: MAL's score stays, the newer side's progress wins.
 func TestFirstConnectMergesInsteadOfWiping(t *testing.T) {
 	t.Run("MAL edited last", func(t *testing.T) {
 		up := &malServer{list: malList(malEntry(101, 24, 8, "completed", time.Now().Add(time.Hour)))}
@@ -110,7 +104,7 @@ func TestFirstConnectMergesInsteadOfWiping(t *testing.T) {
 		}
 	})
 
-	t.Run("kuro edited last", func(t *testing.T) {
+	t.Run("Yoru edited last", func(t *testing.T) {
 		up := &malServer{list: malList(malEntry(101, 2, 8, "watching", time.Now().Add(-48*time.Hour)))}
 		sync, st := newMALSync(t, up)
 		ctx := context.Background()

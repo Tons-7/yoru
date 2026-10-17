@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"kuro/internal/score"
+	"yoru/internal/score"
 )
 
 // A feature-length episode is a bigger file at the same quality, so the size

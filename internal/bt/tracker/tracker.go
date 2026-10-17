@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/anacrolix/log"
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 
-	trHttp "kuro/internal/bt/tracker/http"
-	"kuro/internal/bt/tracker/shared"
-	"kuro/internal/bt/tracker/udp"
+	trHttp "yoru/internal/bt/tracker/http"
+	"yoru/internal/bt/tracker/shared"
+	"yoru/internal/bt/tracker/udp"
 )
 
 const (

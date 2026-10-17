@@ -8,15 +8,15 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/score"
-	"kuro/internal/store"
+	"yoru/internal/score"
+	"yoru/internal/store"
 )
 
 // Titles most exposed to the one-word and sequel problems, against the live
-// indexers. Opt-in: KURO_LIVE=1 go test ./internal/library -run Live.
+// indexers. Opt-in: YORU_LIVE=1 go test ./internal/library -run Live.
 func TestLiveMatchingOnExposedTitles(t *testing.T) {
-	if os.Getenv("KURO_LIVE") == "" {
-		t.Skip("set KURO_LIVE=1 to search the live indexers")
+	if os.Getenv("YORU_LIVE") == "" {
+		t.Skip("set YORU_LIVE=1 to search the live indexers")
 	}
 
 	shows := []struct {

@@ -3,7 +3,7 @@ package transcode
 import (
 	"os"
 
-	"kuro/internal/sound"
+	"yoru/internal/sound"
 )
 
 // Sound is what is being done to the audio on its way out; see package sound.

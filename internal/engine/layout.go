@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	"kuro/internal/bt"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt"
+	"yoru/internal/bt/metainfo"
 )
 
 // layout is where each torrent's files live: under its name, or with its hash appended when another

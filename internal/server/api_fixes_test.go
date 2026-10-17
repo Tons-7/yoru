@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/store"
 )
 
 // A paired device cannot sign the host's trackers out or swap its keys.
@@ -34,7 +34,7 @@ func TestDownloadAllRefusesAnEmptyRange(t *testing.T) {
 	}
 }
 
-// The catalogue being down is a 502 like everywhere else; only a sort kuro does not know is a 400.
+// The catalogue being down is a 502 like everywhere else; only a sort Yoru does not know is a 400.
 func TestDiscoverTellsABadSortFromAnOutage(t *testing.T) {
 	down := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)

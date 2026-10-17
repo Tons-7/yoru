@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 )
 
 var TransactionTimeout = errors.New("transaction timed out")

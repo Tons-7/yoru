@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/anacrolix/chansync"
 	"github.com/anacrolix/chansync/events"
 	. "github.com/anacrolix/generics"
@@ -36,23 +36,23 @@ import (
 	"github.com/dustin/go-humanize"
 	gbtree "github.com/google/btree"
 	"github.com/pion/webrtc/v4"
-	"kuro/internal/bt/dht"
-	"kuro/internal/bt/dht/krpc"
-	"kuro/internal/bt/internal/amortize"
-	"kuro/internal/bt/internal/extracmp"
-	"kuro/internal/bt/tracker"
-	"kuro/internal/bt/webtorrent"
+	"yoru/internal/bt/dht"
+	"yoru/internal/bt/dht/krpc"
+	"yoru/internal/bt/internal/amortize"
+	"yoru/internal/bt/internal/extracmp"
+	"yoru/internal/bt/tracker"
+	"yoru/internal/bt/webtorrent"
 
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/internal/check"
-	"kuro/internal/bt/internal/limiter"
-	"kuro/internal/bt/iplist"
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/mse"
-	pp "kuro/internal/bt/peer_protocol"
-	"kuro/internal/bt/storage"
-	"kuro/internal/bt/types/infohash"
-	infohash_v2 "kuro/internal/bt/types/infohash-v2"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/internal/check"
+	"yoru/internal/bt/internal/limiter"
+	"yoru/internal/bt/iplist"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/mse"
+	pp "yoru/internal/bt/peer_protocol"
+	"yoru/internal/bt/storage"
+	"yoru/internal/bt/types/infohash"
+	infohash_v2 "yoru/internal/bt/types/infohash-v2"
 )
 
 const webseedRequestUpdateTimerInterval = 5 * time.Second
@@ -433,6 +433,20 @@ func NewClient(cfg *ClientConfig) (cl *Client, err error) {
 
 func (cl *Client) AddDhtServer(d DhtServer) {
 	cl.dhtServers = append(cl.dhtServers, d)
+}
+
+// SetUploads changes, while running, whether peers get anything and whether finished torrents seed.
+func (cl *Client) SetUploads(upload, stopSeedingWhenComplete bool) {
+	cl.lock()
+	defer cl.unlock()
+	cl.config.NoUpload = !upload
+	cl.config.StopSeedingWhenComplete = stopSeedingWhenComplete
+	// Each writer chokes or unchokes its peer by the new rules.
+	for t := range cl.torrents {
+		for c := range t.conns {
+			c.tickleWriter()
+		}
+	}
 }
 
 // Adds a Dialer for outgoing connections. All Dialers are used when attempting to connect to a
@@ -870,7 +884,7 @@ func (cl *Client) dialAndCompleteHandshake(opts outgoingConnOpts) (c *PeerConn, 
 		if holepunchAddrErr == nil {
 			cl.lock()
 			if !opts.receivedHolepunchConnect {
-				g.MakeMapIfNilAndSet(&cl.undialableWithoutHolepunch, holepunchAddr, struct{}{})
+				setAdd(&cl.undialableWithoutHolepunch, holepunchAddr)
 			}
 			if !opts.skipHolepunchRendezvous {
 				opts.t.trySendHolepunchRendezvous(holepunchAddr)
@@ -883,10 +897,9 @@ func (cl *Client) dialAndCompleteHandshake(opts outgoingConnOpts) (c *PeerConn, 
 	if opts.receivedHolepunchConnect && holepunchAddrErr == nil {
 		cl.lock()
 		if g.MapContains(cl.undialableWithoutHolepunch, holepunchAddr) {
-			g.MakeMapIfNilAndSet(&cl.dialableOnlyAfterHolepunch, holepunchAddr, struct{}{})
+			setAdd(&cl.dialableOnlyAfterHolepunch, holepunchAddr)
 		}
-		g.MakeMapIfNil(&cl.dialedSuccessfullyAfterHolepunchConnect)
-		g.MapInsert(cl.dialedSuccessfullyAfterHolepunchConnect, holepunchAddr, struct{}{})
+		setAdd(&cl.dialedSuccessfullyAfterHolepunchConnect, holepunchAddr)
 		cl.unlock()
 	}
 	c, err = doProtocolHandshakeOnDialResult(

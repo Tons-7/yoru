@@ -18,11 +18,11 @@ import (
 
 	qrcode "github.com/yeqown/go-qrcode/v2"
 
-	"kuro/internal/firewall"
+	"yoru/internal/firewall"
 )
 
 const (
-	accessCookie  = "kuro_access"
+	accessCookie  = "yoru_access"
 	accessSetting = "access.token"
 	// Whether the listener is open to the network; in the database so it can be a switch.
 	lanSetting = "access.lan"
@@ -47,9 +47,9 @@ func NewAccessToken() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// installAssets are what a phone reads to install kuro as an app.
+// installAssets are what a phone reads to install Yoru as an app.
 var installAssets = map[string]bool{
-	"/manifest.webmanifest": true, "/icon.svg": true, "/favicon.svg": true,
+	"/manifest.webmanifest": true, "/icon.svg": true,
 	"/icon-192.png": true, "/icon-512.png": true, "/icon-maskable-512.png": true,
 }
 
@@ -85,10 +85,38 @@ func presented(r *http.Request) string {
 	if t := r.URL.Query().Get("token"); t != "" {
 		return t
 	}
-	if c, err := r.Cookie(accessCookie); err == nil {
-		return c.Value
+	for _, name := range []string{accessCookie, legacyAccessCookie} {
+		if c, err := r.Cookie(name); err == nil {
+			return c.Value
+		}
 	}
 	return ""
+}
+
+// Cookies set under kuro's names: still read, and moved to Yoru's the first time a device shows one.
+const (
+	legacyAccessCookie = "kuro_access"
+	legacyDeviceCookie = "kuro_device"
+)
+
+// keepCookie sets a year-long cookie, and clears the one under kuro's name if the device still has it.
+func keepCookie(w http.ResponseWriter, r *http.Request, name, legacy, value string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: name, Value: value, Path: "/",
+		MaxAge: 365 * 24 * 3600, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
+	})
+	if _, err := r.Cookie(legacy); err == nil {
+		http.SetCookie(w, &http.Cookie{Name: legacy, Path: "/", MaxAge: -1})
+	}
+}
+
+// onlyLegacy: the request has the cookie under kuro's name alone.
+func onlyLegacy(r *http.Request, name, legacy string) bool {
+	if _, err := r.Cookie(name); err == nil {
+		return false
+	}
+	c, err := r.Cookie(legacy)
+	return err == nil && c.Value != ""
 }
 
 // guard leaves loopback alone so the local browser and mpv need no setup, and
@@ -114,6 +142,11 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// A player app's link carries its own signed, expiring grant, checked by its handler.
+		if safeMethod(r.Method) && strings.HasPrefix(r.URL.Path, "/x/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		token := s.accessToken()
 		if token == "" {
 			send(w, http.StatusServiceUnavailable, map[string]any{
@@ -123,16 +156,13 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		}
 
 		if subtle.ConstantTimeCompare([]byte(presented(r)), []byte(token)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="kuro"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="Yoru"`)
 			send(w, http.StatusUnauthorized, map[string]any{"error": "invalid or missing token"})
 			return
 		}
 
-		if r.URL.Query().Get("token") != "" {
-			http.SetCookie(w, &http.Cookie{
-				Name: accessCookie, Value: token, Path: "/",
-				MaxAge: 365 * 24 * 3600, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
-			})
+		if r.URL.Query().Get("token") != "" || onlyLegacy(r, accessCookie, legacyAccessCookie) {
+			keepCookie(w, r, accessCookie, legacyAccessCookie, token)
 		}
 		if !s.admit(w, r) {
 			return
@@ -141,7 +171,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 	})
 }
 
-// hostOnly keeps a route to the machine kuro runs on: a paired device holds
+// hostOnly keeps a route to the machine Yoru runs on: a paired device holds
 // the token, but must not reconfigure the host or link its accounts.
 func hostOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -157,7 +187,7 @@ func safeMethod(m string) bool {
 	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
 }
 
-// sameOrigin: kuro's own page, or a non-browser client (no Origin).
+// sameOrigin: Yoru's own page, or a non-browser client (no Origin).
 func sameOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
@@ -359,7 +389,7 @@ func (s *Server) LogFirewall(ctx context.Context) {
 		s.log.Info("firewall", "running", st.Firewall, "hint", st.Hint, "command", st.Command)
 	case !st.Supported:
 	case st.Blocked():
-		s.log.Warn("firewall blocks kuro.exe; other devices cannot connect until it is allowed in Settings › Watch on your phone")
+		s.log.Warn("firewall blocks Yoru; other devices cannot connect until it is allowed in Settings › Watch on your phone")
 	case !st.Reachable():
 		s.log.Warn("firewall does not allow other devices on this network",
 			"public", st.OnPublic(), "portRule", st.PortRule != nil)
@@ -383,7 +413,7 @@ func (s *Server) accessFirewall(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// allowFirewall asks Windows (through its administrator prompt) for kuro's
+// allowFirewall asks Windows (through its administrator prompt) for Yoru's
 // port rule. Private networks only unless public is asked for explicitly.
 func (s *Server) allowFirewall(w http.ResponseWriter, r *http.Request) {
 	var body struct {

@@ -3,7 +3,7 @@ package krpc
 import (
 	"fmt"
 
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 const (
@@ -38,13 +38,13 @@ var (
 )
 
 func (e *Error) UnmarshalBencode(_b []byte) (err error) {
-	var _v interface{}
+	var _v any
 	err = bencode.Unmarshal(_b, &_v)
 	if err != nil {
 		return
 	}
 	switch v := _v.(type) {
-	case []interface{}:
+	case []any:
 		func() {
 			defer func() {
 				r := recover()
@@ -65,7 +65,7 @@ func (e *Error) UnmarshalBencode(_b []byte) (err error) {
 }
 
 func (e Error) MarshalBencode() (ret []byte, err error) {
-	return bencode.Marshal([]interface{}{e.Code, e.Msg})
+	return bencode.Marshal([]any{e.Code, e.Msg})
 }
 
 func (e Error) Error() string {

@@ -1,3 +1,3 @@
 package bt
 
-const tracerName = "kuro.bt"
+const tracerName = "yoru.bt"

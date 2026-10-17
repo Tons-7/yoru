@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/store"
 )
 
 // Not rewritten within the client's cache window: nothing newer can arrive.

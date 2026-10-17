@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"kuro/internal/sound"
 	"log/slog"
 	"net"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"runtime"
 	"sync"
 	"time"
+	"yoru/internal/sound"
 )
 
 // VLC is the other desktop player, driven through its loopback HTTP interface.
@@ -104,7 +104,7 @@ func (v *VLC) args(opts Options, ctl control) []string {
 		"--http-host=127.0.0.1",
 		fmt.Sprintf("--http-port=%d", ctl.port),
 		"--http-password=" + ctl.password,
-		"--meta-title=" + orDefault(opts.Title, "kuro"),
+		"--meta-title=" + orDefault(opts.Title, "Yoru"),
 	}
 	if opts.StartAt > 0 {
 		args = append(args, fmt.Sprintf("--start-time=%.3f", opts.StartAt))

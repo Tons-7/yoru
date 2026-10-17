@@ -6,11 +6,11 @@ import (
 	"slices"
 	"strings"
 
-	"kuro/internal/film"
-	"kuro/internal/parse"
-	"kuro/internal/score"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/film"
+	"yoru/internal/parse"
+	"yoru/internal/score"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // filmSeries is one film's place in its series: the key telling it apart, and the names the series goes by.

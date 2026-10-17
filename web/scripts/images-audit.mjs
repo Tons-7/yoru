@@ -2,7 +2,7 @@
 // Reads live catalogue data, so it is run by hand: PAGES=/a,/b overrides the pages, DPR sets the screen density.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const SHOTS = process.env.SHOTS ?? '.'
 const DPR = Number(process.env.DPR ?? 1)
 const PAGES = (process.env.PAGES ?? '/,/browse,/schedule,/anime/16498,/anime/21519,/anime/5204,/anime/14807,/anime/154587')

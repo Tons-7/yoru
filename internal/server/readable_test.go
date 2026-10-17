@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/store"
 )
 
 // The disk copy is found for a file and inside a pack's folder, despite a same-named file in the root.

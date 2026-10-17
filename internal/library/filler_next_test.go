@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/db"
-	"kuro/internal/indexer"
-	"kuro/internal/metadata"
-	"kuro/internal/score"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/db"
+	"yoru/internal/indexer"
+	"yoru/internal/metadata"
+	"yoru/internal/score"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // countingIndexer records every query, locked as the finder fans out across goroutines.

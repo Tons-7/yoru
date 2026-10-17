@@ -8,7 +8,7 @@ import (
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/log"
 
-	pp "kuro/internal/bt/peer_protocol"
+	pp "yoru/internal/bt/peer_protocol"
 )
 
 const (
@@ -105,17 +105,16 @@ func (s *pexConnState) updateRemoteLiveConns(rx pp.PexMsg) (errs []error) {
 		addrPort, _ := ipv6AddrPortFromKrpcNodeAddr(dropped)
 		delete(s.remoteLiveConns, addrPort)
 	}
+	g.MakeMapIfNil(&s.remoteLiveConns)
 	for i, added := range rx.Added {
 		addr := netip.AddrFrom4(*(*[4]byte)(added.IP.To4()))
 		addrPort := netip.AddrPortFrom(addr, uint16(added.Port))
-		flags := g.SliceGet(rx.AddedFlags, i)
-		g.MakeMapIfNilAndSet(&s.remoteLiveConns, addrPort, flags)
+		s.remoteLiveConns[addrPort] = g.SliceGet(rx.AddedFlags, i)
 	}
 	for i, added := range rx.Added6 {
 		addr := netip.AddrFrom16(*(*[16]byte)(added.IP.To16()))
 		addrPort := netip.AddrPortFrom(addr, uint16(added.Port))
-		flags := g.SliceGet(rx.Added6Flags, i)
-		g.MakeMapIfNilAndSet(&s.remoteLiveConns, addrPort, flags)
+		s.remoteLiveConns[addrPort] = g.SliceGet(rx.Added6Flags, i)
 	}
 	return
 }

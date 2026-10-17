@@ -11,7 +11,7 @@ import (
 	"github.com/anacrolix/missinggo/v2"
 	"github.com/go-quicktest/qt"
 
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 func TestShortFile(t *testing.T) {

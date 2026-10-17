@@ -16,7 +16,7 @@ import (
 	"time"
 	"weak"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/anacrolix/chansync"
 	"github.com/anacrolix/generics"
 	. "github.com/anacrolix/generics"
@@ -27,14 +27,14 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"kuro/internal/bt/bencode"
-	requestStrategy "kuro/internal/bt/internal/request-strategy"
+	"yoru/internal/bt/bencode"
+	requestStrategy "yoru/internal/bt/internal/request-strategy"
 
-	"kuro/internal/bt/merkle"
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/mse"
-	pp "kuro/internal/bt/peer_protocol"
-	utHolepunch "kuro/internal/bt/peer_protocol/ut-holepunch"
+	"yoru/internal/bt/merkle"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/mse"
+	pp "yoru/internal/bt/peer_protocol"
+	utHolepunch "yoru/internal/bt/peer_protocol/ut-holepunch"
 )
 
 type PeerStatus struct {
@@ -111,10 +111,12 @@ type PeerConn struct {
 	// the torrent.
 	receivedHashPieces map[[32]byte][][32]byte
 
-	// Requests from the peer that haven't yet been read from storage for upload.
-	unreadPeerRequests map[Request]struct{}
+	// Requests from the peer that haven't yet been read from storage for upload, by arrival.
+	unreadPeerRequests map[Request]uint64
 	// Peer request data that's ready to be uploaded.
-	readyPeerRequests map[Request][]byte
+	readyPeerRequests map[Request]readyPeerRequest
+	// Counts requests in; they are read and sent oldest first, as a streaming peer asks in reading order.
+	peerRequestArrivals uint64
 	// Total peer request data buffered has decreased, so the server can read more.
 	peerRequestDataAllocDecreased chansync.BroadcastCond
 	// A routine is handling buffering peer request data.
@@ -686,7 +688,8 @@ func (c *PeerConn) onReadRequest(r Request, startFetch bool) error {
 		return errors.New("chunk overflows piece")
 	}
 	MakeMapIfNilWithCap(&c.unreadPeerRequests, localClientReqq)
-	c.unreadPeerRequests[r] = struct{}{}
+	c.peerRequestArrivals++
+	c.unreadPeerRequests[r] = c.peerRequestArrivals
 	if startFetch {
 		c.startPeerRequestServer()
 	}
@@ -704,7 +707,7 @@ func (c *PeerConn) peerRequestServer() {
 	c.locker().Lock()
 again:
 	if !c.closed.IsSet() {
-		for r := range c.unreadPeerRequests {
+		if r, ok := oldestPeerRequest(c.unreadPeerRequests, func(arrival uint64) uint64 { return arrival }); ok {
 			c.servePeerRequest(r)
 			goto again
 		}
@@ -754,7 +757,7 @@ func (me *PeerConn) deleteReadyPeerRequest(r Request) {
 		return
 	}
 	delete(me.readyPeerRequests, r)
-	if len(v) > 0 {
+	if len(v.data) > 0 {
 		me.peerRequestDataAllocDecreased.Broadcast()
 	}
 }
@@ -779,14 +782,31 @@ func (c *PeerConn) servePeerRequest(r Request) {
 		c.peerRequestDataReadFailed(err, r)
 		return
 	}
-	if !MapContains(c.unreadPeerRequests, r) {
+	arrival, ok := c.unreadPeerRequests[r]
+	if !ok {
 		c.slogger.Debug("read data for peer request but no longer wanted", "request", r)
 		return
 	}
-	MustDelete(c.unreadPeerRequests, r)
+	delete(c.unreadPeerRequests, r)
 	MakeMapIfNil(&c.readyPeerRequests)
-	c.readyPeerRequests[r] = b
+	c.readyPeerRequests[r] = readyPeerRequest{arrival: arrival, data: b}
 	c.tickleWriter()
+}
+
+type readyPeerRequest struct {
+	arrival uint64
+	data    []byte
+}
+
+// oldestPeerRequest is the first to arrive; a scan is cheap, as a queue holds at most localClientReqq.
+func oldestPeerRequest[V any](requests map[Request]V, arrival func(V) uint64) (oldest Request, ok bool) {
+	var first uint64
+	for r, v := range requests {
+		if a := arrival(v); !ok || a < first {
+			oldest, first, ok = r, a, true
+		}
+	}
+	return
 }
 
 // If this is maintained correctly, we might be able to support optional synchronous reading for
@@ -850,7 +870,7 @@ func (c *PeerConn) readPeerRequestData(r Request) ([]byte, error) {
 	return b, err
 }
 
-func (c *PeerConn) logProtocolBehaviour(level log.Level, format string, arg ...interface{}) {
+func (c *PeerConn) logProtocolBehaviour(level log.Level, format string, arg ...any) {
 	c.protocolLogger.WithContextText(fmt.Sprintf(
 		"peer id %q, ext v %q", c.PeerID, c.PeerClientName.Load(),
 	)).SkipCallers(1).Levelf(level, format, arg...)
@@ -1187,7 +1207,7 @@ another:
 		if !c.unchoke(msg) {
 			return false
 		}
-		for r := range c.readyPeerRequests {
+		if r, ok := oldestPeerRequest(c.readyPeerRequests, func(v readyPeerRequest) uint64 { return v.arrival }); ok {
 			res := c.t.cl.config.UploadRateLimiter.ReserveN(time.Now(), int(r.Length))
 			if !res.OK() {
 				panic(fmt.Sprintf("upload rate limiter burst size < %d", r.Length))
@@ -1225,7 +1245,7 @@ func (c *PeerConn) tickleWriter() {
 }
 
 func (c *PeerConn) sendChunk(r Request, msg func(pp.Message) bool) (more bool) {
-	b := MapMustGet(c.readyPeerRequests, r)
+	b := MapMustGet(c.readyPeerRequests, r).data
 	panicif.NotEq(len(b), r.Length.Int())
 	c.deleteReadyPeerRequest(r)
 	c.lastChunkSent = time.Now()

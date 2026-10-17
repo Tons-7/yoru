@@ -7,7 +7,7 @@ import (
 	"net/netip"
 	"strconv"
 
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 // This will be deprecated in favour of NodeAddrPort.

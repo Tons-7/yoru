@@ -25,7 +25,7 @@ import (
 	"unsafe"
 	"weak"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/anacrolix/chansync"
 	"github.com/anacrolix/chansync/events"
 	. "github.com/anacrolix/generics"
@@ -40,24 +40,24 @@ import (
 	"github.com/pion/webrtc/v4"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
-	"kuro/internal/bt/dht"
+	"yoru/internal/bt/dht"
 
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/internal/check"
-	"kuro/internal/bt/internal/nestedmaps"
-	request_strategy "kuro/internal/bt/internal/request-strategy"
-	"kuro/internal/bt/merkle"
-	"kuro/internal/bt/metainfo"
-	pp "kuro/internal/bt/peer_protocol"
-	utHolepunch "kuro/internal/bt/peer_protocol/ut-holepunch"
-	"kuro/internal/bt/segments"
-	"kuro/internal/bt/storage"
-	"kuro/internal/bt/tracker"
-	typedRoaring "kuro/internal/bt/typed-roaring"
-	"kuro/internal/bt/types/infohash"
-	infohash_v2 "kuro/internal/bt/types/infohash-v2"
-	"kuro/internal/bt/webseed"
-	"kuro/internal/bt/webtorrent"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/internal/check"
+	"yoru/internal/bt/internal/nestedmaps"
+	request_strategy "yoru/internal/bt/internal/request-strategy"
+	"yoru/internal/bt/merkle"
+	"yoru/internal/bt/metainfo"
+	pp "yoru/internal/bt/peer_protocol"
+	utHolepunch "yoru/internal/bt/peer_protocol/ut-holepunch"
+	"yoru/internal/bt/segments"
+	"yoru/internal/bt/storage"
+	"yoru/internal/bt/tracker"
+	typedRoaring "yoru/internal/bt/typed-roaring"
+	"yoru/internal/bt/types/infohash"
+	infohash_v2 "yoru/internal/bt/types/infohash-v2"
+	"yoru/internal/bt/webseed"
+	"yoru/internal/bt/webtorrent"
 )
 
 var errTorrentClosed = errors.New("torrent closed")
@@ -172,6 +172,7 @@ type Torrent struct {
 	gotMetainfoC chan struct{}
 
 	readers                map[*reader]struct{}
+	readerAt               []RequestIndex
 	_readerNowPieces       bitmap.Bitmap
 	_readerReadaheadPieces bitmap.Bitmap
 
@@ -331,7 +332,7 @@ func (t *Torrent) KnownSwarm() (ks []PeerInfo) {
 func (t *Torrent) setChunkSize(size pp.Integer) {
 	t.chunkSize = size
 	t.chunkPool = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			b := make([]byte, size)
 			return &b
 		},
@@ -791,7 +792,7 @@ func (me pieceAvailabilityRun) String() string {
 }
 
 func (t *Torrent) pieceAvailabilityRuns() (ret []pieceAvailabilityRun) {
-	rle := missinggo.NewRunLengthEncoder(func(el interface{}, count uint64) {
+	rle := missinggo.NewRunLengthEncoder(func(el any, count uint64) {
 		ret = append(ret, pieceAvailabilityRun{Availability: el.(int), Count: int(count)})
 	})
 	for i := range t.pieces {
@@ -810,7 +811,7 @@ func (t *Torrent) pieceAvailabilityFrequencies() (freqs []int) {
 }
 
 func (t *Torrent) pieceStateRuns() (ret PieceStateRuns) {
-	rle := missinggo.NewRunLengthEncoder(func(el interface{}, count uint64) {
+	rle := missinggo.NewRunLengthEncoder(func(el any, count uint64) {
 		ret = append(ret, PieceStateRun{
 			PieceState: el.(PieceState),
 			Length:     int(count),
@@ -1020,7 +1021,7 @@ func (t *Torrent) newMetaInfo() metainfo.MetaInfo {
 	return metainfo.MetaInfo{
 		CreationDate: time.Now().Unix(),
 		Comment:      "dynamic metainfo from client",
-		CreatedBy:    "kuro",
+		CreatedBy:    "Yoru",
 		AnnounceList: t.announceList.Clone(),
 		InfoBytes: func() []byte {
 			if t.haveInfo() {
@@ -1111,9 +1112,7 @@ func (t *Torrent) close(wg *sync.WaitGroup) {
 		f()
 	}
 	if t.storage != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			t.storageLock.Lock()
 			defer t.storageLock.Unlock()
 			if f := t.storage.Close; f != nil {
@@ -1122,7 +1121,7 @@ func (t *Torrent) close(wg *sync.WaitGroup) {
 					t.logger.WithDefaultLevel(log.Warning).Printf("error closing storage: %v", err1)
 				}
 			}
-		}()
+		})
 	}
 	t.iterPeers(func(p *Peer) {
 		p.close()
@@ -1539,10 +1538,12 @@ func (t *Torrent) updatePeerRequestsForPiece(piece pieceIndex, reason updateRequ
 		// Non-pending pieces are usually cancelled more synchronously.
 		return
 	}
+	// A reader waits on a piece nobody was asked for: every peer with it re-plans now, full queue or not.
+	urgent := t.piece(piece).purePriority() == PiecePriorityNow && t.pieceHasUnrequestedChunks(piece)
 	for c := range t.conns {
 		// This is a lot of effort to avoid using continue...
 		func() {
-			if !c.isLowOnRequests() {
+			if !urgent && !c.isLowOnRequests() {
 				return
 			}
 			if !c.peerHasPiece(piece) {
@@ -1597,7 +1598,9 @@ func (t *Torrent) updatePiecePriorityNoRequests(piece pieceIndex) (updateRequest
 
 func (t *Torrent) updatePiecePriority(piece pieceIndex, reason updateRequestReason) {
 	//t.logger.Slogger().Debug("updatePiecePriority", "piece", piece, "reason", reason)
-	if t.updatePiecePriorityNoRequests(piece) && !t.disableTriggers {
+	// Rising to Now changes no pending set, yet the peers must hear of it.
+	changed := t.updatePiecePriorityNoRequests(piece)
+	if (changed || t.piece(piece).purePriority() == PiecePriorityNow) && !t.disableTriggers {
 		t.updatePeerRequestsForPiece(piece, reason)
 	}
 }
@@ -1654,10 +1657,7 @@ func (t *Torrent) byteRegionPieces(off, size int64) (begin, end pieceIndex) {
 		return
 	}
 	begin = pieceIndex(off / t.info.PieceLength)
-	end = pieceIndex((off + size + t.info.PieceLength - 1) / t.info.PieceLength)
-	if end > t.info.NumPieces() {
-		end = t.info.NumPieces()
-	}
+	end = min(pieceIndex((off+size+t.info.PieceLength-1)/t.info.PieceLength), t.info.NumPieces())
 	return
 }
 
@@ -1675,6 +1675,20 @@ func (t *Torrent) forReaderOffsetPieces(f func(begin, end pieceIndex) (more bool
 		}
 	}
 	return true
+}
+
+// readerRequests is the chunk each reader is at; reused, as every request update asks for it.
+func (t *Torrent) readerRequests() []RequestIndex {
+	t.readerAt = t.readerAt[:0]
+	for r := range t.readers {
+		if r.pieces.begin >= r.pieces.end || r.pos >= r.length {
+			continue
+		}
+		if req, ok := t.offsetRequest(r.offset + r.pos); ok {
+			t.readerAt = append(t.readerAt, t.requestIndexFromRequest(req))
+		}
+	}
+	return t.readerAt
 }
 
 func (t *Torrent) pendRequest(req RequestIndex) {
@@ -2079,6 +2093,9 @@ func (t *Torrent) seeding() bool {
 		return false
 	}
 	if !cl.config.Seed {
+		return false
+	}
+	if cl.config.StopSeedingWhenComplete && !t.needData() {
 		return false
 	}
 	if cl.config.DisableAggressiveUpload && t.needData() {
@@ -2542,7 +2559,8 @@ func (t *Torrent) newConnsAllowed() bool {
 	if t.closed.IsSet() {
 		return false
 	}
-	if rl := t.cl.config.DownloadRateLimiter; rl != nil && rl.Tokens() <= 0 {
+	// Only a zero limit: a capped bucket runs empty while busy, and a new stream still needs peers.
+	if EffectiveDownloadRateLimit(t.cl.config.DownloadRateLimiter) == 0 {
 		return false
 	}
 	if t.needData() {
@@ -3369,6 +3387,16 @@ func (t *Torrent) iterUndirtiedRequestIndexesInPiece(
 		pieceRequestIndexOffset, pieceRequestIndexOffset+t.pieceNumChunks(piece),
 		f,
 	)
+}
+
+func (t *Torrent) pieceHasUnrequestedChunks(piece pieceIndex) (found bool) {
+	var it typedRoaring.Iterator[RequestIndex]
+	t.iterUndirtiedRequestIndexesInPiece(&it, piece, func(r RequestIndex) {
+		if _, ok := t.requestState[r]; !ok {
+			found = true
+		}
+	})
+	return
 }
 
 type webRtcStatsReports map[string]webrtc.StatsReport

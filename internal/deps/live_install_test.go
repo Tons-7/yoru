@@ -10,16 +10,16 @@ import (
 	"time"
 )
 
-// Opt-in: KURO_LIVE=1 [KURO_LIVE_DEPS=ffmpeg] go test ./internal/deps -run LiveInstall -timeout 60m
+// Opt-in: YORU_LIVE=1 [YORU_LIVE_DEPS=ffmpeg] go test ./internal/deps -run LiveInstall -timeout 60m
 func TestLiveInstallUnpacksRealSevenZips(t *testing.T) {
-	if os.Getenv("KURO_LIVE") == "" {
-		t.Skip("set KURO_LIVE=1 to download mpv and ffmpeg")
+	if os.Getenv("YORU_LIVE") == "" {
+		t.Skip("set YORU_LIVE=1 to download mpv and ffmpeg")
 	}
 	bin := t.TempDir()
 	m := New(bin, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	names := []string{"mpv", "ffmpeg"}
-	if only := os.Getenv("KURO_LIVE_DEPS"); only != "" {
+	if only := os.Getenv("YORU_LIVE_DEPS"); only != "" {
 		names = strings.Split(only, ",")
 	}
 	for _, name := range names {

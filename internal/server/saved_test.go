@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/config"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/store"
 )
 
-// AniList down, but kuro saved the show: the page opens from that, and says so.
+// AniList down, but Yoru saved the show: the page opens from that, and says so.
 func TestAnimePageFallsBackToSavedRecord(t *testing.T) {
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, `{"errors":[{"message":"Internal Server Error","status":500}]}`)

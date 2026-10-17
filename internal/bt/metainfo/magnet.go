@@ -10,7 +10,7 @@ import (
 
 	g "github.com/anacrolix/generics"
 
-	"kuro/internal/bt/types/infohash"
+	"yoru/internal/bt/types/infohash"
 )
 
 // Magnet link components.

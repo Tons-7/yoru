@@ -5,9 +5,9 @@ import { copyFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const LIB = process.env.KURO_LIB
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const LIB = process.env.YORU_LIB
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const shots = process.env.SHOTS ?? '.'
 
 const api = async (path, init) => {
@@ -53,13 +53,13 @@ let file
 for (let i = 0; i < 30 && !file; i++) {
   await sleep(1000)
   const files = await api('/api/local/files')
-  file = (files.body?.items ?? []).find((f) => String(f.path ?? '').includes('Kuro Test Show'))
+  file = (files.body?.items ?? []).find((f) => String(f.path ?? '').includes('Yoru Test Show'))
 }
 check(!!file, 'test file listed')
 if (!file) process.exit(1)
 await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: 1 })
 // Episode 3 is where auto-next lands; a local copy keeps the run off the swarm.
-copyFileSync(join(LIB, 'Kuro Test Show - 01.mkv'), join(LIB, 'third.mkv'))
+copyFileSync(join(LIB, 'Yoru Test Show - 01.mkv'), join(LIB, 'third.mkv'))
 await post('/api/local/scan', {})
 let third
 for (let i = 0; i < 30 && !third; i++) {
@@ -72,13 +72,13 @@ await post('/api/local/assign', { id: third.id, animeId: ANIME, episode: 3 })
 
 // Several sections plant rows straight into the database; without it the
 // run cannot mean anything, so it stops rather than failing them one by one.
-if (!process.env.KURO_DB || !process.env.KURO_REPO) {
-  console.error('KURO_DB and KURO_REPO are required (run through run-player-check.mjs)')
+if (!process.env.YORU_DB || !process.env.YORU_REPO) {
+  console.error('YORU_DB and YORU_REPO are required (run through run-player-check.mjs)')
   process.exit(2)
 }
 const seed = (...flags) =>
-  spawnSync('go', ['run', './scripts/e2e-seed', '-db', process.env.KURO_DB, '-anime', String(ANIME), ...flags], {
-    cwd: process.env.KURO_REPO,
+  spawnSync('go', ['run', './scripts/e2e-seed', '-db', process.env.YORU_DB, '-anime', String(ANIME), ...flags], {
+    cwd: process.env.YORU_REPO,
     stdio: 'inherit',
   }).status === 0
 check(seed('-pack'), 'download rows seeded')
@@ -241,8 +241,33 @@ await page.reload({ waitUntil: 'domcontentloaded' })
 await page.getByRole('tab', { name: 'Quality' }).click()
 check(await until(() => page.getByLabel('Preferred release groups').inputValue().then((v) => v === 'SubsPlease, Erai-raws')), 'preferred groups survive a reload')
 
+// ---------------------------------------------------------------- settings: speed limit and sharing
+const effective = async () => (await api('/api/prefs')).body?.effective ?? {}
+const speedLimit = page.getByLabel('Download speed limit')
+await speedLimit.selectOption({ label: '5 Mbps' })
+check(await until(async () => (await effective())['downloads.limit_bytes'] === '625000'), 'speed limit saved in bytes a second')
+check(await until(() => page.getByText(/plays faster than it downloads/).isVisible()), 'a cap under a 1080p stream says playback waits')
+await page.getByLabel('Sharing').selectOption('never')
+check(await until(async () => (await effective())['downloads.upload'] === 'never'), 'sharing set to never')
+check(await until(() => page.getByText(/Downloads get slower/).isVisible()), 'never sharing says downloads get slower')
+// This machine's adapters, VPN or not, with Any network as the default.
+const torrentNet = page.getByLabel('Network for torrents')
+check(await until(() => torrentNet.isVisible()), 'the network for torrents is offered here, on the host')
+check((await torrentNet.inputValue()) === '', 'torrents use any network by default')
+check((await torrentNet.locator('option').count()) >= 2, 'this machine\'s adapters are listed', String(await torrentNet.locator('option').count()))
+// Back to the defaults, so the checks after this download at full speed.
+await speedLimit.selectOption('0')
+await page.getByLabel('Sharing').selectOption('while_downloading')
+check(
+  await until(async () => {
+    const e = await effective()
+    return e['downloads.limit_bytes'] === '0' && e['downloads.upload'] === 'while_downloading'
+  }),
+  'back to no limit, sharing while downloading',
+)
+
 // ---------------------------------------------------------------- local files: assign by hand
-copyFileSync(join(LIB, 'Kuro Test Show - 01.mkv'), join(LIB, 'mystery clip.mkv'))
+copyFileSync(join(LIB, 'Yoru Test Show - 01.mkv'), join(LIB, 'mystery clip.mkv'))
 await post('/api/local/scan', {})
 let mystery
 for (let i = 0; i < 30 && !mystery; i++) {
@@ -275,7 +300,7 @@ if (offered) {
   check(await until(() => row.getByRole('link', { name: 'Play ep 9' }).isVisible()), 'row now offers to play it')
 }
 // The rescan above must not have undone the episode-1 assignment from setup.
-const ep1 = (await api('/api/local/files')).body?.items?.find((f) => String(f.path ?? '').includes('Kuro Test Show - 01'))
+const ep1 = (await api('/api/local/files')).body?.items?.find((f) => String(f.path ?? '').includes('Yoru Test Show - 01'))
 check(ep1?.animeId === ANIME && ep1?.episode === 1, 'hand assignment survives a rescan', JSON.stringify(ep1 ?? {}).slice(0, 120))
 const localPlay = await post('/api/play', { animeId: ANIME, episode: 1 })
 check(localPlay.body?.source === 'local', 'episode 1 still plays from the local file', localPlay.body?.source)
@@ -295,7 +320,7 @@ await video.evaluate((v) => {
 })
 check(await until(() => video.evaluate((v) => Math.abs(v.volume - 0.3) < 0.01)), 'volume set to 30%')
 // The change is persisted from the volumechange event, which lands a tick later.
-check(await until(() => page.evaluate(() => /"volume":0\.3/.test(localStorage.getItem('kuro.player') ?? ''))), 'volume remembered')
+check(await until(() => page.evaluate(() => /"volume":0\.3/.test(localStorage.getItem('yoru.player') ?? ''))), 'volume remembered')
 await page.goto(`${BASE}/watch/${ANIME}/9`, { waitUntil: 'domcontentloaded' })
 check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'next episode loads')
 check(await until(() => video.evaluate((v) => Math.abs(v.volume - 0.3) < 0.01 && v.playbackRate === 1.5)), 'volume and speed carried to the next episode', await video.evaluate((v) => `vol=${v.volume} rate=${v.playbackRate}`))
@@ -329,7 +354,7 @@ check(await until(() => page.getByLabel('Watch stats').isVisible()), 'history pa
 await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
 const search = page.getByRole('combobox', { name: 'Search anime' })
 await search.fill('Chainsaw')
-const option = page.locator('#kuro-search-results [role=option]').first()
+const option = page.locator('#yoru-search-results [role=option]').first()
 check(await until(() => option.isVisible()), 'typing opens instant results')
 check(await until(() => option.innerText().then((t) => /Chainsaw Man/.test(t))), 'the library show is listed', await option.innerText().catch(() => ''))
 await search.press('ArrowDown')
@@ -500,7 +525,7 @@ await notifyPage.goto(`${BASE}/settings?tab=Notifications`, { waitUntil: 'domcon
 const desktopSwitch = notifyPage.getByRole('switch', { name: 'Desktop alerts' })
 check(await until(() => desktopSwitch.isVisible()), 'desktop alerts switch offered')
 await desktopSwitch.click()
-check(await until(() => notifyPage.evaluate(() => localStorage.getItem('kuro.notify.desktop') === '1')), 'desktop alerts switch turns on')
+check(await until(() => notifyPage.evaluate(() => localStorage.getItem('yoru.notify.desktop') === '1')), 'desktop alerts switch turns on')
 // First sight only records the backlog; a newer item after that is announced.
 await notifyPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
 await sleep(1500)
@@ -548,6 +573,144 @@ await sleep(400)
 await tapAt(0.5)
 check(await until(() => pv.evaluate((v) => !v.paused)), 'single tap plays')
 await phone.close()
+
+// ---------------------------------------------------------------- open in another app
+const android = await browser.newContext({
+  viewport: { width: 420, height: 800 },
+  hasTouch: true,
+  isMobile: true,
+  userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36',
+})
+const ap = await android.newPage()
+await ap.goto(`${BASE}/watch/${ANIME}/9`, { waitUntil: 'domcontentloaded' })
+const openInApp = ap.getByRole('button', { name: 'Open in app' })
+check(await until(() => openInApp.isVisible(), 60_000), 'open in app is offered')
+await openInApp.click()
+const chooser = ap.getByRole('link', { name: 'Choose an app' })
+check(await until(() => chooser.isVisible(), 15_000), 'android gets one link to its app chooser')
+const intent = (await chooser.getAttribute('href')) ?? ''
+check(/^intent:\/\/127\.0\.0\.1:\d+\/x\/[^/]+\/[^#]+#Intent;scheme=http;type=video\/\*;/.test(intent), 'the chooser hands over this file as a video', intent)
+const appLink = await ap.getByLabel('Link to the episode').inputValue()
+const firstBytes = await fetch(appLink, { headers: { Range: 'bytes=0-15' } })
+check(
+  firstBytes.status === 206 && (await firstBytes.arrayBuffer()).byteLength === 16,
+  'the link plays from its first byte, ranged',
+  String(firstBytes.status),
+)
+await android.close()
+
+// ---------------------------------------------------------------- up next list
+// One list, played top to bottom: + on a row adds, Home edits it, the player follows it.
+const FRIEREN = 154587
+const upNextKeys = async () =>
+  ((await api('/api/upnext')).body?.items ?? []).map((it) => `${it.animeId}:${it.episode}`).join(' ')
+await api('/api/upnext', { method: 'DELETE' })
+await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
+const addNine = page.getByRole('button', { name: 'Add episode 9 to Up next' })
+check(await until(() => addNine.isVisible(), 30_000), 'episode rows offer Add to Up next')
+await addNine.click()
+check(await until(async () => (await upNextKeys()) === `${ANIME}:9`), 'the + put episode 9 on the list', await upNextKeys())
+check(
+  await until(() => page.getByRole('button', { name: 'Remove episode 9 from Up next' }).isVisible()),
+  'the row then offers to take it off',
+)
+check(await page.getByText('In Up next').first().isVisible(), 'the row says In Up next')
+await post('/api/upnext', { animeId: FRIEREN, episode: 1 })
+
+await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+const upNextRail = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Up next', exact: true }) })
+check(await until(() => upNextRail.isVisible(), 15_000), 'Home shows the Up next row while it has episodes')
+check(await upNextRail.getByText(/^2 episodes/).isVisible(), 'the row says how much is on it')
+await upNextRail.getByRole('button', { name: 'Edit list' }).click()
+const sheet = page.getByRole('dialog', { name: 'Edit Up next' })
+check(await until(() => sheet.isVisible()), 'Edit list opens the sheet')
+// The menu moves a show for remotes, keyboards and anyone who can't drag.
+await sheet.getByRole('button', { name: /^More for / }).last().click()
+await page.getByRole('menuitem', { name: 'Move to top' }).click()
+check(await until(async () => (await upNextKeys()).startsWith(`${FRIEREN}:`)), 'Move to top puts that show first', await upNextKeys())
+// Measured once the rows stand in the new order, by show, or the drag aims at a row mid-render.
+const rowOrder = () => sheet.locator('[data-show]').evaluateAll((els) => els.map((e) => e.dataset.show).join(' '))
+await until(async () => (await rowOrder()) === `${FRIEREN} ${ANIME}`)
+await sleep(300)
+const grips = sheet.getByRole('button', { name: /^Reorder / })
+const gripFrom = await sheet.locator(`[data-show="${FRIEREN}"]`).getByRole('button', { name: /^Reorder / }).boundingBox()
+const gripTo = await sheet.locator(`[data-show="${ANIME}"]`).getByRole('button', { name: /^Reorder / }).boundingBox()
+await page.mouse.move(gripFrom.x + gripFrom.width / 2, gripFrom.y + gripFrom.height / 2)
+await page.mouse.down()
+await page.mouse.move(gripTo.x + gripTo.width / 2, gripTo.y + gripTo.height / 2 + 20, { steps: 8 })
+await page.mouse.up()
+check(await until(async () => (await upNextKeys()).startsWith(`${ANIME}:`)), 'dragging the grip reorders the shows', await upNextKeys())
+// Arrow keys on the grip move a show too, and the grip keeps the focus for the next press.
+await until(async () => (await rowOrder()) === `${ANIME} ${FRIEREN}`)
+await grips.first().focus()
+await page.keyboard.press('ArrowDown')
+check(await until(async () => (await upNextKeys()).startsWith(`${FRIEREN}:`)), 'arrow down on the grip moves the show down', await upNextKeys())
+check(await until(async () => (await rowOrder()) === `${FRIEREN} ${ANIME}`), 'the rows show the new order', await rowOrder())
+check(
+  await until(() => page.evaluate(() => /^Reorder /.test(document.activeElement?.getAttribute('aria-label') ?? ''))),
+  'the moved show\'s grip keeps the focus',
+)
+await page.keyboard.press('ArrowUp')
+check(await until(async () => (await upNextKeys()).startsWith(`${ANIME}:`)), 'arrow up moves it back', await upNextKeys())
+await page.keyboard.press('Escape')
+check(await until(() => sheet.isVisible().then((v) => !v)), 'Escape closes the sheet')
+
+// A phone gets the same sheet from the bottom, full width.
+const upNextPhone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+const upp = await upNextPhone.newPage()
+await upp.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+const phoneEdit = upp.getByRole('button', { name: 'Edit list' })
+check(await until(() => phoneEdit.isVisible(), 15_000), 'the phone shows the Up next row')
+await phoneEdit.click()
+const phoneSheet = upp.getByRole('dialog', { name: 'Edit Up next' })
+check(await until(() => phoneSheet.isVisible()), 'the phone opens the sheet')
+const phoneBox = await phoneSheet.boundingBox()
+check(
+  phoneBox && Math.abs(phoneBox.y + phoneBox.height - 844) < 2 && phoneBox.width >= 389,
+  'on a phone it is a bottom sheet',
+  JSON.stringify(phoneBox),
+)
+await upNextPhone.close()
+
+// The end of an episode offers the list's next, not the show's, and says what follows.
+await post('/api/prefs', { key: 'playback.autonext', value: 'false' })
+await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
+check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'episode 1 loads for the Up next list check')
+await video.evaluate((v) => {
+  v.currentTime = v.duration - 0.5
+  void v.play()
+})
+check(await until(() => upNext.isVisible(), 20_000), 'the end card appears')
+const cardText = async () => (await upNext.innerText().catch(() => '')).replace(/\s+/g, ' ')
+check(
+  await until(async () => /from your list/i.test(await cardText()) && /Episode 9/.test(await cardText())),
+  'the card offers the list\'s episode 9, not the show\'s next',
+  await cardText(),
+)
+check(/Then .+ · Ep 1/.test(await cardText()), 'and says what plays after it', await cardText())
+await upNext.getByRole('button', { name: 'Play next' }).click()
+check(await until(() => page.url().endsWith(`/watch/${ANIME}/9`)), 'Play next goes to the list\'s episode', page.url())
+
+// Watched episodes leave by themselves.
+await post('/api/progress', { animeId: ANIME, episode: 9, position: 175, duration: 180, played: 100, final: true })
+check(await until(async () => (await upNextKeys()) === `${FRIEREN}:1`), 'a watched episode leaves the list', await upNextKeys())
+
+// Add next episodes: one per show being watched, and a second press adds nothing.
+await post('/api/status', { animeId: ANIME, status: 'CURRENT' })
+await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+await page.getByRole('button', { name: 'Edit list' }).click()
+check(await until(() => sheet.isVisible()), 'the sheet opens again')
+await sheet.getByRole('button', { name: 'Add next episodes' }).click()
+check(await until(() => page.getByText(/^Added 1$/).isVisible()), 'Add next episodes says what it added')
+check(await until(async () => (await upNextKeys()).includes(`${ANIME}:10`)), 'it added the show\'s next unwatched episode', await upNextKeys())
+await sheet.getByRole('button', { name: 'Add next episodes' }).click()
+check(await until(() => page.getByText('Nothing to add').isVisible()), 'a second press has nothing to add')
+await sheet.getByRole('button', { name: 'Clear list' }).click()
+await sheet.getByRole('button', { name: 'Clear list' }).click()
+check(await until(async () => (await upNextKeys()) === ''), 'Clear list empties it', await upNextKeys())
+await page.keyboard.press('Escape')
+check(await until(() => upNextRail.isVisible().then((v) => !v)), 'an empty list leaves Home without the row')
+await post('/api/prefs', { key: 'playback.autonext', value: 'true' })
 
 // ---------------------------------------------------------------- hentai filter
 const hentai = await api('/api/filters')

@@ -3,7 +3,7 @@ package udp
 import (
 	"encoding"
 
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 )
 
 // Discriminates behaviours based on address family in use.

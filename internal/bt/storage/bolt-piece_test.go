@@ -3,8 +3,8 @@ package storage_test
 import (
 	"testing"
 
-	"kuro/internal/bt/storage"
-	"kuro/internal/bt/test"
+	"yoru/internal/bt/storage"
+	"yoru/internal/bt/test"
 )
 
 func TestBoltLeecherStorage(t *testing.T) {

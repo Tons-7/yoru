@@ -6,7 +6,7 @@ import (
 
 	g "github.com/anacrolix/generics"
 
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 type ClientImplCloser interface {

@@ -593,7 +593,7 @@ func (c *Client) get(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "kuro/0.1")
+	req.Header.Set("User-Agent", "yoru/0.1")
 	req.Header.Set("Accept", "application/json")
 
 	res, err := c.http.Do(req)
@@ -619,7 +619,7 @@ func (c *Client) getStrict(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "kuro/0.1")
+	req.Header.Set("User-Agent", "yoru/0.1")
 
 	res, err := c.http.Do(req)
 	if err != nil {

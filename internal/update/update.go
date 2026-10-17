@@ -1,4 +1,4 @@
-// Package update replaces kuro.exe with the newest GitHub release. The zip is
+// Package update replaces yoru.exe with the newest GitHub release. The zip is
 // the only thing touched: bin/, cache/, config.toml and the database stay.
 package update
 
@@ -24,16 +24,17 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/config"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/store"
 )
 
-// Version is stamped by the build (-X kuro/internal/update.Version=...); a "dev" build never updates itself.
+// Version is stamped by the build (-X yoru/internal/update.Version=...); a "dev" build never updates itself.
 var Version = "dev"
 
 const (
-	Repo      = "Tons-7/kuro"
-	userAgent = "kuro"
+	// Renamed from Tons-7/kuro, whose address GitHub forwards here for older versions' update checks.
+	Repo      = "Tons-7/yoru"
+	userAgent = "Yoru"
 	sumsFile  = "SHA256SUMS.txt"
 	sigFile   = sumsFile + ".sig"
 )
@@ -112,7 +113,7 @@ type Updater struct {
 func New(st *store.Store, exe, staging string, log *slog.Logger) *Updater {
 	api := "https://api.github.com"
 	// An end-to-end test points a real build at a fake release server.
-	if override := os.Getenv("KURO_UPDATE_API"); override != "" {
+	if override := config.Env("UPDATE_API"); override != "" {
 		api = override
 	}
 	return &Updater{
@@ -332,7 +333,7 @@ func (u *Updater) Started(ctx context.Context) {
 	}
 	if _, err := u.store.AddNotification(ctx, store.Notification{
 		Kind:    store.NotifyUpdate,
-		Title:   fmt.Sprintf("Updated to kuro %s", Version),
+		Title:   fmt.Sprintf("Updated to Yoru %s", Version),
 		Body:    "See what's new in Settings → About",
 		Payload: map[string]any{"version": Version, "updated": true},
 	}); err != nil {
@@ -358,12 +359,13 @@ func (u *Updater) fetchSmall(ctx context.Context, url string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(res.Body, 64<<10))
 }
 
-// AssetName is the zip package.ps1 publishes for this platform.
+// AssetName is the zip package.ps1 publishes for this platform. Releases also carry kuro-named ones, holding the
+// program as kuro.exe, for versions from before the rename, which ask for those.
 func AssetName(version string) string {
 	if runtime.GOOS == "windows" {
-		return fmt.Sprintf("kuro-%s-update.zip", version)
+		return fmt.Sprintf("%s-%s-update.zip", config.Name, version)
 	}
-	return fmt.Sprintf("kuro-%s-%s-%s.zip", version, runtime.GOOS, runtime.GOARCH)
+	return fmt.Sprintf("%s-%s-%s-%s.zip", config.Name, version, runtime.GOOS, runtime.GOARCH)
 }
 
 // notify announces a version once; the setting remembers which.
@@ -376,7 +378,7 @@ func (u *Updater) notify(ctx context.Context, rel Release) {
 	}
 	if _, err := u.store.AddNotification(ctx, store.Notification{
 		Kind:    store.NotifyUpdate,
-		Title:   fmt.Sprintf("kuro %s is available", rel.Version),
+		Title:   fmt.Sprintf("Yoru %s is available", rel.Version),
 		Body:    "Open Settings → About to update",
 		Payload: map[string]any{"version": rel.Version},
 	}); err != nil {
@@ -453,7 +455,7 @@ func (u *Updater) apply(ctx context.Context, rel Release) error {
 	}
 	if err := u.launch(u.exe); err != nil {
 		// Put the running version back, or nothing is left to start next time.
-		if rerr := Rollback(u.exe); rerr != nil {
+		if _, rerr := Rollback(u.exe); rerr != nil {
 			u.log.Error("restore the previous version", "err", rerr)
 		}
 		return fmt.Errorf("start the new version: %w", err)
@@ -461,22 +463,44 @@ func (u *Updater) apply(ctx context.Context, rel Release) error {
 	return nil
 }
 
-// Rollback puts the previous binary back in place of a new one that failed.
-func Rollback(exe string) error {
-	old := exe + ".old"
+// Rollback puts the previous binary back in place of a new one that failed, returning the one to start. The
+// first Yoru renamed itself on start, so the version before it may wait as kuro.exe.old.
+func Rollback(exe string) (string, error) {
+	old, back := exe+".old", exe
 	if _, err := os.Stat(old); err != nil {
-		return err
+		legacy := filepath.Join(filepath.Dir(exe), config.ExeName(config.Legacy))
+		if _, lerr := os.Stat(legacy + ".old"); lerr != nil {
+			return "", err
+		}
+		old, back = legacy+".old", legacy
 	}
 	failed := exe + ".failed"
 	os.Remove(failed)
 	if err := os.Rename(exe, failed); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return "", err
 	}
-	if err := os.Rename(old, exe); err != nil {
+	if err := os.Rename(old, back); err != nil {
 		os.Rename(failed, exe)
-		return err
+		return "", err
 	}
-	return nil
+	return back, nil
+}
+
+// TakeName renames a kuro.exe running the renamed code to yoru.exe, before anything holds its path; it returns
+// the path to use from then on. A yoru.exe already there is left alone, and so is kuro.exe.
+func TakeName(exe string) string {
+	if !strings.EqualFold(filepath.Base(exe), config.ExeName(config.Legacy)) {
+		return exe
+	}
+	named := filepath.Join(filepath.Dir(exe), config.ExeName(config.Name))
+	if _, err := os.Lstat(named); err == nil {
+		return exe
+	}
+	// A running program can be renamed, though not deleted, on Windows too: the update swap relies on it.
+	if err := os.Rename(exe, named); err != nil {
+		return exe
+	}
+	return named
 }
 
 // Handover reports a start by an update, the only time a failed start falls back to the old binary.
@@ -547,7 +571,7 @@ func (u *Updater) verify(ctx context.Context, rel Release, archive string) error
 		return fmt.Errorf("signature: %w", err)
 	}
 	if !ed25519.Verify(signingKey, raw, sig) {
-		return errors.New(sumsFile + " is not signed by kuro's release key; refusing the update")
+		return errors.New(sumsFile + " is not signed by Yoru's release key; refusing the update")
 	}
 
 	want := ""
@@ -585,7 +609,7 @@ func extractExe(archive, dest string) error {
 	}
 	defer r.Close()
 
-	want := config.ExeName("kuro")
+	want := config.ExeName(config.Name)
 	for _, f := range r.File {
 		if filepath.Base(f.Name) != want || f.FileInfo().IsDir() {
 			continue
@@ -621,17 +645,24 @@ func swap(exe, fresh string) error {
 	return nil
 }
 
-// Cleanup removes the last update's leftovers once this version serves; until then .old is the way back.
+// Cleanup removes the last update's leftovers once this version serves; until then .old is the way back. The
+// kuro-named ones go too, once this runs under the new name.
 func Cleanup(exe string) {
-	os.Remove(exe + ".old")
-	os.Remove(exe + ".new")
-	os.Remove(exe + ".failed")
+	stems := []string{exe}
+	if legacy := filepath.Join(filepath.Dir(exe), config.ExeName(config.Legacy)); !strings.EqualFold(legacy, exe) {
+		stems = append(stems, legacy)
+	}
+	for _, stem := range stems {
+		os.Remove(stem + ".old")
+		os.Remove(stem + ".new")
+		os.Remove(stem + ".failed")
+	}
 }
 
 // RelaunchSelf starts this binary again, told to wait for this process, for a change that needs a restart.
 func RelaunchSelf(exe string) error { return relaunch(exe) }
 
-// relaunch starts the new binary outside the job object, waiting for this exit; a windowed kuro reopens its UI.
+// relaunch starts the new binary outside the job object, waiting for this exit; a windowed Yoru reopens its UI.
 func relaunch(exe string) error { return relaunchCmd(exe).Start() }
 
 func relaunchCmd(exe string) *exec.Cmd {
@@ -660,8 +691,8 @@ func relaunchArgs(pid int, current []string) []string {
 	return args
 }
 
-// WaitFor reads --wait-for <pid> from the arguments and blocks until that
-// process is gone, so a relaunched kuro does not race its predecessor for the port.
+// WaitFor reads --wait-for <pid> from the arguments and blocks until that process is gone, so a relaunch
+// doesn't race its predecessor for the port, nor move the data folder while it still has the database open.
 func WaitFor(args []string, timeout time.Duration) {
 	for i, a := range args {
 		if a != "--wait-for" || i+1 >= len(args) {

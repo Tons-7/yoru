@@ -1,9 +1,9 @@
 package peer_store
 
 import (
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 )
 
 type InfoHash = metainfo.Hash

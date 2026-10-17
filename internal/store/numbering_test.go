@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"testing"
 
-	"kuro/internal/db"
-	"kuro/internal/metadata"
+	"yoru/internal/db"
+	"yoru/internal/metadata"
 )
 
 // The migration re-keys TheTVDB-numbered cours from one, with everything filed under the old keys.

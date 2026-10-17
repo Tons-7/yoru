@@ -1,7 +1,7 @@
 package bt
 
 import (
-	"kuro/internal/bt/webseed"
+	"yoru/internal/bt/webseed"
 )
 
 // Deprecated: The names doesn't reflect the actual behaviour. You can only add sources. Use

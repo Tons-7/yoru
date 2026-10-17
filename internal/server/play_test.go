@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/indexer"
-	"kuro/internal/library"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/config"
+	"yoru/internal/indexer"
+	"yoru/internal/library"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // Enough of the engine for one play.

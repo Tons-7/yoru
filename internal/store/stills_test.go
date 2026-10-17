@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/metadata"
+	"yoru/internal/metadata"
 )
 
 func seedCatalogue(t *testing.T, s *Store, id int, status string, count int) {

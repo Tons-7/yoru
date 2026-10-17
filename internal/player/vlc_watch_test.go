@@ -17,7 +17,7 @@ import (
 
 // Stands in for the VLC process: the test binary re-run, doing nothing until killed.
 func TestVLCStandIn(t *testing.T) {
-	if os.Getenv("KURO_VLC_STAND_IN") != "1" {
+	if os.Getenv("YORU_VLC_STAND_IN") != "1" {
 		t.Skip("only as the stand-in process")
 	}
 	time.Sleep(time.Minute)
@@ -59,7 +59,7 @@ func watched(t *testing.T, opts Options, script ...vlcStatus) ([]Event, *fakeVLC
 	t.Cleanup(srv.Close)
 
 	cmd := exec.Command(os.Args[0], "-test.run=^TestVLCStandIn$")
-	cmd.Env = append(os.Environ(), "KURO_VLC_STAND_IN=1")
+	cmd.Env = append(os.Environ(), "YORU_VLC_STAND_IN=1")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestVLCClosedByTheViewerReportsWhereItWas(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	cmd := exec.Command(os.Args[0], "-test.run=^TestVLCStandIn$")
-	cmd.Env = append(os.Environ(), "KURO_VLC_STAND_IN=1")
+	cmd.Env = append(os.Environ(), "YORU_VLC_STAND_IN=1")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

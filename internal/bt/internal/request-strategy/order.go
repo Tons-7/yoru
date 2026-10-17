@@ -5,8 +5,8 @@ import (
 
 	"github.com/anacrolix/multiless"
 
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/types"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/types"
 )
 
 type (

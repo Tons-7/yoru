@@ -1,6 +1,6 @@
-// Reports what kuro offers for each film of a series, and which file it starts for one.
-//   KURO_EXTRA_CONFIG='[[indexer]] ...' FILMS=5204,5205 PLAY=5204 node scripts/run-player-check.mjs film-series-probe.mjs
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+// Reports what Yoru offers for each film of a series, and which file it starts for one.
+//   YORU_EXTRA_CONFIG='[[indexer]] ...' FILMS=5204,5205 PLAY=5204 node scripts/run-player-check.mjs film-series-probe.mjs
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const FILMS = (process.env.FILMS ?? '').split(',').filter(Boolean).map(Number)
 const PLAY = Number(process.env.PLAY ?? 0)
 const get = async (path) => {

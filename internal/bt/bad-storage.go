@@ -6,9 +6,9 @@ import (
 	"math/rand"
 	"strings"
 
-	"kuro/internal/bt/internal/testutil"
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/internal/testutil"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/storage"
 )
 
 type badStorage struct{}

@@ -19,7 +19,7 @@ type DirtyEntry struct {
 	CompletedAt string
 	// Repeat is how many full rewatches are finished: AniList's repeat, MAL's num_times_rewatched.
 	Repeat int
-	// Score on kuro's 0-100 scale; 0 is unrated.
+	// Score on Yoru's 0-100 scale; 0 is unrated.
 	Score int
 	// ScoreCleared: set to unrated on purpose, so the push clears the site's.
 	ScoreCleared bool
@@ -70,6 +70,12 @@ func (s *Store) MarkWatched(ctx context.Context, animeID, episode int) (bool, er
 		  AND progress > 0
 		  AND progress >= (SELECT episode_count FROM anime WHERE id = ? AND episode_count > 0)`,
 		today, animeID, animeID); err != nil {
+		return false, err
+	}
+
+	// Progress may not rise (a rewatch, a finished show), and a ticked episode still leaves Up next.
+	if _, err := s.w.ExecContext(ctx,
+		`DELETE FROM up_next WHERE anime_id = ? AND episode = ?`, animeID, episode); err != nil {
 		return false, err
 	}
 
@@ -150,7 +156,7 @@ func (s *Store) SetScore(ctx context.Context, animeID, score int) error {
 	return err
 }
 
-// RemoteEntry is what a tracker holds for one anime, in kuro's vocabulary.
+// RemoteEntry is what a tracker holds for one anime, in Yoru's vocabulary.
 type RemoteEntry struct {
 	AnimeID  int
 	Status   string

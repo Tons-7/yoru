@@ -18,14 +18,14 @@ func Check(ctx context.Context, port int, _ string) (Status, error) {
 		if active(ctx, "firewalld") {
 			return Status{
 				Firewall: "firewalld",
-				Hint:     "firewalld is running and blocks other devices until kuro's port is opened.",
+				Hint:     "firewalld is running and blocks other devices until Yoru's port is opened.",
 				Command:  fmt.Sprintf("sudo firewall-cmd --permanent --add-port=%d/tcp && sudo firewall-cmd --reload", port),
 			}, nil
 		}
 		if active(ctx, "ufw") {
 			return Status{
 				Firewall: "ufw",
-				Hint:     "ufw is running and blocks other devices until kuro's port is allowed.",
+				Hint:     "ufw is running and blocks other devices until Yoru's port is allowed.",
 				Command:  fmt.Sprintf("sudo ufw allow %d/tcp", port),
 			}, nil
 		}
@@ -34,8 +34,8 @@ func Check(ctx context.Context, port int, _ string) (Status, error) {
 		if strings.Contains(string(out), "enabled") {
 			return Status{
 				Firewall: "macOS firewall",
-				Hint: "macOS asks the first time kuro is opened to the network. If that was declined, " +
-					"allow kuro in System Settings › Network › Firewall › Options.",
+				Hint: "macOS asks the first time Yoru is opened to the network. If that was declined, " +
+					"allow Yoru in System Settings › Network › Firewall › Options.",
 			}, nil
 		}
 	}
@@ -68,7 +68,7 @@ func CheckPeers(ctx context.Context, port int, _ string) (Status, error) {
 }
 
 func AllowPeers(context.Context, int, string) error {
-	return errors.New("kuro changes the firewall only on Windows; run the command shown instead")
+	return errors.New("Yoru changes the firewall only on Windows; run the command shown instead")
 }
 
 func active(ctx context.Context, unit string) bool {
@@ -77,7 +77,7 @@ func active(ctx context.Context, unit string) bool {
 }
 
 func Allow(context.Context, int, string, bool) error {
-	return errors.New("kuro changes the firewall only on Windows; run the command shown instead")
+	return errors.New("Yoru changes the firewall only on Windows; run the command shown instead")
 }
 
 func OpenNetworkSettings() error {

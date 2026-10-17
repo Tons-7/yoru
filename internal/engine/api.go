@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"kuro/internal/torrent"
+	"yoru/internal/torrent"
 )
 
 // How far a stream reads ahead of the player: a few seconds of a 1080p
 // episode, enough to ride out a slow block without starving other files.
 const streamReadahead = 16 << 20
 
-// guard keeps the API to kuro, ffmpeg and mpv: no browser headers or rebound name, and the secret off the streams.
+// guard keeps the API to Yoru, ffmpeg and mpv: no browser headers or rebound name, and the secret off the streams.
 func (e *Engine) guard(addr string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Origin") != "" || r.Header.Get("Sec-Fetch-Site") != "" || r.Header.Get("Sec-Fetch-Mode") != "" || r.Host != addr {
@@ -36,7 +36,7 @@ func (e *Engine) guard(addr string, next http.Handler) http.Handler {
 func (e *Engine) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, map[string]any{"engine": "kuro"})
+		reply(w, map[string]any{"engine": "Yoru"})
 	})
 	mux.HandleFunc("GET /torrents", e.started(e.handleList))
 	mux.HandleFunc("POST /torrents", e.started(e.handleAdd))
@@ -133,7 +133,7 @@ func (e *Engine) handleAdd(w http.ResponseWriter, r *http.Request) {
 	if q.Get("list_only") == "true" {
 		d, err := e.inspect(r.Context(), magnet)
 		if err != nil {
-			fail(w, http.StatusBadGateway, err)
+			fail(w, addStatus(err), err)
 			return
 		}
 		reply(w, torrent.Torrent{Details: d})
@@ -141,10 +141,18 @@ func (e *Engine) handleAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	en, err := e.add(r.Context(), magnet, q.Get("only_files_regex"))
 	if err != nil {
-		fail(w, http.StatusBadGateway, err)
+		fail(w, addStatus(err), err)
 		return
 	}
 	reply(w, torrent.Torrent{ID: en.id, Details: e.detail(en)})
+}
+
+// addStatus: a client down for the network is unavailable, like one not started; anything else is the swarm's.
+func addStatus(err error) int {
+	if errors.Is(err, torrent.ErrUnavailable) {
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusBadGateway
 }
 
 // handleStream serves a file with Range support. The reader's position is

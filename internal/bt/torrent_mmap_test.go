@@ -1,12 +1,11 @@
 //go:build !wasm
-// +build !wasm
 
 package bt
 
 import (
 	"testing"
 
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/storage"
 )
 
 func TestEmptyFilesAndZeroPieceLengthWithMMapStorage(t *testing.T) {

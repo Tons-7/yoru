@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"kuro/internal/indexer"
-	"kuro/internal/store"
+	"yoru/internal/indexer"
+	"yoru/internal/store"
 )
 
 // A fresh install has no titles until its first corpus build; a download

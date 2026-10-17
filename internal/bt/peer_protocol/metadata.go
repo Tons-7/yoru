@@ -1,7 +1,7 @@
 package peer_protocol
 
 import (
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 const (
@@ -34,9 +34,6 @@ func MetadataExtensionRequestMsg(peerMetadataExtensionId ExtensionNumber, piece 
 // Returns the expected piece size for this request message. This is needed to determine the offset
 // into an extension message payload that the request metadata piece data starts.
 func (me ExtendedMetadataRequestMsg) PieceSize() int {
-	ret := me.TotalSize - me.Piece*(1<<14)
-	if ret > 1<<14 {
-		ret = 1 << 14
-	}
+	ret := min(me.TotalSize-me.Piece*(1<<14), 1<<14)
 	return ret
 }

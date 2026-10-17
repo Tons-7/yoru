@@ -7,8 +7,8 @@ import (
 
 	g "github.com/anacrolix/generics"
 
-	"kuro/internal/bt/bencode"
-	infohash_v2 "kuro/internal/bt/types/infohash-v2"
+	"yoru/internal/bt/bencode"
+	infohash_v2 "yoru/internal/bt/types/infohash-v2"
 )
 
 const FileTreePropertiesKey = ""

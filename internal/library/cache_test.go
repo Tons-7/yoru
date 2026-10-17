@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kuro/internal/db"
-	"kuro/internal/store"
+	"yoru/internal/db"
+	"yoru/internal/store"
 )
 
 // Finished, since only a download that has arrived is space to reclaim.

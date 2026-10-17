@@ -8,9 +8,9 @@ import (
 	"os"
 	"strings"
 
-	"kuro/internal/db"
-	"kuro/internal/metadata"
-	"kuro/internal/store"
+	"yoru/internal/db"
+	"yoru/internal/metadata"
+	"yoru/internal/store"
 )
 
 func main() {
@@ -20,7 +20,7 @@ func main() {
 	extras := flag.Bool("extras", false, "also mark episode 2 filler and add a release notification")
 	flag.Parse()
 	if *path == "" || *anime <= 0 {
-		fmt.Fprintln(os.Stderr, "usage: e2e-seed -db kuro.db -anime 127230 [-pack] [-extras]")
+		fmt.Fprintln(os.Stderr, "usage: e2e-seed -db yoru.db -anime 127230 [-pack] [-extras]")
 		os.Exit(2)
 	}
 	if err := seed(*path, *anime, *pack, *extras); err != nil {
@@ -48,7 +48,7 @@ func seed(path string, anime int, withPack, withExtras bool) error {
 	}{{"cached", 2, false}, {"kept", 3, true}}
 	for _, r := range rows {
 		hash := strings.ToLower(fmt.Sprintf("e2e%037x", r.episode))
-		name := fmt.Sprintf("[E2E] Kuro Test Show - %02d [1080p].mkv", r.episode)
+		name := fmt.Sprintf("[E2E] Yoru Test Show - %02d [1080p].mkv", r.episode)
 		const size = 700 << 20
 		if err := st.RecordTorrent(ctx, store.TorrentRecord{
 			InfoHash: hash, Name: name, TotalSize: size, AnimeID: anime,
@@ -77,7 +77,7 @@ func seed(path string, anime int, withPack, withExtras bool) error {
 		}
 		if _, err := st.AddNotification(ctx, store.Notification{
 			Kind: store.NotifyRelease, AnimeID: &anime, Episode: new(int(7)),
-			Title: "Episode 7 is available", Body: "[E2E] Kuro Test Show - 07 [1080p].mkv",
+			Title: "Episode 7 is available", Body: "[E2E] Yoru Test Show - 07 [1080p].mkv",
 		}); err != nil {
 			return err
 		}
@@ -89,7 +89,7 @@ func seed(path string, anime int, withPack, withExtras bool) error {
 	pack := strings.ToLower(fmt.Sprintf("e2e%037x", 999))
 	for i, episode := range []int{4, 5} {
 		if err := st.RecordTorrent(ctx, store.TorrentRecord{
-			InfoHash: pack, Name: "[E2E] Kuro Test Show - Batch [1080p]", TotalSize: 700 << 20,
+			InfoHash: pack, Name: "[E2E] Yoru Test Show - Batch [1080p]", TotalSize: 700 << 20,
 			AnimeID: anime, EpKey: fmt.Sprint(episode), FileIndex: i, FilePath: fmt.Sprintf("%02d.mkv", episode),
 		}); err != nil {
 			return err

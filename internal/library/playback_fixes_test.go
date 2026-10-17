@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/indexer"
-	"kuro/internal/player"
-	"kuro/internal/score"
-	"kuro/internal/store"
+	"yoru/internal/indexer"
+	"yoru/internal/player"
+	"yoru/internal/score"
+	"yoru/internal/store"
 )
 
 func quickRace(t *testing.T) {

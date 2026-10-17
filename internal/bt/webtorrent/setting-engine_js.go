@@ -1,6 +1,5 @@
 // These build constraints are copied from webrtc's settingengine_js.go.
 //go:build js && wasm
-// +build js,wasm
 
 package webtorrent
 

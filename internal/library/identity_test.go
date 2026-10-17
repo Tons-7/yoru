@@ -3,8 +3,8 @@ package library
 import (
 	"testing"
 
-	"kuro/internal/corpus"
-	"kuro/internal/parse"
+	"yoru/internal/corpus"
+	"yoru/internal/parse"
 )
 
 func identifies(t *testing.T, releaseTitle string, known ...string) bool {

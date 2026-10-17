@@ -1,5 +1,5 @@
-// A running kuro honours data_dir, cache_dir and bin_dir from config.toml.
-//   KURO_EXE=...\kuro.exe node scripts/folders-config-check.mjs
+// A running Yoru honours data_dir, cache_dir and bin_dir from config.toml.
+//   YORU_EXE=...\yoru.exe node scripts/folders-config-check.mjs
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,10 +8,10 @@ import { fileURLToPath } from 'node:url'
 import { linkBin } from './harness-lib.mjs'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const exe = process.env.KURO_EXE
+const exe = process.env.YORU_EXE
 const PORT = process.env.PORT ?? 4398
 const BASE = `http://127.0.0.1:${PORT}`
-if (!exe || !existsSync(exe)) throw new Error('set KURO_EXE to a built kuro.exe')
+if (!exe || !existsSync(exe)) throw new Error('set YORU_EXE to a built yoru.exe')
 
 let failures = 0
 const check = (ok, label, detail = '') => {
@@ -20,7 +20,7 @@ const check = (ok, label, detail = '') => {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-const scratch = join(tmpdir(), 'kuro-folders-check')
+const scratch = join(tmpdir(), 'yoru-folders-check')
 rmSync(scratch, { recursive: true, force: true })
 const root = join(scratch, 'root')
 const tools = join(scratch, 'tools')
@@ -33,9 +33,9 @@ writeFileSync(
 )
 
 const appdata = join(scratch, 'appdata')
-const kuro = spawn(exe, ['--no-window'], {
+const app = spawn(exe, ['--no-window'], {
   // APPDATA too: the engine imports rqbit's per-user session when it has none.
-  env: { ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, APPDATA: appdata, KURO_NO_WINDOW: '1' },
+  env: { ...process.env, YORU_ROOT: root, LOCALAPPDATA: appdata, APPDATA: appdata, YORU_NO_WINDOW: '1' },
   stdio: 'ignore',
 })
 try {
@@ -44,16 +44,16 @@ try {
     await sleep(500)
     setup = await fetch(`${BASE}/api/setup`).then((r) => r.json()).catch(() => null)
   }
-  check(!!setup, 'kuro started with the custom folders')
+  check(!!setup, 'Yoru started with the custom folders')
   check(setup?.dataDir === join(root, 'data'), 'data_dir is beside the exe', setup?.dataDir)
   check(setup?.cacheDir === join(root, 'store'), 'cache_dir is beside the exe', setup?.cacheDir)
   check(setup?.binDir === tools, 'bin_dir is the absolute folder as written', setup?.binDir)
   check(setup?.ready === true, 'the engines were found in bin_dir')
-  check(existsSync(join(root, 'data', 'kuro.db')), 'the database lives in data_dir')
+  check(existsSync(join(root, 'data', 'yoru.db')), 'the database lives in data_dir')
   check(existsSync(join(root, 'store')), 'the cache folder was created')
-  check(!existsSync(join(root, 'cache')) && !existsSync(join(scratch, 'appdata', 'kuro', 'kuro.db')), 'nothing went to the default folders')
+  check(!existsSync(join(root, 'cache')) && !existsSync(join(scratch, 'appdata', 'yoru', 'yoru.db')), 'nothing went to the default folders')
 } finally {
-  kuro.kill()
+  app.kill()
 }
 await sleep(1000)
 console.log(failures === 0 ? '\nall checks passed' : `\n${failures} check(s) failed`)

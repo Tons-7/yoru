@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 )
 
 type addrPorter interface {

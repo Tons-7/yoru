@@ -1,4 +1,4 @@
-// Caching AniList stand-in for the checks: clean answers kept a day in %TEMP%/kuro-e2e-anilist.
+// Caching AniList stand-in for the checks: clean answers kept a day in %TEMP%/yoru-e2e-anilist.
 //   node scripts/anilist-cache.mjs <port>     (run-player-check starts and stops it)
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 
 const UPSTREAM = 'https://graphql.anilist.co'
 const DAY = 24 * 60 * 60 * 1000
-const dir = join(tmpdir(), 'kuro-e2e-anilist')
+const dir = join(tmpdir(), 'yoru-e2e-anilist')
 mkdirSync(dir, { recursive: true })
 
 const cached = (file) => {

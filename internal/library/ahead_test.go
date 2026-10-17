@@ -7,10 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"kuro/internal/indexer"
-	"kuro/internal/score"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/indexer"
+	"yoru/internal/score"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // aheadPrefetcher holds one show whose indexer remembers every search.

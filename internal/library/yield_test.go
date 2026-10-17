@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"kuro/internal/indexer"
-	"kuro/internal/score"
-	"kuro/internal/store"
+	"yoru/internal/indexer"
+	"yoru/internal/score"
+	"yoru/internal/store"
 )
 
 // A background download must not starve the episode starting.

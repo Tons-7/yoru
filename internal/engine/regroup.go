@@ -3,8 +3,8 @@ package engine
 import (
 	"time"
 
-	"kuro/internal/bt"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt"
+	"yoru/internal/bt/metainfo"
 )
 
 // Vars so tests need not wait.
@@ -107,9 +107,11 @@ func (e *Engine) regroup(en *entry, now time.Time) {
 			again = append(again, r.info)
 		}
 	}
+	// Rebound since the janitor looked: the torrent is a closed client's.
+	cl, current := e.cl, e.byID[en.id] == en
 	e.mu.Unlock()
 
-	if !due {
+	if !due || !current || cl == nil {
 		return
 	}
 	// The first try is news; the rest are the same line again.
@@ -120,7 +122,7 @@ func (e *Engine) regroup(en *entry, now time.Time) {
 	level("download has no peers; trying the ones it had again", "name", t.Name(), "peers", len(again), "try", tries+1)
 	t.AddPeers(again)
 	// And asking around afresh, where that is on.
-	for _, dht := range e.cl.DhtServers() {
+	for _, dht := range cl.DhtServers() {
 		if _, stop, err := t.AnnounceToDht(dht); err == nil {
 			time.AfterFunc(time.Minute, stop)
 		}

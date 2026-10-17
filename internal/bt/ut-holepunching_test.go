@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 
-	"kuro/internal/bt/internal/testutil"
+	"yoru/internal/bt/internal/testutil"
 )
 
 // Check that after completing leeching, a leecher transitions to a seeding
@@ -95,13 +95,11 @@ func TestHolepunchConnect(t *testing.T) {
 	assert.True(t, ok)
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		r := llg.NewReader()
 		defer r.Close()
 		qt.Check(t, qt.IsNil(iotest.TestReader(r, []byte(testutil.GreetingFileContents))))
-	}()
+	})
 	go seederTorrent.AddClientPeer(leecher)
 	waitForConns(seederTorrent)
 	go llg.AddClientPeer(leecher)

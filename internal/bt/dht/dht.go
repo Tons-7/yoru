@@ -12,13 +12,13 @@ import (
 	"github.com/anacrolix/log"
 	"github.com/anacrolix/missinggo/v2"
 	"golang.org/x/time/rate"
-	"kuro/internal/bt/iplist"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/iplist"
+	"yoru/internal/bt/metainfo"
 
-	"kuro/internal/bt/dht/bep44"
-	"kuro/internal/bt/dht/krpc"
-	peer_store "kuro/internal/bt/dht/peer-store"
-	"kuro/internal/bt/dht/transactions"
+	"yoru/internal/bt/dht/bep44"
+	"yoru/internal/bt/dht/krpc"
+	peer_store "yoru/internal/bt/dht/peer-store"
+	"yoru/internal/bt/dht/transactions"
 )
 
 func defaultQueryResendDelay() time.Duration {

@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kuro/internal/db"
-	"kuro/internal/match"
-	"kuro/internal/store"
+	"yoru/internal/db"
+	"yoru/internal/match"
+	"yoru/internal/store"
 )
 
 func newScanner(t *testing.T) (*Scanner, *store.Store) {

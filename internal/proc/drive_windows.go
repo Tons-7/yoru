@@ -11,10 +11,10 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Drive is where a directory really lives, which a path alone can't tell; slow drives make kuro look slow.
+// Drive is where a directory really lives, which a path alone can't tell; slow drives make Yoru look slow.
 type Drive struct {
 	Kind string // fixed, network, removable, cdrom, ramdisk, unknown
-	Slow bool   // worth warning about before anyone blames kuro
+	Slow bool   // worth warning about before anyone blames Yoru
 }
 
 func DriveOf(dir string) Drive {

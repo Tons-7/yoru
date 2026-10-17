@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"kuro/internal/metadata"
+	"yoru/internal/metadata"
 )
 
 // An episode a library folder holds needs no download, so "Download all" must not count it.

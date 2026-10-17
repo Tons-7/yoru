@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/library"
+	"yoru/internal/config"
+	"yoru/internal/library"
 )
 
 // The series page readies an episode unless playback is already starting it: two searches could disagree.

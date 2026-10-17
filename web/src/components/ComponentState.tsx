@@ -27,7 +27,7 @@ export function ComponentState({
   if (present && progress?.stage !== 'failed' && !update) return null
 
   // No clean prebuilt binary on this OS: guide to the package manager, which
-  // puts it on PATH where kuro looks, rather than a download that would fail.
+  // puts it on PATH where Yoru looks, rather than a download that would fail.
   if (manual) {
     return (
       <div className="mt-2">

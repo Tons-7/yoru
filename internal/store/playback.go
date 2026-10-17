@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"kuro/internal/player"
+	"yoru/internal/player"
 )
 
 type TorrentRecord struct {
@@ -425,6 +425,9 @@ func (s *Store) SavePlayback(ctx context.Context, p PlaybackState) (bool, error)
 	reached := duration > 0 && p.Position/duration >= threshold
 	if reached && played >= duration*playedShare {
 		watched = true
+		if err := leaveUpNext(ctx, tx, p.AnimeID, p.EpKey); err != nil {
+			return false, err
+		}
 	}
 
 	// A jump to the ending that isn't a watch keeps the old resume point, not the credits.

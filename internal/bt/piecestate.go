@@ -1,7 +1,7 @@
 package bt
 
 import (
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/storage"
 )
 
 // The current state of a piece.

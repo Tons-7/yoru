@@ -14,17 +14,17 @@ import (
 
 func TestDuckDomainAcceptsWhatPeopleType(t *testing.T) {
 	for typed, want := range map[string]string{
-		"mykuro":                          "mykuro.duckdns.org",
-		" MyKuro.duckdns.org ":            "mykuro.duckdns.org",
-		"https://mykuro.duckdns.org:4321": "mykuro.duckdns.org",
-		"http://my-kuro.duckdns.org/":     "my-kuro.duckdns.org",
+		"myyoru":                          "myyoru.duckdns.org",
+		" MyYoru.duckdns.org ":            "myyoru.duckdns.org",
+		"https://myyoru.duckdns.org:4321": "myyoru.duckdns.org",
+		"http://my-yoru.duckdns.org/":     "my-yoru.duckdns.org",
 	} {
 		got, err := DuckDomain(typed)
 		if err != nil || got != want {
 			t.Errorf("%q = %q, %v; want %q", typed, got, err, want)
 		}
 	}
-	for _, typed := range []string{"", "my kuro", "a.b", "-kuro", "kuro.example.com"} {
+	for _, typed := range []string{"", "my yoru", "a.b", "-yoru", "yoru.example.com"} {
 		if got, err := DuckDomain(typed); err == nil {
 			t.Errorf("%q accepted as %q", typed, got)
 		}
@@ -47,7 +47,7 @@ func TestPointDuckSendsTheLANAddressOncePerChange(t *testing.T) {
 	duckServer(t, "OK", &calls)
 	ip := "192.168.1.20"
 	s := New(t.TempDir(), func() string { return ip }, slog.New(slog.DiscardHandler))
-	d := &duck{domain: "mykuro.duckdns.org", token: "tok"}
+	d := &duck{domain: "myyoru.duckdns.org", token: "tok"}
 
 	for range 2 {
 		if err := s.pointDuck(context.Background(), d); err != nil {
@@ -57,7 +57,7 @@ func TestPointDuckSendsTheLANAddressOncePerChange(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("%d updates for an unchanged address, want 1", len(calls))
 	}
-	if q := calls[0]; q.Get("domains") != "mykuro" || q.Get("token") != "tok" || q.Get("ip") != ip {
+	if q := calls[0]; q.Get("domains") != "myyoru" || q.Get("token") != "tok" || q.Get("ip") != ip {
 		t.Fatalf("sent %v", q)
 	}
 
@@ -74,7 +74,7 @@ func TestPointDuckReportsARefusal(t *testing.T) {
 	var calls []url.Values
 	duckServer(t, "KO", &calls)
 	s := New(t.TempDir(), func() string { return "192.168.1.20" }, slog.New(slog.DiscardHandler))
-	d := &duck{domain: "mykuro.duckdns.org", token: "wrong"}
+	d := &duck{domain: "myyoru.duckdns.org", token: "wrong"}
 	if err := s.pointDuck(context.Background(), d); err == nil {
 		t.Fatal("a refused token was accepted")
 	}
@@ -96,7 +96,7 @@ func TestStatusIsOffUntilSetUp(t *testing.T) {
 	if st := s.Status(); st.State != StateOff {
 		t.Fatalf("state = %q", st.State)
 	}
-	if err := s.UseDuckDNS("mykuro", ""); err == nil {
+	if err := s.UseDuckDNS("myyoru", ""); err == nil {
 		t.Fatal("accepted without a token")
 	}
 	if names := s.Names(); len(names) != 0 {

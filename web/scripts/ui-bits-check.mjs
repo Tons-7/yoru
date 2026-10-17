@@ -1,7 +1,7 @@
 // Popular panel episode counts, the Recently released hover, and the "download ahead" setting.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const SHOTS = process.env.SHOTS ?? '.'
 
 let failures = 0
@@ -29,7 +29,8 @@ await page.goto(`${BASE}/recent`, { waitUntil: 'domcontentloaded' })
 const card = page.locator('a[href^="/watch/"]').first()
 await card.waitFor({ timeout: 60000 })
 await page.mouse.move(0, 0)
-await card.hover({ position: { x: 20, y: 20 } })
+// The middle of the art: its top-left corner holds the Up next toggle, a control of its own.
+await card.hover()
 const panel = page.locator('div.fixed.z-50.rounded-2xl')
 const shown = await panel.waitFor({ timeout: 5000 }).then(() => true, () => false)
 const text = shown ? await panel.innerText() : await page.locator('body').innerText()

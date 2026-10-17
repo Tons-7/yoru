@@ -4,15 +4,15 @@ import (
 	"errors"
 	"net"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/anacrolix/missinggo/v2"
 	"github.com/anacrolix/missinggo/v2/panicif"
 	"golang.org/x/time/rate"
 
-	"kuro/internal/bt/metainfo"
-	pp "kuro/internal/bt/peer_protocol"
-	"kuro/internal/bt/types"
-	"kuro/internal/bt/types/infohash"
+	"yoru/internal/bt/metainfo"
+	pp "yoru/internal/bt/peer_protocol"
+	"yoru/internal/bt/types"
+	"yoru/internal/bt/types/infohash"
 )
 
 type (
@@ -48,10 +48,7 @@ func newRequestFromMessage(msg *pp.Message) Request {
 
 // The size in bytes of a metadata extension piece.
 func metadataPieceSize(totalSize, piece int) int {
-	ret := totalSize - piece*(1<<14)
-	if ret > 1<<14 {
-		ret = 1 << 14
-	}
+	ret := min(totalSize-piece*(1<<14), 1<<14)
 	return ret
 }
 

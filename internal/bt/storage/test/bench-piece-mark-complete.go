@@ -3,14 +3,14 @@ package test_storage
 import (
 	"bytes"
 	"context"
-	"math/rand"
+	"crypto/rand"
 	"sync"
 	"testing"
 
 	qt "github.com/go-quicktest/qt"
 
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/storage"
 )
 
 const (
@@ -43,7 +43,7 @@ func BenchmarkPieceMarkComplete(
 	readData := make([]byte, pieceSize)
 	b.SetBytes(int64(numPieces) * pieceSize)
 	oneIter := func() {
-		for pieceIndex := 0; pieceIndex < numPieces; pieceIndex += 1 {
+		for pieceIndex := range numPieces {
 			pi := tw.Piece(info.Piece(pieceIndex))
 			rand.Read(data)
 			b.StartTimer()
@@ -79,7 +79,7 @@ func BenchmarkPieceMarkComplete(
 	// Fill the cache
 	if capacity > 0 {
 		iterN := int((capacity + info.TotalLength() - 1) / info.TotalLength())
-		for i := 0; i < iterN; i += 1 {
+		for range iterN {
 			oneIter()
 		}
 	}

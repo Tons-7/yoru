@@ -11,15 +11,15 @@ import (
 	"strings"
 	"time"
 
-	"kuro/internal/config"
-	"kuro/internal/deps"
-	"kuro/internal/indexer"
-	"kuro/internal/player"
-	"kuro/internal/torrent"
-	"kuro/internal/transcode"
+	"yoru/internal/config"
+	"yoru/internal/deps"
+	"yoru/internal/indexer"
+	"yoru/internal/player"
+	"yoru/internal/torrent"
+	"yoru/internal/transcode"
 )
 
-// Component is one external program kuro shells out to. None are bundled:
+// Component is one external program Yoru shells out to. None are bundled:
 // together they exceed half a gigabyte, against a 25 MB application.
 type Component struct {
 	Name     string `json:"name"`
@@ -34,7 +34,7 @@ type Component struct {
 	// Latest is what is published, when known; newer than Version means an update is on offer.
 	Latest string `json:"latest,omitempty"`
 	Needs  string `json:"needs,omitempty"`
-	// Manual: the package-manager command, where kuro cannot fetch this component on this OS.
+	// Manual: the package-manager command, where Yoru cannot fetch this component on this OS.
 	Manual string `json:"manual,omitempty"`
 	// System: found on PATH rather than downloaded into bin/.
 	System bool `json:"system,omitempty"`
@@ -50,7 +50,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	components := []Component{
 		{
 			Name: "engine", Label: "Torrent engine",
-			Purpose:  "Built into kuro: streams and downloads episodes. Nothing to install.",
+			Purpose:  "Built into Yoru: streams and downloads episodes. Nothing to install.",
 			Required: true,
 			Present:  true,
 			Version:  "built in",
@@ -97,7 +97,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	// Versions come from the network; the page gets what was last resolved and a refresh runs behind it.
 	if s.deps != nil {
 		for i := range components {
-			// The built-in engine updates with kuro; a system install, with its package manager.
+			// The built-in engine updates with Yoru; a system install, with its package manager.
 			if !components[i].Present || components[i].System || !deps.Known(components[i].Name) {
 				continue
 			}
@@ -172,10 +172,16 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusOK, map[string]any{"dataDir": dir, "copied": false, "restart": false})
 		return
 	}
-	// Opening another history instead of carrying this one is asked, not assumed.
-	if info, err := os.Stat(filepath.Join(dir, "kuro.db")); err == nil && !body.UseExisting {
+	// Opening another history instead of carrying this one is asked, not assumed; kuro's counts too.
+	existing := ""
+	for _, name := range []string{config.Name, config.Legacy} {
+		if p := filepath.Join(dir, name+".db"); fileExists(p) && existing == "" {
+			existing = p
+		}
+	}
+	if info, err := os.Stat(existing); existing != "" && err == nil && !body.UseExisting {
 		send(w, http.StatusConflict, map[string]any{
-			"error":    "that folder already holds a kuro database",
+			"error":    "that folder already holds a Yoru database",
 			"existing": true,
 			"modified": info.ModTime().Unix(),
 		})
@@ -185,7 +191,7 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "cannot create folder: " + err.Error()})
 		return
 	}
-	probe, err := os.CreateTemp(dir, ".kuro-*")
+	probe, err := os.CreateTemp(dir, ".yoru-*")
 	if err != nil {
 		send(w, http.StatusBadRequest, map[string]any{"error": "folder is not writable"})
 		return
@@ -194,9 +200,9 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 	os.Remove(probe.Name())
 
 	// Only into an empty home: a database already there is someone's history.
-	target := filepath.Join(dir, "kuro.db")
+	target := filepath.Join(dir, config.Name+".db")
 	copied := false
-	if dir != s.cfg.DataDir() && !fileExists(target) && fileExists(s.cfg.DatabasePath()) {
+	if dir != s.cfg.DataDir() && existing == "" && fileExists(s.cfg.DatabasePath()) {
 		if err := s.store.SnapshotTo(r.Context(), target); err != nil {
 			os.Remove(target)
 			s.fail(w, "copy database", err)
@@ -309,7 +315,7 @@ func (s *Server) describeSystemFFmpeg(ctx context.Context, c *Component) {
 	}
 }
 
-// hasBinary: the tool is in bin/ or on PATH, as macOS and Linux supply what kuro can't fetch.
+// hasBinary: the tool is in bin/ or on PATH, as macOS and Linux supply what Yoru can't fetch.
 func (s *Server) hasBinary(name string) bool {
 	info, err := os.Stat(s.cfg.Path(config.ExeName(name)))
 	if err == nil && !info.IsDir() && info.Size() > 0 {
@@ -324,9 +330,9 @@ func (s *Server) halfTranscoder() string {
 	ffmpeg, ffprobe := s.hasBinary("ffmpeg"), s.hasBinary("ffprobe")
 	switch {
 	case ffmpeg && !ffprobe:
-		return "ffmpeg is on this system but ffprobe is not; kuro needs both. Install fetches a matching pair."
+		return "ffmpeg is on this system but ffprobe is not; Yoru needs both. Install fetches a matching pair."
 	case ffprobe && !ffmpeg:
-		return "ffprobe is on this system but ffmpeg is not; kuro needs both. Install fetches a matching pair."
+		return "ffprobe is on this system but ffmpeg is not; Yoru needs both. Install fetches a matching pair."
 	}
 	return ""
 }

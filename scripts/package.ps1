@@ -3,21 +3,24 @@
 Builds the zips that get sent to someone else.
 
 .DESCRIPTION
-Two artifacts, because installing and updating want different things:
+Installing and updating want different things:
 
-  kuro-<version>.zip             kuro.exe and a README. First install.
-  kuro-<version>-update.zip      kuro.exe alone. What the in-app updater fetches.
-  kuro-<version>-<os>-<arch>.zip The macOS and Linux binaries, which their updaters fetch.
+  yoru-<version>.zip             yoru.exe and a README. First install.
+  yoru-<version>-update.zip      yoru.exe alone. What the in-app updater fetches.
+  yoru-<version>-<os>-<arch>.zip The macOS and Linux binaries, which their updaters fetch.
+  kuro-<version>-update.zip      The same program as kuro.exe, and kuro-<version>-<os>-<arch>.zip as kuro:
+                                 versions from before the rename ask for these by name. Once running, the
+                                 program renames itself to yoru.exe and moves the data folder over.
   SHA256SUMS.txt                 The updater refuses a zip that does not match.
   SHA256SUMS.txt.sig             Its ed25519 signature; the updater refuses a release without one.
 
-Neither carries bin/, cache/ or config.toml. bin/ is over half a gigabyte and
+None carries bin/, cache/ or config.toml. bin/ is over half a gigabyte and
 the app downloads it itself on first run; cache/ is downloaded episodes; and
 config.toml holds the AniList client secret, which must never be shipped.
 
-Updating means replacing kuro.exe, not the folder: the folder is where the
+Updating means replacing yoru.exe, not the folder: the folder is where the
 downloaded programs, the episode cache and the credentials live. The database is in
-%LOCALAPPDATA%\kuro and is migrated on startup, so watch history survives
+%LOCALAPPDATA%\yoru and is migrated on startup, so watch history survives
 whatever happens to the folder.
 
 .PARAMETER Version
@@ -31,8 +34,9 @@ what every installed copy checks. Needs `gh auth login` once.
 
 .PARAMETER SigningKey
 The release key's file (a hex ed25519 seed), kept outside the repository.
-Default: %LOCALAPPDATA%\kuro-release\update-signing.key. Back it up: without it
-no installed copy will accept another update.
+Default: %LOCALAPPDATA%\yoru-release\update-signing.key, else the kuro-release
+one from before the rename. Back it up: without it no installed copy will accept
+another update.
 
 .EXAMPLE
 ./scripts/package.ps1
@@ -52,7 +56,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 if (-not $Version) { $Version = Get-Date -Format 'yyyy.MM.dd' }
 if (-not $OutDir) { $OutDir = Join-Path $root 'dist' }
-if (-not $SigningKey) { $SigningKey = Join-Path $env:LOCALAPPDATA 'kuro-release\update-signing.key' }
+if (-not $SigningKey) {
+    $SigningKey = Join-Path $env:LOCALAPPDATA 'yoru-release\update-signing.key'
+    if (-not (Test-Path $SigningKey)) { $SigningKey = Join-Path $env:LOCALAPPDATA 'kuro-release\update-signing.key' }
+}
 if (-not (Test-Path $SigningKey)) { throw "release key not found at $SigningKey; every installed copy refuses an unsigned release" }
 
 # The platforms build.sh users run; their updaters look for these zips by name.
@@ -61,122 +68,134 @@ $platforms = @('darwin/arm64', 'darwin/amd64', 'linux/amd64', 'linux/arm64')
 function Write-Step($message) { Write-Host "==> $message" -ForegroundColor Cyan }
 function Write-Note($message) { Write-Host "    $message" -ForegroundColor DarkGray }
 
+# One zip from named files, each written under the name given: the bridge zips hold the program as kuro.
+function New-Zip($zip, [hashtable]$entries) {
+    $dir = Join-Path $staging ([Guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    foreach ($name in $entries.Keys) { Copy-Item $entries[$name] (Join-Path $dir $name) }
+    Remove-Item $zip -ErrorAction SilentlyContinue
+    Compress-Archive -Path (Join-Path $dir '*') -DestinationPath $zip
+    Write-Note ("{0} ({1:N1} MB)" -f (Split-Path $zip -Leaf), ((Get-Item $zip).Length / 1MB))
+}
+
 Write-Step "build $Version"
 & (Join-Path $PSScriptRoot 'build.ps1') -Version $Version
 if ($LASTEXITCODE -ne 0) { throw 'build failed' }
 
-$exe = Join-Path $root 'kuro.exe'
-if (-not (Test-Path $exe)) { throw "kuro.exe not found at $exe" }
+$exe = Join-Path $root 'yoru.exe'
+if (-not (Test-Path $exe)) { throw "yoru.exe not found at $exe" }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$staging = Join-Path ([IO.Path]::GetTempPath()) ("kuro-package-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+$staging = Join-Path ([IO.Path]::GetTempPath()) ("yoru-package-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 
 $readme = @"
-kuro $Version
+Yoru $Version
 
-Extract this zip to a folder of its own first. Run kuro.exe from there, never
+Extract this zip to a folder of its own first. Run yoru.exe from there, never
 from inside the zip: Windows would put it in a temporary folder and throw your
 settings away every time it closes.
 
-kuro.exe opens its own window and, on first run, asks to download ffmpeg, about
+yoru.exe opens its own window and, on first run, asks to download ffmpeg, about
 420 MB (the torrent engine is built in; an ffmpeg already on PATH is used as is).
-Nothing is installed anywhere else: everything lives beside kuro.exe.
+Nothing is installed anywhere else: everything lives beside yoru.exe.
 
-kuro ships with no torrent sites. The setup screen shows the block to add to
-config.toml (written beside kuro.exe on first run); add your sites and restart.
+Yoru ships with no torrent sites. The setup screen shows the block to add to
+config.toml (written beside yoru.exe on first run); add your sites and restart.
 
 Windows will warn that the app is unsigned. More info -> Run anyway.
 
 Your watch history, library and settings are kept in:
-    %LOCALAPPDATA%\kuro
+    %LOCALAPPDATA%\yoru
 To keep everything in this folder instead, pick a folder under Setup ->
 Where things go.
 
-Updates: kuro checks for a new version on launch and offers it under
-Settings -> About. Only kuro.exe is replaced; the downloaded programs, the
-episode cache and your settings stay. To update by hand, replace kuro.exe,
+Updates: Yoru checks for a new version on launch and offers it under
+Settings -> About. Only yoru.exe is replaced; the downloaded programs, the
+episode cache and your settings stay. To update by hand, replace yoru.exe,
 never the whole folder.
+
+Used kuro before? Yoru is its new name. Put yoru.exe in kuro's folder in place of
+kuro.exe and run it: your history, library and settings come along.
 
 Connecting an AniList account is optional and needs a client id of your own;
 config.toml, written on first run, says how.
 "@
 
-# macOS and Linux get their own: the Windows one named kuro.exe, %LOCALAPPDATA% and Windows' warning.
+# macOS and Linux get their own: the Windows one names yoru.exe, %LOCALAPPDATA% and Windows' warning.
 $unixReadme = @"
-kuro $Version
+Yoru $Version
 
-Extract this zip to a folder of its own and run kuro from there:
-    chmod +x kuro    (once, if unzipping dropped the permission)
-    ./kuro
+Extract this zip to a folder of its own and run yoru from there:
+    chmod +x yoru    (once, if unzipping dropped the permission)
+    ./yoru
 
-kuro opens in its own window when Chrome, Edge, Brave or Chromium is installed,
+Yoru opens in its own window when Chrome, Edge, Brave or Chromium is installed,
 otherwise in your default browser.
 
-ffmpeg: on Linux kuro offers to download it on first run. On macOS install it
+ffmpeg: on Linux Yoru offers to download it on first run. On macOS install it
 first with Homebrew: brew install ffmpeg. An ffmpeg already on PATH is used as
 is. mpv, for playing outside the browser, comes from your package manager too.
 
 macOS blocks programs from unidentified developers. Run this once in the folder:
-    xattr -d com.apple.quarantine kuro
-or allow kuro under System Settings -> Privacy & Security after the first try.
+    xattr -d com.apple.quarantine yoru
+or allow Yoru under System Settings -> Privacy & Security after the first try.
 
-kuro ships with no torrent sites. The setup screen shows the block to add to
-config.toml (written beside kuro on first run); add your sites and restart.
+Yoru ships with no torrent sites. The setup screen shows the block to add to
+config.toml (written beside yoru on first run); add your sites and restart.
 
-Your watch history, library and settings are kept in ~/.kuro. To keep
+Your watch history, library and settings are kept in ~/.yoru. To keep
 everything in this folder instead, pick a folder under Setup -> Where things go.
 
-Updates: kuro checks for a new version on launch and offers it under
-Settings -> About. Only the kuro program is replaced; the downloaded programs,
-the episode cache and your settings stay. To update by hand, replace the kuro
+Updates: Yoru checks for a new version on launch and offers it under
+Settings -> About. Only the yoru program is replaced; the downloaded programs,
+the episode cache and your settings stay. To update by hand, replace the yoru
 file, never the whole folder.
+
+Used kuro before? Yoru is its new name. Put yoru in kuro's folder in place of
+kuro and run it: your history, library and settings come along.
 
 Connecting an AniList account is optional and needs a client id of your own;
 config.toml, written on first run, says how.
 "@
 
 try {
-    Write-Step 'full'
-    $full = Join-Path $staging 'full'
-    New-Item -ItemType Directory -Force -Path $full | Out-Null
-    Copy-Item $exe (Join-Path $full 'kuro.exe')
-    Set-Content -Path (Join-Path $full 'README.txt') -Value $readme -Encoding utf8
+    $readmeFile = Join-Path $staging 'README.txt'
+    Set-Content -Path $readmeFile -Value $readme -Encoding utf8
+    # LF and no BOM there, where a BOM shows as a stray character.
+    $unixReadmeFile = Join-Path $staging 'README-unix.txt'
+    [IO.File]::WriteAllText($unixReadmeFile, ($unixReadme -replace "`r`n", "`n") + "`n")
     # The license's Required Notice must travel with every copy.
-    Copy-Item (Join-Path $root 'LICENSE.md') (Join-Path $full 'LICENSE.md')
+    $license = Join-Path $root 'LICENSE.md'
 
-    $fullZip = Join-Path $OutDir "kuro-$Version.zip"
-    Remove-Item $fullZip -ErrorAction SilentlyContinue
-    Compress-Archive -Path (Join-Path $full '*') -DestinationPath $fullZip
-    Write-Note ("{0} ({1:N1} MB)" -f (Split-Path $fullZip -Leaf), ((Get-Item $fullZip).Length / 1MB))
+    Write-Step 'full'
+    $fullZip = Join-Path $OutDir "yoru-$Version.zip"
+    New-Zip $fullZip @{ 'yoru.exe' = $exe; 'README.txt' = $readmeFile; 'LICENSE.md' = $license }
 
     Write-Step 'update'
-    $updateZip = Join-Path $OutDir "kuro-$Version-update.zip"
-    Remove-Item $updateZip -ErrorAction SilentlyContinue
-    Compress-Archive -Path $exe -DestinationPath $updateZip
-    Write-Note ("{0} ({1:N1} MB)" -f (Split-Path $updateZip -Leaf), ((Get-Item $updateZip).Length / 1MB))
+    $updateZip = Join-Path $OutDir "yoru-$Version-update.zip"
+    New-Zip $updateZip @{ 'yoru.exe' = $exe }
+    $bridgeZips = @(Join-Path $OutDir "kuro-$Version-update.zip")
+    New-Zip $bridgeZips[0] @{ 'kuro.exe' = $exe }
 
     $platformZips = @()
     foreach ($platform in $platforms) {
         $goos, $goarch = $platform -split '/'
         Write-Step "$goos/$goarch"
-        $dir = Join-Path $staging "$goos-$goarch"
-        New-Item -ItemType Directory -Force -Path $dir | Out-Null
-        & (Join-Path $PSScriptRoot 'build.ps1') -SkipWeb -Target $platform -Version $Version -Out (Join-Path $dir 'kuro')
+        $bin = Join-Path $staging "yoru-$goos-$goarch"
+        & (Join-Path $PSScriptRoot 'build.ps1') -SkipWeb -Target $platform -Version $Version -Out $bin
         if ($LASTEXITCODE -ne 0) { throw "build for $platform failed" }
-        # LF and no BOM there, where a BOM shows as a stray character.
-        [IO.File]::WriteAllText((Join-Path $dir 'README.txt'), ($unixReadme -replace "`r`n", "`n") + "`n")
-        Copy-Item (Join-Path $root 'LICENSE.md') (Join-Path $dir 'LICENSE.md')
-        $zip = Join-Path $OutDir "kuro-$Version-$goos-$goarch.zip"
-        Remove-Item $zip -ErrorAction SilentlyContinue
-        Compress-Archive -Path (Join-Path $dir '*') -DestinationPath $zip
-        Write-Note ("{0} ({1:N1} MB)" -f (Split-Path $zip -Leaf), ((Get-Item $zip).Length / 1MB))
+        $zip = Join-Path $OutDir "yoru-$Version-$goos-$goarch.zip"
+        New-Zip $zip @{ 'yoru' = $bin; 'README.txt' = $unixReadmeFile; 'LICENSE.md' = $license }
         $platformZips += $zip
+        $bridge = Join-Path $OutDir "kuro-$Version-$goos-$goarch.zip"
+        New-Zip $bridge @{ 'kuro' = $bin }
+        $bridgeZips += $bridge
     }
 
     Write-Step 'checksums'
     $sums = Join-Path $OutDir 'SHA256SUMS.txt'
-    $lines = foreach ($zip in @($fullZip, $updateZip) + $platformZips) {
+    $lines = foreach ($zip in @($fullZip, $updateZip) + $platformZips + $bridgeZips) {
         "{0}  {1}" -f (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower(), (Split-Path $zip -Leaf)
     }
     # LF and no BOM: the updater reads it byte for byte.
@@ -194,8 +213,8 @@ try {
 # A secret shipped by accident can't be unshipped: stop on any zip entry but the program, README, license.
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Write-Host ''
-$allowed = @('kuro.exe', 'kuro', 'README.txt', 'LICENSE.md')
-foreach ($zip in @($fullZip, $updateZip) + $platformZips) {
+$allowed = @('yoru.exe', 'yoru', 'kuro.exe', 'kuro', 'README.txt', 'LICENSE.md')
+foreach ($zip in @($fullZip, $updateZip) + $platformZips + $bridgeZips) {
     Write-Host "  $(Split-Path $zip -Leaf)" -ForegroundColor Green
     $archive = [IO.Compression.ZipFile]::OpenRead($zip)
     try {
@@ -213,9 +232,9 @@ Write-Host "out: $OutDir" -ForegroundColor DarkGray
 
 if ($Publish) {
     Write-Step "publish v$Version"
-    if (-not $Notes) { $Notes = "kuro $Version" }
-    gh release create "v$Version" $fullZip $updateZip @platformZips $sums $sig `
-        --repo Tons-7/kuro --title "kuro $Version" --notes $Notes
+    if (-not $Notes) { $Notes = "Yoru $Version" }
+    gh release create "v$Version" $fullZip $updateZip @platformZips @bridgeZips $sums $sig `
+        --repo Tons-7/yoru --title "Yoru $Version" --notes $Notes
     if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
-    Write-Host "published https://github.com/Tons-7/kuro/releases/tag/v$Version" -ForegroundColor Green
+    Write-Host "published https://github.com/Tons-7/yoru/releases/tag/v$Version" -ForegroundColor Green
 }

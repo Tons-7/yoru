@@ -14,9 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 
-	"kuro/internal/bt"
-	"kuro/internal/bt/internal/testutil"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt"
+	"yoru/internal/bt/internal/testutil"
+	"yoru/internal/bt/storage"
 )
 
 type LeecherStorageTestCase struct {

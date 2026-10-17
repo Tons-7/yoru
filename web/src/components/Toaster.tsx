@@ -1,47 +1,22 @@
 import { useEffect, useState } from 'react'
 import { cx } from '../lib/format'
-
-interface Toast {
-  id: number
-  message: string
-  tone: 'error' | 'info'
-  action?: ToastAction
-}
-
-export interface ToastAction {
-  label: string
-  run: () => void
-}
-
-/** How long a toast stays, and so how long its action (an Undo) can be pressed. */
-export const TOAST_MS = 6000
-
-// Outside React so a mutation cache, which is not a component, can raise one.
-let listeners: Array<(t: Toast) => void> = []
-let next = 1
-
-export function toast(message: string, tone: Toast['tone'] = 'error', action?: ToastAction) {
-  const t = { id: next++, message, tone, action }
-  for (const l of listeners) l(t)
-}
+import { onToast, TOAST_MS, type Toast } from '../lib/toast'
 
 /** Shows an action's failure when its own screen has no place for it. */
 export function Toaster() {
   const [toasts, setToasts] = useState<Toast[]>([])
 
-  useEffect(() => {
-    const add = (t: Toast) => {
-      // The same failure twice in a row is one message; one with an action is its own.
-      setToasts((prev) =>
-        !t.action && prev.some((p) => p.message === t.message && !p.action) ? prev : [...prev.slice(-2), t],
-      )
-      window.setTimeout(() => setToasts((prev) => prev.filter((p) => p.id !== t.id)), TOAST_MS)
-    }
-    listeners.push(add)
-    return () => {
-      listeners = listeners.filter((l) => l !== add)
-    }
-  }, [])
+  useEffect(
+    () =>
+      onToast((t) => {
+        // The same failure twice in a row is one message; one with an action is its own.
+        setToasts((prev) =>
+          !t.action && prev.some((p) => p.message === t.message && !p.action) ? prev : [...prev.slice(-2), t],
+        )
+        window.setTimeout(() => setToasts((prev) => prev.filter((p) => p.id !== t.id)), TOAST_MS)
+      }),
+    [],
+  )
 
   return (
     <div

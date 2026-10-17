@@ -2,7 +2,6 @@
 // think JS is the stronger signal).
 
 //go:build cgo && !nosqlite
-// +build cgo,!nosqlite
 
 package storage
 
@@ -14,7 +13,7 @@ import (
 	sqlite "github.com/go-llsqlite/adapter"
 	"github.com/go-llsqlite/adapter/sqlitex"
 
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 // sqlite is always the default when available.

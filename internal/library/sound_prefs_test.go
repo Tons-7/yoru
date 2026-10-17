@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"kuro/internal/player"
-	"kuro/internal/sound"
+	"yoru/internal/player"
+	"yoru/internal/sound"
 )
 
 // capturingPlayer keeps the options it was launched with.

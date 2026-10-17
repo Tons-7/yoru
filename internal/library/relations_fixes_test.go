@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"kuro/internal/anilist"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/store"
 )
 
 // relationsServer answers the Relations query from a table of edges per id; other queries get nothing.
@@ -165,7 +165,7 @@ func TestWalkReplacesTheEdgesOfWhatItFetched(t *testing.T) {
 	}
 }
 
-// Members kuro never showed get the walk's dates, so an earlier season isn't sorted last.
+// Members Yoru never showed get the walk's dates, so an earlier season isn't sorted last.
 func TestWalkDatesOrderMembersWithoutARow(t *testing.T) {
 	var asked atomic.Int32
 	al := relationsServer(t, map[int]string{

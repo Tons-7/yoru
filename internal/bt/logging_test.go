@@ -10,9 +10,9 @@ import (
 	"testing"
 
 	"github.com/go-quicktest/qt"
-	"kuro/internal/bt/tracker"
+	"yoru/internal/bt/tracker"
 
-	"kuro/internal/bt/tracker/shared"
+	"yoru/internal/bt/tracker/shared"
 )
 
 type testHandler struct{}
@@ -60,12 +60,12 @@ func TestAnnounceEventJSONHandlerLogsAsString(t *testing.T) {
 	t.Logf("Log output: %s", logOutput)
 
 	// Parse the JSON to verify the event is logged as a string
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal([]byte(logOutput), &logEntry)
 	qt.Assert(t, qt.IsNil(err))
 
 	// Extract the data field
-	data, ok := logEntry["data"].(map[string]interface{})
+	data, ok := logEntry["data"].(map[string]any)
 	qt.Assert(t, qt.IsTrue(ok), qt.Commentf("Expected 'data' field to be an object, got %T", logEntry["data"]))
 
 	// Check that the event field is a string, not a number
@@ -108,11 +108,11 @@ func TestSlogLoggerWithSameNameCreatesDuplicateGroups(t *testing.T) {
 	qt.Assert(t, qt.IsTrue(strings.Contains(logOutput, `"test":{"key3":"value3"}`)))
 
 	// When parsing JSON with duplicate keys, the last one wins
-	var logEntry map[string]interface{}
+	var logEntry map[string]any
 	err := json.Unmarshal([]byte(logOutput), &logEntry)
 	qt.Assert(t, qt.IsNil(err))
 
-	testGroup, ok := logEntry["test"].(map[string]interface{})
+	testGroup, ok := logEntry["test"].(map[string]any)
 	qt.Assert(t, qt.IsTrue(ok), qt.Commentf("Expected 'test' field to be an object"))
 
 	// The parsed JSON will have only the last occurrence due to JSON duplicate key handling

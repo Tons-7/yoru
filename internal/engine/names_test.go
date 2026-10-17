@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/bt"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt"
+	"yoru/internal/bt/metainfo"
 )
 
 // Two torrents named alike get their own folders, the first keeping the plain name; a torrent asks once

@@ -3,10 +3,10 @@ package bt
 import (
 	"io"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 
-	"kuro/internal/bt/metainfo"
-	pp "kuro/internal/bt/peer_protocol"
+	"yoru/internal/bt/metainfo"
+	pp "yoru/internal/bt/peer_protocol"
 )
 
 // Contains implementation details that differ between peer types, like WebSeeds and regular

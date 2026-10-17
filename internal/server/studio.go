@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/anilist"
+	"yoru/internal/anilist"
 )
 
 // The catalogue cannot filter a studio's works: the list is fetched once, kept, and narrowed and paged here.

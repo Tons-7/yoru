@@ -2,9 +2,9 @@
 // painted (cue i at x = 40 + 12i, from 2i s) against the video's clock.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const LIB = process.env.KURO_LIB
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const LIB = process.env.YORU_LIB
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const EP = 3
 
 let failures = 0
@@ -31,7 +31,7 @@ let file
 for (let i = 0; i < 30 && !file; i++) {
   await sleep(1000)
   const files = await api('/api/local/files')
-  file = (files.body.items ?? []).find((f) => String(f.path ?? '').includes('Kuro Test Show - 03'))
+  file = (files.body.items ?? []).find((f) => String(f.path ?? '').includes('Yoru Test Show - 03'))
 }
 check(!!file, 'marker episode listed')
 if (!file) process.exit(1)

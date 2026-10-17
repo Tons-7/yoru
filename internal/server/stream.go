@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"kuro/internal/library"
-	"kuro/internal/sound"
-	"kuro/internal/torrent"
-	"kuro/internal/transcode"
+	"yoru/internal/library"
+	"yoru/internal/sound"
+	"yoru/internal/torrent"
+	"yoru/internal/transcode"
 )
 
 // The browser cannot play Matroska, so everything here rewrites the container
@@ -448,7 +448,7 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The player keeps asking while the track can still grow; this is how it knows when to stop.
-	w.Header().Set("X-Kuro-Complete", strconv.FormatBool(complete))
+	w.Header().Set("X-Yoru-Complete", strconv.FormatBool(complete))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(track)

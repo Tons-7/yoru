@@ -1,9 +1,9 @@
 // Reports the seconds a downloading episode's line was due but nothing was drawn.
-//   KURO_EXTRA_CONFIG='[[indexer]] ...' KURO_SHOW_ID=235 EPISODE=1 [SEEK_TO=600] node scripts/run-player-check.mjs subs-lag-probe.mjs
+//   YORU_EXTRA_CONFIG='[[indexer]] ...' YORU_SHOW_ID=235 EPISODE=1 [SEEK_TO=600] node scripts/run-player-check.mjs subs-lag-probe.mjs
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const ID = Number(process.env.KURO_SHOW_ID)
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const ID = Number(process.env.YORU_SHOW_ID)
 const EP = Number(process.env.EPISODE ?? 1)
 const SECONDS = Number(process.env.SECONDS ?? 100)
 const SEEK_TO = Number(process.env.SEEK_TO ?? 0)

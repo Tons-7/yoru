@@ -2,10 +2,10 @@ package bt
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"net/netip"
 	"os"
@@ -21,13 +21,13 @@ import (
 	"github.com/go-quicktest/qt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"kuro/internal/bt/dht"
+	"yoru/internal/bt/dht"
 
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/internal/testutil"
-	"kuro/internal/bt/iplist"
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/internal/testutil"
+	"yoru/internal/bt/iplist"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/storage"
 )
 
 func TestClientDefault(t *testing.T) {
@@ -118,10 +118,7 @@ func TestReducedDialTimeout(t *testing.T) {
 		{cfg.NominalDialTimeout, 40, 4000, cfg.NominalDialTimeout / 101},
 	} {
 		reduced := reducedDialTimeout(cfg.MinDialTimeout, _case.Max, _case.HalfOpenLimit, _case.PendingPeers)
-		expected := _case.ExpectedReduced
-		if expected < cfg.MinDialTimeout {
-			expected = cfg.MinDialTimeout
-		}
+		expected := max(_case.ExpectedReduced, cfg.MinDialTimeout)
 		if reduced != expected {
 			t.Fatalf("expected %s, got %s", _case.ExpectedReduced, reduced)
 		}
@@ -739,7 +736,7 @@ func testSeederLeecherPair(t *testing.T, seeder, leecher func(*ClientConfig)) {
 	// Extra torrents are added to test the seeder having to match incoming obfuscated headers
 	// against more than one torrent. See issue #114
 	makeMagnet(t, server, cfg.DataDir, "test2")
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		makeMagnet(t, server, cfg.DataDir, fmt.Sprintf("test%d", i+3))
 	}
 	cfg = TestingConfig(t)

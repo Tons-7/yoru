@@ -1,5 +1,4 @@
 //go:build !wasm
-// +build !wasm
 
 package storage
 
@@ -14,8 +13,8 @@ import (
 	"github.com/anacrolix/missinggo/v2"
 	"github.com/edsrzf/mmap-go"
 
-	"kuro/internal/bt/metainfo"
-	mmapSpan "kuro/internal/bt/mmap-span"
+	"yoru/internal/bt/metainfo"
+	mmapSpan "yoru/internal/bt/mmap-span"
 )
 
 type mmapClientImpl struct {

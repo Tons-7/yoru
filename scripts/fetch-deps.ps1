@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-Downloads the external binaries kuro shells out to, into bin/.
+Downloads the external binaries Yoru shells out to, into bin/.
 
 .DESCRIPTION
-kuro needs programs it does not bundle: ffmpeg and ffprobe for transcoding,
+Yoru needs programs it does not bundle: ffmpeg and ffprobe for transcoding,
 and mpv (with the Anime4K shaders) for external playback. This resolves the
 current version of each from upstream, downloads it, and extracts only what
-kuro uses.
+Yoru uses.
 
 Re-running is cheap: a component whose recorded version already matches is
 skipped unless -Force is given. What was installed is recorded in
@@ -40,7 +40,7 @@ $manifestPath = Join-Path $BinDir 'versions.json'
 # TLS 1.2 isn't Windows PowerShell 5.1's default, and every source below refuses anything older.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$github = @{ 'User-Agent' = 'kuro-fetch-deps'; 'Accept' = 'application/vnd.github+json' }
+$github = @{ 'User-Agent' = 'yoru-fetch-deps'; 'Accept' = 'application/vnd.github+json' }
 
 function Write-Step($message) { Write-Host "==> $message" -ForegroundColor Cyan }
 function Write-Note($message) { Write-Host "    $message" -ForegroundColor DarkGray }
@@ -94,13 +94,13 @@ function Expand-Download($archive, $destination) {
     }
 }
 
-# Copy-Item fails on a running executable, as when kuro is open; saying so beats an access-denied trace.
+# Copy-Item fails on a running executable, as when Yoru is open; saying so beats an access-denied trace.
 function Install-Binary($source, $name) {
     $target = Join-Path $BinDir $name
     try {
         Copy-Item -Path $source -Destination $target -Force
     } catch {
-        throw "could not write $name - is kuro or $name still running? ($($_.Exception.Message))"
+        throw "could not write $name - is Yoru or $name still running? ($($_.Exception.Message))"
     }
     Write-Note ("installed {0} ({1:N1} MB)" -f $name, ((Get-Item $target).Length / 1MB))
 }
@@ -175,7 +175,7 @@ $components = [ordered]@{
 
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $manifest = Get-Manifest
-$staging = Join-Path ([IO.Path]::GetTempPath()) ("kuro-deps-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+$staging = Join-Path ([IO.Path]::GetTempPath()) ("yoru-deps-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 
 $summary = @()

@@ -8,15 +8,15 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/score"
-	"kuro/internal/store"
+	"yoru/internal/score"
+	"yoru/internal/store"
 )
 
 // A feature is one long episode: against the per-episode cap every release of
-// it was rejected. Opt-in: KURO_LIVE=1 go test ./internal/library -run LiveMovie -v
+// it was rejected. Opt-in: YORU_LIVE=1 go test ./internal/library -run LiveMovie -v
 func TestLiveMovieIsNotRejectedForItsSize(t *testing.T) {
-	if os.Getenv("KURO_LIVE") == "" {
-		t.Skip("set KURO_LIVE=1 to search the live indexers")
+	if os.Getenv("YORU_LIVE") == "" {
+		t.Skip("set YORU_LIVE=1 to search the live indexers")
 	}
 
 	films := []struct {

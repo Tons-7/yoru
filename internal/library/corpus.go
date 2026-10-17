@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/corpus"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/corpus"
+	"yoru/internal/store"
 )
 
 const (

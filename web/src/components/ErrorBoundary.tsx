@@ -1,6 +1,6 @@
 import { Component, type ReactNode } from 'react'
 import { cx } from '../lib/format'
-import { buttonClass } from './ui'
+import { buttonClass } from '../lib/ui'
 
 // After a self-update the old page asks for chunks that no longer exist.
 const STALE_CHUNK = /dynamically imported module|Importing a module script failed|error loading dynamically/i
@@ -8,16 +8,17 @@ const STALE_CHUNK = /dynamically imported module|Importing a module script faile
 // resetKey clears a caught error when it changes: the watch page keeps one key across episodes.
 export class ErrorBoundary extends Component<
   { children: ReactNode; resetKey?: string },
-  { error: Error | null }
+  { error: Error | null; key?: string }
 > {
-  state: { error: Error | null } = { error: null }
+  state: { error: Error | null; key?: string } = { error: null, key: this.props.resetKey }
 
   static getDerivedStateFromError(error: Error) {
     return { error }
   }
 
-  componentDidUpdate(prev: { resetKey?: string }) {
-    if (this.state.error && prev.resetKey !== this.props.resetKey) this.setState({ error: null })
+  // Before the render, not after it as componentDidUpdate did: the error clears without a second pass.
+  static getDerivedStateFromProps(props: { resetKey?: string }, state: { key?: string }) {
+    return props.resetKey !== state.key ? { error: null, key: props.resetKey } : null
   }
 
   render() {
@@ -28,7 +29,7 @@ export class ErrorBoundary extends Component<
       <div className="grid min-h-[50vh] place-items-center p-6 text-center">
         <div className="max-w-md">
           <p className="text-base font-medium text-white">
-            {updated ? 'kuro was updated' : 'This page hit a problem'}
+            {updated ? 'Yoru was updated' : 'This page hit a problem'}
           </p>
           <p className="mt-1.5 text-sm text-base-400">
             {updated

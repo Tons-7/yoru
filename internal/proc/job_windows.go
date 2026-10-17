@@ -1,4 +1,4 @@
-// Package proc ties helpers' lifetime to kuro's: on Windows, killing a parent leaves its children running.
+// Package proc ties helpers' lifetime to Yoru's: on Windows, killing a parent leaves its children running.
 package proc
 
 import (
@@ -15,8 +15,8 @@ func KillChildrenOnExit() error {
 		return err
 	}
 
-	// BREAKAWAY_OK lets a child opt out: helpers die with kuro, but the user's
-	// own browser must not get adopted into the job and closed on exit.
+	// BREAKAWAY_OK lets a child opt out: helpers die with Yoru, but the user's own browser must not get
+	// adopted into the job and closed on exit.
 	limits := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
 		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
 			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |

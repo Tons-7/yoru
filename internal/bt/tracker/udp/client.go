@@ -11,7 +11,7 @@ import (
 
 	"github.com/anacrolix/log"
 	"github.com/protolambda/ctxlock"
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 )
 
 // Client interacts with UDP trackers via its Writer and Dispatcher. It has no knowledge of

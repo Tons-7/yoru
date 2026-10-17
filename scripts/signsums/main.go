@@ -1,5 +1,5 @@
 // signsums signs a release's SHA256SUMS.txt with the offline ed25519 key, so an install can tell a release
-// kuro's author published from one a stolen token did: go run ./scripts/signsums -key K -sums S -out S.sig
+// Yoru's author published from one a stolen token did: go run ./scripts/signsums -key K -sums S -out S.sig
 package main
 
 import (

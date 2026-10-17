@@ -5,8 +5,10 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useFilters } from '../lib/queries'
 import { FilterMenu } from '../components/FilterMenu'
 import { StudioFilter } from '../components/StudioFilter'
-import { PosterCard, PosterGrid, toCard } from '../components/PosterCard'
-import { Button, Empty, ErrorState, PageHeader, Pager, SearchInput, Skeleton, useDebounced } from '../components/ui'
+import { PosterCard, PosterGrid } from '../components/PosterCard'
+import { toCard } from '../lib/cards'
+import { Button, Empty, ErrorState, PageHeader, Pager, SearchInput, Skeleton } from '../components/ui'
+import { useDebounced } from '../lib/hooks'
 
 interface Vocabulary {
   genres: string[]

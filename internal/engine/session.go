@@ -11,10 +11,10 @@ import (
 	"slices"
 	"strings"
 
-	"kuro/internal/bt"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt"
+	"yoru/internal/bt/metainfo"
 
-	"kuro/internal/torrent"
+	"yoru/internal/torrent"
 )
 
 // record is one torrent in session.json, with rqbit's field names so its session reads too.
@@ -37,12 +37,12 @@ type sessionDoc struct {
 // saveSession writes the torrents and missing metainfo, so a restart needs nothing from the swarm.
 func (e *Engine) saveSession() { e.writeSession(false) }
 
-// writeSession is saveSession; once Stop has written the last one (final), a late save is dropped.
-func (e *Engine) writeSession(final bool) {
+// writeSession is saveSession; last is a client's final save (Stop's, a rebind's), and saves after it are dropped.
+func (e *Engine) writeSession(last bool) {
 	e.saveMu.Lock()
 	defer e.saveMu.Unlock()
 	e.mu.Lock()
-	if e.cl == nil || (e.closed && !final) {
+	if e.cl == nil || ((e.offline || e.closed) && !last) {
 		e.mu.Unlock()
 		return
 	}

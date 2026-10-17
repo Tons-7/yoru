@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/score"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/score"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // Downloader works the queue one episode at a time across shows: several at once all finish later.

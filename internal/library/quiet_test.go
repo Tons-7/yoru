@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/db"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/db"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // A torrent whose data is being hashed is neither paused nor downloading. The startup pass must not pause it (that froze finished

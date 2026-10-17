@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/db"
-	"kuro/internal/mal"
-	"kuro/internal/store"
+	"yoru/internal/db"
+	"yoru/internal/mal"
+	"yoru/internal/store"
 )
 
 type malServer struct {

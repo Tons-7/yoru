@@ -3,7 +3,7 @@ package metainfo
 import (
 	"fmt"
 
-	"kuro/internal/bt/merkle"
+	"yoru/internal/bt/merkle"
 )
 
 func ValidatePieceLayers(

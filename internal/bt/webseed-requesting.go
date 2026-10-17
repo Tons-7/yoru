@@ -20,11 +20,11 @@ import (
 	"github.com/anacrolix/generics/heap"
 	"github.com/anacrolix/missinggo/v2/panicif"
 	"github.com/davecgh/go-spew/spew"
-	"kuro/internal/bt/internal/extracmp"
+	"yoru/internal/bt/internal/extracmp"
 
-	"kuro/internal/bt/internal/request-strategy"
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/webseed"
+	"yoru/internal/bt/internal/request-strategy"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/webseed"
 )
 
 // Default is based on experience with CloudFlare.

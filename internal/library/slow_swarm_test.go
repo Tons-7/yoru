@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/indexer"
-	"kuro/internal/score"
+	"yoru/internal/indexer"
+	"yoru/internal/score"
 )
 
 // Timings shrunk to milliseconds.

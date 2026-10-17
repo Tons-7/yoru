@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"sync"
 
-	"kuro/internal/bt/internal/ctxrw"
+	"yoru/internal/bt/internal/ctxrw"
 )
 
 const (
@@ -275,10 +275,7 @@ func (h *handshake) postWrite(b []byte) error {
 }
 
 func xor(a, b []byte) (ret []byte) {
-	max := len(a)
-	if max > len(b) {
-		max = len(b)
-	}
+	max := min(len(a), len(b))
 	ret = make([]byte, max)
 	xorInPlace(ret, a, b)
 	return
@@ -290,7 +287,7 @@ func xorInPlace(dst, a, b []byte) {
 	}
 }
 
-func marshal(w io.Writer, data ...interface{}) (err error) {
+func marshal(w io.Writer, data ...any) (err error) {
 	for _, data := range data {
 		err = binary.Write(w, binary.BigEndian, data)
 		if err != nil {
@@ -300,7 +297,7 @@ func marshal(w io.Writer, data ...interface{}) (err error) {
 	return
 }
 
-func unmarshal(r io.Reader, data ...interface{}) (err error) {
+func unmarshal(r io.Reader, data ...any) (err error) {
 	for _, data := range data {
 		err = binary.Read(r, binary.BigEndian, data)
 		if err != nil {

@@ -12,14 +12,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/RoaringBitmap/roaring"
-	g "github.com/anacrolix/generics"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/anacrolix/missinggo/v2/panicif"
 	"github.com/dustin/go-humanize"
 	"golang.org/x/time/rate"
 
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/segments"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/segments"
 )
 
 // How many consecutive bytes to allow discarding from responses. This number is based on
@@ -200,7 +199,7 @@ func (me *Client) checkContentLength(resp *http.Response, part requestPart, expe
 }
 
 var bufPool = &sync.Pool{New: func() any {
-	return g.PtrTo(make([]byte, 128<<10)) // 128 KiB. 4x the default.
+	return new(make([]byte, 128<<10)) // 128 KiB. 4x the default.
 }}
 
 // Reads the part in full. All expected bytes must be returned or there will an error returned.

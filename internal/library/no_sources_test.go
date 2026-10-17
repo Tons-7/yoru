@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"kuro/internal/score"
+	"yoru/internal/score"
 )
 
 // With no site configured a search is refused with the fix named, not "nobody released it".

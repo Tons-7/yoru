@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	qt "github.com/frankban/quicktest"
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 func TestUnmarshalCompactInfohashes(t *testing.T) {

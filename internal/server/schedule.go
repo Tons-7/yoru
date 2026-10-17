@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/jobs"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/jobs"
+	"yoru/internal/store"
 )
 
 func (s *Server) jobStatus(w http.ResponseWriter, r *http.Request) {

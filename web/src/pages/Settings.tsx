@@ -13,16 +13,14 @@ import {
   type AccessDevice,
   type ApprovalMode,
 } from '../lib/queries'
-import { ANIME4K_MODES, ANIME4K_SIZES } from '../components/Anime4KDialog'
+import { ANIME4K_MODES, ANIME4K_SIZES } from '../lib/anime4k'
 import { ComponentState } from '../components/ComponentState'
 import { ReleaseNotesList, type Notes } from '../components/ReleaseNotes'
 import { WhereThingsGo } from '../components/WhereThingsGo'
-import { DESKTOP_NOTIFY_KEY, desktopNotifyWanted } from '../components/NotificationPanel'
+import { DESKTOP_NOTIFY_KEY, desktopNotifyWanted } from '../lib/notifications'
 import {
   Button,
-  buttonClass,
   ConfirmInline,
-  ControlLabel,
   ErrorState,
   inputClass,
   PageHeader,
@@ -34,6 +32,7 @@ import {
   Spinner,
   TextInput,
 } from '../components/ui'
+import { buttonClass, ControlLabel } from '../lib/ui'
 
 const TABS = ['Playback', 'Quality', 'Trackers', 'Library', 'Notifications', 'Access', 'Jobs', 'About'] as const
 type Tab = (typeof TABS)[number]
@@ -187,7 +186,7 @@ function useFlag() {
   }
 }
 
-// Only when chosen and missing: kuro does not install VLC.
+// Only when chosen and missing: Yoru does not install VLC.
 function VLCNote() {
   const f = useFlag()
   const setup = useSetup()
@@ -195,7 +194,7 @@ function VLCNote() {
   return (
     <p className="text-xs text-recap">
       VLC was not found. Install it from videolan.org, or if it is installed somewhere unusual set{' '}
-      <code>vlc_path</code> in {setup.data.configPath} to its folder, then restart kuro.
+      <code>vlc_path</code> in {setup.data.configPath} to its folder, then restart Yoru.
     </p>
   )
 }
@@ -344,8 +343,8 @@ function PlaybackTab() {
 
       <Section title="Window">
         <Row
-          label="Open kuro"
-          hint="Takes effect the next time kuro starts. F11 switches either way."
+          label="Open Yoru"
+          hint="Takes effect the next time Yoru starts. F11 switches either way."
         >
           <Select value={f.value('window.mode') || 'fullscreen'} onChange={(v) => f.set('window.mode', v)}>
             <option value="fullscreen">Fullscreen</option>
@@ -354,8 +353,35 @@ function PlaybackTab() {
         </Row>
       </Section>
 
+      <DiscordSection f={f} />
+
       <SubtitleLanguages f={f} />
     </div>
+  )
+}
+
+// The card is this computer's Discord account, so it is set here only.
+function DiscordSection({ f }: { f: ReturnType<typeof useFlag> }) {
+  const access = useQuery({ queryKey: ['access'], queryFn: () => api.get<{ host?: boolean }>('/api/access') })
+  if (!access.data?.host) return null
+  const on = f.get('discord.enabled')
+  return (
+    <Section title="Discord">
+      <Row
+        label="Show what I'm watching"
+        hint="Your Discord profile shows Watching Yoru, with the show, the episode and the time left. Needs the Discord desktop app on this computer. Adult titles never show."
+      >
+        <Switch on={on} onChange={(v) => f.set('discord.enabled', String(v))} />
+      </Row>
+      {on && (
+        <Row
+          label="Include other devices"
+          hint="Also when you watch on a phone or TV through this Yoru. Off, only what plays on this computer shows."
+        >
+          <Switch on={f.get('discord.everywhere')} onChange={(v) => f.set('discord.everywhere', String(v))} />
+        </Row>
+      )}
+    </Section>
   )
 }
 
@@ -534,7 +560,7 @@ function QualityTab() {
                 ? found.removed === 0
                   ? 'Nothing orphaned.'
                   : `${found.removed} found · ${bytes(found.freedBytes)}`
-                : 'Folders in the cache the torrent engine no longer knows about, left by a crash or a delete outside kuro. They escape the budget until removed.'
+                : 'Folders in the cache the torrent engine no longer knows about, left by a crash or a delete outside Yoru. They escape the budget until removed.'
           }
         >
           {found && found.removed > 0 ? (
@@ -582,6 +608,21 @@ function QualityTab() {
         <Row label="Auto-download followed anime">
           <Switch on={f.get('autodownload.enabled')} onChange={(v) => f.set('autodownload.enabled', String(v))} />
         </Row>
+        <SpeedLimitRow f={f} />
+        <TorrentNetworkRow f={f} />
+        <Row
+          label="Sharing"
+          hint={
+            f.value('downloads.upload') === 'never'
+              ? 'Nothing is shared. Downloads get slower, as peers send most to those who share back.'
+              : 'Pieces of an episode go to other viewers only while you download it, which keeps them sending to you. Finished episodes are never shared.'
+          }
+        >
+          <Select value={f.value('downloads.upload') || 'while_downloading'} onChange={(v) => f.set('downloads.upload', v)}>
+            <option value="while_downloading">While downloading</option>
+            <option value="never">Never</option>
+          </Select>
+        </Row>
         <PeersFirewallRow />
       </Section>
     </div>
@@ -614,7 +655,7 @@ function PeersFirewallRow() {
   if (!host || !fw.data) return null
   const { status, port, allowed, blocked } = fw.data
 
-  // Linux and macOS: kuro only says what it found.
+  // Linux and macOS: Yoru only says what it found.
   if (!status.supported) {
     if (!status.firewall) return null
     return (
@@ -633,9 +674,9 @@ function PeersFirewallRow() {
   const hint = allow.isError
     ? (allow.error as Error).message
     : allowed
-      ? `Peers can connect to kuro on port ${port}.`
+      ? `Peers can connect to Yoru on port ${port}.`
       : blocked
-        ? 'Windows Firewall is blocking kuro, probably from an earlier Cancel on its prompt. Downloads find fewer peers.'
+        ? 'Windows Firewall is blocking Yoru, probably from an earlier Cancel on its prompt. Downloads find fewer peers.'
         : `Windows Firewall keeps peers from connecting in on port ${port}. Downloads still work, from fewer peers.`
   return (
     <Row label="Incoming peers" hint={hint}>
@@ -650,6 +691,81 @@ function PeersFirewallRow() {
   )
 }
 
+// Megabits a second, as speed tests and the downloads list show them; stored as bytes a second.
+const SPEED_LIMITS = [5, 10, 20, 40, 80]
+// A 1080p episode is about 1.4 GB for 24 minutes: some 8 Mbps.
+const STREAM_MBPS = 8
+
+function SpeedLimitRow({ f }: { f: ReturnType<typeof useFlag> }) {
+  const mbps = (Number(f.value('downloads.limit_bytes')) * 8) / 1_000_000
+  return (
+    <Row
+      label="Download speed limit"
+      hint={
+        mbps > 0 && mbps < STREAM_MBPS
+          ? `Under about ${STREAM_MBPS} Mbps a 1080p episode plays faster than it downloads, so it stops to wait.`
+          : 'Leaves room on your connection for everything else. Streaming counts against it too.'
+      }
+    >
+      <Select value={f.value('downloads.limit_bytes') || '0'} onChange={(v) => f.set('downloads.limit_bytes', v)}>
+        <option value="0">No limit</option>
+        {SPEED_LIMITS.map((m) => (
+          <option key={m} value={String((m * 1_000_000) / 8)}>
+            {m} Mbps
+          </option>
+        ))}
+      </Select>
+    </Row>
+  )
+}
+
+interface TorrentNetwork {
+  adapters: { name: string; addresses: string[]; vpn: boolean }[]
+  network: { adapter: string; address?: string; waiting: boolean }
+}
+
+// Torrents kept to one adapter, a VPN's. Host only: it is this machine's network, as the firewall is.
+function TorrentNetworkRow({ f }: { f: ReturnType<typeof useFlag> }) {
+  const access = useQuery({ queryKey: ['access'], queryFn: () => api.get<{ host?: boolean }>('/api/access') })
+  const host = !!access.data?.host
+  // Polled: a VPN connects and drops on its own.
+  const net = useQuery({
+    queryKey: ['network'],
+    queryFn: () => api.get<TorrentNetwork>('/api/network'),
+    enabled: host,
+    refetchInterval: 5000,
+  })
+  if (!host || !net.data) return null
+  const chosen = f.value('downloads.adapter')
+  const { adapters, network } = net.data
+  // A chosen adapter that's down isn't listed, but stays the choice.
+  const missing = chosen && !adapters.some((a) => a.name === chosen)
+
+  let hint =
+    "Pick your VPN app's adapter to keep torrents to it. Only torrents use it; Yoru itself, AniList and searches don't."
+  if (chosen && network.waiting) {
+    hint = `Waiting for ${chosen} to connect. Downloads stay paused until it does; nothing goes out over your normal connection.`
+  } else if (chosen) {
+    hint =
+      `Torrents use only ${chosen}${network.address ? ` (${network.address})` : ''} and pause if it disconnects. ` +
+      'The VPN must allow torrent traffic, and peers can rarely connect in through one, so expect fewer peers and slower downloads.'
+  }
+  return (
+    <Row label="Network for torrents" hint={hint}>
+      <Select value={chosen} onChange={(v) => f.set('downloads.adapter', v)}>
+        <option value="">Any network</option>
+        {missing && <option value={chosen}>{chosen} (not connected)</option>}
+        {adapters.map((a) => (
+          <option key={a.name} value={a.name}>
+            {a.name} · {a.addresses[0]}
+            {a.vpn ? ' · VPN' : ''}
+          </option>
+        ))}
+      </Select>
+    </Row>
+  )
+}
+
 // Release groups to favour, typed as a comma list and stored as a JSON array.
 function PreferGroups({ f }: { f: ReturnType<typeof useFlag> }) {
   const stored: string[] = (() => {
@@ -660,8 +776,14 @@ function PreferGroups({ f }: { f: ReturnType<typeof useFlag> }) {
       return []
     }
   })()
-  const [text, setText] = useState(stored.join(', '))
-  useEffect(() => setText(stored.join(', ')), [f.value('release.prefer_groups')]) // eslint-disable-line react-hooks/exhaustive-deps
+  // The field follows the saved list when it changes, set during render rather than an effect after it.
+  const saved = stored.join(', ')
+  const [text, setText] = useState(saved)
+  const [shown, setShown] = useState(saved)
+  if (shown !== saved) {
+    setShown(saved)
+    setText(saved)
+  }
 
   // Its own mutation, so the Saved hint is this field's and not every switch's on the page.
   const setGroups = useSetPref()
@@ -965,7 +1087,7 @@ function ImportRow() {
 
   return (
     <div className="space-y-2 rounded-lg border border-base-850 bg-base-950/40 p-3">
-      <p className="text-xs text-base-400">Bring your AniList list into kuro.</p>
+      <p className="text-xs text-base-400">Bring your AniList list into Yoru.</p>
 
       <div className="flex gap-1 rounded-md bg-base-900 p-1">
         {(['merge', 'replace'] as const).map((option) => (
@@ -988,7 +1110,7 @@ function ImportRow() {
       <p className="text-xs text-base-500">
         {mode === 'merge'
           ? 'Keeps anything AniList does not have and protects changes you have not pushed yet.'
-          : 'Makes your list exactly what AniList holds. Entries only in kuro are deleted and unpushed changes are overwritten.'}
+          : 'Makes your list exactly what AniList holds. Entries only in Yoru are deleted and unpushed changes are overwritten.'}
       </p>
 
       {mode === 'replace' && confirming ? (
@@ -1226,7 +1348,7 @@ function DesktopNotifyRow() {
       hint={
         permission === 'denied'
           ? 'Blocked by the browser; allow notifications for this site to use it.'
-          : 'Pop up on this device when a new episode appears, even with kuro in another tab.'
+          : 'Pop up on this device when a new episode appears, even with Yoru in another tab.'
       }
     >
       <Switch label="Desktop alerts" on={on && permission === 'granted'} onChange={(v) => void toggle(v)} />
@@ -1306,7 +1428,7 @@ function AccessTab() {
         <p className="text-sm text-recap">{(access.error as Error).message}</p>
       ) : !access.data?.reachable ? (
         <p className="text-sm text-base-400">
-          Only this machine can reach kuro right now.
+          Only this machine can reach Yoru right now.
         </p>
       ) : access.data.urls.length === 0 ? (
         <p className="text-sm text-base-300">
@@ -1348,7 +1470,7 @@ interface HTTPSStatus {
   expires?: number
 }
 
-// A phone only installs kuro as an app over HTTPS: a free DuckDNS name and a certificate kuro fetches for it.
+// A phone only installs Yoru as an app over HTTPS: a free DuckDNS name and a certificate Yoru fetches for it.
 function InstallAsApp() {
   const qc = useQueryClient()
   const https = useQuery({
@@ -1386,8 +1508,8 @@ function InstallAsApp() {
       : state === 'working'
         ? `Getting a certificate for ${https.data?.domain}. This takes a minute or two.`
         : state === 'error'
-          ? `Could not get a certificate yet: ${https.data?.problem}. kuro keeps trying.`
-          : 'Phones install kuro as an app only over HTTPS. Make a free name at duckdns.org and paste it and its token here.'
+          ? `Could not get a certificate yet: ${https.data?.problem}. Yoru keeps trying.`
+          : 'Phones install Yoru as an app only over HTTPS. Make a free name at duckdns.org and paste it and its token here.'
 
   return (
     <>
@@ -1420,7 +1542,7 @@ function InstallAsApp() {
           <input
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
-            placeholder="mykuro.duckdns.org"
+            placeholder="myyoru.duckdns.org"
             aria-label="DuckDNS name"
             autoComplete="off"
             className={HTTPS_INPUT}
@@ -1609,7 +1731,7 @@ function FirewallPanel() {
   const { status, reachable, blocked } = fw.data
   const publicNets = status.networks.filter((n) => n.category === 'Public')
 
-  // Linux and macOS: kuro only says what it found.
+  // Linux and macOS: Yoru only says what it found.
   if (!status.supported) {
     if (!status.firewall) return null
     return (
@@ -1637,17 +1759,17 @@ function FirewallPanel() {
         </p>
       ) : blocked ? (
         <p className="text-base-100">
-          Windows Firewall is blocking kuro, probably from an earlier Cancel on its prompt. Allowing it
+          Windows Firewall is blocking Yoru, probably from an earlier Cancel on its prompt. Allowing it
           fixes that.
         </p>
       ) : publicNets.length > 0 ? (
         <p className="text-base-100">
           Windows calls <strong>{publicNets.map((n) => n.name).join(', ')}</strong> a Public network and
           keeps other devices out. If it's your home Wi-Fi, set it to <strong>Private</strong>, then allow
-          kuro below.
+          Yoru below.
         </p>
       ) : (
-        <p className="text-base-100">Windows Firewall isn't letting other devices reach kuro yet.</p>
+        <p className="text-base-100">Windows Firewall isn't letting other devices reach Yoru yet.</p>
       )}
 
       {!reachable && (
@@ -1759,7 +1881,7 @@ function AboutTab() {
   // Only a 503 "updater unavailable" means a development build; other failures say what they are.
   if (!s && !(status.error instanceof ApiError && status.error.status === 503)) {
     return (
-      <Section title="kuro">
+      <Section title="Yoru">
         <p className="text-sm text-recap">{(status.error as Error | null)?.message ?? 'Could not read the version.'}</p>
       </Section>
     )
@@ -1767,7 +1889,7 @@ function AboutTab() {
   if (!s) {
     return (
       <div className="space-y-4">
-        <Section title="kuro" hint="Development build: updates aren't checked.">
+        <Section title="Yoru" hint="Development build: updates aren't checked.">
           <p className="text-sm text-base-400">Built from source.</p>
         </Section>
         <ComponentsSection />
@@ -1793,7 +1915,7 @@ function AboutTab() {
         return 'Verifying…'
       case 'restarting':
         return stuck
-          ? 'The new version has not come up. Reload this page; if that fails, start kuro again (it falls back to the previous version).'
+          ? 'The new version has not come up. Reload this page; if that fails, start Yoru again (it falls back to the previous version).'
           : 'Restarting into the new version…'
       case 'failed':
         return s.error ?? 'Update failed'
@@ -1807,7 +1929,7 @@ function AboutTab() {
 
   return (
     <div className="space-y-4">
-      <Section title={`kuro ${s.current}`} hint="Updates replace only kuro.exe. Downloads, settings and history stay.">
+      <Section title={`Yoru ${s.current}`} hint="Updates replace only yoru.exe. Downloads, settings and history stay.">
         <Row label={line} hint={s.checkedAt ? `Checked ${relativeTime(Date.parse(s.checkedAt) / 1000)}` : undefined}>
           <div className="flex gap-2">
             <button
@@ -1854,12 +1976,12 @@ function AboutTab() {
   )
 }
 
-// The folders kuro uses and the movable one, here too as only the first run opens Setup.
+// The folders Yoru uses and the movable one, here too as only the first run opens Setup.
 function WhereSection() {
   const setup = useSetup()
   if (!setup.data) return null
   return (
-    <Section title="Where things go" hint="Folders kuro reads and writes.">
+    <Section title="Where things go" hint="Folders Yoru reads and writes.">
       <WhereThingsGo setup={setup.data} />
     </Section>
   )
@@ -1888,7 +2010,7 @@ function ComponentsSection() {
 
   return (
     <Section
-      title="Programs kuro uses"
+      title="Programs Yoru uses"
       hint="Downloaded on demand. Installing one takes effect straight away."
     >
       {components.map((c) => {

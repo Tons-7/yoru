@@ -6,7 +6,7 @@ import (
 
 	g "github.com/anacrolix/generics"
 	"github.com/google/go-cmp/cmp"
-	"kuro/internal/bt/internal/amortize"
+	"yoru/internal/bt/internal/amortize"
 )
 
 // Iters from a point, assuming that where can only be true consecutively from that point and

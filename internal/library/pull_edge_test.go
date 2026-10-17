@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kuro/internal/anilist"
-	"kuro/internal/db"
-	"kuro/internal/mal"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/db"
+	"yoru/internal/mal"
+	"yoru/internal/store"
 )
 
 func TestAniListRunSkipsEverythingWhenNotConnected(t *testing.T) {

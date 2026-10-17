@@ -14,16 +14,16 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/config"
-	"kuro/internal/library"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
-	"kuro/internal/transcode"
+	"yoru/internal/config"
+	"yoru/internal/library"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
+	"yoru/internal/transcode"
 )
 
 func ffmpegBinaries(t *testing.T) (ffmpeg, ffprobe string) {
 	t.Helper()
-	root := os.Getenv("KURO_BIN")
+	root := os.Getenv("YORU_BIN")
 	if root == "" {
 		root = filepath.Join("..", "..", "bin")
 	}
@@ -168,7 +168,7 @@ func TestAnEpisodeStreamsFromOpenToClose(t *testing.T) {
 	if code != http.StatusOK || !bytes.Contains(track, []byte("the first line")) || !bytes.Contains(track, []byte("the second line")) {
 		t.Fatalf("subtitles answered %d: %.200s", code, track)
 	}
-	if header.Get("X-Kuro-Complete") != "true" {
+	if header.Get("X-Yoru-Complete") != "true" {
 		t.Error("a library file's subtitles were not marked complete")
 	}
 

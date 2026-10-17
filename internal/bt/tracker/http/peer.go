@@ -5,7 +5,7 @@ import (
 	"net"
 	"net/netip"
 
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 )
 
 // TODO: Use netip.Addr and Option[[20]byte].
@@ -31,7 +31,7 @@ func (p Peer) String() string {
 }
 
 // Set from the non-compact form in BEP 3.
-func (p *Peer) FromDictInterface(d map[string]interface{}) {
+func (p *Peer) FromDictInterface(d map[string]any) {
 	p.IP = net.ParseIP(d["ip"].(string))
 	if _, ok := d["peer id"]; ok {
 		p.ID = []byte(d["peer id"].(string))

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/indexer"
-	"kuro/internal/parse"
+	"yoru/internal/indexer"
+	"yoru/internal/parse"
 )
 
 func candidate(title string, seeders int, size int64) Candidate {

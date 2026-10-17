@@ -2,7 +2,7 @@ package limiter
 
 import "sync"
 
-type Key = interface{}
+type Key = any
 
 // Manages resources with a limited number of concurrent slots for use for each key.
 type Instance struct {

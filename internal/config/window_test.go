@@ -124,7 +124,7 @@ func TestOpenAppRetryHonoursCancellation(t *testing.T) {
 	}
 }
 
-// The window goes with kuro, so the profile is free for whatever starts next.
+// The window goes with Yoru, so the profile is free for whatever starts next.
 func TestCloseEndsTheWindowProcess(t *testing.T) {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {

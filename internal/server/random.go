@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/library"
-	"kuro/internal/metadata"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/library"
+	"yoru/internal/metadata"
+	"yoru/internal/store"
 )
 
 // random draws from the corpus, which has titles AniList lacks; a genre filter goes to AniList.
@@ -233,7 +233,7 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 	return body, true, false
 }
 
-// savedAnime is kuro's row of a show, for when AniList is unreachable and no answer was saved.
+// savedAnime is Yoru's row of a show, for when AniList is unreachable and no answer was saved.
 func (s *Server) savedAnime(ctx context.Context, id int) (anilist.Media, bool) {
 	a, at, ok, err := s.store.AnimeRecord(ctx, id)
 	if err != nil || !ok {

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/db"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/db"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 func checkingEngine(t *testing.T, polls *int, mu *sync.Mutex) *httptest.Server {

@@ -11,8 +11,8 @@ import (
 	"github.com/anacrolix/missinggo/v2"
 	"github.com/anacrolix/missinggo/v2/panicif"
 
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/segments"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/segments"
 )
 
 type fileTorrentImpl struct {

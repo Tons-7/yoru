@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// Window is the app window kuro opened. Closing it with kuro frees the browser
-// profile, so a relaunch takes it at once instead of racing a dying window.
+// Window is the app window Yoru opened. Closing it with Yoru frees the browser profile, so a relaunch takes it
+// at once instead of racing a dying window.
 type Window struct {
 	// Profile is the browser profile directory; empty means AppData.
 	Profile string
@@ -35,7 +35,7 @@ type launched struct {
 	exited chan struct{}
 }
 
-// OpenApp, from a second launch, hands the URL to the running kuro's window (a clean quick exit).
+// OpenApp, from a second launch, hands the URL to the running Yoru's window (a clean quick exit).
 func OpenApp(ctx context.Context, url, profile string) {
 	(&Window{Profile: profile, handoff: true}).Open(ctx, url)
 }
@@ -113,8 +113,8 @@ func appWindow(ctx context.Context, url, profile string, maximized, handoff bool
 
 	select {
 	case <-exited:
-		// Off Windows the window outlives kuro, so a relaunch hands the URL
-		// to it and exits clean at once; that is the window, not a failure.
+		// Off Windows the window outlives Yoru, so a relaunch hands the URL to it and exits clean at once;
+		// that is the window, not a failure.
 		if (runtime.GOOS != "windows" || handoff) && cmd.ProcessState.Success() {
 			return &launched{}
 		}

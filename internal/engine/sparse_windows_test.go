@@ -8,10 +8,10 @@ import (
 	"testing"
 
 	"golang.org/x/sys/windows"
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/storage"
 	"syscall"
 	"unsafe"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/storage"
 )
 
 // The first write lands at the tail (the prewarm reads the end first): a sparse file costs nothing for

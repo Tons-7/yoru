@@ -3,9 +3,9 @@ package bt
 import (
 	g "github.com/anacrolix/generics"
 
-	requestStrategy "kuro/internal/bt/internal/request-strategy"
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/storage"
+	requestStrategy "yoru/internal/bt/internal/request-strategy"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/storage"
 )
 
 type requestStrategyInputCommon struct {

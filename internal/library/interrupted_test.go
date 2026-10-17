@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/indexer"
-	"kuro/internal/score"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/indexer"
+	"yoru/internal/score"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // A download stopped before its first bytes (an episode started playing) stays this episode's, so the

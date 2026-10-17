@@ -7,8 +7,8 @@ import (
 	"errors"
 	"log/slog"
 
-	"kuro/internal/anilist"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/store"
 )
 
 type Importer struct {

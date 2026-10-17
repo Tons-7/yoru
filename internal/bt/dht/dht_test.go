@@ -15,10 +15,10 @@ import (
 	"github.com/anacrolix/sync"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 
-	"kuro/internal/bt/dht/int160"
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/int160"
+	"yoru/internal/bt/dht/krpc"
 )
 
 func TestSetNilBigInt(t *testing.T) {
@@ -281,7 +281,7 @@ func TestBootstrapRace(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close()
 	go func() {
-		for i := 0; i < defaultMaxQuerySends-1; i++ {
+		for range defaultMaxQuerySends - 1 {
 			remotePc.ReadFrom(nil)
 		}
 		var b [1024]byte

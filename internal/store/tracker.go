@@ -10,14 +10,14 @@ import (
 
 // TrackerEntry is one anime that a tracker has not been told about yet.
 type TrackerEntry struct {
-	AnimeID  int // AniList id, kuro's canonical key
+	AnimeID  int // AniList id, Yoru's canonical key
 	RemoteID int // the id this tracker uses
 	Status   string
 	Progress int
 	Episodes int
 	// Repeat is the finished-rewatch count, MAL's num_times_rewatched.
 	Repeat int
-	// Score on kuro's 0-100 scale; each tracker converts.
+	// Score on Yoru's 0-100 scale; each tracker converts.
 	Score int
 	// LastScore is what the tracker was last told, so a 0 now is a clear.
 	LastScore int

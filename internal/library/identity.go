@@ -9,9 +9,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"kuro/internal/corpus"
-	"kuro/internal/parse"
-	"kuro/internal/store"
+	"yoru/internal/corpus"
+	"yoru/internal/parse"
+	"yoru/internal/store"
 )
 
 // A release covering this much of a title's characters shortens it, not another show.

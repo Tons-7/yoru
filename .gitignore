@@ -9,6 +9,8 @@
 *.db-shm
 
 # build output
+/yoru.exe
+/yoru
 /kuro.exe
 /e2e-seed.exe
 /dist/

@@ -17,11 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/db"
-	"kuro/internal/indexer"
-	"kuro/internal/score"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/db"
+	"yoru/internal/indexer"
+	"yoru/internal/score"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // fakeEngine is enough engine for attach: add, report state, stream, delete.
@@ -41,6 +41,8 @@ type fakeEngine struct {
 	stuck   map[string]bool
 	addedAt map[string]time.Time
 	paused  map[int]bool
+	// onAdd runs as a torrent is added, before the add answers.
+	onAdd func(hash string)
 }
 
 func newFakeEngine(dead ...string) *fakeEngine {
@@ -91,7 +93,11 @@ func (f *fakeEngine) handler() http.Handler {
 			f.added = append(f.added, hash)
 			f.addedAt[hash] = time.Now()
 		}
+		onAdd := f.onAdd
 		f.mu.Unlock()
+		if onAdd != nil && id != 0 {
+			onAdd(hash)
+		}
 
 		json.NewEncoder(w).Encode(map[string]any{
 			"id": id,
@@ -323,30 +329,26 @@ func TestAttachRemovesAReleaseAdoptedWhileItWasTried(t *testing.T) {
 	})
 	ctx := context.Background()
 
-	// The sweep, landing between the add and the verdict.
-	swept := make(chan struct{})
-	go func() {
-		defer close(swept)
-		for range 2000 {
-			engine.mu.Lock()
-			added := slices.Contains(engine.added, deadHash)
-			engine.mu.Unlock()
-			if added {
-				if err := p.store.TrackTorrent(ctx, deadHash, 1, "[Dead] Sousou no Frieren - 01 [1080p].mkv"); err != nil {
-					t.Error(err)
-				}
-				return
-			}
-			time.Sleep(time.Millisecond)
+	// The sweep, landing between the add and the verdict: as the add happens, not polled for after.
+	swept := false
+	engine.onAdd = func(hash string) {
+		if hash != deadHash {
+			return
 		}
-	}()
+		swept = true
+		if err := p.store.TrackTorrent(ctx, deadHash, 1, "[Dead] Sousou no Frieren - 01 [1080p].mkv"); err != nil {
+			t.Error(err)
+		}
+	}
 
 	if _, _, _, _, _, err := p.attach(ctx, PlayRequest{
 		AnimeID: 1, Episode: 1, Season: 1, Prefs: score.DefaultPreferences(),
 	}); err != nil {
 		t.Fatalf("attach: %v", err)
 	}
-	<-swept
+	if !swept {
+		t.Fatal("the dead release was never added")
+	}
 
 	if !engine.wasDeleted(deadHash) {
 		t.Error("the adopted release that delivered nothing was left downloading")
@@ -417,7 +419,7 @@ func TestAttachKeepsReleasesTheEngineAlreadyHeld(t *testing.T) {
 	}
 }
 
-// A release kuro chose is dropped the moment it shows no peers, for the next one. A release picked by
+// A release Yoru chose is dropped the moment it shows no peers, for the next one. A release picked by
 // hand has no next one: it is waited on, and plays when its swarm wakes up.
 func TestPickedReleaseIsWaitedForWhereAnAutomaticOneIsDropped(t *testing.T) {
 	old := peerProbeDeadline

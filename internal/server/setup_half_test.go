@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/config"
+	"yoru/internal/config"
 )
 
 func TestSetupExplainsHalfATranscoder(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 
 	"github.com/multiformats/go-multihash"
 
-	"kuro/internal/bt/types/infohash"
+	"yoru/internal/bt/types/infohash"
 )
 
 const Size = sha256.Size

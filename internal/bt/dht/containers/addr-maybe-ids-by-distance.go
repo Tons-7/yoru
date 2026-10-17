@@ -1,11 +1,10 @@
 package containers
 
 import (
-	"github.com/anacrolix/missinggo/v2/iter"
 	"github.com/anacrolix/stm/stmutil"
 
-	"kuro/internal/bt/dht/int160"
-	"kuro/internal/bt/dht/types"
+	"yoru/internal/bt/dht/int160"
+	"yoru/internal/bt/dht/types"
 )
 
 type addrMaybeId = types.AddrMaybeId
@@ -21,9 +20,12 @@ type stmSettishWrapper struct {
 	set stmutil.Settish[addrMaybeId]
 }
 
+// Next is the closest; callers check Len first, as an empty set has none.
 func (me stmSettishWrapper) Next() addrMaybeId {
-	first, _ := iter.First(me.set.Iter)
-	return first.(addrMaybeId)
+	for x := range me.set.All() {
+		return x
+	}
+	panic("Next on an empty set")
 }
 
 func (me stmSettishWrapper) Delete(x addrMaybeId) AddrMaybeIdsByDistance {

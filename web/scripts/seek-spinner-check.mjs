@@ -2,9 +2,9 @@
 // spinner — least of all while paused, where the frame just sat there anyway.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const LIB = process.env.KURO_LIB
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const LIB = process.env.YORU_LIB
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const SHOTS = process.env.MANUAL_SHOTS ?? process.env.SHOTS ?? '.'
 
 let failures = 0
@@ -45,7 +45,7 @@ await post('/api/local/scan', {})
 let file
 for (let i = 0; i < 30 && !file; i++) {
   await sleep(1000)
-  file = (await api('/api/local/files')).body?.items?.find((f) => String(f.path ?? '').includes('Kuro Test Show'))
+  file = (await api('/api/local/files')).body?.items?.find((f) => String(f.path ?? '').includes('Yoru Test Show'))
 }
 check(!!file, 'test file listed')
 if (!file) process.exit(1)

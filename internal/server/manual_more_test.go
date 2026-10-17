@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/config"
-	"kuro/internal/indexer"
-	"kuro/internal/library"
-	"kuro/internal/mal"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/config"
+	"yoru/internal/indexer"
+	"yoru/internal/library"
+	"yoru/internal/mal"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // aniRecorder is an AniList fake that answers reads with a fixed body and keeps every mutation's variables.

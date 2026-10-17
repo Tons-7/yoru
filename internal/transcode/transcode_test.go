@@ -15,7 +15,7 @@ import (
 func binaries(t *testing.T) (ffmpeg, ffprobe string) {
 	t.Helper()
 
-	root := os.Getenv("KURO_BIN")
+	root := os.Getenv("YORU_BIN")
 	if root == "" {
 		root = filepath.Join("..", "..", "bin")
 	}

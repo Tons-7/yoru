@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"kuro/internal/corpus"
+	"yoru/internal/corpus"
 )
 
 // Weights follow Seanime's published table, which is the most battle-tested

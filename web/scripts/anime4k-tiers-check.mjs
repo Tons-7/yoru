@@ -3,8 +3,8 @@
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const SHOTS = process.env.SHOTS ?? '.'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -16,7 +16,7 @@ const check = (ok, label, detail = '') => {
 const post = (path, body) =>
   fetch(BASE + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
 
-check(await prepareLocalEpisode({ base: BASE, lib: process.env.KURO_LIB, anime: ANIME }), 'test episode ready')
+check(await prepareLocalEpisode({ base: BASE, lib: process.env.YORU_LIB, anime: ANIME }), 'test episode ready')
 await post('/api/prefs', { key: 'playback.anime4k', value: 'true' })
 
 const browser = await chromium.launch({
@@ -27,7 +27,7 @@ const browser = await chromium.launch({
 // One profile per case, with the device choice stored before the page loads.
 async function watch(choice, contextOptions = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, ...contextOptions })
-  if (choice) await context.addInitScript((c) => localStorage.setItem('kuro.anime4k', c), choice)
+  if (choice) await context.addInitScript((c) => localStorage.setItem('yoru.anime4k', c), choice)
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))

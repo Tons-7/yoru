@@ -3,8 +3,9 @@ package library
 import (
 	"encoding/json"
 
-	"kuro/internal/score"
-	"kuro/internal/store"
+	"yoru/internal/score"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 type scorePrefs = score.Preferences
@@ -50,3 +51,12 @@ func prefsFromSettings(p store.Prefs) scorePrefs {
 
 // Preferences is the entry point for callers that have an anime id.
 func Preferences(p store.Prefs) score.Preferences { return prefsFromSettings(p) }
+
+// TorrentLimits is the engine's download cap, upload choice and network from Settings.
+func TorrentLimits(p store.Prefs) torrent.Limits {
+	return torrent.Limits{
+		DownloadBytes: max(0, p.Int64("downloads.limit_bytes")),
+		Upload:        p.String("downloads.upload"),
+		Adapter:       p.String("downloads.adapter"),
+	}
+}

@@ -1,6 +1,6 @@
 export const meta = {
-  name: 'kuro-audit',
-  description: 'Audit kuro backend + frontend for bugs, improvements and UI/UX gaps, adversarially verify each finding',
+  name: 'yoru-audit',
+  description: 'Audit Yoru backend + frontend for bugs, improvements and UI/UX gaps, adversarially verify each finding',
   phases: [
     { title: 'Find', detail: 'one auditor per subsystem, plus UI/UX reviewers' },
     { title: 'Verify', detail: 'skeptics try to refute every finding; high/critical get two lenses' },
@@ -8,11 +8,11 @@ export const meta = {
   ],
 }
 
-const CONTEXT = `kuro is a Windows-first anime app at D:\\kuro. Go backend (internal/, cmd/kuro) serving a React SPA (web/src, embedded into kuro.exe at build). It searches public torrent indexers, scores releases (internal/score), downloads through a built-in torrent engine (internal/engine: anacrolix/torrent in process, behind a loopback HTTP API on a random port; session in cache/engine-session, importing an old rqbit session once), plays via ffmpeg->HLS in the browser or via mpv/VLC, and syncs progress to AniList/MAL. SQLite store in internal/store; migrations in internal/db/migrations (applied migrations are never edited, fixes go in new files). Owner's design rules: highest quality always; a labelled single episode beats a season pack; per-show preferences override the global ones; code comments must be terse. Past incident: a second kuro instance shared the torrent session and its cache sweeper deleted the user's downloaded files, so anything that can delete or orphan user files deserves extra scrutiny.`
+const CONTEXT = `Yoru (called kuro until October 2026) is a Windows-first anime app; this repository is its source. Go backend (internal/, cmd/yoru) serving a React SPA (web/src, embedded into yoru.exe at build). It searches public torrent indexers, scores releases (internal/score), downloads through its own BitTorrent engine (internal/bt, run in process by internal/engine behind a loopback HTTP API on a random port; session in cache/engine-session, importing an old rqbit session once), plays via ffmpeg->HLS in the browser or via mpv/VLC, and syncs progress to AniList/MAL. SQLite store in internal/store; migrations in internal/db/migrations (applied migrations are never edited, fixes go in new files). Owner's design rules: highest quality always; a labelled single episode beats a season pack; per-show preferences override the global ones; code comments must be terse. Past incident: a second instance shared the torrent session and its cache sweeper deleted the user's downloaded files, so anything that can delete or orphan user files deserves extra scrutiny.`
 
 const RULES = `Hard rules:
-- READ-ONLY. Do not create, modify or delete any file under D:\\kuro. No git commit/push/checkout/stash/reset.
-- Do NOT run kuro.exe, npm build, the e2e harness (web/scripts/*.mjs) or live tests (KURO_LIVE). Never contact 127.0.0.1:4321: that is the user's live app.
+- READ-ONLY. Do not create, modify or delete any file in this repository. No git commit/push/checkout/stash/reset.
+- Do NOT run yoru.exe or kuro.exe, npm build, the e2e harness (web/scripts/*.mjs) or live tests (YORU_LIVE). Never contact 127.0.0.1:4321: that is the user's live app.
 - Allowed: reading files, grep, git log/blame/show, go vet, and running EXISTING unit tests for one package (go test ./internal/<pkg> -run <Name>).
 - Be concrete. Every item needs the exact file and line, a concrete trigger -> outcome, and evidence quoted or traced from the current code. No speculative "might" items without a traced path.`
 
@@ -28,7 +28,7 @@ const AREAS = [
   { name: 'http-api-security', files: 'internal/server/ (server.go, access.go, setup.go, prefs.go, local.go, browse.go, discover.go, random.go, schedule.go, malextra.go, corpus.go and the other handlers)', focus: 'HTTP handlers: input validation, error handling, the LAN/remote access model and its tokens, path handling for local files, requests forged by other websites against the local server, information leaks', lens: BUG_LENS + ' For security, state concretely who can reach the endpoint and what they can do with it.' },
   { name: 'streaming-transcode', files: 'internal/server/stream.go; internal/transcode/; internal/player/', focus: 'ffmpeg HLS sessions, segment serving, seek restarts, subtitle and font extraction, thumbnails, external players (mpv, VLC) and their control channels', lens: BUG_LENS + ' Look hard at process and goroutine lifecycles, leaks, and races between concurrent requests.' },
   { name: 'trackers-metadata', files: 'internal/anilist/; internal/mal/; internal/metadata/; internal/library/sync.go, enrich.go, import.go, mal.go; internal/store/tracker.go', focus: 'AniList/MAL auth and token refresh, list import and two-way sync, rate limiting, metadata enrichment', lens: BUG_LENS },
-  { name: 'platform-startup', files: 'cmd/kuro/main.go; internal/config/; internal/deps/; internal/update/; internal/proc/; internal/jobs/; internal/indexer/', focus: 'startup order, config loading, first-run dependency downloads, the self-updater (download, checksum, swap), background jobs, indexer HTTP/RSS parsing', lens: BUG_LENS + ' For the updater and dependency installer, check integrity verification and failure recovery.' },
+  { name: 'platform-startup', files: 'cmd/yoru/main.go; internal/config/; internal/deps/; internal/update/; internal/proc/; internal/jobs/; internal/indexer/', focus: 'startup order, config loading, first-run dependency downloads, the self-updater (download, checksum, swap), background jobs, indexer HTTP/RSS parsing', lens: BUG_LENS + ' For the updater and dependency installer, check integrity verification and failure recovery.' },
   { name: 'player-ui-logic', files: 'web/src/player/ (Player.tsx, hooks.ts and the rest); web/src/pages/Watch.tsx', focus: 'the browser player: HLS lifecycle, effects and listeners, keyboard shortcuts, fullscreen, auto-next, subtitles, progress reporting', lens: FE_BUG_LENS },
   { name: 'pages-logic', files: 'web/src/pages/ (everything except Watch.tsx)', focus: 'page logic: data fetching, query keys and invalidation, URL state, mutations, error and loading handling', lens: FE_BUG_LENS },
   { name: 'components-lib', files: 'web/src/components/; web/src/lib/', focus: 'shared components and the API/query layer', lens: FE_BUG_LENS },
@@ -96,7 +96,7 @@ const GAPS = {
 
 const finderPrompt = (a) => `${CONTEXT}
 
-You are auditing the "${a.name}" area of kuro: ${a.focus}.
+You are auditing the "${a.name}" area of Yoru: ${a.focus}.
 Files: ${a.files}
 
 Look for: ${a.lens}
@@ -113,7 +113,7 @@ const LENS_TEXT = {
 
 const verifyPrompt = (f, lens) => `${CONTEXT}
 
-Verify this reported ${f.kind} in kuro. ${LENS_TEXT[lens]}
+Verify this reported ${f.kind} in Yoru. ${LENS_TEXT[lens]}
 Give the severity you would assign, and the corrected line if the cited one is off.
 
 ${RULES}
@@ -174,7 +174,7 @@ phase('Critic')
 const summary = all.map((f) => `${f.area} | ${norm(f.file)}:${f.line} | ${f.title}`).join('\n')
 const critic = await agent(`${CONTEXT}
 
-An audit of kuro just ran over these areas:
+An audit of Yoru just ran over these areas:
 ${AREAS.map((a) => `- ${a.name}: ${a.files}`).join('\n')}
 
 It produced these items (area | file:line | title):

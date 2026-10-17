@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"net/url"
 
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/tracker/udp"
-	"kuro/internal/bt/types/infohash"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/tracker/udp"
+	"yoru/internal/bt/types/infohash"
 )
 
 type scrapeResponse struct {

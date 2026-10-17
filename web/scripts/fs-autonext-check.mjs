@@ -3,9 +3,9 @@ import { copyFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const LIB = process.env.KURO_LIB
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const LIB = process.env.YORU_LIB
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 // SHOTS is the harness's scratch folder; '.' would drop images in the repo.
 const SHOTS = process.env.MANUAL_SHOTS ?? process.env.SHOTS ?? '.'
 
@@ -48,14 +48,14 @@ await post('/api/local/scan', {})
 let file
 for (let i = 0; i < 30 && !file; i++) {
   await sleep(1000)
-  file = (await api('/api/local/files')).body?.items?.find((f) => String(f.path ?? '').includes('Kuro Test Show'))
+  file = (await api('/api/local/files')).body?.items?.find((f) => String(f.path ?? '').includes('Yoru Test Show'))
 }
 check(!!file, 'test file listed')
 if (!file) process.exit(1)
 await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: 1 })
 
 // Episode 2 is where auto-next lands and it has to be playable.
-copyFileSync(join(LIB, 'Kuro Test Show - 01.mkv'), join(LIB, 'second.mkv'))
+copyFileSync(join(LIB, 'Yoru Test Show - 01.mkv'), join(LIB, 'second.mkv'))
 await post('/api/local/scan', {})
 let second
 for (let i = 0; i < 30 && !second; i++) {

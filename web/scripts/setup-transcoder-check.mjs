@@ -1,7 +1,7 @@
 // The transcoder row says what it is for, and explains half an install. Run with BIN_ONLY=ffmpeg.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const SHOTS = process.env.SHOTS ?? '.'
 
 let failures = 0
@@ -27,7 +27,7 @@ const text = await item.innerText()
 check(text.includes('Needed for the built-in player'), 'the badge says what it is needed for')
 check(!/\bOptional\b/.test(text), 'and no longer says Optional')
 check(text.includes('ffmpeg and ffprobe') && text.includes('mpv or VLC'), 'the text names both programs and who can skip them')
-check(text.includes('ffprobe is not; kuro needs both'), 'the page shows which half is missing')
+check(text.includes('ffprobe is not; Yoru needs both'), 'the page shows which half is missing')
 check(await item.getByRole('button', { name: /install/i }).isVisible(), 'and still offers to install the pair')
 await page.screenshot({ path: `${SHOTS}/setup-transcoder.png` })
 

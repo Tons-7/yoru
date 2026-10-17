@@ -6,15 +6,15 @@ import (
 	"net"
 
 	"github.com/davecgh/go-spew/spew"
-	"kuro/internal/bt/dht"
-	"kuro/internal/bt/dht/krpc"
-	peer_store "kuro/internal/bt/dht/peer-store"
+	"yoru/internal/bt/dht"
+	"yoru/internal/bt/dht/krpc"
+	peer_store "yoru/internal/bt/dht/peer-store"
 )
 
 // DHT server interface for use by a Torrent or Client. It's reasonable for this to make assumptions
 // for torrent-use that might not be the default behaviour for the DHT server.
 type DhtServer interface {
-	Stats() interface{}
+	Stats() any
 	ID() [20]byte
 	Addr() net.Addr
 	AddNode(ni krpc.NodeInfo) error
@@ -38,7 +38,7 @@ type DhtServerWrapper struct {
 	*dht.Server
 }
 
-func (me DhtServerWrapper) Stats() interface{} {
+func (me DhtServerWrapper) Stats() any {
 	return me.Server.Stats()
 }
 

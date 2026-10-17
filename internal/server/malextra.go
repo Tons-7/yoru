@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"kuro/internal/store"
+	"yoru/internal/store"
 )
 
 // MyAnimeList's own API has no favourites; Jikan reads the public profile.
@@ -76,7 +76,7 @@ func jikanFavourites(ctx context.Context, base, user string) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "kuro")
+	req.Header.Set("User-Agent", "Yoru")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"kuro/internal/metadata"
+	"yoru/internal/metadata"
 )
 
 func playbackWatched(t *testing.T, s *Store, animeID int, key string) (watched bool, position float64) {

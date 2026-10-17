@@ -5,8 +5,8 @@ import (
 
 	g "github.com/anacrolix/generics"
 
-	"kuro/internal/bt/storage"
-	test_storage "kuro/internal/bt/storage/test"
+	"yoru/internal/bt/storage"
+	test_storage "yoru/internal/bt/storage/test"
 )
 
 func BenchmarkMarkComplete(b *testing.B) {

@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"strings"
 
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 type PathEscaper func(pathComps []string) string

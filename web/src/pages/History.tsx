@@ -14,9 +14,9 @@ import {
   Pager,
   ProgressBar,
   Skeleton,
-  useClampPage,
 } from '../components/ui'
-import { toast, TOAST_MS } from '../components/Toaster'
+import { useClampPage } from '../lib/hooks'
+import { toast, TOAST_MS } from '../lib/toast'
 
 interface HistoryEntry {
   animeId: number

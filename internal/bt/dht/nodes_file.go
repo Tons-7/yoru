@@ -1,10 +1,11 @@
 package dht
 
 import (
-	"io/ioutil"
+	"io"
+
 	"os"
 
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 )
 
 func WriteNodesToFile(ns []krpc.NodeInfo, fileName string) (err error) {
@@ -32,7 +33,7 @@ func ReadNodesFromFile(fileName string) (ns []krpc.NodeInfo, err error) {
 		return
 	}
 	defer f.Close()
-	b, err := ioutil.ReadAll(f)
+	b, err := io.ReadAll(f)
 	if err != nil {
 		return
 	}

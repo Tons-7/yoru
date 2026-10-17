@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/certs"
+	"yoru/internal/certs"
 )
 
 // SetCerts gives the server its HTTPS certificates, for the pairing links and Settings.

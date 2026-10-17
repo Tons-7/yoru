@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// A cache folder holding kuro's own folders would hand them to the orphan cleanup; the config refuses it.
-func TestCacheDirMustNotHoldKurosOwnFolders(t *testing.T) {
+// A cache folder holding Yoru's own folders would hand them to the orphan cleanup; the config refuses it.
+func TestCacheDirMustNotHoldYorusOwnFolders(t *testing.T) {
 	for _, body := range []string{
 		"cache_dir = \".\"\n",
 		"cache_dir = \"store\"\nbin_dir = \"store/bin\"\n",

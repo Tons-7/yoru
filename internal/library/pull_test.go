@@ -13,9 +13,9 @@ import (
 	"sync"
 	"testing"
 
-	"kuro/internal/anilist"
-	"kuro/internal/db"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/db"
+	"yoru/internal/store"
 )
 
 func TestMALPullAppliesASiteEditAndFlagsItForAniList(t *testing.T) {
@@ -98,7 +98,7 @@ func TestMALPullKeepsAFinerScore(t *testing.T) {
 	}
 }
 
-func TestMALPullCreatesEntriesKuroLacks(t *testing.T) {
+func TestMALPullCreatesEntriesYoruLacks(t *testing.T) {
 	up := &malServer{list: `{"data":[
 	  {"node":{"id":52991,"title":"Frieren","num_episodes":28},
 	   "list_status":{"status":"completed","num_episodes_watched":28,"score":9,

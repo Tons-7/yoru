@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 
@@ -16,9 +17,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 
-	"kuro/internal/bt/metainfo"
-	pp "kuro/internal/bt/peer_protocol"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/metainfo"
+	pp "yoru/internal/bt/peer_protocol"
+	"yoru/internal/bt/storage"
 )
 
 // Ensure that no race exists between sending a bitfield, and a subsequent
@@ -152,20 +153,16 @@ func BenchmarkConnectionMainReadLoop(b *testing.B) {
 	// errgroup can't handle this pattern...
 	allErrors := make(chan error, 2)
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		cl.lock()
 		err := cn.mainReadLoop()
 		if errors.Is(err, io.EOF) {
 			err = nil
 		}
 		allErrors <- err
-	}()
+	})
 	b.SetBytes(chunkSize * int64(numRequests))
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := 0; i < b.N; i += 1 {
 			cl.lock()
 			// The chunk must be written to storage everytime, to ensure the
@@ -189,7 +186,7 @@ func BenchmarkConnectionMainReadLoop(b *testing.B) {
 		if err := w.Close(); err != nil {
 			panic(err)
 		}
-	}()
+	})
 	go func() {
 		wg.Wait()
 		close(allErrors)
@@ -393,6 +390,48 @@ func TestReceiveLargeRequest(t *testing.T) {
 	req.Length = 2 << 20
 	qt.Check(t, qt.IsNil(pc.onReadRequest(req, false)))
 	qt.Check(t, qt.Equals(pc.messageWriter.writeBuffer.Len(), 17))
+}
+
+// A streaming peer asks in reading order, so its requests are read and sent in the order they came.
+func TestPeerRequestsServedInArrivalOrder(t *testing.T) {
+	cl := newTestingClient(t)
+	pc := cl.newConnection(nil, newConnectionOpts{network: "test"})
+	tor := cl.newTorrentForTesting()
+	tor.info = &metainfo.Info{PieceLength: 1 << 20}
+	pc.setTorrent(tor)
+	tor._completedPieces.Add(0)
+	pc.choking = false
+	pc.initMessageWriter()
+	var asked []Request
+	for _, chunk := range []int{9, 3, 7, 1, 5, 0, 8, 2, 6, 4} {
+		r := Request{ChunkSpec: ChunkSpec{Begin: pp.Integer(chunk * defaultChunkSize), Length: defaultChunkSize}}
+		qt.Assert(t, qt.IsNil(pc.onReadRequest(r, false)))
+		asked = append(asked, r)
+	}
+	pc.deletePeerRequest(asked[2])
+	want := append(slices.Clone(asked[:2]), asked[3:]...)
+
+	// Half are read before the rest, as the server keeps ahead of the writer.
+	var read []Request
+	for range 4 {
+		r, _ := oldestPeerRequest(pc.unreadPeerRequests, func(arrival uint64) uint64 { return arrival })
+		g.MakeMapIfNil(&pc.readyPeerRequests)
+		pc.readyPeerRequests[r] = readyPeerRequest{arrival: pc.unreadPeerRequests[r]}
+		delete(pc.unreadPeerRequests, r)
+		read = append(read, r)
+	}
+	qt.Check(t, qt.DeepEquals(read, want[:4]))
+	var sent []Request
+	for {
+		r, ok := oldestPeerRequest(pc.readyPeerRequests, func(v readyPeerRequest) uint64 { return v.arrival })
+		if !ok {
+			break
+		}
+		pc.deleteReadyPeerRequest(r)
+		sent = append(sent, r)
+	}
+	qt.Check(t, qt.DeepEquals(sent, want[:4]))
+	qt.Check(t, qt.HasLen(pc.unreadPeerRequests, len(want)-4))
 }
 
 func TestChunkOverflowsPiece(t *testing.T) {

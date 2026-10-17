@@ -45,7 +45,7 @@ func (h *headcount) note(now time.Time, current []string) (joined, left []string
 	return joined, left, true
 }
 
-// census logs a download's peers when they change: a slow download is either a small swarm or kuro
+// census logs a download's peers when they change: a slow download is either a small swarm or Yoru
 // losing peers it could keep, and only who came and went, beside what is known, tells the two apart.
 func (e *Engine) census(en *entry, now time.Time) {
 	t := en.t

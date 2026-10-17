@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"testing"
 
-	"kuro/internal/match"
-	"kuro/internal/store"
+	"yoru/internal/match"
+	"yoru/internal/store"
 )
 
 func scanned(t *testing.T, s *Scanner) ScanReport {
@@ -80,11 +80,11 @@ func TestJunctionRootIsWalked(t *testing.T) {
 	}
 }
 
-// Downloads in kuro's own cache folder are not library files, however the roots are drawn.
-func TestScanSkipsKurosCacheFolder(t *testing.T) {
+// Downloads in Yoru's own cache folder are not library files, however the roots are drawn.
+func TestScanSkipsYorusCacheFolder(t *testing.T) {
 	s, st := newScanner(t)
 	root := t.TempDir()
-	cache := filepath.Join(root, "kuro", "cache")
+	cache := filepath.Join(root, "yoru", "cache")
 	s.WithCacheDir(cache)
 	setRoots(t, st, root)
 	write(t, filepath.Join(cache, "[SubsPlease] Sousou no Frieren - 10 (1080p).mkv"), minEpisodeBytes+1)

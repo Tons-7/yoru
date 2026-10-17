@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 var Greeting = Torrent{

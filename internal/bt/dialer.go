@@ -1,7 +1,7 @@
 package bt
 
 import (
-	"kuro/internal/bt/dialer"
+	"yoru/internal/bt/dialer"
 )
 
 type (

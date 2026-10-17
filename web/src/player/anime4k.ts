@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useState } from 'react'
 import type { Anime4KPipeline } from 'anime4k-webgpu'
 
 /** Anime4K via WebGPU, with mpv's mode names; best-effort, every failure plays plain. */
@@ -13,8 +13,8 @@ export type DeviceUpscale = 'auto' | 'off' | UpscaleTier
 /** Where Auto settled on this device after stepping down. */
 export type AutoTier = UpscaleTier | 'off'
 
-const DEVICE_KEY = 'kuro.anime4k'
-const AUTO_KEY = 'kuro.anime4k.auto'
+const DEVICE_KEY = 'yoru.anime4k'
+const AUTO_KEY = 'yoru.anime4k.auto'
 const TIERS: readonly string[] = ['light', 'balanced', 'full']
 
 const read = (key: string) => {
@@ -135,9 +135,7 @@ export function useAnime4K({
   /** The GPU cannot keep up at this tier; unset when the tier was picked by hand. */
   onSlow?: () => void
 }) {
-  const [state, setState] = useState<UpscaleState>('off')
-  const slowRef = useRef(onSlow)
-  slowRef.current = onSlow
+  const slow = useEffectEvent(() => onSlow?.())
 
   // Fullscreen transitions replace the compositing surface the canvas was
   // configured against, so the old renderer paints black over the video.
@@ -148,20 +146,17 @@ export function useAnime4K({
     return () => document.removeEventListener('fullscreenchange', restart)
   }, [])
 
+  // The outcome is tagged with the run it came from; any other run is still starting.
+  const run = [video, canvas, enabled, mode, tier, generation, source]
+  const [outcome, setOutcome] = useState<{ run: unknown[]; state: 'on' | 'failed' }>()
+
   useEffect(() => {
-    if (!enabled) {
-      setState('off')
-      return
-    }
-    if (!webgpuAvailable()) {
-      setState('unsupported')
-      return
-    }
-    if (!video || !canvas) return
+    if (!enabled || !webgpuAvailable() || !video || !canvas) return
 
     let cancelled = false
     let device: GPUDevice | undefined
-    setState('starting')
+    const run = [video, canvas, enabled, mode, tier, generation, source]
+    const setState = (state: 'on' | 'failed') => setOutcome({ run, state })
 
     const start = async () => {
       // The renderer sizes textures from frame dimensions, known once metadata loads.
@@ -183,8 +178,8 @@ export function useAnime4K({
       )
       const scale = Math.min(2, fit)
       const target = { width: Math.round(native.width * scale) & ~1, height: Math.round(native.height * scale) & ~1 }
-      canvas.width = target.width
-      canvas.height = target.height
+      canvas.setAttribute('width', String(target.width))
+      canvas.setAttribute('height', String(target.height))
 
       const key = mode?.toUpperCase() as Mode
       const picked: Mode = ['A', 'B', 'C', 'A+A', 'B+B', 'C+A'].includes(key) ? key : 'A'
@@ -202,7 +197,7 @@ export function useAnime4K({
           })
 
           const pipelines = chain(lib, gpu, inputTexture, native, target, picked, tier)
-          timeFrames(gpu, pipelines[pipelines.length - 1], () => !cancelled && slowRef.current?.())
+          timeFrames(gpu, pipelines[pipelines.length - 1], () => !cancelled && slow())
           return pipelines as [...Anime4KPipeline[], Anime4KPipeline]
         },
       })
@@ -229,7 +224,10 @@ export function useAnime4K({
     }
   }, [video, canvas, enabled, mode, tier, generation, source])
 
-  return state
+  if (!enabled) return 'off'
+  if (!webgpuAvailable()) return 'unsupported'
+  if (!video || !canvas) return 'off'
+  return outcome && outcome.run.every((dep, i) => Object.is(dep, run[i])) ? outcome.state : 'starting'
 }
 
 /** Times each frame through the GPU; slow fires once when a window's median is over the budget. */

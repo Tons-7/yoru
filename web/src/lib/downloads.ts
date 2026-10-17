@@ -78,7 +78,7 @@ export function downloadsReport(s: DownloadSections): string {
   const section = (name: string, lines: string[]) => (lines.length ? [`${name} (${lines.length})`, ...lines, ''] : [])
 
   return [
-    `kuro downloads at ${new Date().toLocaleTimeString()}`,
+    `Yoru downloads at ${new Date().toLocaleTimeString()}`,
     '',
     ...section('Downloading', [...s.searching.map((q) => `${queuedLine(q)} — finding a release`), ...s.active.map(downloadLine)]),
     ...section('Waiting', [...s.held.map(downloadLine), ...s.waitingQueue.map(queuedLine)]),

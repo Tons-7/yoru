@@ -1,9 +1,9 @@
 # bt
 
-kuro's BitTorrent engine: the client, peer wire protocol, trackers, DHT (`dht/`), metainfo and storage. kuro's
+Yoru's BitTorrent engine: the client, peer wire protocol, trackers, DHT (`dht/`), metainfo and storage. Yoru's
 engine package (`internal/engine`) drives it.
 
-Files here are under the Mozilla Public License 2.0 (`LICENSE`, and `dht/LICENSE`), unlike the rest of kuro.
+Files here are under the Mozilla Public License 2.0 (`LICENSE`, and `dht/LICENSE`), unlike the rest of Yoru.
 They are derived from open-source code under that licence, and changes to them stay under it.
 
 ## How it asks peers for data
@@ -18,5 +18,5 @@ They are derived from open-source code under that licence, and changes to them s
 
 ## Identity
 
-kuro names itself in `version/`: peer IDs start `-KU0001-` (bump it when kuro changes in a way other peers could
-care about), and peers, trackers and the router's port mapping see "kuro".
+Yoru names itself in `version/`: peer IDs start `-YR0001-` (bump it when Yoru changes in a way other peers could
+care about), and peers, trackers and the router's port mapping see "Yoru".

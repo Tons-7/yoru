@@ -6,7 +6,7 @@ import (
 	g "github.com/anacrolix/generics"
 	"github.com/stretchr/testify/assert"
 
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 func TestMarshalInfo(t *testing.T) {

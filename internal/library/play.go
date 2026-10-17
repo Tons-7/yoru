@@ -11,13 +11,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"kuro/internal/parse"
-	"kuro/internal/player"
-	"kuro/internal/score"
-	"kuro/internal/sound"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
-	"kuro/internal/transcode"
+	"yoru/internal/parse"
+	"yoru/internal/player"
+	"yoru/internal/score"
+	"yoru/internal/sound"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
+	"yoru/internal/transcode"
 )
 
 // Player is a desktop playback backend (mpv, VLC); the browser path needs only the stream URL.
@@ -42,8 +42,10 @@ type Playback struct {
 	prober   Prober
 	// Named before a search: cours are told apart by their siblings' titles.
 	relations *Relations
-	cacheDir  string
-	log       *slog.Logger
+	// presence hears what mpv and VLC play, for Discord.
+	presence *Presence
+	cacheDir string
+	log      *slog.Logger
 
 	// mpv has one event channel, so a leftover tracker would take this episode's events.
 	trackGen atomic.Uint64
@@ -80,6 +82,7 @@ func (p *Playback) WithPrefetcher(f *Prefetcher) *Playback { p.prefetch = f; ret
 func (p *Playback) WithCache(c *Cache) *Playback           { p.cache = c; return p }
 func (p *Playback) WithProber(pr Prober) *Playback         { p.prober = pr; return p }
 func (p *Playback) WithRelations(r *Relations) *Playback   { p.relations = r; return p }
+func (p *Playback) WithPresence(pr *Presence) *Playback    { p.presence = pr; return p }
 func (p *Playback) WithPlayer(name string, pl Player) *Playback {
 	if p.players == nil {
 		p.players = map[string]Player{}
@@ -1152,6 +1155,8 @@ func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64) {
 			if ev.Duration > 0 {
 				lastDur = ev.Duration
 			}
+			// A desktop player is on this machine; the card sends only what changes.
+			p.presence.Report(context.Background(), animeID, episode, ev.Position, lastDur, ev.Paused, false, true)
 
 			if time.Since(last) < saveEvery {
 				continue
@@ -1164,6 +1169,7 @@ func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64) {
 			played = 0
 
 		case player.EventEnd, player.EventExit:
+			p.presence.Stop()
 			// End and exit events carry no position, so the last one seen is the
 			// resume point; without this every mpv session ended by saving zero.
 			if ev.Position == 0 {
@@ -1201,7 +1207,7 @@ func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64) {
 	}
 }
 
-// advance plays the next episode, if any, usually already prefetched so it starts at once.
+// advance plays the next episode, the Up next list's when it has one, usually already prefetched.
 func (p *Playback) advance(animeID, episode, season int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -1211,21 +1217,28 @@ func (p *Playback) advance(animeID, episode, season int) {
 		return
 	}
 
-	next, err := p.store.NextEpisode(ctx, animeID, episode)
-	if err != nil || next == 0 {
+	picks, _, err := p.store.PlayOrder(ctx, animeID, episode, 1)
+	if err != nil || len(picks) == 0 {
 		return
 	}
+	next := picks[0]
+	if next.AnimeID != animeID {
+		if prefs, err = p.store.Prefs(ctx, next.AnimeID); err != nil {
+			return
+		}
+		season = 0
+	}
 
-	p.log.Info("advancing to next episode", "anime", animeID, "episode", next)
+	p.log.Info("advancing to next episode", "anime", next.AnimeID, "episode", next.Episode)
 
 	if _, err := p.Start(ctx, PlayRequest{
-		AnimeID:  animeID,
-		Episode:  next,
+		AnimeID:  next.AnimeID,
+		Episode:  next.Episode,
 		Season:   season,
 		External: true,
 		Prefs:    prefsFromSettings(prefs),
 	}); err != nil {
-		p.log.Warn("auto-advance", "anime", animeID, "episode", next, "err", err)
+		p.log.Warn("auto-advance", "anime", next.AnimeID, "episode", next.Episode, "err", err)
 	}
 }
 

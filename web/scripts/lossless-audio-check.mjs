@@ -5,9 +5,9 @@ import { join } from 'node:path'
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
-const LIB = process.env.KURO_LIB
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
+const LIB = process.env.YORU_LIB
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 let failures = 0
@@ -21,7 +21,7 @@ const post = (path, body) =>
 check(await prepareLocalEpisode({ base: BASE, lib: LIB, anime: ANIME }), 'test episode ready')
 
 // Episode 2: 24-bit PCM in 5.1, the shape of a Blu-ray's lossless track.
-const ffmpeg = join(process.env.KURO_REPO, 'bin', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
+const ffmpeg = join(process.env.YORU_REPO, 'bin', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
 const made = spawnSync(ffmpeg, [
   '-hide_banner', '-loglevel', 'error', '-y',
   '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=24:duration=60',
@@ -29,7 +29,7 @@ const made = spawnSync(ffmpeg, [
   '-filter_complex', '[1:a]pan=5.1|c0=c0|c1=c0|c2=c0|c3=c0|c4=c0|c5=c0[a]',
   '-map', '0:v', '-map', '[a]',
   '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-g', '48',
-  '-c:a', 'pcm_s24le', join(LIB, 'Kuro Test Show - 02.mkv'),
+  '-c:a', 'pcm_s24le', join(LIB, 'Yoru Test Show - 02.mkv'),
 ])
 check(made.status === 0, 'a file with lossless 5.1 sound was built', String(made.stderr ?? '').slice(0, 200))
 
@@ -38,7 +38,7 @@ let file
 for (let i = 0; i < 30 && !file; i++) {
   await sleep(1000)
   const files = await (await fetch(`${BASE}/api/local/files`)).json()
-  file = (files.items ?? []).find((f) => String(f.path ?? '').includes('Kuro Test Show - 02'))
+  file = (files.items ?? []).find((f) => String(f.path ?? '').includes('Yoru Test Show - 02'))
 }
 check(!!file, 'the file was scanned')
 if (file) await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: 2 })

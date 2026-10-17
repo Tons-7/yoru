@@ -6,6 +6,6 @@ import (
 
 // Wow Go is retarded.
 var (
-	marshalerType   = reflect.TypeOf((*Marshaler)(nil)).Elem()
-	unmarshalerType = reflect.TypeOf((*Unmarshaler)(nil)).Elem()
+	marshalerType   = reflect.TypeFor[Marshaler]()
+	unmarshalerType = reflect.TypeFor[Unmarshaler]()
 )

@@ -1,4 +1,4 @@
-// Package sound is what kuro does to an episode's audio on the way out (dialogue lift, night mode,
+// Package sound is what Yoru does to an episode's audio on the way out (dialogue lift, night mode,
 // headphones, mono, volume boost): one description, rendered for ffmpeg, mpv and VLC.
 package sound
 

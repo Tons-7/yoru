@@ -1,5 +1,4 @@
 //go:build !noboltdb && !wasm
-// +build !noboltdb,!wasm
 
 package storage
 
@@ -8,8 +7,9 @@ import (
 	"io"
 
 	"go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 type boltPiece struct {
@@ -35,7 +35,7 @@ func (me *boltPiece) pk() metainfo.PieceKey {
 func (me *boltPiece) Completion() Completion {
 	c, err := me.pc().Get(me.pk())
 	switch err {
-	case bbolt.ErrDatabaseNotOpen:
+	case bolterrors.ErrDatabaseNotOpen:
 		return Completion{}
 	case nil:
 	default:

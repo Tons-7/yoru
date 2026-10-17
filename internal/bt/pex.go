@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	pp "kuro/internal/bt/peer_protocol"
+	pp "yoru/internal/bt/peer_protocol"
 )
 
 type pexEventType int

@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/store"
+	"yoru/internal/store"
 )
 
 const (
 	approvalSetting = "access.approval"
-	deviceCookie    = "kuro_device"
+	deviceCookie    = "yoru_device"
 
 	approvalOff    = "off"
 	approvalOnce   = "once"   // the host accepts a device once and it is remembered
@@ -84,6 +84,10 @@ func (s *Server) admit(w http.ResponseWriter, r *http.Request) bool {
 	id := ""
 	if c, err := r.Cookie(deviceCookie); err == nil && c.Value != "" {
 		id = deviceID(c.Value)
+	} else if c, err := r.Cookie(legacyDeviceCookie); err == nil && c.Value != "" {
+		// The same secret under Yoru's name, so the device keeps its approval.
+		id = deviceID(c.Value)
+		keepCookie(w, r, deviceCookie, legacyDeviceCookie, c.Value)
 	}
 	status, now := a.status[id], time.Now()
 	if status == store.DeviceApproved {
@@ -137,10 +141,7 @@ func (s *Server) requestAccess(w http.ResponseWriter, r *http.Request, id, name 
 	}
 	if id == "" {
 		secret := NewAccessToken()
-		http.SetCookie(w, &http.Cookie{
-			Name: deviceCookie, Value: secret, Path: "/", MaxAge: 365 * 24 * 3600,
-			HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
-		})
+		keepCookie(w, r, deviceCookie, legacyDeviceCookie, secret)
 		id = deviceID(secret)
 	}
 	addr, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -292,7 +293,7 @@ func (s *Server) removeDevice(w http.ResponseWriter, r *http.Request) {
 
 // waitingPage is what a device sees until the host decides; self-contained, so the app stays behind the gate.
 func waitingPage(status, name string) string {
-	title, detail := "Waiting for the host", "Ask the person running kuro to accept this device. This page opens kuro as soon as they do."
+	title, detail := "Waiting for the host", "Ask the person running Yoru to accept this device. This page opens Yoru as soon as they do."
 	switch status {
 	case store.DeviceDenied:
 		title, detail = "Access declined", "The host declined this device. They can remove it from Settings to let it ask again."
@@ -301,7 +302,7 @@ func waitingPage(status, name string) string {
 	}
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b0d12">
-<title>kuro</title><style>
+<title>Yoru</title><style>
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d12;color:#d6dbe6;font:16px/1.5 system-ui,sans-serif}
 main{max-width:22rem;padding:2rem;text-align:center}h1{font-size:1.25rem;margin:0 0 .5rem}p{margin:0;color:#8b93a7}
 code{display:inline-block;margin-top:1rem;padding:.25rem .6rem;border-radius:.4rem;background:#151822;color:#d6dbe6}

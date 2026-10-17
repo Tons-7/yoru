@@ -1,13 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { useModalFocus } from './ui'
-
-/** The YouTube id inside any of the URL shapes AniList and MAL hand out. */
-export function youtubeID(url?: string | null): string | undefined {
-  if (!url) return undefined
-  const m = url.match(/(?:youtu\.be\/|[?&]v=|\/embed\/)([\w-]{6,})/)
-  return m?.[1]
-}
+import { useModalFocus } from '../lib/hooks'
 
 // The trailer over the page it came from, not a new tab: Escape or the X brings the page straight back.
 export function TrailerOverlay({ videoId, onClose }: { videoId: string; onClose: () => void }) {

@@ -23,13 +23,13 @@ func TestToolPrefersBinThenPath(t *testing.T) {
 	bin := t.TempDir()
 	c := Config{BinDir: bin}
 
-	// A tool found nowhere gives the bin path, so an error names where kuro looked.
+	// A tool found nowhere gives the bin path, so an error names where Yoru looked.
 	if got := c.Tool("nedb-nonesuch"); got != filepath.Join(bin, ExeName("nedb-nonesuch")) {
 		t.Errorf("missing tool = %q, want the bin path", got)
 	}
 
 	// One in bin/ wins even if a same-named tool is on PATH.
-	name := "kuro-tool-test"
+	name := "yoru-tool-test"
 	inBin := filepath.Join(bin, ExeName(name))
 	if err := os.WriteFile(inBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -40,12 +40,12 @@ func TestToolPrefersBinThenPath(t *testing.T) {
 
 	// One only on PATH is found there.
 	pathDir := t.TempDir()
-	onPath := filepath.Join(pathDir, ExeName("kuro-path-tool"))
+	onPath := filepath.Join(pathDir, ExeName("yoru-path-tool"))
 	if err := os.WriteFile(onPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", pathDir)
-	if got := (Config{BinDir: bin}).Tool("kuro-path-tool"); got != onPath {
+	if got := (Config{BinDir: bin}).Tool("yoru-path-tool"); got != onPath {
 		t.Errorf("path tool = %q, want %q", got, onPath)
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"kuro/internal/store"
+	"yoru/internal/store"
 )
 
 const emptyList = `{"data":{"MediaListCollection":{"lists":[]}}}`

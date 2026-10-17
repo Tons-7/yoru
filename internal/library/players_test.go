@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"kuro/internal/anilist"
-	"kuro/internal/player"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/player"
+	"yoru/internal/store"
 )
 
 type fakePlayer struct {

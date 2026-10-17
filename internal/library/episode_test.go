@@ -3,7 +3,7 @@ package library
 import (
 	"testing"
 
-	"kuro/internal/parse"
+	"yoru/internal/parse"
 )
 
 // An entry is one season from one, so omitting the season never yields a later season's episode 1.

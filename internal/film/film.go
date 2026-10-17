@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"kuro/internal/parse"
+	"yoru/internal/parse"
 )
 
 // Entry is one film, by the titles it goes by.

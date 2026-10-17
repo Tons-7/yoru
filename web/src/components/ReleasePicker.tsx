@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, query, type ReleaseCandidate } from '../lib/api'
 import { bytes, cx } from '../lib/format'
-import { Badge, Skeleton, useDismiss, useModalFocus } from './ui'
+import { Badge, Skeleton } from './ui'
+import { useDismiss, useModalFocus } from '../lib/hooks'
 
 /** Every release the finder saw, best first; ineligible ones greyed with the reason. */
 export function ReleasePicker({

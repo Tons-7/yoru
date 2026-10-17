@@ -11,10 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"kuro/internal/bt"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/storage"
 
-	"kuro/internal/torrent"
+	"yoru/internal/torrent"
 )
 
 // hashOf reads the info hash from a magnet link.
@@ -42,6 +43,10 @@ func (e *Engine) inspect(ctx context.Context, magnet string) (torrent.Detail, er
 		return torrent.Detail{}, err
 	}
 	e.mu.Lock()
+	if e.offline {
+		e.mu.Unlock()
+		return torrent.Detail{}, errRestarting
+	}
 	if en, ok := e.byHash[hash]; ok {
 		e.mu.Unlock()
 		if err := e.awaitInfo(ctx, en.t); err != nil {
@@ -99,6 +104,10 @@ func (e *Engine) add(ctx context.Context, magnet, only string) (*entry, error) {
 	}
 
 	e.mu.Lock()
+	if e.offline {
+		e.mu.Unlock()
+		return nil, errRestarting
+	}
 	en, ok := e.byHash[hash]
 	if !ok {
 		var t *bt.Torrent
@@ -139,20 +148,35 @@ func (e *Engine) add(ctx context.Context, magnet, only string) (*entry, error) {
 
 // forgetMissing clears records of deleted files' pieces, or a regrown file would pass zero-filled holes.
 func (e *Engine) forgetMissing(t *bt.Torrent) {
+	pieces := e.pieceStore()
+	if pieces == nil {
+		return
+	}
 	for _, f := range t.Files() {
 		if _, err := os.Stat(e.names.filePath(t, f)); err == nil {
 			continue
 		}
 		for i := f.BeginPieceIndex(); i < f.EndPieceIndex(); i++ {
-			e.pieces.Set(metainfo.PieceKey{InfoHash: t.InfoHash(), Index: i}, false)
+			pieces.Set(metainfo.PieceKey{InfoHash: t.InfoHash(), Index: i}, false)
 		}
 	}
 }
 
+// pieceStore is the running client's piece completion; nil while the client is down.
+func (e *Engine) pieceStore() storage.PieceCompletion {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.pieces
+}
+
 // track registers a torrent under a new id. Caller holds the lock.
 func (e *Engine) track(t *bt.Torrent, trackers []string) *entry {
-	en := &entry{id: e.nextID, t: t, trackers: trackers, selected: map[int]bool{}}
-	e.nextID++
+	id := e.keepIDs[t.InfoHash()]
+	if id == 0 {
+		id = e.nextID
+		e.nextID++
+	}
+	en := &entry{id: id, t: t, trackers: trackers, selected: map[int]bool{}}
 	e.byID[en.id] = en
 	e.byHash[t.InfoHash()] = en
 	if len(trackers) > 0 {
@@ -228,8 +252,10 @@ func (e *Engine) remove(en *entry, data bool) error {
 		return nil
 	}
 	// Completion would otherwise claim pieces whose bytes are gone.
-	for i := range pieces {
-		e.pieces.Set(metainfo.PieceKey{InfoHash: hash, Index: i}, false)
+	if store := e.pieceStore(); store != nil {
+		for i := range pieces {
+			store.Set(metainfo.PieceKey{InfoHash: hash, Index: i}, false)
+		}
 	}
 	var failed []string
 	for _, p := range paths {
@@ -310,7 +336,7 @@ func detailOf(t *bt.Torrent, names *layout, selected map[int]bool) torrent.Detai
 	return d
 }
 
-// stats reports the fields kuro reads, in rqbit's stats/v1 shape.
+// stats reports the fields Yoru reads, in rqbit's stats/v1 shape.
 func (e *Engine) stats(en *entry) torrent.Stats {
 	var s torrent.Stats
 	e.mu.Lock()

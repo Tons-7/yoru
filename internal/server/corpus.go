@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/jobs"
-	"kuro/internal/library"
-	"kuro/internal/match"
-	"kuro/internal/parse"
-	"kuro/internal/score"
+	"yoru/internal/jobs"
+	"yoru/internal/library"
+	"yoru/internal/match"
+	"yoru/internal/parse"
+	"yoru/internal/score"
 )
 
 // The matcher index is rebuilt after ingestion and swapped behind a lock, never mutated.

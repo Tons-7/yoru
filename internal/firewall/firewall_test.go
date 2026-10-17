@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// A phone gets in only when every network's profile is allowed and nothing blocks kuro.exe.
+// A phone gets in only when every network's profile is allowed and nothing blocks yoru.exe.
 func TestReachable(t *testing.T) {
 	home := []Network{{Name: "Home", Category: "Private"}}
 	cafe := []Network{{Name: "Cafe", Category: "Public"}}
@@ -45,8 +45,8 @@ func TestCheckReadsThisMachine(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("windows only")
 	}
-	// Point it at an installed kuro.exe to see the rules Windows made for it.
-	exe := os.Getenv("KURO_FIREWALL_EXE")
+	// Point it at an installed yoru.exe to see the rules Windows made for it.
+	exe := os.Getenv("YORU_FIREWALL_EXE")
 	if exe == "" {
 		exe, _ = os.Executable()
 	}
@@ -77,7 +77,7 @@ func TestCheckReadsThisMachine(t *testing.T) {
 // Rules count only for the port asked about, and a Public-profile block doesn't block a Private network.
 func TestRulesAreJudgedForTheirPortAndProfile(t *testing.T) {
 	home := []Network{{Name: "Home", Category: "Private"}}
-	peers := Rule{Name: "kuro peers 4240", Action: "Allow", Profiles: "Any", Enabled: true, LocalPort: "4240", Protocol: "TCP"}
+	peers := Rule{Name: "Yoru peers 4240", Action: "Allow", Profiles: "Any", Enabled: true, LocalPort: "4240", Protocol: "TCP"}
 	web := &Rule{Action: "Allow", Profiles: "Private, Domain", Enabled: true, LocalPort: "4321", Protocol: "TCP"}
 	publicBlock := Rule{Action: "Block", Profiles: "Public", Enabled: true}
 

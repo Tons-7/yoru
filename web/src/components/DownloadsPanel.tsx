@@ -6,7 +6,8 @@ import { api } from '../lib/api'
 import { copyText, downloadProgress, downloadsReport, retryNote, sortDownloads } from '../lib/downloads'
 import { cx } from '../lib/format'
 import { refreshDownloads, useDownloadQueue, useDownloads, type Download, type Queued } from '../lib/queries'
-import { ProgressBar, useDismiss } from './ui'
+import { ProgressBar } from './ui'
+import { useAnchorBox, useDismiss } from '../lib/hooks'
 import { plainKey, usePortalHome } from './keys'
 
 /** Downloads at a glance over the episode playing (D toggles it); look-only, so a stray key removes nothing. */
@@ -47,7 +48,8 @@ export function DownloadsPanel() {
 
   // Under its button, or the corner when fullscreen hides the button.
   // A hidden button (a narrow window) measures zero, so that is the corner too.
-  const measured = home === document.body ? trigger.current?.getBoundingClientRect() : undefined
+  const anchored = useAnchorBox(trigger, open)
+  const measured = home === document.body ? anchored : undefined
   const box = measured && measured.width > 0 ? measured : undefined
 
   return (

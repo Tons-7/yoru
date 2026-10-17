@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 var Empty32ByteArray [32]byte
@@ -17,7 +17,7 @@ type Item struct {
 	created time.Time
 
 	// Value to be stored
-	V interface{}
+	V any
 
 	// 32 byte ed25519 public key
 	K    [32]byte
@@ -54,7 +54,7 @@ func (i *Item) ToPut() Put {
 //
 // The optional seq field specifies that an item's value should only be sent if its
 // sequence number is greater than the given value.
-func NewItem(value interface{}, salt []byte, seq, cas int64, k ed25519.PrivateKey) (*Item, error) {
+func NewItem(value any, salt []byte, seq, cas int64, k ed25519.PrivateKey) (*Item, error) {
 	v, err := bencode.Marshal(value)
 	if err != nil {
 		return nil, err
@@ -88,7 +88,7 @@ func (i *Item) Target() Target {
 	return sha1.Sum(bencode.MustMarshal(i.V))
 }
 
-func (i *Item) Modify(value interface{}, k ed25519.PrivateKey) bool {
+func (i *Item) Modify(value any, k ed25519.PrivateKey) bool {
 	if !i.IsMutable() {
 		return false
 	}
@@ -118,7 +118,7 @@ func bufferToSign(salt, bv []byte, seq int64) []byte {
 		x := bencode.MustMarshal(salt)
 		bts = append(bts, x...)
 	}
-	bts = append(bts, []byte(fmt.Sprintf("3:seqi%de1:v", seq))...)
+	bts = append(bts, fmt.Appendf(nil, "3:seqi%de1:v", seq)...)
 	bts = append(bts, bv...)
 	return bts
 }

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"kuro/internal/store"
+	"yoru/internal/store"
 )
 
 // LibraryFile is what an export writes and an import reads. The version is
@@ -22,8 +22,10 @@ type LibraryFile struct {
 }
 
 const (
-	libraryKind    = "kuro.library"
-	libraryVersion = 1
+	libraryKind = "yoru.library"
+	// legacyLibraryKind marks files exported by kuro, which read the same.
+	legacyLibraryKind = "kuro.library"
+	libraryVersion    = 1
 )
 
 func (s *Server) exportLibrary(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +41,7 @@ func (s *Server) exportLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Content-Disposition",
-		`attachment; filename="kuro-library-`+time.Now().Format("2006-01-02")+`.`+ext+`"`)
+		`attachment; filename="yoru-library-`+time.Now().Format("2006-01-02")+`.`+ext+`"`)
 	w.Header().Set("Cache-Control", "no-store")
 
 	if ext == "txt" {
@@ -87,7 +89,7 @@ func orDash(s string) string {
 	return s
 }
 
-// importLibrary merges a kuro or MAL export; progress never goes back, and changes queue for the trackers.
+// importLibrary merges a Yoru, kuro or MAL export; progress never goes back, and changes queue for the trackers.
 func (s *Server) importLibrary(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<20))
 	if err != nil {
@@ -108,15 +110,15 @@ func (s *Server) importLibrary(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "not a readable library file"})
 		return
 	}
-	if file.Kind != "" && file.Kind != libraryKind {
+	if file.Kind != "" && file.Kind != libraryKind && file.Kind != legacyLibraryKind {
 		send(w, http.StatusBadRequest, map[string]any{
-			"error": fmt.Sprintf("%q is not a kuro library file", file.Kind),
+			"error": fmt.Sprintf("%q is not a Yoru library file", file.Kind),
 		})
 		return
 	}
 	if file.Version > libraryVersion {
 		send(w, http.StatusBadRequest, map[string]any{
-			"error": fmt.Sprintf("this file is version %d; this kuro reads up to %d",
+			"error": fmt.Sprintf("this file is version %d; this Yoru reads up to %d",
 				file.Version, libraryVersion),
 		})
 		return

@@ -3,8 +3,8 @@
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const SHOTS = process.env.SHOTS ?? '.'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -14,7 +14,7 @@ const check = (ok, label, detail = '') => {
   if (!ok) failures++
 }
 
-check(await prepareLocalEpisode({ base: BASE, lib: process.env.KURO_LIB, anime: ANIME }), 'test episode ready')
+check(await prepareLocalEpisode({ base: BASE, lib: process.env.YORU_LIB, anime: ANIME }), 'test episode ready')
 
 const GB = 1 << 30
 const download = (infoHash, name, more = {}) => ({
@@ -98,11 +98,11 @@ await sleep(300)
 check((await panel.count()) === 0, 'Escape closes it too')
 
 // Typing a "d" is not a shortcut.
-await page.locator('#kuro-search').fill('d')
-await page.locator('#kuro-search').press('d')
+await page.locator('#yoru-search').fill('d')
+await page.locator('#yoru-search').press('d')
 await sleep(300)
 check((await panel.count()) === 0, 'typing in search does not open it')
-await page.locator('#kuro-search').fill('')
+await page.locator('#yoru-search').fill('')
 await page.locator('body').click({ position: { x: 5, y: 400 } })
 
 // S is the skip button, pressed.

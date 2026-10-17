@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"sync/atomic"
 
-	"kuro/internal/bt/webseed"
+	"yoru/internal/bt/webseed"
 )
 
 // A wrapper around webseed.Request with extra state for webseedPeer.

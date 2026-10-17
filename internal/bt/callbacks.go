@@ -1,8 +1,8 @@
 package bt
 
 import (
-	"kuro/internal/bt/mse"
-	pp "kuro/internal/bt/peer_protocol"
+	"yoru/internal/bt/mse"
+	pp "yoru/internal/bt/peer_protocol"
 )
 
 // These are called synchronously, and do not pass ownership of arguments (do not expect to retain

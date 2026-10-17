@@ -3,7 +3,7 @@ package bt_test
 import (
 	"log"
 
-	"kuro/internal/bt"
+	"yoru/internal/bt"
 )
 
 func Example() {

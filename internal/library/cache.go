@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // Cache keeps what you have watched on disk within a size budget, evicting whole files oldest-first.
@@ -38,7 +38,7 @@ type Cache struct {
 	sweeping sync.Mutex
 }
 
-// WithProtected names folders the orphan cleanup must never touch: kuro's own, when cache_dir holds them.
+// WithProtected names folders the orphan cleanup must never touch: Yoru's own, when cache_dir holds them.
 func (c *Cache) WithProtected(dirs ...string) *Cache {
 	for _, d := range dirs {
 		if abs, err := filepath.Abs(d); err == nil {
@@ -48,7 +48,7 @@ func (c *Cache) WithProtected(dirs ...string) *Cache {
 	return c
 }
 
-// isProtected: the entry is, or holds, a folder of kuro's own.
+// isProtected: the entry is, or holds, a folder of Yoru's own.
 func (c *Cache) isProtected(path string) bool {
 	for _, p := range c.protected {
 		if torrent.Within(path, p) {
@@ -118,7 +118,7 @@ func NewCache(s *store.Store, tc *torrent.Client, dir string, log *slog.Logger) 
 		absent: map[string]*absence{}, progress: map[string]mark{}}
 }
 
-// owns: kuro only ever deletes what downloads into its own cache directory.
+// owns: Yoru only ever deletes what downloads into its own cache directory.
 func (c *Cache) owns(d torrent.Detail) bool {
 	return torrent.Within(c.dir, d.OutputFolder)
 }
@@ -424,7 +424,7 @@ func (c *Cache) Remove(ctx context.Context, infoHash string) (int64, error) {
 				return 0, err
 			}
 			if !c.owns(d) {
-				return 0, fmt.Errorf("that download is not in kuro's cache folder")
+				return 0, fmt.Errorf("that download is not in Yoru's cache folder")
 			}
 			return 0, c.torrent.Delete(ctx, id)
 		}
@@ -654,7 +654,7 @@ func (c *Cache) present(hashes map[string]struct{}) {
 	}
 }
 
-// A download removed outside kuro leaves a row charging the budget for gone bytes; only this clears it.
+// A download removed outside Yoru leaves a row charging the budget for gone bytes; only this clears it.
 func (c *Cache) forgetVanished(ctx context.Context) error {
 	live, err := c.torrent.List(ctx)
 	if err != nil {

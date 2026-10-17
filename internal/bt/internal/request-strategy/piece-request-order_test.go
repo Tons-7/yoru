@@ -5,7 +5,7 @@ import (
 	"unique"
 
 	"github.com/bradfitz/iter"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 func benchmarkPieceRequestOrder[B Btree](

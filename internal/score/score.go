@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"kuro/internal/film"
-	"kuro/internal/indexer"
-	"kuro/internal/parse"
+	"yoru/internal/film"
+	"yoru/internal/indexer"
+	"yoru/internal/parse"
 )
 
 // Tier is one rung of the quality ladder, written "1080p:BD:HEVC:10". Only the

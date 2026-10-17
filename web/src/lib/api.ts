@@ -1,6 +1,6 @@
 // A LAN client is handed a token in the URL on first visit; the server then
 // sets a cookie, so it only has to be remembered for that first request.
-const TOKEN_KEY = 'kuro.token'
+export const TOKEN_KEY = 'yoru.token'
 
 function readToken(): string {
   const params = new URLSearchParams(window.location.search)
@@ -24,7 +24,7 @@ function readToken(): string {
   }
 }
 
-export const UNPAIRED_EVENT = 'kuro:unpaired'
+export const UNPAIRED_EVENT = 'yoru:unpaired'
 
 export class ApiError extends Error {
   readonly status: number
@@ -42,8 +42,8 @@ let savedAt: number | null = null
 const savedListeners = new Set<() => void>()
 
 function noteSource(res: Response) {
-  const saved = res.headers.get('X-Kuro-Saved')
-  const next = saved ? Number(saved) : res.headers.has('X-Kuro-Live') ? null : savedAt
+  const saved = res.headers.get('X-Yoru-Saved')
+  const next = saved ? Number(saved) : res.headers.has('X-Yoru-Live') ? null : savedAt
   if (next === savedAt) return
   savedAt = next
   savedListeners.forEach((l) => l())
@@ -145,6 +145,18 @@ export interface Resume {
   position: number
   duration: number | null
   watched: boolean
+}
+
+/** One episode on the Up next list, in play order. */
+export interface UpNextItem {
+  animeId: number
+  episode: number
+  title: string
+  cover?: string
+  episodeTitle?: string
+  minutes?: number
+  position?: number
+  duration?: number
 }
 
 export interface LibraryItem {

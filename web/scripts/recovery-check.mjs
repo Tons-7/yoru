@@ -1,9 +1,9 @@
 // Keepalive and recovery: pings while playing, a reaped session reopened in place, a frozen clock poked.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const LIB = process.env.KURO_LIB
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const LIB = process.env.YORU_LIB
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const EP = 1
 const shots = process.env.SHOTS ?? '.'
 
@@ -46,7 +46,7 @@ let file
 for (let i = 0; i < 30 && !file; i++) {
   await sleep(1000)
   const files = await api('/api/local/files')
-  file = (files.body.items ?? []).find((f) => String(f.path ?? '').includes('Kuro Test Show'))
+  file = (files.body.items ?? []).find((f) => String(f.path ?? '').includes('Yoru Test Show'))
 }
 check(!!file, 'test file listed')
 if (!file) process.exit(1)

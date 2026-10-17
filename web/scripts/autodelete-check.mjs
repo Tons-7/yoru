@@ -1,5 +1,5 @@
 // Auto-delete "keep last 2": going back to an early episode, then on, keeps the one just left.
-//   KURO_NYAA=<url> KURO_TOKYOTOSHO=<url> [SKIP_BUILD=1] node scripts/autodelete-check.mjs
+//   YORU_NYAA=<url> YORU_TOKYOTOSHO=<url> [SKIP_BUILD=1] node scripts/autodelete-check.mjs
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync, existsSync, openSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -16,15 +16,15 @@ const PORT = process.env.PORT ?? '4397'
 const URL = `http://127.0.0.1:${PORT}`
 const ANIME = 185874
 const PROGRESS = 6
-const NYAA = process.env.KURO_NYAA
-const TOKYO = process.env.KURO_TOKYOTOSHO
+const NYAA = process.env.YORU_NYAA
+const TOKYO = process.env.YORU_TOKYOTOSHO
 
 const exe = (name) => (process.platform === 'win32' ? `${name}.exe` : name)
-const scratch = join(tmpdir(), 'kuro-autodelete-e2e')
+const scratch = join(tmpdir(), 'yoru-autodelete-e2e')
 const root = join(scratch, 'root')
 const appdata = join(scratch, 'appdata')
-const binCache = join(tmpdir(), 'kuro-e2e-bin')
-const kuroExe = join(binCache, exe('kuro'))
+const binCache = join(tmpdir(), 'yoru-e2e-bin')
+const yoruExe = join(binCache, exe('yoru'))
 const serverLog = join(scratch, 'server.log')
 
 let server
@@ -81,7 +81,7 @@ function killTree(child) {
 }
 
 try {
-  if (!NYAA || !TOKYO) throw new Error('set KURO_NYAA and KURO_TOKYOTOSHO')
+  if (!NYAA || !TOKYO) throw new Error('set YORU_NYAA and YORU_TOKYOTOSHO')
   stage(`scratch instance at ${scratch}`)
   rmSync(scratch, { recursive: true, force: true })
   for (const d of [scratch, root, appdata]) mkdirSync(d, { recursive: true })
@@ -97,16 +97,16 @@ try {
     const r1 = spawnSync('npm run build', [], { cwd: webDir, shell: true, stdio: 'inherit' })
     if (r1.status !== 0) throw new Error('web build failed')
     mkdirSync(binCache, { recursive: true })
-    const r2 = spawnSync('go', ['build', '-o', kuroExe, './cmd/kuro'], { cwd: repo, stdio: 'inherit' })
+    const r2 = spawnSync('go', ['build', '-o', yoruExe, './cmd/yoru'], { cwd: repo, stdio: 'inherit' })
     if (r2.status !== 0) throw new Error('go build failed')
   }
 
   stage('starting server')
   const logFd = openSync(serverLog, 'w')
-  server = spawn(kuroExe, [], {
+  server = spawn(yoruExe, [], {
     cwd: root,
     // APPDATA too: the engine imports rqbit's per-user session when it has none.
-    env: { ...process.env, KURO_ROOT: root, LOCALAPPDATA: appdata, APPDATA: appdata, KURO_NO_WINDOW: '1' },
+    env: { ...process.env, YORU_ROOT: root, LOCALAPPDATA: appdata, APPDATA: appdata, YORU_NO_WINDOW: '1' },
     stdio: ['ignore', logFd, logFd],
     detached: process.platform !== 'win32',
   })

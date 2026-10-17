@@ -13,14 +13,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/missinggo/v2/panicif"
-	"golang.org/x/net/http2"
 
-	"kuro/internal/bt/metainfo"
-	pp "kuro/internal/bt/peer_protocol"
-	"kuro/internal/bt/webseed"
+	"yoru/internal/bt/metainfo"
+	pp "yoru/internal/bt/peer_protocol"
+	"yoru/internal/bt/webseed"
 )
 
 type webseedPeer struct {
@@ -204,12 +203,10 @@ func (ws *webseedPeer) readChunksErrorLevel(err error, req *webseedRequest) slog
 	if ws.peer.closedCtx.Err() != nil {
 		return slog.LevelDebug
 	}
-	var h2e http2.GoAwayError
-	if errors.As(err, &h2e) {
-		if h2e.ErrCode == http2.ErrCodeEnhanceYourCalm {
-			// It's fine, we'll sleep for a bit. But it's still interesting.
-			return slog.LevelInfo
-		}
+	// net/http keeps its HTTP/2 GOAWAY error type unexported, so its text is all there is to match.
+	if msg := err.Error(); strings.Contains(msg, "sent GOAWAY") && strings.Contains(msg, "ErrCode=ENHANCE_YOUR_CALM") {
+		// It's fine, we'll sleep for a bit. But it's still interesting.
+		return slog.LevelInfo
 	}
 	var ne net.Error
 	if errors.As(err, &ne) && ne.Timeout() {

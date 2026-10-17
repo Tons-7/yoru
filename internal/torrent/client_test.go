@@ -21,7 +21,7 @@ const inspectJSON = `{
   "details": {
     "info_hash": "8011219944fe12e9",
     "name": "[SubsPlease] Show (01-12) [1080p]",
-    "output_folder": "D:\\kuro\\cache\\show",
+    "output_folder": "D:\\yoru\\cache\\show",
     "files": [
       {"name": "Show - 01 [1080p].mkv", "components": ["Show - 01 [1080p].mkv"], "length": 1503238553, "included": false},
       {"name": "Show - 02 [1080p].mkv", "components": ["Show - 02 [1080p].mkv"], "length": 1502000000, "included": false},

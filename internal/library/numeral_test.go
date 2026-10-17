@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"kuro/internal/parse"
-	"kuro/internal/store"
+	"yoru/internal/parse"
+	"yoru/internal/store"
 )
 
 // chainStore seeds a franchise of TV series in broadcast order, linked as sequels.

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"kuro/internal/db"
+	"yoru/internal/db"
 )
 
 type Store struct {

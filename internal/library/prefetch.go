@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/score"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/score"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // Prefetcher pulls the next episode while the current one plays, so pressing
@@ -241,24 +241,24 @@ func (p *Prefetcher) Next(animeID, episode, season int, prefs score.Preferences)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(count)*30*time.Minute)
 		defer cancel()
 
-		at := episode
-		for i := range count {
-			next, err := p.store.NextEpisode(ctx, animeID, at)
-			if err != nil || next == 0 {
-				return
-			}
-			at = next
-			id, started, err := p.fetch(ctx, animeID, next, season, prefs, false)
+		// The Up next list's order when it has one, else the show's own.
+		picks, _, err := p.store.PlayOrder(ctx, animeID, episode, count)
+		if err != nil {
+			return
+		}
+		for i, next := range picks {
+			nextPrefs, nextSeason := p.prefsOf(ctx, next.AnimeID, animeID, prefs, season)
+			id, started, err := p.fetch(ctx, next.AnimeID, next.Episode, nextSeason, nextPrefs, false)
 			if err != nil {
 				// Said aloud: "it stopped downloading the next one" has to be answerable from the log.
 				if !errors.Is(err, errOvertaken) {
-					p.log.Info("next episode not downloaded ahead", "anime", animeID, "episode", next, "err", err)
+					p.log.Info("next episode not downloaded ahead", "anime", next.AnimeID, "episode", next.Episode, "err", err)
 				}
 				return
 			}
-			if started && i < count-1 {
+			if started && i < len(picks)-1 {
 				if err := p.torrent.Await(ctx, id, prefetchStall); err != nil {
-					p.log.Debug("prefetch stopped waiting", "anime", animeID, "episode", next, "err", err)
+					p.log.Debug("prefetch stopped waiting", "anime", next.AnimeID, "episode", next.Episode, "err", err)
 					return
 				}
 			}
@@ -274,11 +274,27 @@ func (p *Prefetcher) Prepare(animeID, episode, season int, prefs score.Preferenc
 	if p == nil {
 		return
 	}
-	next, err := p.store.NextEpisode(context.Background(), animeID, episode)
-	if err != nil || next == 0 {
+	ctx := context.Background()
+	picks, _, err := p.store.PlayOrder(ctx, animeID, episode, 1)
+	if err != nil || len(picks) == 0 {
 		return
 	}
-	p.PrepareTarget(animeID, next, season, prefs)
+	next := picks[0]
+	prefs, season = p.prefsOf(ctx, next.AnimeID, animeID, prefs, season)
+	p.PrepareTarget(next.AnimeID, next.Episode, season, prefs)
+}
+
+// prefsOf is what a pick searches with: the playing show's own, or for another show off the Up next list, that
+// show's preferences and season 0, so the finder fills it from the title.
+func (p *Prefetcher) prefsOf(ctx context.Context, animeID, playing int, prefs score.Preferences, season int) (score.Preferences, int) {
+	if animeID == playing {
+		return prefs, season
+	}
+	resolved, err := p.store.Prefs(ctx, animeID)
+	if err != nil {
+		return score.DefaultPreferences(), 0
+	}
+	return Preferences(resolved), 0
 }
 
 // PrepareTarget does the same for one named episode: whatever the series page

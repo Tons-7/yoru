@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/db"
-	"kuro/internal/indexer"
-	"kuro/internal/metadata"
-	"kuro/internal/score"
-	"kuro/internal/store"
+	"yoru/internal/db"
+	"yoru/internal/indexer"
+	"yoru/internal/metadata"
+	"yoru/internal/score"
+	"yoru/internal/store"
 )
 
 // Bleach: Thousand-Year Blood War is four AniList entries sharing a base title,

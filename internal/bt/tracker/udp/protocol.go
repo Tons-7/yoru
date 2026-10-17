@@ -57,14 +57,14 @@ type AnnounceResponseHeader struct {
 
 type InfoHash = [20]byte
 
-func marshal(data interface{}) (b []byte, err error) {
+func marshal(data any) (b []byte, err error) {
 	var buf bytes.Buffer
 	err = Write(&buf, data)
 	b = buf.Bytes()
 	return
 }
 
-func mustMarshal(data interface{}) []byte {
+func mustMarshal(data any) []byte {
 	b, err := marshal(data)
 	if err != nil {
 		panic(err)
@@ -73,10 +73,10 @@ func mustMarshal(data interface{}) []byte {
 }
 
 // This is for fixed-size, builtin types only I think.
-func Write(w io.Writer, data interface{}) error {
+func Write(w io.Writer, data any) error {
 	return binary.Write(w, binary.BigEndian, data)
 }
 
-func Read(r io.Reader, data interface{}) error {
+func Read(r io.Reader, data any) error {
 	return binary.Read(r, binary.BigEndian, data)
 }

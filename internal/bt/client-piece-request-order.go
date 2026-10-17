@@ -1,8 +1,8 @@
 package bt
 
 import (
-	requestStrategy "kuro/internal/bt/internal/request-strategy"
-	"kuro/internal/bt/storage"
+	requestStrategy "yoru/internal/bt/internal/request-strategy"
+	"yoru/internal/bt/storage"
 )
 
 // clientPieceRequestOrderKey is a key for the piece request order map in the Client.

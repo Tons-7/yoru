@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { LIST_STATUSES, type ListStatus } from '../lib/api'
 import { useRemoveStatus, useSetStatus } from '../lib/queries'
 import { cx } from '../lib/format'
-import { useDismiss, useModalFocus } from './ui'
+import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 
 /** The bookmark control is the list status (watching, completed, …), not a separate flag. */
 export function StatusMenu({
@@ -34,7 +34,7 @@ export function StatusMenu({
   const active = LIST_STATUSES.find((s) => s.value === current)
 
   // A portal, as the cards and banner it sits in clip their contents.
-  const box = trigger.current?.getBoundingClientRect()
+  const box = useAnchorBox(trigger, open)
   const menu = box && {
     top: Math.min(box.bottom + 6, window.innerHeight - 290),
     left: Math.max(8, Math.min(box.right - 176, window.innerWidth - 184)),

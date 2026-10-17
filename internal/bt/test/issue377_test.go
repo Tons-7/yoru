@@ -13,11 +13,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"kuro/internal/bt"
-	"kuro/internal/bt/internal/testutil"
-	"kuro/internal/bt/metainfo"
-	pp "kuro/internal/bt/peer_protocol"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt"
+	"yoru/internal/bt/internal/testutil"
+	"yoru/internal/bt/metainfo"
+	pp "yoru/internal/bt/peer_protocol"
+	"yoru/internal/bt/storage"
 )
 
 func justOneNetwork(cc *bt.ClientConfig) {

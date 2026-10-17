@@ -16,7 +16,7 @@ import (
 func binaries(t *testing.T) (mpv, ffmpeg string) {
 	t.Helper()
 
-	root := os.Getenv("KURO_BIN")
+	root := os.Getenv("YORU_BIN")
 	if root == "" {
 		root = filepath.Join("..", "..", "bin")
 	}
@@ -76,9 +76,9 @@ func newPlayer(t *testing.T, mpv string) *MPV {
 
 func socketName(test string) string {
 	if os.PathSeparator == '\\' {
-		return `\\.\pipe\kuro-test-` + test
+		return `\\.\pipe\yoru-test-` + test
 	}
-	return filepath.Join(os.TempDir(), "kuro-test-"+test)
+	return filepath.Join(os.TempDir(), "yoru-test-"+test)
 }
 
 func TestMPVReportsPosition(t *testing.T) {
@@ -89,7 +89,7 @@ func TestMPVReportsPosition(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	if err := p.Play(ctx, Options{URL: clip, Title: "kuro integration", Extra: []string{"--no-video"}}); err != nil {
+	if err := p.Play(ctx, Options{URL: clip, Title: "yoru integration", Extra: []string{"--no-video"}}); err != nil {
 		t.Fatalf("start mpv: %v", err)
 	}
 

@@ -41,7 +41,7 @@ if (-not $SkipWeb) {
         if (-not (Test-Path 'node_modules')) { npm install }
         # -b, not --noEmit: the root tsconfig is a solution file with no files
         # of its own, so --noEmit checked nothing and exited 0 on anything.
-        npx tsgo -b --force
+        npx tsc -b --force
         if ($LASTEXITCODE -ne 0) { Fail 'type check failed' }
         npx vite build
         if ($LASTEXITCODE -ne 0) { Fail 'frontend build failed' }
@@ -60,11 +60,11 @@ if ($Target) {
 }
 
 if (-not $Out) {
-    # The name from its parts: a regex on 'kuro.exe' matched twice and gave kuro-windows-arm64.exe-windows-arm64.
+    # The name from its parts: a regex on 'yoru.exe' matched twice and gave yoru-windows-arm64.exe-windows-arm64.
     $targetOS = if ($goos) { $goos } else { go env GOOS }
     $ext = if ($targetOS -eq 'windows') { '.exe' } else { '' }
     $suffix = if ($Target) { "-$goos-$goarch" } else { '' }
-    $Out = Join-Path $root "kuro$suffix$ext"
+    $Out = Join-Path $root "yoru$suffix$ext"
 }
 # go -C resolves a relative -o against the repo, not where this was run from; say the same path it will use.
 $Out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Out)
@@ -76,8 +76,8 @@ if ($goos) { $env:GOOS = $goos; $env:GOARCH = $goarch }
 try {
     # Trimming the symbol table roughly halves the binary; nothing needs a Go stack trace in production.
     $ldflags = '-s -w'
-    if ($Version) { $ldflags += " -X kuro/internal/update.Version=$Version" }
-    go -C $root build -trimpath -ldflags $ldflags -o $Out ./cmd/kuro
+    if ($Version) { $ldflags += " -X yoru/internal/update.Version=$Version" }
+    go -C $root build -trimpath -ldflags $ldflags -o $Out ./cmd/yoru
     if ($LASTEXITCODE -ne 0) { Fail 'go build failed' }
 } finally {
     foreach ($name in $was.Keys) {

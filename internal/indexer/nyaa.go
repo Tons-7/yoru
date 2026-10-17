@@ -120,7 +120,7 @@ func (n *Nyaa) Latest(ctx context.Context, q Query) ([]Torrent, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "kuro/0.1")
+	req.Header.Set("User-Agent", "yoru/0.1")
 
 	res, err := n.http.Do(req)
 	if err != nil {

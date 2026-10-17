@@ -3,9 +3,10 @@ import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, statusLabel, type Bookmark, type DiscoverItem } from '../lib/api'
-import { clockTime, cx, readableTint, relativeTime, tint } from '../lib/format'
+import { clockTime, cx, readableTint, relativeTime, tint, youtubeID } from '../lib/format'
 import {
   refreshDownloads,
+  useAnimeExtra,
   useDownloadQueue,
   useDownloads,
   useEpisodes,
@@ -19,12 +20,14 @@ import {
   type Season,
 } from '../lib/queries'
 import { CharacterRail } from '../components/CharacterRail'
-import { ShowExtra, useAnimeExtra } from '../components/ShowExtra'
-import { EpisodeList, isUnaired } from '../components/EpisodeList'
-import { PlayIcon, PosterCard, toCard } from '../components/PosterCard'
+import { ShowExtra } from '../components/ShowExtra'
+import { EpisodeList } from '../components/EpisodeList'
+import { isUnaired } from '../lib/episodes'
+import { PlayIcon, PosterCard } from '../components/PosterCard'
+import { toCard } from '../lib/cards'
 import { Rail, RailItem } from '../components/Rail'
 import { StatusMenu } from '../components/StatusMenu'
-import { TrailerOverlay, youtubeID } from '../components/TrailerOverlay'
+import { TrailerOverlay } from '../components/TrailerOverlay'
 import {
   Badge,
   Button,
@@ -34,9 +37,8 @@ import {
   SaveHint,
   Skeleton,
   TextInput,
-  useDismiss,
-  useDocumentTitle,
 } from '../components/ui'
+import { useAnchorBox, useDismiss, useDocumentTitle } from '../lib/hooks'
 
 /** AniList and Jikan describe an anime differently; only the overlap is used. */
 interface AnimeDetail {
@@ -110,6 +112,7 @@ const STATUS: Record<string, { label: string; tone: string; live?: boolean }> = 
 
 /** The facts under the title, as chips: what, how long, how far along, and how good. */
 function FactChips({ media }: { media: AnimeDetail['anime'] }) {
+  const now = useNow()
   const status = media.status ? STATUS[media.status] : undefined
   const aired = media.nextAiringEpisode ? media.nextAiringEpisode.episode - 1 : null
   const episodes =
@@ -142,7 +145,7 @@ function FactChips({ media }: { media: AnimeDetail['anime'] }) {
           {status.label}
         </span>
       )}
-      {media.nextAiringEpisode && media.nextAiringEpisode.airingAt * 1000 > Date.now() && (
+      {media.nextAiringEpisode && media.nextAiringEpisode.airingAt * 1000 > now && (
         <span className={cx(chip, 'text-emerald-300 ring-emerald-400/30')}>
           Ep {media.nextAiringEpisode.episode} {relativeTime(media.nextAiringEpisode.airingAt)}
         </span>
@@ -276,9 +279,10 @@ export function Anime() {
 
   const refreshQueue = () => refreshDownloads(qc)
 
+  const clock = useNow()
   // Exactly the aired episodes not on disk or in a library folder, as an airing show often has no total.
   const toDownload = (episodes.data?.items ?? [])
-    .filter((e) => !isUnaired(e) && !e.onDisk && !e.local)
+    .filter((e) => !isUnaired(e, clock) && !e.onDisk && !e.local)
     .map((e) => e.number)
   const downloadAll = useMutation({
     meta: { inline: true },
@@ -295,7 +299,7 @@ export function Anime() {
   const list = episodes.data?.items ?? []
   const progress = detail.data?.progress ?? 0
   const resume = detail.data?.resume
-  const now = useNow() / 1000
+  const now = clock / 1000
   const next = list.find((e) => e.number > progress)
   const total = detail.data?.episodeCount || detail.data?.anime.episodes || list.length
   // An episode stopped part way comes first: the tracker's count can already
@@ -662,8 +666,14 @@ function ShowGroups({ animeId }: { animeId: number }) {
 
   const own = parseGroups(prefs.data?.overrides?.['release.prefer_groups'])
   const inherited = parseGroups(prefs.data?.defaults?.['release.prefer_groups'])
-  const [text, setText] = useState('')
-  useEffect(() => setText(own.join(', ')), [prefs.data?.overrides?.['release.prefer_groups']]) // eslint-disable-line react-hooks/exhaustive-deps
+  // The field follows the saved list when it changes, set during render rather than an effect after it.
+  const saved = own.join(', ')
+  const [text, setText] = useState(saved)
+  const [shown, setShown] = useState(saved)
+  if (shown !== saved) {
+    setShown(saved)
+    setText(saved)
+  }
 
   if (!prefs.isSuccess) return null
 
@@ -761,7 +771,7 @@ function ScoreSelect({ animeId, score }: { animeId: number; score: number }) {
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
-  const box = trigger.current?.getBoundingClientRect()
+  const box = useAnchorBox(trigger, open)
 
   return (
     <div className="relative" ref={ref}>
@@ -831,7 +841,7 @@ function useSetBookmark(animeId: number) {
   })
 }
 
-// Local only: a favourite is a shelf in kuro, not a list status on a tracker.
+// Local only: a favourite is a shelf in Yoru, not a list status on a tracker.
 function FavouriteButton({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
   const set = useSetBookmark(animeId)
   const on = !!bookmark?.favourite
@@ -855,9 +865,15 @@ function FavouriteButton({ animeId, bookmark }: { animeId: number; bookmark?: Bo
 // A private note saved on blur, sent alone so a Favourite click with the blur can't revert it.
 function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
   const set = useSetBookmark(animeId)
-  const [text, setText] = useState(bookmark?.note ?? '')
-  const [open, setOpen] = useState(!!bookmark?.note)
-  useEffect(() => setText(bookmark?.note ?? ''), [bookmark?.note])
+  const saved = bookmark?.note ?? ''
+  const [text, setText] = useState(saved)
+  const [open, setOpen] = useState(!!saved)
+  // The note follows the saved one when it changes, set during render rather than an effect after it.
+  const [shown, setShown] = useState(saved)
+  if (shown !== saved) {
+    setShown(saved)
+    setText(saved)
+  }
 
   if (!open) {
     return (
@@ -1034,7 +1050,7 @@ function SyncNote({ sync }: { sync?: { anilist: boolean; mal: boolean } }) {
 
   const targets = [sync.anilist && 'AniList', sync.mal && 'MyAnimeList'].filter(Boolean)
   if (targets.length === 0) {
-    return <p className="mt-3 text-xs text-base-500">Not on either tracker, so progress stays in kuro.</p>
+    return <p className="mt-3 text-xs text-base-500">Not on either tracker, so progress stays in Yoru.</p>
   }
 
   return (

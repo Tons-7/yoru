@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"kuro/internal/metadata"
-	"kuro/internal/store"
+	"yoru/internal/metadata"
+	"yoru/internal/store"
 )
 
 const listingJSON = `{"data":[

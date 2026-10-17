@@ -1,5 +1,4 @@
 //go:build !noboltdb && !wasm
-// +build !noboltdb,!wasm
 
 package storage
 
@@ -12,7 +11,7 @@ import (
 	"github.com/anacrolix/missinggo/expect"
 	"go.etcd.io/bbolt"
 
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 const (

@@ -15,7 +15,7 @@ import (
 	"github.com/anacrolix/missinggo/v2/iter"
 	qt "github.com/go-quicktest/qt"
 	"github.com/stretchr/testify/require"
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 )
 
 // Ensure net.IPs are stored big-endian, to match the way they're read from
@@ -128,13 +128,11 @@ func TestConnectionIdMismatch(t *testing.T) {
 		rand.Read(ar.InfoHash[:])
 		rand.Read(ar.PeerId[:])
 		//spew.Dump(ar)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, _, err := cl.Announce(ctx, ar, Options{})
 			// I'm looking for `error response: "Connection ID missmatch.\x00"`.
 			t.Logf("announce error after %v: %v", time.Since(started), err)
-		}()
+		})
 	}
 	wg.Wait()
 }

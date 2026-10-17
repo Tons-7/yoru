@@ -3,7 +3,7 @@ package library
 import (
 	"testing"
 
-	"kuro/internal/parse"
+	"yoru/internal/parse"
 )
 
 // A whole-season pack confirms an episode of its season.

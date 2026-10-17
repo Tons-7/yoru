@@ -9,7 +9,7 @@ import (
 	"slices"
 	"testing"
 
-	"kuro/internal/store"
+	"yoru/internal/store"
 )
 
 // releaseList serves /releases/latest (newest, no assets needed) and the list, drafts and pre-releases included.
@@ -47,7 +47,7 @@ func versions(ns []Notes) []string {
 func TestCheckListsEveryPendingRelease(t *testing.T) {
 	setVersion(t, "2026.10.13")
 	gh := releaseList(t, "2026.10.16", "2026.10.15", "2026.10.13.1", "2026.10.13", "2026.10.12")
-	u := newUpdater(t, testStore(t), gh, filepath.Join(t.TempDir(), "kuro.exe"))
+	u := newUpdater(t, testStore(t), gh, filepath.Join(t.TempDir(), "yoru.exe"))
 
 	st, err := u.Check(context.Background())
 	if err != nil {
@@ -68,7 +68,7 @@ func TestCheckListsEveryPendingRelease(t *testing.T) {
 func TestCheckFallsBackToTheLatestNotes(t *testing.T) {
 	setVersion(t, "2026.10.13")
 	gh := fakeGitHub(t, "2026.10.16", []byte("new"), true)
-	u := newUpdater(t, testStore(t), gh, filepath.Join(t.TempDir(), "kuro.exe"))
+	u := newUpdater(t, testStore(t), gh, filepath.Join(t.TempDir(), "yoru.exe"))
 
 	st, err := u.Check(context.Background())
 	if err != nil {
@@ -86,14 +86,14 @@ func TestStartedAfterAnUpdate(t *testing.T) {
 	gh := releaseList(t, "2026.10.16", "2026.10.15", "2026.10.13")
 
 	setVersion(t, "2026.10.13")
-	newUpdater(t, st, gh, "kuro.exe").Started(ctx)
+	newUpdater(t, st, gh, "yoru.exe").Started(ctx)
 	if items, _ := st.Notifications(ctx, false, 10); len(items) != 0 {
 		t.Fatalf("a first install announced an update: %+v", items)
 	}
 
 	Version = "2026.10.16"
 	for range 2 {
-		u := newUpdater(t, st, gh, "kuro.exe")
+		u := newUpdater(t, st, gh, "yoru.exe")
 		u.Started(ctx)
 		got, err := u.Check(ctx)
 		if err != nil {
@@ -107,7 +107,7 @@ func TestStartedAfterAnUpdate(t *testing.T) {
 		}
 	}
 	items, _ := st.Notifications(ctx, false, 10)
-	if len(items) != 1 || items[0].Kind != store.NotifyUpdate || items[0].Title != "Updated to kuro 2026.10.16" {
+	if len(items) != 1 || items[0].Kind != store.NotifyUpdate || items[0].Title != "Updated to Yoru 2026.10.16" {
 		t.Fatalf("notifications = %+v, want one 'Updated to' on the first start only", items)
 	}
 }
@@ -120,7 +120,7 @@ func TestStartedAfterAnUpdateFromAnOlderUpdater(t *testing.T) {
 	if err := st.SetSetting(ctx, "update.notified", "2026.10.16"); err != nil {
 		t.Fatal(err)
 	}
-	u := newUpdater(t, st, releaseList(t, "2026.10.16", "2026.10.15"), "kuro.exe")
+	u := newUpdater(t, st, releaseList(t, "2026.10.16", "2026.10.15"), "yoru.exe")
 	u.Started(ctx)
 	got, err := u.Check(ctx)
 	if err != nil {
@@ -142,7 +142,7 @@ func TestStartedAfterARollbackSaysNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	setVersion(t, "2026.10.15")
-	newUpdater(t, st, releaseList(t, "2026.10.16"), "kuro.exe").Started(ctx)
+	newUpdater(t, st, releaseList(t, "2026.10.16"), "yoru.exe").Started(ctx)
 	if items, _ := st.Notifications(ctx, false, 10); len(items) != 0 {
 		t.Fatalf("a rollback announced an update: %+v", items)
 	}

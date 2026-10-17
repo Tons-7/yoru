@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "kuro",
-  "short_name": "kuro",
+  "name": "Yoru",
+  "short_name": "Yoru",
   "description": "Self-hosted anime streaming",
   "start_url": "/",
   "scope": "/",

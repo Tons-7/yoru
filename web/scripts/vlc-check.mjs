@@ -2,9 +2,9 @@
 import { execSync } from 'node:child_process'
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const LIB = process.env.KURO_LIB
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const LIB = process.env.YORU_LIB
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 
 let failures = 0
 const check = (ok, label, detail = '') => {
@@ -48,7 +48,7 @@ await post('/api/local/scan', {})
 let files = []
 for (let i = 0; i < 30 && files.length < 2; i++) {
   await sleep(1000)
-  files = ((await api('/api/local/files')).body?.items ?? []).filter((f) => /Kuro Test Show - 0[13]/.test(String(f.path ?? '')))
+  files = ((await api('/api/local/files')).body?.items ?? []).filter((f) => /Yoru Test Show - 0[13]/.test(String(f.path ?? '')))
 }
 check(files.length === 2, 'two local test episodes listed')
 if (files.length < 2) process.exit(1)
@@ -59,8 +59,8 @@ for (const f of files) {
 
 const found = (await api('/api/setup')).body?.vlc
 check(!!found, 'VLC was found on this machine', found)
-if (process.env.KURO_VLC_EXPECT) {
-  check(found === process.env.KURO_VLC_EXPECT, 'vlc_path decided which VLC is used', found)
+if (process.env.YORU_VLC_EXPECT) {
+  check(found === process.env.YORU_VLC_EXPECT, 'vlc_path decided which VLC is used', found)
 }
 check(!vlcRunning(), 'no VLC running before the test')
 await post('/api/prefs', { key: 'playback.player', value: 'vlc' })

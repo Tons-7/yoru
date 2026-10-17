@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"kuro/internal/metadata"
+	"yoru/internal/metadata"
 )
 
 type EpisodeRow struct {

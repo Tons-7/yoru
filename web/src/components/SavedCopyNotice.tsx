@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { api, catalogueSource } from '../lib/api'
 import { relativeTime } from '../lib/format'
 
-/** Shown while pages come from kuro's saved copy. */
+/** Shown while pages come from Yoru's saved copy. */
 export function SavedCopyNotice() {
   const savedAt = useSyncExternalStore(catalogueSource.subscribe, catalogueSource.savedAt)
   const qc = useQueryClient()
@@ -18,7 +18,7 @@ export function SavedCopyNotice() {
     >
       <span className="size-1.5 shrink-0 rounded-full bg-amber-400" />
       <p className="min-w-0 flex-1">
-        AniList isn't answering, so this is kuro's saved copy
+        AniList isn't answering, so this is Yoru's saved copy
         <span className="text-amber-200/70"> from {relativeTime(savedAt)}</span>. It updates by itself once AniList is back.
       </p>
       <button

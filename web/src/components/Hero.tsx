@@ -13,9 +13,11 @@ const PRELOAD = 2
 
 export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boolean }) {
   const slides = (items ?? []).filter((a) => a.cover).slice(0, 10)
-  const [index, setIndex] = useState(0)
+  const [picked, setIndex] = useState(0)
   const [paused, setPaused] = useState(false)
   const timer = useRef<number | undefined>(undefined)
+  // A shorter list after a refetch would otherwise leave the index past the end.
+  const index = picked < slides.length ? picked : 0
 
   useEffect(() => {
     if (paused || slides.length < 2) return
@@ -26,24 +28,12 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
     return () => window.clearInterval(timer.current)
   }, [paused, slides.length])
 
-  // A shorter list after a refetch would otherwise leave the index past the end.
-  useEffect(() => {
-    if (index >= slides.length) setIndex(0)
-  }, [index, slides.length])
-
   // Every slide is in the viewport at opacity zero, so lazy loading holds none
   // of them back. Fetch just ahead of the rotation and keep what has arrived.
+  // Kept up during render (React's "adjusting state when a prop changes"), so no effect paints it a frame late.
   const [fetched, setFetched] = useState<number[]>([])
-  useEffect(() => {
-    if (slides.length === 0) return
-    setFetched((prev) => {
-      const next = new Set(prev)
-      for (let step = 0; step <= PRELOAD; step++) {
-        next.add((index + step) % slides.length)
-      }
-      return next.size === prev.length ? prev : [...next]
-    })
-  }, [index, slides.length])
+  const ahead = slides.length ? Array.from({ length: PRELOAD + 1 }, (_, step) => (index + step) % slides.length) : []
+  if (ahead.some((i) => !fetched.includes(i))) setFetched([...new Set([...fetched, ...ahead])])
 
   if (loading) {
     return <Skeleton className="h-[clamp(22rem,46vw,34rem)] w-full rounded-2xl" />
@@ -51,7 +41,7 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
   // Trending failed or is empty: nothing to feature, and an endless skeleton reads as broken.
   if (slides.length === 0) return null
 
-  const active = slides[Math.min(index, slides.length - 1)]
+  const active = slides[index]
   // Nothing to play: finished, unaired, or caught up with what has aired (PosterCard's rule).
   const aired = active.nextEpisode ? active.nextEpisode - 1 : active.episodes
   const caughtUp =

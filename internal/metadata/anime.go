@@ -44,8 +44,8 @@ const (
 	TenraiAnimeURL = "https://api.tenrai.org/v1/anime/%d"
 )
 
-// AnimeDetail is the subset of Jikan's record kuro shows for anime that exist
-// on MyAnimeList but not AniList, where there is no AniList entry to read.
+// AnimeDetail is the subset of Jikan's record Yoru shows for anime on MyAnimeList but not AniList, where there
+// is no AniList entry to read.
 type AnimeDetail struct {
 	MalID       int      `json:"malId"`
 	Romaji      string   `json:"romaji"`

@@ -3,7 +3,7 @@ package torrent
 import (
 	"testing"
 
-	"kuro/internal/parse"
+	"yoru/internal/parse"
 )
 
 func TestEpisodeInNameIgnoresYearsAndCodecs(t *testing.T) {

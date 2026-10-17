@@ -1,5 +1,4 @@
 //go:build !noboltdb && !wasm
-// +build !noboltdb,!wasm
 
 package storage
 
@@ -11,7 +10,7 @@ import (
 
 	"go.etcd.io/bbolt"
 
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/metainfo"
 )
 
 const (

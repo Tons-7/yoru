@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"kuro/internal/player"
-	"kuro/internal/store"
+	"yoru/internal/player"
+	"yoru/internal/store"
 )
 
 func decode(w http.ResponseWriter, r *http.Request, out any) bool {
@@ -30,6 +30,9 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 		Position float64 `json:"position"`
 		Duration float64 `json:"duration"`
 		Played   float64 `json:"played"`
+		// Paused, and final (the episode ended or the player closed), are for the Discord card.
+		Paused bool `json:"paused"`
+		Final  bool `json:"final"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -52,6 +55,8 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "save playback", err)
 		return
 	}
+	s.presence.Report(ctx, body.AnimeID, body.Episode, body.Position, body.Duration, body.Paused, body.Final,
+		isLoopback(r.RemoteAddr) && loopbackHost(r.Host))
 
 	if watched && s.syncer != nil {
 		if err := s.syncer.Watched(ctx, body.AnimeID, body.Episode); err != nil {

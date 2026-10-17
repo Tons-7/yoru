@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/bt"
-	pp "kuro/internal/bt/peer_protocol"
+	"yoru/internal/bt"
+	pp "yoru/internal/bt/peer_protocol"
 )
 
 // fakeClock is a ledger's clock that moves only when told.

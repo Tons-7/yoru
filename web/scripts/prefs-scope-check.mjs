@@ -1,9 +1,9 @@
 // The player's toggles change the value they show: the per-show one, not the global.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
-const LIB = process.env.KURO_LIB
-const ANIME = Number(process.env.KURO_ANIME ?? 127230)
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const LIB = process.env.YORU_LIB
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 
 const api = async (path, init) => {
   const res = await fetch(BASE + path, {
@@ -47,7 +47,7 @@ let file
 for (let i = 0; i < 30 && !file; i++) {
   await sleep(1000)
   const files = await api('/api/local/files')
-  file = (files.body?.items ?? []).find((f) => String(f.path ?? '').includes('Kuro Test Show'))
+  file = (files.body?.items ?? []).find((f) => String(f.path ?? '').includes('Yoru Test Show'))
 }
 check(!!file, 'test file listed')
 if (!file) process.exit(1)

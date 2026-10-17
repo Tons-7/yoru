@@ -11,13 +11,13 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/anilist"
-	"kuro/internal/config"
-	"kuro/internal/corpus"
-	"kuro/internal/db"
-	"kuro/internal/indexer"
-	"kuro/internal/library"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/config"
+	"yoru/internal/corpus"
+	"yoru/internal/db"
+	"yoru/internal/indexer"
+	"yoru/internal/library"
+	"yoru/internal/store"
 )
 
 type harness struct {

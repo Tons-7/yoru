@@ -17,4 +17,4 @@ func dialIPC(ctx context.Context, socket string) (net.Conn, error) {
 }
 
 // A named pipe: the only namespace mpv's IPC uses on Windows.
-func defaultSocket() string { return `\\.\pipe\kuro-mpv` }
+func defaultSocket() string { return `\\.\pipe\yoru-mpv` }

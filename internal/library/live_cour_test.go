@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/indexer"
-	"kuro/internal/metadata"
-	"kuro/internal/parse"
-	"kuro/internal/score"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/indexer"
+	"yoru/internal/metadata"
+	"yoru/internal/parse"
+	"yoru/internal/score"
+	"yoru/internal/store"
 )
 
 // Airing shows in the shapes that break matching: absolute runs, subtitled cours, numbered sequels.
@@ -40,10 +40,10 @@ var airing = []struct {
 }
 
 // Each show, seeded as the app does, resolves a release of its own cour from the real indexers.
-// Opt-in: KURO_LIVE=1 go test ./internal/library -run LiveAiring -v
+// Opt-in: YORU_LIVE=1 go test ./internal/library -run LiveAiring -v
 func TestLiveAiringShowsResolveARelease(t *testing.T) {
-	if os.Getenv("KURO_LIVE") == "" {
-		t.Skip("set KURO_LIVE=1 to search the live indexers")
+	if os.Getenv("YORU_LIVE") == "" {
+		t.Skip("set YORU_LIVE=1 to search the live indexers")
 	}
 
 	st := prefetchStore(t)
@@ -90,18 +90,18 @@ func TestLiveAiringShowsResolveARelease(t *testing.T) {
 	}
 }
 
-// liveSources reads the sites from KURO_NYAA and KURO_TOKYOTOSHO, so none is named in the repo.
+// liveSources reads the sites from YORU_NYAA and YORU_TOKYOTOSHO, so none is named in the repo.
 func liveSources(t *testing.T) indexer.Source {
 	t.Helper()
 	var sites []indexer.Source
-	if u := os.Getenv("KURO_NYAA"); u != "" {
+	if u := os.Getenv("YORU_NYAA"); u != "" {
 		sites = append(sites, indexer.NewCached(indexer.NewNyaa(u)))
 	}
-	if u := os.Getenv("KURO_TOKYOTOSHO"); u != "" {
+	if u := os.Getenv("YORU_TOKYOTOSHO"); u != "" {
 		sites = append(sites, indexer.NewCached(indexer.NewTokyoTosho(u)))
 	}
 	if len(sites) == 0 {
-		t.Skip("set KURO_NYAA and/or KURO_TOKYOTOSHO to the sites to search")
+		t.Skip("set YORU_NYAA and/or YORU_TOKYOTOSHO to the sites to search")
 	}
 	return indexer.Multi{Sources: sites}
 }

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/storage"
 )
 
 // A path climbing out of the cache is refused, even into a sibling named like it.

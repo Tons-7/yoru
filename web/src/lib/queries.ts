@@ -17,7 +17,9 @@ import {
   type Page,
   type ScheduleDay,
   type ScheduleItem,
+  type UpNextItem,
 } from './api'
+import { toast } from './toast'
 
 // getTimezoneOffset has the opposite sign to what the schedule endpoint wants.
 export const tzOffset = () => -new Date().getTimezoneOffset()
@@ -64,7 +66,9 @@ export function useNow(every = 30_000) {
 }
 
 export function useAired(hours = 48) {
-  const start = Math.floor(Date.now() / 3_600_000) * 3600 - hours * 3600
+  // The clock hook, not Date.now(): render stays pure, and an open page moves on the hour.
+  const now = useNow(60_000)
+  const start = Math.floor(now / 3_600_000) * 3600 - hours * 3600
   return useQuery({
     queryKey: ['aired', hours, start],
     // The window moves on the hour, which is a new key; the last answer stays up until the next lands.
@@ -270,6 +274,35 @@ export function useRecommendations(animeId: number | undefined) {
   })
 }
 
+export interface Theme {
+  title: string
+  artist?: string
+  episodes?: string
+}
+
+export interface Credit {
+  name: string
+  role: string
+  image?: string
+}
+
+export interface AnimeExtra {
+  openings?: Theme[]
+  endings?: Theme[]
+  staff?: Credit[]
+  trailer?: string
+}
+
+/** A show's themes, staff and trailer, fetched apart from the details as two more requests. */
+export function useAnimeExtra(animeId: number) {
+  return useQuery({
+    enabled: animeId > 0,
+    queryKey: ['anime-extra', animeId],
+    queryFn: () => api.get<AnimeExtra>(`/api/anime/${animeId}/extra`),
+    staleTime: 12 * 60 * 60_000,
+  })
+}
+
 export function useFilters() {
   return useQuery({
     queryKey: ['filters'],
@@ -310,8 +343,90 @@ export function useSetPref() {
 // Everything that shows list state or progress: a status change, a tick or an import refreshes all of it.
 const LIST_STATE_KEYS = [
   'library', 'continue', 'discover', 'browse', 'schedule', 'anime', 'episodes', 'franchise',
-  'recommend', 'aired', 'bookmarks', 'search', 'history',
+  'recommend', 'aired', 'bookmarks', 'search', 'history', 'upnext', 'upnext-after',
 ]
+
+export function useUpNext() {
+  return useQuery({
+    queryKey: ['upnext'],
+    queryFn: () => api.get<{ items: UpNextItem[] }>('/api/upnext'),
+    // Watched episodes leave it, from mpv or a phone too.
+    refetchInterval: 2 * 60_000,
+  })
+}
+
+/** The list with one show moved to place `to` among the shows, as the server will have it. */
+function reorderShows(items: UpNextItem[], animeId: number, to: number): UpNextItem[] {
+  const shows = [...new Set(items.map((it) => it.animeId))].filter((id) => id !== animeId)
+  shows.splice(Math.min(Math.max(to, 0), shows.length), 0, animeId)
+  return shows.flatMap((id) => items.filter((it) => it.animeId === id))
+}
+
+/** Every change to the Up next list, each refreshing it and what the player would play after. */
+export function useUpNextEdit() {
+  const qc = useQueryClient()
+  const mutationKey = ['upnext-edit']
+  // After the last change in flight only: an earlier one's refetch would bring back what a later one changed.
+  const refresh = () => {
+    if (qc.isMutating({ mutationKey }) > 1) return
+    void qc.invalidateQueries({ queryKey: ['upnext'] })
+    void qc.invalidateQueries({ queryKey: ['upnext-after'] })
+  }
+  // Shown at once, so a dropped row stays where it was put; put back if the server says no.
+  const optimistic = async (change: (items: UpNextItem[]) => UpNextItem[]) => {
+    await qc.cancelQueries({ queryKey: ['upnext'] })
+    const before = qc.getQueryData<{ items: UpNextItem[] }>(['upnext'])
+    if (before) qc.setQueryData(['upnext'], { items: change(before.items) })
+    return { before }
+  }
+  const restore = (_e: unknown, _v: unknown, ctx?: { before?: { items: UpNextItem[] } }) => {
+    if (ctx?.before) qc.setQueryData(['upnext'], ctx.before)
+  }
+  return {
+    add: useMutation({
+      mutationKey,
+      mutationFn: (v: { animeId: number; episode: number }) => api.post('/api/upnext', v),
+      // With the show's other episodes in episode order, else at the bottom; the refetch fills in the rest.
+      onMutate: (v) =>
+        optimistic((items) => {
+          const show = items.find((it) => it.animeId === v.animeId)
+          const added = [...items, { ...show, ...v, title: show?.title ?? '', episodeTitle: undefined, position: 0 }]
+          const shows = [...new Set(added.map((it) => it.animeId))]
+          return shows.flatMap((id) => added.filter((it) => it.animeId === id).sort((a, b) => a.episode - b.episode))
+        }),
+      onError: restore,
+      onSettled: refresh,
+    }),
+    remove: useMutation({
+      mutationKey,
+      // Without an episode, the whole show.
+      mutationFn: (v: { animeId: number; episode?: number }) =>
+        api.del(`/api/upnext/${v.animeId}${v.episode ? query({ episode: v.episode }) : ''}`),
+      onMutate: (v) =>
+        optimistic((items) => items.filter((it) => it.animeId !== v.animeId || (!!v.episode && it.episode !== v.episode))),
+      onError: restore,
+      onSettled: refresh,
+    }),
+    move: useMutation({
+      mutationKey,
+      mutationFn: (v: { animeId: number; to: number }) => api.post('/api/upnext/move', v),
+      onMutate: (v) => optimistic((items) => reorderShows(items, v.animeId, v.to)),
+      onError: restore,
+      onSettled: refresh,
+    }),
+    fill: useMutation({
+      mutationKey,
+      mutationFn: () => api.post<{ added: number }>('/api/upnext/fill'),
+      onSuccess: (r) => toast(r.added === 0 ? 'Nothing to add' : `Added ${r.added}`, 'info'),
+      onSettled: refresh,
+    }),
+    clear: useMutation({
+      mutationKey,
+      mutationFn: () => api.del('/api/upnext'),
+      onSettled: refresh,
+    }),
+  }
+}
 
 export function refreshListState(qc: QueryClient) {
   for (const key of LIST_STATE_KEYS) void qc.invalidateQueries({ queryKey: [key] })
@@ -371,9 +486,9 @@ export interface SetupComponent {
   /** Newest published version, once looked up. */
   latest?: string
   needs?: string
-  /** A package-manager command, for what kuro cannot fetch on this OS. */
+  /** A package-manager command, for what Yoru cannot fetch on this OS. */
   manual?: string
-  /** Found on PATH rather than downloaded by kuro. */
+  /** Found on PATH rather than downloaded by Yoru. */
   system?: boolean
   /** Why one that is there cannot be used. */
   problem?: string
@@ -391,7 +506,7 @@ export interface SetupProgress {
 export interface SetupState {
   components: SetupComponent[]
   ready: boolean
-  /** Torrent sites in config.toml. None ship with kuro. */
+  /** Torrent sites in config.toml. None ship with Yoru. */
   indexers: number
   /** [[indexer]] blocks skipped at startup, with the reason. */
   badIndexers?: string[]
@@ -402,7 +517,7 @@ export interface SetupState {
   dataDir: string
   /** Where VLC was found, or empty. */
   vlc?: string
-  /** A config.toml.txt beside the real file, which kuro never reads. */
+  /** A config.toml.txt beside the real file, which Yoru never reads. */
   strayConfig?: string
   /** Running from the OS temp folder, as an exe opened from inside a zip does. */
   temporary: boolean

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/anilist"
+	"yoru/internal/anilist"
 )
 
 type discoverItem struct {
@@ -153,7 +153,7 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(q.Get("page"))
 	perPage, _ := strconv.Atoi(q.Get("perPage"))
 
-	// 400 only for a sort kuro does not know; the catalogue being down is a 502, as everywhere else.
+	// 400 only for a sort Yoru does not know; the catalogue being down is a 502, as everywhere else.
 	if !slices.Contains(anilist.Sorts(), sort) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "unknown sort " + sort, "sorts": anilist.Sorts()})
 		return

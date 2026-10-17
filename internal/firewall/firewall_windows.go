@@ -2,36 +2,20 @@ package firewall
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
-	"syscall"
-	"unicode/utf16"
+
+	"yoru/internal/proc"
 )
 
-const createNoWindow = 0x08000000
-
-func powershell(ctx context.Context, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "powershell", append([]string{"-NoProfile", "-NonInteractive"}, args...)...)
-	// kuro has no console; without this every check flashes one.
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
-	return cmd
-}
-
-// encoded is what -EncodedCommand takes: UTF-16LE, base64. No quoting to get wrong.
-func encoded(script string) string {
-	u := utf16.Encode([]rune(script))
-	b := make([]byte, len(u)*2)
-	for i, v := range u {
-		b[2*i], b[2*i+1] = byte(v), byte(v>>8)
-	}
-	return base64.StdEncoding.EncodeToString(b)
-}
-
-func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+var (
+	powershell = proc.PowerShell
+	encoded    = proc.Encoded
+	quote      = proc.Quote
+)
 
 const statusScript = `$ErrorActionPreference = 'SilentlyContinue'
 $nets = @(Get-NetConnectionProfile | ForEach-Object {
@@ -43,17 +27,21 @@ $prog = @(Get-NetFirewallApplicationFilter -Program %s | Get-NetFirewallRule | W
 
 // Check reads the network categories and every rule that decides whether a device on them reaches the port.
 func Check(ctx context.Context, port int, exe string) (Status, error) {
-	return check(ctx, port, RuleName(port), exe)
+	return check(ctx, port, []string{RuleName(port), legacyRuleName(port)}, exe)
 }
 
-// CheckPeers is Check for the torrent peer port; PortRule is kuro's peer rule.
+// CheckPeers is Check for the torrent peer port; PortRule is Yoru's peer rule.
 func CheckPeers(ctx context.Context, port int, exe string) (Status, error) {
-	return check(ctx, port, PeerRuleName(port), exe)
+	return check(ctx, port, []string{PeerRuleName(port)}, exe)
 }
 
-func check(ctx context.Context, port int, rule, exe string) (Status, error) {
+func check(ctx context.Context, port int, rules []string, exe string) (Status, error) {
+	quoted := make([]string, len(rules))
+	for i, r := range rules {
+		quoted[i] = quote(r)
+	}
 	out, err := powershell(ctx, "-EncodedCommand",
-		encoded(fmt.Sprintf(statusScript, quote(rule), quote(exe)))).Output()
+		encoded(fmt.Sprintf(statusScript, strings.Join(quoted, ","), quote(exe)))).Output()
 	if err != nil {
 		return Status{Supported: true}, fmt.Errorf("read firewall: %w", err)
 	}
@@ -73,30 +61,30 @@ func check(ctx context.Context, port int, rule, exe string) (Status, error) {
 }
 
 const allowScript = `$ErrorActionPreference = 'Stop'
-Remove-NetFirewallRule -DisplayName %[1]s -ErrorAction SilentlyContinue
-New-NetFirewallRule -DisplayName %[1]s -Description 'Lets devices on this network open kuro.' -Direction Inbound -Action Allow -Protocol TCP -LocalPort %[2]d -RemoteAddress LocalSubnet -Profile %[3]s | Out-Null
+Remove-NetFirewallRule -DisplayName %[1]s,%[5]s -ErrorAction SilentlyContinue
+New-NetFirewallRule -DisplayName %[1]s -Description 'Lets devices on this network open Yoru.' -Direction Inbound -Action Allow -Protocol TCP -LocalPort %[2]d -RemoteAddress LocalSubnet -Profile %[3]s | Out-Null
 Get-NetFirewallApplicationFilter -Program %[4]s -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object { $_.Direction.ToString() -eq 'Inbound' -and $_.Action.ToString() -eq 'Block' } | Remove-NetFirewallRule`
 
-// Allow adds kuro's subnet rule and drops the block rules a declined prompt left, as administrator.
+// Allow adds Yoru's subnet rule in place of kuro's and drops a declined prompt's block rules, as administrator.
 func Allow(ctx context.Context, port int, exe string, public bool) error {
 	profiles := "Private,Domain"
 	if public {
 		profiles = "Private,Domain,Public"
 	}
-	return elevated(ctx, fmt.Sprintf(allowScript, quote(RuleName(port)), port, profiles, quote(exe)))
+	return elevated(ctx, fmt.Sprintf(allowScript, quote(RuleName(port)), port, profiles, quote(exe), quote(legacyRuleName(port))))
 }
 
 const allowPeersScript = `$ErrorActionPreference = 'Stop'
-Remove-NetFirewallRule -DisplayName %[1]s -ErrorAction SilentlyContinue
+Remove-NetFirewallRule -DisplayName %[1]s,%[4]s -ErrorAction SilentlyContinue
 foreach ($proto in 'TCP', 'UDP') {
-  New-NetFirewallRule -DisplayName %[1]s -Description 'Lets torrent peers connect to kuro.' -Direction Inbound -Action Allow -Protocol $proto -LocalPort %[2]d -Program %[3]s -Profile Any | Out-Null
+  New-NetFirewallRule -DisplayName %[1]s -Description 'Lets torrent peers connect to Yoru.' -Direction Inbound -Action Allow -Protocol $proto -LocalPort %[2]d -Program %[3]s -Profile Any | Out-Null
 }
 Get-NetFirewallApplicationFilter -Program %[3]s -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object { $_.Direction.ToString() -eq 'Inbound' -and $_.Action.ToString() -eq 'Block' } | Remove-NetFirewallRule`
 
-// AllowPeers lets torrent peers reach kuro.exe on the peer port from anywhere,
-// TCP and UDP, removing block rules a declined prompt left on kuro.exe.
+// AllowPeers lets torrent peers reach yoru.exe on the peer port from anywhere, TCP and UDP, replacing kuro's
+// rules for kuro.exe and removing block rules a declined prompt left.
 func AllowPeers(ctx context.Context, port int, exe string) error {
-	return elevated(ctx, fmt.Sprintf(allowPeersScript, quote(PeerRuleName(port)), port, quote(exe)))
+	return elevated(ctx, fmt.Sprintf(allowPeersScript, quote(PeerRuleName(port)), port, quote(exe), quote(legacyPeerRuleName(port))))
 }
 
 // elevated runs script through Windows' administrator prompt.

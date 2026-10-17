@@ -130,3 +130,10 @@ export function languageName(code?: string | null): string | undefined {
   }
   return raw.toUpperCase()
 }
+
+/** The YouTube id inside any of the URL shapes AniList and MAL hand out. */
+export function youtubeID(url?: string | null): string | undefined {
+  if (!url) return undefined
+  const m = url.match(/(?:youtu\.be\/|[?&]v=|\/embed\/)([\w-]{6,})/)
+  return m?.[1]
+}

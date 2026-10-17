@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"strconv"
 
-	"kuro/internal/library"
-	"kuro/internal/store"
+	"yoru/internal/library"
+	"yoru/internal/store"
 )
 
-// anilistCreds prefers what was entered in the app, since kuro ships as a binary;
+// anilistCreds prefers what was entered in the app, since Yoru ships as a binary;
 // the config file is still read for an install already set up that way.
 func (s *Server) anilistCreds(ctx context.Context) (id, secret string) {
 	id, _ = s.store.Setting(ctx, "anilist.client_id")

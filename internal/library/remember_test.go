@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/db"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/db"
+	"yoru/internal/store"
 )
 
 func rememberStore(t *testing.T) *store.Store {

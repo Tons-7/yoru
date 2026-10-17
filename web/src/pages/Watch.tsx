@@ -11,16 +11,21 @@ import {
   SOUND_PREFS,
   type SoundOptions,
   type StreamInfo,
+  type UpNextItem,
   type VoiceLevel,
 } from '../lib/api'
 import { bytes, cx } from '../lib/format'
-import { refreshDownloads, useDownloads, useEpisodes, usePrefs, useSetPref } from '../lib/queries'
+import { refreshDownloads, useDownloads, useEpisodes, useNow, usePrefs, useSetPref } from '../lib/queries'
 import { Anime4KDialog } from '../components/Anime4KDialog'
 import { CharacterRail } from '../components/CharacterRail'
-import { EpisodeList, isUnaired } from '../components/EpisodeList'
+import { EpisodeList } from '../components/EpisodeList'
+import { isUnaired } from '../lib/episodes'
 import { ReleasePicker } from '../components/ReleasePicker'
+import { OpenInApp } from '../components/OpenInApp'
 import { StatusMenu } from '../components/StatusMenu'
-import { Badge, Button, buttonClass, ErrorState, LinkButton, Segmented, Skeleton, Spinner, useDocumentTitle } from '../components/ui'
+import { Badge, Button, ErrorState, LinkButton, Segmented, Skeleton, Spinner } from '../components/ui'
+import { useDocumentTitle } from '../lib/hooks'
+import { buttonClass } from '../lib/ui'
 
 type AudioChoice = 'sub' | 'dub' | 'either'
 import { Player } from '../player/Player'
@@ -91,6 +96,7 @@ export function Watch() {
   const infoHash = hashPick?.key === epKey ? hashPick.hash : undefined
   const setInfoHash = (hash?: string) => setHashPick(hash ? { key: epKey, hash } : null)
   const [picking, setPicking] = useState(false)
+  const [inApp, setInApp] = useState(false)
 
   const play = useQuery({
     enabled: id !== 0 && ep > 0 && prefs.isSuccess,
@@ -218,13 +224,23 @@ export function Watch() {
   const current = list.find((e) => e.number === ep)
   // The next episode worth playing, as store.NextEpisode picks it (filler rule, nothing unaired).
   const skipFiller = flag('playback.skip_filler')
+  const now = useNow()
   const next = list.find(
     (e) =>
       e.number > ep &&
-      !isUnaired(e) &&
+      !isUnaired(e, now) &&
       !(skipFiller && (e.filler === 'filler' || e.recap)),
   )
-  const hasNext = !!next
+  // With an Up next list, the list plays next; the show's own next is for when it has nothing else.
+  const after = useQuery({
+    enabled: id !== 0 && ep > 0,
+    queryKey: ['upnext-after', id, ep],
+    queryFn: () =>
+      api.get<{ fromList: boolean; next?: UpNextItem; then?: UpNextItem }>(`/api/upnext/after${query({ id, episode: ep })}`),
+    refetchInterval: 2 * 60_000,
+  })
+  const fromList = after.data?.fromList ? after.data.next : undefined
+  const hasNext = !!fromList || !!next
 
   // The release filename is what the server resolved; it is not what anyone
   // calls the episode. Fall back to it only when nothing better is known.
@@ -235,8 +251,8 @@ export function Watch() {
   useDocumentTitle(showTitle ? `${showTitle} · Ep ${current?.display ?? ep}` : undefined)
 
   const reportProgress = useCallback(
-    (position: number, duration: number, played: number, final: boolean) => {
-      const body = { animeId: id, episode: ep, position, duration, played }
+    (position: number, duration: number, played: number, final: boolean, paused: boolean) => {
+      const body = { animeId: id, episode: ep, position, duration, played, paused, final }
       // sendBeacon survives the tab closing, which a fetch does not.
       if (!final) return beacon('/api/progress', body)
       // The last report of an episode (its end, Next, leaving) refreshes the ticks once the server has it.
@@ -246,16 +262,22 @@ export function Watch() {
           if (!r.watched) return
           void qc.invalidateQueries({ queryKey: ['episodes', id] })
           void qc.invalidateQueries({ queryKey: ['anime', id] })
+          // A watched episode left the list.
+          void qc.invalidateQueries({ queryKey: ['upnext'] })
         })
         .catch(() => {})
     },
     [id, ep, qc],
   )
 
-  const nextNumber = next?.number
+  const nextPath = fromList
+    ? `/watch/${fromList.animeId}/${fromList.episode}`
+    : next
+      ? `/watch/${id}/${next.number}`
+      : undefined
   const goNext = useCallback(() => {
-    if (nextNumber) navigate(`/watch/${id}/${nextNumber}`)
-  }, [nextNumber, id, navigate])
+    if (nextPath) navigate(nextPath)
+  }, [nextPath, navigate])
 
   // Swapping in the searching panel would destroy the element holding
   // fullscreen, so after the first episode the player waits with its own spinner.
@@ -390,10 +412,21 @@ export function Watch() {
                         onRetry={() => stream.refetch()}
                         onPick={() => setPicking(true)}
                       />
+                    ) : ended && fromList ? (
+                      <UpNext
+                        label="Up next · from your list"
+                        line={`${fromList.animeId === id ? '' : `${fromList.title} · `}Episode ${fromList.episode}${
+                          fromList.animeId === id && fromList.episodeTitle ? ` · ${fromList.episodeTitle}` : ''
+                        }`}
+                        then={after.data?.then && `Then ${after.data.then.title} · Ep ${after.data.then.episode}`}
+                        auto={flag('playback.autonext')}
+                        onPlay={goNext}
+                        onCancel={() => setEndedKey(null)}
+                      />
                     ) : ended && next ? (
                       <UpNext
-                        episode={next.display || next.number}
-                        title={next.titleEn}
+                        label="Up next"
+                        line={`Episode ${next.display || next.number}${next.titleEn ? ` · ${next.titleEn}` : ''}`}
                         auto={flag('playback.autonext')}
                         onPlay={goNext}
                         onCancel={() => setEndedKey(null)}
@@ -432,9 +465,15 @@ export function Watch() {
                     {held ? 'Downloaded' : download.isSuccess ? 'Queued' : 'Download'}
                   </Button>
 
+                  {source && <Button onClick={() => setInApp(true)}>Open in app</Button>}
+
                   {hasNext && (
-                    <Button variant="primary" onClick={goNext}>
-                      Next episode ›
+                    <Button
+                      variant="primary"
+                      onClick={goNext}
+                      title={fromList ? `${fromList.title} · Episode ${fromList.episode}` : undefined}
+                    >
+                      {fromList ? 'Up next ›' : 'Next episode ›'}
                     </Button>
                   )}
                 </div>
@@ -606,6 +645,7 @@ export function Watch() {
           }}
         />
       )}
+      {source && <OpenInApp source={source} open={inApp} onClose={() => setInApp(false)} />}
     </div>
   )
 }
@@ -661,11 +701,14 @@ interface PlayStage {
 
 /** Starting is search, file list, first data, file start; the wait says which step and for how long. */
 function useStartingNote(animeId: number, episode: number, waiting: boolean): { title: string; detail: string } {
-  const [seconds, setSeconds] = useState(0)
+  // Counted per wait: a new episode, or a wait starting again, begins at zero (set during render, no effect).
+  const wait = waiting ? `${animeId}:${episode}` : ''
+  const [count, setCount] = useState({ wait, seconds: 0 })
+  if (count.wait !== wait) setCount({ wait, seconds: 0 })
+  const seconds = count.seconds
   useEffect(() => {
     if (!waiting) return
-    setSeconds(0)
-    const id = window.setInterval(() => setSeconds((s) => s + 1), 1000)
+    const id = window.setInterval(() => setCount((c) => ({ ...c, seconds: c.seconds + 1 })), 1000)
     return () => window.clearInterval(id)
   }, [waiting, animeId, episode])
 
@@ -817,14 +860,17 @@ const UP_NEXT_SECONDS = 5
 
 // Over the credits at the end: counts down with auto-next on, else offers the button.
 function UpNext({
-  episode,
-  title,
+  label,
+  line,
+  then,
   auto,
   onPlay,
   onCancel,
 }: {
-  episode: number
-  title?: string
+  label: string
+  line: string
+  /** What follows it on the Up next list. */
+  then?: string
   auto: boolean
   onPlay: () => void
   onCancel: () => void
@@ -846,11 +892,9 @@ function UpNext({
       aria-label="Up next"
       className="absolute right-4 bottom-20 z-20 w-72 animate-rise rounded-xl border border-base-700 bg-base-950/90 p-3 shadow-xl shadow-black/60 backdrop-blur-sm"
     >
-      <p className="text-[11px] font-medium tracking-wide text-base-400 uppercase">Up next</p>
-      <p className="mt-0.5 truncate text-sm text-base-100">
-        Episode {episode}
-        {title ? ` · ${title}` : ''}
-      </p>
+      <p className="text-[11px] font-medium tracking-wide text-base-400 uppercase">{label}</p>
+      <p className="mt-0.5 truncate text-sm text-base-100">{line}</p>
+      {then && <p className="mt-0.5 truncate text-xs text-base-500">{then}</p>}
       <div className="mt-2.5 flex items-center gap-2">
         <button
           onClick={onPlay}

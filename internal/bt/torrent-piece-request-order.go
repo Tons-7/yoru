@@ -3,10 +3,10 @@ package bt
 import (
 	"fmt"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	g "github.com/anacrolix/generics"
-	"kuro/internal/bt/internal/amortize"
-	requestStrategy "kuro/internal/bt/internal/request-strategy"
+	"yoru/internal/bt/internal/amortize"
+	requestStrategy "yoru/internal/bt/internal/request-strategy"
 )
 
 // It's probably possible to track whether the piece moves around in the btree to be more efficient

@@ -206,7 +206,7 @@ func spans(t *testing.T, ffprobe string, init, seg []byte, sv *served) {
 	}
 	sv.vFrom, sv.aFrom = math.Inf(1), math.Inf(1)
 	sv.vTo, sv.aTo = math.Inf(-1), math.Inf(-1)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		parts := strings.Split(strings.TrimSpace(line), ",")
 		if len(parts) < 3 {
 			continue

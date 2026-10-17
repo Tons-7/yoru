@@ -1,35 +1,5 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { api } from '../lib/api'
-
-interface Theme {
-  title: string
-  artist?: string
-  episodes?: string
-}
-
-interface Credit {
-  name: string
-  role: string
-  image?: string
-}
-
-interface Extra {
-  openings?: Theme[]
-  endings?: Theme[]
-  staff?: Credit[]
-  trailer?: string
-}
-
-/** A show's themes, staff and trailer, fetched apart from the details as two more requests. */
-export function useAnimeExtra(animeId: number) {
-  return useQuery({
-    enabled: animeId > 0,
-    queryKey: ['anime-extra', animeId],
-    queryFn: () => api.get<Extra>(`/api/anime/${animeId}/extra`),
-    staleTime: 12 * 60 * 60_000,
-  })
-}
+import { useAnimeExtra, type Theme } from '../lib/queries'
 
 /** Theme songs and credits; the trailer is the hero's Trailer button. */
 export function ShowExtra({ animeId }: { animeId: number }) {

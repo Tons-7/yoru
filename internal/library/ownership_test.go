@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kuro/internal/db"
-	"kuro/internal/indexer"
-	"kuro/internal/parse"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/db"
+	"yoru/internal/indexer"
+	"yoru/internal/parse"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 func ownedFixture(t *testing.T) (*Cache, *store.Store, *fakeEngine) {
@@ -67,7 +67,7 @@ func TestEvictNeverDeletesOutsideTheCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	if engine.wasDeleted("abc") {
-		t.Error("deleted a download outside kuro's cache folder")
+		t.Error("deleted a download outside Yoru's cache folder")
 	}
 }
 
@@ -248,8 +248,8 @@ func TestDiscardSparesADownloadOnRecord(t *testing.T) {
 	}
 }
 
-// kuro's own folders inside the cache folder are never orphans.
-func TestOrphansLeaveKurosOwnFoldersAlone(t *testing.T) {
+// Yoru's own folders inside the cache folder are never orphans.
+func TestOrphansLeaveYorusOwnFoldersAlone(t *testing.T) {
 	c, _, _ := ownedFixture(t)
 	was := orphanSettle
 	orphanSettle = 0

@@ -31,13 +31,13 @@ func TestSecondDuckDNSSetupStopsTheFirst(t *testing.T) {
 	manageCert = func(context.Context, *certmagic.Config, string) error { return nil }
 	t.Cleanup(func() { manageCert = was })
 	s := New(t.TempDir(), func() string { return "" }, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err := s.UseDuckDNS("mykuro", "token-1"); err != nil {
+	if err := s.UseDuckDNS("myyoru", "token-1"); err != nil {
 		t.Fatal(err)
 	}
 	s.mu.RLock()
 	first := s.duck
 	s.mu.RUnlock()
-	if err := s.UseDuckDNS("mykuro", "token-2"); err != nil {
+	if err := s.UseDuckDNS("myyoru", "token-2"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.StopDuckDNS)

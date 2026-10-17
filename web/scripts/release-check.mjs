@@ -1,4 +1,4 @@
-// Pre-release run: the Go suite, then each browser check on its own instance; logs in %TEMP%/kuro-release-check.
+// Pre-release run: the Go suite, then each browser check on its own instance; logs in %TEMP%/yoru-release-check.
 //   node scripts/release-check.mjs [only.mjs …]    env: LANES=4, SKIP_BUILD=1, SKIP_GO=1
 import { spawn } from 'node:child_process'
 import { createWriteStream, mkdirSync, rmSync } from 'node:fs'
@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const webDir = resolve(scriptDir, '..')
 const repo = resolve(webDir, '..')
-const logs = join(tmpdir(), 'kuro-release-check')
+const logs = join(tmpdir(), 'yoru-release-check')
 
 // ALONE checks run one at a time: AniList throttles parallel catalogue loads, or they need the foreground.
 const ALONE = true
@@ -42,7 +42,7 @@ const CHECKS = [
   ['over-budget-note-check.mjs'],
   ['pip-check.mjs'],
   // Real sites would compete with the local swarm's.
-  ['prefetch-check.mjs', { KURO_EXTRA_CONFIG: '' }, ALONE],
+  ['prefetch-check.mjs', { YORU_EXTRA_CONFIG: '' }, ALONE],
   ['related-check.mjs', {}, ALONE],
   ['saved-copy-check.mjs', {}, ALONE],
   ['seek-spinner-check.mjs'],
@@ -114,8 +114,8 @@ if (!only.length) await step('release notes', 'node scripts/notes-check.mjs', we
 
 let built = process.env.SKIP_BUILD === '1'
 if (!built) {
-  const exe = join(tmpdir(), 'kuro-e2e-bin', process.platform === 'win32' ? 'kuro.exe' : 'kuro')
-  built = (await step('web build', 'npm run build', webDir)) && (await step('server build', `go build -o "${exe}" ./cmd/kuro`, repo))
+  const exe = join(tmpdir(), 'yoru-e2e-bin', process.platform === 'win32' ? 'yoru.exe' : 'yoru')
+  built = (await step('web build', 'npm run build', webDir)) && (await step('server build', `go build -o "${exe}" ./cmd/yoru`, repo))
 }
 
 // The updater end to end on two real builds; its own ports, so it never meets a lane.

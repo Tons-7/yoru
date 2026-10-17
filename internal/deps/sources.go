@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const userAgent = "kuro"
+const userAgent = "Yoru"
 
 type ghAsset struct {
 	Name string `json:"name"`

@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/tracker/udp"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/tracker/udp"
 )
 
 func TestUnmarshalHTTPResponsePeerDicts(t *testing.T) {

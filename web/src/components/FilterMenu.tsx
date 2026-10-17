@@ -1,7 +1,8 @@
 import { useCallback, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cx } from '../lib/format'
-import { TextInput, useDismiss, useModalFocus } from './ui'
+import { TextInput } from './ui'
+import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 
 /** A multi-value filter (a native select holds one), portalled so the scrolling bar can't clip it. */
 export function FilterMenu({
@@ -29,7 +30,7 @@ export function FilterMenu({
   useModalFocus(menuRef, open)
 
   const pretty = (option: string) => labels?.[option] ?? option.replace(/_/g, ' ').toLowerCase()
-  const box = trigger.current?.getBoundingClientRect()
+  const box = useAnchorBox(trigger, open)
 
   // A long list in one narrow column has to be scrolled to be read. Two
   // columns puts twenty genres on screen at once, which is the whole list.

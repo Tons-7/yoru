@@ -1,7 +1,7 @@
 // Saved-copy answers (marked as the server does) show a banner; the next live answer clears it.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const SHOTS = process.env.SHOTS ?? '.'
 
 let failures = 0
@@ -25,7 +25,7 @@ page.on('pageerror', (e) => errors.push(e.message.slice(0, 160)))
 
 // Browsing saves what it shows: that is what the fallback later stands on.
 const live = await fetch(`${BASE}/api/browse?sort=popular&perPage=42`)
-check(live.headers.get('x-kuro-live') === '1', 'a live answer is marked live')
+check(live.headers.get('x-yoru-live') === '1', 'a live answer is marked live')
 const first = (await live.json()).items?.[0]
 check(!!first, 'browse returned shows', first?.title)
 const saved = await until(async () => {
@@ -37,8 +37,8 @@ check(saved, 'a browsed show is saved and found by the local search')
 const dayAgo = Math.floor(Date.now() / 1000) - 26 * 3600
 await page.route('**/api/discover**', async (route) => {
   const res = await route.fetch()
-  const headers = { ...res.headers(), 'x-kuro-saved': String(dayAgo) }
-  delete headers['x-kuro-live']
+  const headers = { ...res.headers(), 'x-yoru-saved': String(dayAgo) }
+  delete headers['x-yoru-live']
   await route.fulfill({ response: res, headers })
 })
 await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })

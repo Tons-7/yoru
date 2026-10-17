@@ -90,7 +90,7 @@ func (t *TokyoTosho) Search(ctx context.Context, q Query) ([]Torrent, error) {
 		return nil, err
 	}
 	// Without one the site serves an empty body.
-	req.Header.Set("User-Agent", "kuro/0.1")
+	req.Header.Set("User-Agent", "yoru/0.1")
 	req.Header.Set("Accept", "application/rss+xml")
 
 	res, err := t.http.Do(req)

@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/config"
-	"kuro/internal/db"
-	"kuro/internal/store"
+	"yoru/internal/config"
+	"yoru/internal/db"
+	"yoru/internal/store"
 )
 
 // --no-window is forwarded, never added, so a windowed kuro reopens its UI.
@@ -104,7 +104,7 @@ func fakeGitHubSigned(t *testing.T, version string, exeBody []byte, sums, truste
 
 	var archive bytes.Buffer
 	zw := zip.NewWriter(&archive)
-	f, _ := zw.Create(config.ExeName("kuro"))
+	f, _ := zw.Create(config.ExeName(config.Name))
 	f.Write(exeBody)
 	zw.Close()
 	sum := sha256.Sum256(archive.Bytes())
@@ -318,6 +318,64 @@ func TestApplyRestoresTheOldBinaryWhenTheNewOneWontStart(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(exe); string(got) != "old binary" {
 		t.Errorf("executable = %q, want the old one restored", got)
+	}
+}
+
+// The old updater installs the first Yoru as kuro.exe; it takes its new name on start, and a later start leaves it.
+func TestTakeNameAfterTheRename(t *testing.T) {
+	dir := t.TempDir()
+	kuro, yoru := filepath.Join(dir, config.ExeName("kuro")), filepath.Join(dir, config.ExeName("yoru"))
+	os.WriteFile(kuro, []byte("new code"), 0o755)
+
+	if got := TakeName(kuro); got != yoru {
+		t.Fatalf("now %s, want %s", got, yoru)
+	}
+	if b, _ := os.ReadFile(yoru); string(b) != "new code" {
+		t.Errorf("yoru.exe holds %q", b)
+	}
+	if _, err := os.Stat(kuro); err == nil {
+		t.Error("kuro.exe is still there")
+	}
+	if got := TakeName(yoru); got != yoru {
+		t.Errorf("an already renamed one moved to %s", got)
+	}
+
+	// A yoru.exe of the user's own (a fresh download beside the old one) is never replaced.
+	os.WriteFile(kuro, []byte("other"), 0o755)
+	if got := TakeName(kuro); got != kuro {
+		t.Errorf("renamed over an existing yoru.exe: %s", got)
+	}
+	if b, _ := os.ReadFile(yoru); string(b) != "new code" {
+		t.Errorf("yoru.exe was replaced with %q", b)
+	}
+}
+
+// The first Yoru failing to start hands back to the version before it, which waits as kuro.exe.old.
+func TestRollbackAcrossTheRename(t *testing.T) {
+	dir := t.TempDir()
+	kuro, yoru := filepath.Join(dir, config.ExeName("kuro")), filepath.Join(dir, config.ExeName("yoru"))
+	os.WriteFile(yoru, []byte("new, failing"), 0o755)
+	os.WriteFile(kuro+".old", []byte("old"), 0o755)
+
+	back, err := Rollback(yoru)
+	if err != nil || back != kuro {
+		t.Fatalf("rollback to %q (%v), want %s", back, err, kuro)
+	}
+	if b, _ := os.ReadFile(kuro); string(b) != "old" {
+		t.Errorf("kuro.exe holds %q, want the old version", b)
+	}
+	if b, _ := os.ReadFile(yoru + ".failed"); string(b) != "new, failing" {
+		t.Errorf("the failed one kept as %q", b)
+	}
+
+	// Serving under the new name later, the kuro-named leftovers go.
+	os.WriteFile(yoru, []byte("fixed"), 0o755)
+	os.WriteFile(kuro+".old", []byte("old"), 0o755)
+	Cleanup(yoru)
+	for _, left := range []string{kuro + ".old", yoru + ".failed"} {
+		if _, err := os.Stat(left); err == nil {
+			t.Errorf("%s left behind", filepath.Base(left))
+		}
 	}
 }
 

@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/match"
-	"kuro/internal/parse"
-	"kuro/internal/store"
-	"kuro/internal/torrent"
+	"yoru/internal/match"
+	"yoru/internal/parse"
+	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 // Extras, trailers and samples are video too, so size separates an episode from them.
@@ -39,7 +39,7 @@ type Scanner struct {
 	last *ScanReport
 }
 
-// WithCacheDir names kuro's own download folder, which a library root may contain.
+// WithCacheDir names Yoru's own download folder, which a library root may contain.
 func (s *Scanner) WithCacheDir(dir string) *Scanner {
 	if abs, err := filepath.Abs(dir); err == nil {
 		s.cacheDir = abs

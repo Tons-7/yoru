@@ -6,7 +6,7 @@ import (
 	g "github.com/anacrolix/generics"
 	list "github.com/bahlo/generic-list-go"
 
-	typedRoaring "kuro/internal/bt/typed-roaring"
+	typedRoaring "yoru/internal/bt/typed-roaring"
 )
 
 type orderedBitmap[T typedRoaring.BitConstraint] struct {
@@ -35,7 +35,8 @@ func (o *orderedBitmap[T]) Contains(index T) bool {
 func (o *orderedBitmap[T]) Add(index T) {
 	o.bitmap.Add(index)
 	if _, ok := o.elements[index]; !ok {
-		g.MakeMapIfNilAndSet(&o.elements, index, o.order.PushBack(index))
+		g.MakeMapIfNil(&o.elements)
+		o.elements[index] = o.order.PushBack(index)
 	}
 }
 

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/indexer"
-	"kuro/internal/store"
+	"yoru/internal/indexer"
+	"yoru/internal/store"
 )
 
 // A show on the list as watching, with its status synced from the tracker rather than set here.

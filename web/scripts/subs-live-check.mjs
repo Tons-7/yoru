@@ -1,10 +1,10 @@
 // Reports the subtitles each real release of a show carries and whether they render.
-//   KURO_EXTRA_CONFIG='[[indexer]] ...' KURO_SHOW='Some title' EPISODES=1,2 node scripts/run-player-check.mjs subs-live-check.mjs
+//   YORU_EXTRA_CONFIG='[[indexer]] ...' YORU_SHOW='Some title' EPISODES=1,2 node scripts/run-player-check.mjs subs-live-check.mjs
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const SHOTS = process.env.SHOTS ?? '.'
-const SHOW = process.env.KURO_SHOW ?? ''
+const SHOW = process.env.YORU_SHOW ?? ''
 const EPISODES = (process.env.EPISODES ?? '1').split(',').map(Number)
 
 const get = async (path) => {
@@ -12,7 +12,7 @@ const get = async (path) => {
   return res.ok ? res.json() : { error: `${res.status} ${await res.text()}` }
 }
 
-let id = Number(process.env.KURO_SHOW_ID ?? 0)
+let id = Number(process.env.YORU_SHOW_ID ?? 0)
 if (!id) {
   const found = await get(`/api/browse?q=${encodeURIComponent(SHOW)}`)
   const first = found.items?.[0]
@@ -47,7 +47,7 @@ const dialogueOf = async (streamId, track) => {
   const body = res.ok ? await res.text() : ''
   return {
     status: res.status,
-    complete: res.headers.get('x-kuro-complete'),
+    complete: res.headers.get('x-yoru-complete'),
     dialogue: (body.match(/^Dialogue:/gm) ?? []).length,
     sample: (body.match(/^Dialogue:.*$/m)?.[0] ?? '').slice(0, 120),
   }
@@ -78,7 +78,7 @@ for (const ep of EPISODES) {
         const nearPlayhead = (body.match(/^Dialogue: \d+,0:0[345]:\d\d/gm) ?? []).length
         subtitleFetches.push({
           status: res.status(),
-          complete: res.headers()['x-kuro-complete'],
+          complete: res.headers()['x-yoru-complete'],
           dialogue: (body.match(/^Dialogue:/gm) ?? []).length,
           nearPlayhead,
         })

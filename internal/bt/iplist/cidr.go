@@ -34,7 +34,7 @@ func IPNetLast(in *net.IPNet) (last net.IP) {
 		panic("wat")
 	}
 	last = make(net.IP, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		last[i] = in.IP[i] | ^in.Mask[i]
 	}
 	return

@@ -8,13 +8,13 @@ import (
 	"sync"
 
 	"github.com/anacrolix/log"
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 
-	"kuro/internal/bt/dht"
-	"kuro/internal/bt/dht/bep44"
-	k_nearest_nodes "kuro/internal/bt/dht/k-nearest-nodes"
-	"kuro/internal/bt/dht/krpc"
-	"kuro/internal/bt/dht/traversal"
+	"yoru/internal/bt/dht"
+	"yoru/internal/bt/dht/bep44"
+	k_nearest_nodes "yoru/internal/bt/dht/k-nearest-nodes"
+	"yoru/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/traversal"
 )
 
 type GetResult struct {
@@ -153,9 +153,7 @@ notDone:
 	var wg sync.WaitGroup
 	put := seqToPut(autoSeq)
 	op.Closest().Range(func(elem k_nearest_nodes.Elem) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			// This is enforced by startGetTraversal.
 			token := elem.Data.(string)
 			res := s.Put(ctx, dht.NewAddr(elem.Addr.UDP()), put, token, dht.QueryRateLimiting{})
@@ -165,7 +163,7 @@ notDone:
 			} else {
 				logger.Levelf(log.Debug, "put to %v [token=%q]", elem.Addr, token)
 			}
-		}()
+		})
 	})
 	wg.Wait()
 	stats = op.Stats()

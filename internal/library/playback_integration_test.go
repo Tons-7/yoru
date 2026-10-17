@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/engine"
-	"kuro/internal/player"
-	"kuro/internal/torrent"
+	"yoru/internal/engine"
+	"yoru/internal/player"
+	"yoru/internal/torrent"
 )
 
 // End to end: torrent stream over HTTP into mpv, position back over IPC. Big Buck Bunny, CC BY 3.0.
@@ -33,11 +33,11 @@ func magnetWithTrackers() string {
 }
 
 func TestStreamIntoPlayer(t *testing.T) {
-	if os.Getenv("KURO_LIVE") == "" {
-		t.Skip("set KURO_LIVE=1 to run swarm-dependent tests")
+	if os.Getenv("YORU_LIVE") == "" {
+		t.Skip("set YORU_LIVE=1 to run swarm-dependent tests")
 	}
 
-	bin := os.Getenv("KURO_BIN")
+	bin := os.Getenv("YORU_BIN")
 	if bin == "" {
 		bin = filepath.Join("..", "..", "bin")
 	}
@@ -94,13 +94,13 @@ func TestStreamIntoPlayer(t *testing.T) {
 	streamURL := client.StreamURL(added.ID, index)
 	t.Logf("streaming %s", streamURL)
 
-	p := player.New(mpvPath, `\\.\pipe\kuro-stream-test`, log)
+	p := player.New(mpvPath, `\\.\pipe\yoru-stream-test`, log)
 	defer p.Stop()
 
 	start := time.Now()
 	err = p.Play(ctx, player.Options{
 		URL:   streamURL,
-		Title: "kuro stream test",
+		Title: "yoru stream test",
 		// Audio only keeps the run headless; the video path is identical.
 		Extra: []string{"--no-video", "--cache=yes"},
 	})

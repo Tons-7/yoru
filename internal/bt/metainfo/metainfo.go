@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	"kuro/internal/bt/bencode"
-	infohash_v2 "kuro/internal/bt/types/infohash-v2"
+	"yoru/internal/bt/bencode"
+	infohash_v2 "yoru/internal/bt/types/infohash-v2"
 )
 
 // Also known as a torrent file.
@@ -74,7 +74,7 @@ func (mi *MetaInfo) Write(w io.Writer) error {
 
 // Set good default values in preparation for creating a new MetaInfo file.
 func (mi *MetaInfo) SetDefaults() {
-	mi.CreatedBy = "kuro/internal/bt"
+	mi.CreatedBy = "yoru/internal/bt"
 	mi.CreationDate = time.Now().Unix()
 }
 

@@ -3,9 +3,9 @@ package httpTracker
 import (
 	"fmt"
 
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 
-	"kuro/internal/bt/bencode"
+	"yoru/internal/bt/bencode"
 )
 
 type HttpResponse struct {
@@ -45,7 +45,7 @@ var (
 )
 
 func (me *Peers) UnmarshalBencode(b []byte) (err error) {
-	var _v interface{}
+	var _v any
 	err = bencode.Unmarshal(b, &_v)
 	if err != nil {
 		return
@@ -66,12 +66,12 @@ func (me *Peers) UnmarshalBencode(b []byte) (err error) {
 			})
 		}
 		return
-	case []interface{}:
+	case []any:
 		vars.Add("http responses with list peers", 1)
 		me.Compact = false
 		for _, i := range v {
 			var p Peer
-			p.FromDictInterface(i.(map[string]interface{}))
+			p.FromDictInterface(i.(map[string]any))
 			me.List = append(me.List, p)
 		}
 		return

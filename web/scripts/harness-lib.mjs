@@ -1,4 +1,4 @@
-// Shared by the scripts that start their own kuro.
+// Shared by the scripts that start their own Yoru.
 import { copyFileSync, linkSync, mkdirSync, readdirSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -46,7 +46,7 @@ export async function prepareLocalEpisode({ base, lib, anime, autoplay = true })
   for (let i = 0; i < 30 && !file; i++) {
     await sleep(1000)
     const files = await (await fetch(`${base}/api/local/files`)).json()
-    file = (files.items ?? []).find((f) => String(f.path ?? '').includes('Kuro Test Show'))
+    file = (files.items ?? []).find((f) => String(f.path ?? '').includes('Yoru Test Show'))
   }
   if (!file) return false
   const assign = await post('/api/local/assign', { id: file.id, animeId: Number(anime), episode: 1 })

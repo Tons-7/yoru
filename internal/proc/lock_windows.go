@@ -8,7 +8,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Lock takes an exclusive lock on path for the life of the process; a second kuro on the same data gets
+// Lock takes an exclusive lock on path for the life of the process; a second Yoru on the same data gets
 // an error. The port alone did not tell: a listener on every address lets a loopback claim through.
 func Lock(path string) (func(), error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)

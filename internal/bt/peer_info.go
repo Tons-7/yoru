@@ -1,9 +1,9 @@
 package bt
 
 import (
-	"kuro/internal/bt/dht/krpc"
+	"yoru/internal/bt/dht/krpc"
 
-	"kuro/internal/bt/peer_protocol"
+	"yoru/internal/bt/peer_protocol"
 )
 
 // Peer connection info, handed about publicly.

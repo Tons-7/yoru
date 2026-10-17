@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"kuro/internal/anilist"
-	"kuro/internal/mal"
-	"kuro/internal/store"
+	"yoru/internal/anilist"
+	"yoru/internal/mal"
+	"yoru/internal/store"
 )
 
 // trackers is one fake for both: AniList's GraphQL and MAL's REST, recording what each was asked.

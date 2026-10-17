@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// Search follows the sort sent, not relevance. Opt-in: KURO_LIVE=1 go test -run LiveBrowseSort -v
+// Search follows the sort sent, not relevance. Opt-in: YORU_LIVE=1 go test -run LiveBrowseSort -v
 func TestLiveBrowseSortOrdersSearchResults(t *testing.T) {
-	if os.Getenv("KURO_LIVE") == "" {
-		t.Skip("set KURO_LIVE=1 to query AniList")
+	if os.Getenv("YORU_LIVE") == "" {
+		t.Skip("set YORU_LIVE=1 to query AniList")
 	}
 	c := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ctx := context.Background()

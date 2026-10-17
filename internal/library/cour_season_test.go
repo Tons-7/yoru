@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"kuro/internal/indexer"
-	"kuro/internal/parse"
-	"kuro/internal/score"
+	"yoru/internal/indexer"
+	"yoru/internal/parse"
+	"yoru/internal/score"
 )
 
 // A later cour restarts at one, but a release named for the broadcast season

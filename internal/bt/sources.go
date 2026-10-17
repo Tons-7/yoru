@@ -10,8 +10,8 @@ import (
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/missinggo/v2/panicif"
 
-	"kuro/internal/bt/bencode"
-	"kuro/internal/bt/metainfo"
+	"yoru/internal/bt/bencode"
+	"yoru/internal/bt/metainfo"
 )
 
 // Add HTTP endpoints that serve the metainfo. They will be used if the torrent info isn't obtained

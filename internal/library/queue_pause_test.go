@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"kuro/internal/store"
+	"yoru/internal/store"
 )
 
 func pausableQueue(t *testing.T) (*Downloader, *store.Store) {

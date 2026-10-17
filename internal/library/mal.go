@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"kuro/internal/mal"
-	"kuro/internal/store"
+	"yoru/internal/mal"
+	"yoru/internal/store"
 )
 
 const malTracker = "mal"

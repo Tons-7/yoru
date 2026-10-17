@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"kuro/internal/parse"
+	"yoru/internal/parse"
 )
 
 type Client struct {
@@ -46,8 +46,53 @@ func (c *Client) WithEngine(e Engine) *Client {
 	return c
 }
 
+// Limits are the engine's speed, upload and network settings, changed from Settings while it runs.
+type Limits struct {
+	// DownloadBytes caps download in bytes a second; 0 is no cap.
+	DownloadBytes int64
+	Upload        string
+	// Adapter is the network adapter torrents keep to (a VPN's), down or not; empty is any.
+	Adapter string
+}
+
+// Network is where torrents go out: the adapter chosen, its address in use, or that they wait for it.
+type Network struct {
+	Adapter string `json:"adapter"`
+	Address string `json:"address,omitempty"`
+	Waiting bool   `json:"waiting"`
+}
+
+// NetworkReporter is an engine that can say how it is connected.
+type NetworkReporter interface{ Network() Network }
+
+// Network asks the engine how torrents are connected; the zero value when it can't say.
+func (c *Client) Network() Network {
+	if r, ok := c.engine.(NetworkReporter); ok {
+		return r.Network()
+	}
+	return Network{}
+}
+
+// Upload settings: share only while a torrent downloads (finished ones never seed), or never.
+const (
+	UploadWhileDownloading = "while_downloading"
+	UploadNever            = "never"
+)
+
+// Limiter is an engine that takes Limits without being started for them.
+type Limiter interface{ SetLimits(Limits) }
+
+// SetLimits hands the settings to the engine; false when it can't take them.
+func (c *Client) SetLimits(l Limits) bool {
+	lim, ok := c.engine.(Limiter)
+	if ok {
+		lim.SetLimits(l)
+	}
+	return ok
+}
+
 // SecretHeader carries the per-run secret the engine wants on every request that is not a stream.
-const SecretHeader = "X-Kuro-Engine"
+const SecretHeader = "X-Yoru-Engine"
 
 // NewSecret is a random token for one run.
 func NewSecret() string {

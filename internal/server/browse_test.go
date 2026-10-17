@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"kuro/internal/config"
+	"yoru/internal/config"
 )
 
 // The sort picked on Browse survives the query string all the way to AniList.

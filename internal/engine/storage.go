@@ -9,10 +9,10 @@ import (
 	"strings"
 	"sync"
 
-	"kuro/internal/bt/metainfo"
-	"kuro/internal/bt/storage"
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/bt/storage"
 
-	"kuro/internal/torrent"
+	"yoru/internal/torrent"
 )
 
 // files opens a file per read or write: bt's file storage maps them, and Windows can't delete a mapped file.

@@ -14,11 +14,11 @@ import (
 	g "github.com/anacrolix/generics"
 	analog "github.com/anacrolix/log"
 	"github.com/anacrolix/missinggo/v2/panicif"
-	"kuro/internal/bt/internal/extracmp"
-	"kuro/internal/bt/internal/indexed"
-	"kuro/internal/bt/internal/mytimer"
-	"kuro/internal/bt/tracker"
-	trHttp "kuro/internal/bt/tracker/http"
+	"yoru/internal/bt/internal/extracmp"
+	"yoru/internal/bt/internal/indexed"
+	"yoru/internal/bt/internal/mytimer"
+	"yoru/internal/bt/tracker"
+	trHttp "yoru/internal/bt/tracker/http"
 )
 
 // Designed in a way to allow switching to an event model if required. If multiple slots are allowed
@@ -389,7 +389,7 @@ func (me *regularTrackerAnnounceDispatcher) addKey(key torrentTrackerAnnouncerKe
 	me.torrentForAnnounceRequests[key.ShortInfohash] = weak.Make(t)
 	if !g.MapContains(me.announceStates, key) {
 		g.MakeMapIfNil(&me.announceStates)
-		g.MapMustAssignNew(me.announceStates, key, g.PtrTo(announceState{}))
+		g.MapMustAssignNew(me.announceStates, key, new(announceState{}))
 	}
 	t.regularTrackerAnnounceState[key] = g.MapMustGet(me.announceStates, key)
 	me.announceData.Create(key, nextAnnounceInput{

@@ -3,8 +3,8 @@ package score
 import (
 	"testing"
 
-	"kuro/internal/indexer"
-	"kuro/internal/parse"
+	"yoru/internal/indexer"
+	"yoru/internal/parse"
 )
 
 func seeded(title string, size int64, seeders int) Candidate {

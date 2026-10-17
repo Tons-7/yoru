@@ -1,9 +1,9 @@
 // Every page at desktop and phone width: screenshots for review, and none throws or scrolls sideways.
 import { chromium } from 'playwright'
 
-const BASE = process.env.KURO_URL ?? 'http://127.0.0.1:4399'
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const SHOTS = process.env.SHOTS ?? '.'
-const ANIME = process.env.KURO_ANIME ?? '127230'
+const ANIME = process.env.YORU_ANIME ?? '127230'
 const ONLY = process.env.TOUR ? process.env.TOUR.split(',') : null
 
 const pages = [
