@@ -32,6 +32,9 @@ see it as newer.
 Creates the GitHub release (tag v<version>) with the zips attached, which is
 what every installed copy checks. Needs `gh auth login` once.
 
+.PARAMETER NotesFile
+The release notes, a UTF-8 markdown file passed to gh untouched; read into -Notes, PowerShell 5.1 mangles non-ASCII.
+
 .PARAMETER SigningKey
 The release key's file (a hex ed25519 seed), kept outside the repository.
 Default: %LOCALAPPDATA%\yoru-release\update-signing.key, else the kuro-release
@@ -40,7 +43,7 @@ another update.
 
 .EXAMPLE
 ./scripts/package.ps1
-./scripts/package.ps1 -Version 2026.08.27 -Publish
+./scripts/package.ps1 -Version 2026.08.27 -Publish -NotesFile notes.md
 #>
 [CmdletBinding()]
 param(
@@ -48,6 +51,7 @@ param(
     [string]$OutDir,
     [switch]$Publish,
     [string]$Notes,
+    [string]$NotesFile,
     [string]$SigningKey
 )
 
@@ -233,8 +237,9 @@ Write-Host "out: $OutDir" -ForegroundColor DarkGray
 if ($Publish) {
     Write-Step "publish v$Version"
     if (-not $Notes) { $Notes = "Yoru $Version" }
+    $notesArgs = if ($NotesFile) { @('--notes-file', (Resolve-Path $NotesFile).Path) } else { @('--notes', $Notes) }
     gh release create "v$Version" $fullZip $updateZip @platformZips @bridgeZips $sums $sig `
-        --repo Tons-7/yoru --title "Yoru $Version" --notes $Notes
+        --repo Tons-7/yoru --title "Yoru $Version" @notesArgs
     if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
     Write-Host "published https://github.com/Tons-7/yoru/releases/tag/v$Version" -ForegroundColor Green
 }
