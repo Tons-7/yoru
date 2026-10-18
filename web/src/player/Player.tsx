@@ -16,8 +16,8 @@ import {
   VOICE_LEVELS,
   type VoiceLevel,
 } from '../lib/api'
-import { clockTime, cx, languageName } from '../lib/format'
-import { refreshDownloads } from '../lib/queries'
+import { clockTime, cx, languageName, speed } from '../lib/format'
+import { refreshDownloads, useSpeedUnit } from '../lib/queries'
 import { SHOW_SHORTCUTS } from '../components/keys'
 import { PlayIcon } from '../components/PosterCard'
 import { Spinner } from '../components/ui'
@@ -158,6 +158,8 @@ export interface PlayerProps {
   onResume?: () => void
   /** The server no longer knows the stream; reopen it under the same URLs. */
   onSessionLost?: () => Promise<unknown>
+  /** Opens the release picker, offered when this release won't play. */
+  onPickRelease?: () => void
   /** Drawn inside the player, so it survives fullscreen and picture in picture. */
   overlay?: ReactNode
 }
@@ -180,6 +182,7 @@ export function Player({
   onNext,
   onResume,
   onSessionLost,
+  onPickRelease,
   overlay,
 }: PlayerProps) {
   const [video, setVideo] = useState<HTMLVideoElement | null>(null)
@@ -329,7 +332,7 @@ export function Player({
   const recovering = useRef(false)
   const recover = useCallback(() => recoverRef.current(), [])
 
-  const { error, hls } = useHlsSource(video, playlist, resumeAt, recover)
+  const { error, final, hls } = useHlsSource(video, playlist, resumeAt, recover)
   useKeepAlive(video, playlist, recover)
   recoverRef.current = () => {
     if (recovering.current || !onSessionLost) return
@@ -656,6 +659,7 @@ export function Player({
 
   // Numbers for the stall message: a swarm too slow for the bitrate is a download, not a wait.
   const [health, setHealth] = useState<StreamHealth | null>(null)
+  const unit = useSpeedUnit()
   const [queued, setQueued] = useState(false)
   useEffect(() => setQueued(false), [stream?.id])
   const stalledLong = stalledFor > 12
@@ -806,7 +810,7 @@ export function Player({
                 {!health || health.complete
                   ? 'Buffering…'
                   : health.peers > 0
-                    ? `Buffering… ${health.mbps.toFixed(1)} Mbps from ${health.peers} ${health.peers === 1 ? 'peer' : 'peers'}`
+                    ? `Buffering… ${speed(health.mbps, unit)} from ${health.peers} ${health.peers === 1 ? 'peer' : 'peers'}`
                     : 'Buffering… no peers connected right now'}
               </p>
             )}
@@ -835,23 +839,33 @@ export function Player({
         <div className={cx('absolute inset-0 grid place-items-center bg-base-950/80 p-6 text-center', corners)}>
           <div>
             <p className="text-sm text-base-200">{error ?? lostError}</p>
-            <button
-              onClick={() => {
-                if (error) {
-                  // A fresh source from where it stopped, playing once it can; the hook clears the error.
-                  setResumeAt(video?.currentTime || startAt)
-                  setWaiting(true)
-                  resumeAfterRebuild(video, true)
-                  setEpoch((e) => e + 1)
-                  return
-                }
-                setLostError(null)
-                recover()
-              }}
-              className={cx(buttonClass('secondary', 'sm'), 'pointer-events-auto mt-3')}
-            >
-              Try again
-            </button>
+            <div className="mt-3 flex flex-wrap justify-center gap-2">
+              {/* The same release again only fails again when its conversion is what failed. */}
+              {!(error && final) && (
+                <button
+                  onClick={() => {
+                    if (error) {
+                      // A fresh source from where it stopped, playing once it can; the hook clears the error.
+                      setResumeAt(video?.currentTime || startAt)
+                      setWaiting(true)
+                      resumeAfterRebuild(video, true)
+                      setEpoch((e) => e + 1)
+                      return
+                    }
+                    setLostError(null)
+                    recover()
+                  }}
+                  className={cx(buttonClass('secondary', 'sm'), 'pointer-events-auto')}
+                >
+                  Try again
+                </button>
+              )}
+              {error && onPickRelease && (
+                <button onClick={onPickRelease} className={cx(buttonClass('secondary', 'sm'), 'pointer-events-auto')}>
+                  Choose another release
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1164,8 +1178,8 @@ function useLoadedRanges(streamId: string | undefined, video: HTMLVideoElement |
         const res = await api.get<{ complete: boolean; ranges: Array<[number, number]> }>(`/api/stream/${streamId}/loaded`)
         if (stopped) return
         setLoaded({ stream: streamId, ranges: res.ranges })
-        // Asked again every few seconds while downloading, only while watched: a poll keeps the session alive.
-        if (!res.complete) timer = setTimeout(() => void untilWatching(video, () => stopped).then(read), 4000)
+        // Asked again while downloading and on screen, paused too: asking keeps nothing alive.
+        if (!res.complete) timer = setTimeout(() => void untilWatching(null, () => stopped).then(read), 4000)
       } catch {
         if (!stopped) timer = setTimeout(read, 10_000)
       }

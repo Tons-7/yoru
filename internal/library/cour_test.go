@@ -153,7 +153,7 @@ func TestAliasesAreDerivedFromTheFranchise(t *testing.T) {
 
 	// A catalogue that does carry the numbering is believed over the count.
 	if _, err := st.SaveEpisodes(ctx, tybwCalamity, []metadata.Episode{
-		{Number: 2, TvdbNumber: 99, Absolute: 999},
+		{Number: 2, TvdbNumber: 99, Absolute: 999, Season: 17},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestAliasesAreDerivedFromTheFranchise(t *testing.T) {
 	}
 	// So is one saying the numbers agree: it is not a gap to fill.
 	if _, err := st.SaveEpisodes(ctx, tybwCalamity, []metadata.Episode{
-		{Number: 2, TvdbNumber: 2, Absolute: 2},
+		{Number: 2, TvdbNumber: 2, Absolute: 2, Season: 17},
 	}); err != nil {
 		t.Fatal(err)
 	}

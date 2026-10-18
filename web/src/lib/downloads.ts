@@ -1,4 +1,4 @@
-import { bytes } from './format'
+import { bytes, speed, type SpeedUnit } from './format'
 import type { Download, Queued } from './queries'
 
 /** The downloads list by state, as the Downloads page and the panel both show it. */
@@ -52,11 +52,11 @@ export function downloadLabel(d: Download): string {
 }
 
 /** How far, how big, how fast: the line under a download that is still arriving. */
-export function downloadProgress(d: Download): string {
+export function downloadProgress(d: Download, unit?: SpeedUnit): string {
   return [
     `${Math.round(d.percent)}%`,
     `${bytes(d.bytesOnDisk)} of ${bytes(d.totalBytes)}`,
-    !d.paused && d.mbps ? `${d.mbps.toFixed(1)} Mbps` : '',
+    !d.paused && d.mbps ? speed(d.mbps, unit) : '',
     !d.paused && d.peers ? `${d.peers} peers` : '',
     d.paused ? 'paused' : '',
     d.checking ? 'checking file' : '',
@@ -66,13 +66,13 @@ export function downloadProgress(d: Download): string {
 }
 
 /** The whole list as plain text, to paste into a bug report. */
-export function downloadsReport(s: DownloadSections): string {
+export function downloadsReport(s: DownloadSections, unit?: SpeedUnit): string {
   const waiting = (q: Queued | undefined) => (q?.retryAt ? ` · ${retryNote(q)}: ${q.error}` : '')
   const queuedLine = (q: Queued) =>
     `- ${q.title ?? `Anime ${q.animeId}`} episode ${q.episode}` +
     `${q.torrent ? ` — ${Math.round(q.torrent.percent)}% on disk` : ''}${q.error ? ` — ${q.error}` : ''}${waiting(q)}`
   const downloadLine = (d: Download) =>
-    `- ${downloadLabel(d)} — ${downloadProgress(d)}${d.pinned ? ' · playing' : ''}${d.kept ? ' · kept' : ''}${waiting(d.queued)}` +
+    `- ${downloadLabel(d)} — ${downloadProgress(d, unit)}${d.pinned ? ' · playing' : ''}${d.kept ? ' · kept' : ''}${waiting(d.queued)}` +
     // The release under the show; one under no show is already named by it.
     (d.title ? `\n  ${d.name}` : '')
   const section = (name: string, lines: string[]) => (lines.length ? [`${name} (${lines.length})`, ...lines, ''] : [])

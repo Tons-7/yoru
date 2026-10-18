@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -310,6 +312,74 @@ func TestPauseStartAndRemove(t *testing.T) {
 	}
 	if live, _ := f.client.Live(c); len(live) != 0 {
 		t.Errorf("still listed: %v", live)
+	}
+}
+
+// A file a stream still reads cannot be deleted on Windows: the delete goes through, and the file once let go.
+func TestDeleteRemovesAnOpenFileOnceReleased(t *testing.T) {
+	f := newFixture(t)
+	c := ctx(t)
+	in, _ := f.client.Inspect(c, f.magnet)
+	added, err := f.client.Add(c, f.magnet, in.Details.Files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.client.Await(c, added.ID, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(f.cache, "Show Pack", "Show - 01.mkv")
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.client.Delete(c, added.ID); err != nil {
+		reader.Close()
+		t.Fatalf("a delete of a file still open failed: %v", err)
+	}
+	if live, _ := f.client.Live(c); len(live) != 0 {
+		t.Errorf("still listed: %v", live)
+	}
+	if _, err := os.Stat(path); runtime.GOOS == "windows" && err != nil {
+		t.Errorf("Windows removed a file still open, so this ran nothing: %v", err)
+	}
+	reader.Close()
+
+	gone := func() bool {
+		_, err := os.Stat(path)
+		return os.IsNotExist(err)
+	}
+	for end := time.Now().Add(6 * janitorEvery); !gone() && time.Now().Before(end); {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !gone() {
+		t.Fatal("the file stayed after it was let go")
+	}
+	if _, err := os.Stat(filepath.Join(f.cache, "Show Pack")); !os.IsNotExist(err) {
+		t.Error("the empty pack folder stayed")
+	}
+}
+
+// A file added back before it could be removed belongs to that download, and stays.
+func TestDoomedFileAddedBackStays(t *testing.T) {
+	f := newFixture(t)
+	c := ctx(t)
+	in, _ := f.client.Inspect(c, f.magnet)
+	added, err := f.client.Add(c, f.magnet, in.Details.Files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.client.Await(c, added.ID, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(f.cache, "Show Pack", "Show - 01.mkv")
+	f.engine.doom(path, filepath.Join(f.cache, "Show Pack"), errors.New("in use"))
+	f.engine.reap(time.Now())
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("a held download's file was removed: %v", err)
+	}
+	if len(f.engine.doomed) != 0 {
+		t.Error("the claimed file is still waiting to be removed")
 	}
 }
 

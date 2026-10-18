@@ -323,3 +323,21 @@ func TestDownloadActionsWithoutAnEngine(t *testing.T) {
 		}
 	}
 }
+
+// The queue says it waits for the episode on screen, and "Download anyway" lets it carry on.
+func TestQueueSaysItWaitsForTheEpisodeOnScreen(t *testing.T) {
+	h, _ := downloadsHarness(t)
+	if _, body := h.call(t, "GET", "/api/download/queue", ""); body["watching"] != false {
+		t.Fatalf("watching with nothing on screen: %v", body["watching"])
+	}
+	h.server.downloader.Hold("1-1")
+	if _, body := h.call(t, "GET", "/api/download/queue", ""); body["watching"] != true {
+		t.Fatalf("an episode plays, yet the queue doesn't say it waits for it: %v", body["watching"])
+	}
+	if code, body := h.call(t, "POST", "/api/download/queue/proceed", ""); code != 200 || body["watching"] != false {
+		t.Fatalf("Download anyway: HTTP %d %v", code, body)
+	}
+	if h.server.downloader.Held() {
+		t.Error("the queue still stands down after Download anyway")
+	}
+}

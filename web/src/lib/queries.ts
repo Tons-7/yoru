@@ -19,6 +19,7 @@ import {
   type ScheduleItem,
   type UpNextItem,
 } from './api'
+import type { SpeedUnit } from './format'
 import { toast } from './toast'
 
 // getTimezoneOffset has the opposite sign to what the schedule endpoint wants.
@@ -206,7 +207,9 @@ export function useDownloadQueue() {
   return useQuery({
     queryKey: ['download-queue'],
     queryFn: () =>
-      api.get<{ items: Queued[]; waiting: Record<string, number>; paused?: boolean }>('/api/download/queue'),
+      api.get<{ items: Queued[]; waiting: Record<string, number>; paused?: boolean; watching?: boolean }>(
+        '/api/download/queue',
+      ),
     staleTime: 0,
     refetchInterval: (q) => (pollable(q.state.data?.items) ? 5000 : 15_000),
   })
@@ -321,6 +324,11 @@ export function usePrefs(animeId?: number) {
         overrides?: Record<string, string>
       }>(`/api/prefs${query({ anime: animeId })}`),
   })
+}
+
+/** The unit Settings shows speeds in; megabits until the prefs arrive. */
+export function useSpeedUnit(): SpeedUnit {
+  return usePrefs().data?.effective['display.speed'] === 'mbs' ? 'mbs' : 'mbps'
 }
 
 export function useSetPref() {

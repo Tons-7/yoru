@@ -15,6 +15,24 @@ export function bytes(n: number): string {
   return `${(n / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
 }
 
+/** Settings' unit for speeds: megabits as speed tests give them, or megabytes as file sizes are. */
+export type SpeedUnit = 'mbps' | 'mbs'
+
+/** A speed given in megabits a second: "12.4 Mbps", or in bytes()'s units "1.5 MB/s", "176 KB/s". */
+export function speed(mbps: number, unit: SpeedUnit = 'mbps'): string {
+  if (unit !== 'mbs') return `${mbps.toFixed(1)} Mbps`
+  const perSecond = mbps * 125_000
+  const kb = Math.round(perSecond / 1024)
+  return kb < 1000 ? `${kb} KB/s` : `${(perSecond / 1024 ** 2).toFixed(1)} MB/s`
+}
+
+/** A speed limit, stored in bytes a second, as its choice reads: "10 Mbps", "1.2 MB/s". */
+export function speedLimit(bytesPerSecond: number, unit: SpeedUnit = 'mbps'): string {
+  return unit === 'mbs'
+    ? `${+(bytesPerSecond / 1024 ** 2).toFixed(1)} MB/s`
+    : `${+((bytesPerSecond * 8) / 1_000_000).toFixed(1)} Mbps`
+}
+
 /** "in 2h 14m" / "3d ago" — the schedule and episode lists both want this. */
 export function relativeTime(unix: number): string {
   const delta = unix * 1000 - Date.now()
@@ -102,6 +120,20 @@ export function groupByDay<T>(items: T[], at: (item: T) => number): Array<[strin
     groups.set(label, [...(groups.get(label) ?? []), item])
   }
   return [...groups]
+}
+
+/** "Episodes 1–22", "Episodes 1–5, 8, 10–12", "Episode 4"; "14 episodes" past four runs. */
+export function episodeSpan(numbers: number[]): string {
+  const sorted = [...new Set(numbers)].sort((a, b) => a - b)
+  if (sorted.length === 1) return `Episode ${sorted[0]}`
+  const runs: string[] = []
+  for (let i = 0; i < sorted.length; ) {
+    let j = i
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++
+    runs.push(j > i ? `${sorted[i]}–${sorted[j]}` : String(sorted[i]))
+    i = j + 1
+  }
+  return runs.length > 4 ? `${sorted.length} episodes` : `Episodes ${runs.join(', ')}`
 }
 
 export function cx(...parts: Array<string | false | null | undefined>): string {

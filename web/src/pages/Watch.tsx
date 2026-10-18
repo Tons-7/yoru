@@ -386,6 +386,7 @@ export function Watch() {
                   // Back into the finished episode: the countdown must not take the viewer away mid-rewatch.
                   onResume={clearEnded}
                   onSessionLost={recoverSession}
+                  onPickRelease={() => setPicking(true)}
                   // Inside the player, or fullscreen hides it; failures too, unless the player can recover.
                   overlay={
                     play.isError && !stream.data ? (

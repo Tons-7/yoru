@@ -1279,6 +1279,14 @@ func (c *PeerConn) pexPeerFlags() pp.PexPeerFlags {
 	return f
 }
 
+// LocalAddr is this end's address, unspecified over uTP's shared socket; nil before the connection is made.
+func (c *PeerConn) LocalAddr() net.Addr {
+	if c.conn == nil {
+		return nil
+	}
+	return c.conn.LocalAddr()
+}
+
 // This returns the address to use if we want to dial the peer again. It incorporates the peer's
 // advertised listen port.
 func (c *PeerConn) dialAddr() PeerRemoteAddr {

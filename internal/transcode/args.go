@@ -128,7 +128,8 @@ func (s *Session) audioArgs() []string {
 	if filter := s.soundFilter(); filter != "" {
 		a := []string{"-af", filter, "-c:a", "aac", "-b:a", "192k"}
 		if s.Plan.AudioCodec == "flac" {
-			a = []string{"-af", filter, "-c:a", "flac"}
+			// Even blocks: the limiter's first frame is one sample, and FLAC takes that as its block size and fails.
+			a = []string{"-af", filter + ",asetnsamples=n=4096:p=0", "-c:a", "flac"}
 		}
 		return a
 	}

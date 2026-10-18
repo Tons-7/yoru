@@ -31,8 +31,76 @@ type Downloader struct {
 	userPaused map[string]bool
 	// Stream sessions watching now; on a slow line the queue waits for them.
 	watching map[string]struct{}
+	// "Download anyway": sessions watched when it was pressed, which no longer hold the queue; later ones do.
+	through map[string]struct{}
+	// arrived reports a watched session whose episode is whole, so the queue need wait no longer; nil never.
+	arrived func(ctx context.Context, session string) bool
 	// Paused as a whole from the downloads list: nothing starts until it is resumed. Kept across restarts.
 	paused bool
+}
+
+// WhenArrived sets how the queue learns that an episode being watched has fully downloaded.
+func (d *Downloader) WhenArrived(f func(ctx context.Context, session string) bool) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.arrived = f
+	d.mu.Unlock()
+}
+
+// Watching reports a queue standing down for an episode on screen, not paused by hand.
+func (d *Downloader) Watching() bool {
+	if d == nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return !d.paused && d.holding()
+}
+
+// holding: a session watching that Download anyway wasn't pressed for. Caller holds d.mu.
+func (d *Downloader) holding() bool {
+	for id := range d.watching {
+		if _, past := d.through[id]; !past {
+			return true
+		}
+	}
+	return false
+}
+
+// Proceed lets the queue run beside the episodes watched now; the next viewing waits again.
+func (d *Downloader) Proceed() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.through = map[string]struct{}{}
+	for id := range d.watching {
+		d.through[id] = struct{}{}
+	}
+	d.mu.Unlock()
+	d.Wake()
+}
+
+// releaseArrived lets go of sessions whose episode is whole: the setting waits only while it still arrives.
+func (d *Downloader) releaseArrived(ctx context.Context) {
+	d.mu.Lock()
+	arrived := d.arrived
+	sessions := make([]string, 0, len(d.watching))
+	for id := range d.watching {
+		sessions = append(sessions, id)
+	}
+	d.mu.Unlock()
+	if arrived == nil {
+		return
+	}
+	for _, id := range sessions {
+		if arrived(ctx, id) {
+			d.log.Info("the episode playing has downloaded; the queue carries on", "session", id)
+			d.Release(id)
+		}
+	}
 }
 
 // pausedSetting remembers a paused queue, so a restart does not start downloading again by itself.
@@ -150,11 +218,12 @@ func (d *Downloader) Hold(sessionID string) {
 	}
 	d.mu.Lock()
 	_, already := d.watching[sessionID]
+	_, through := d.through[sessionID]
 	d.watching[sessionID] = struct{}{}
 	current := d.current
 	d.mu.Unlock()
 
-	if already || current == nil {
+	if already || current == nil || through {
 		return
 	}
 
@@ -187,10 +256,11 @@ func (d *Downloader) Release(sessionID string) {
 	}
 	d.mu.Lock()
 	delete(d.watching, sessionID)
-	idle := len(d.watching) == 0
+	delete(d.through, sessionID)
+	free := !d.holding()
 	d.mu.Unlock()
 
-	if idle {
+	if free {
 		d.Wake()
 	}
 }
@@ -204,7 +274,7 @@ func (d *Downloader) held() bool {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.paused || len(d.watching) > 0
+	return d.paused || d.holding()
 }
 
 // Wake tells the worker there is something to do.
@@ -221,6 +291,8 @@ func (d *Downloader) Wake() {
 // Shrunk in tests.
 var (
 	queueIdle = 30 * time.Second
+	// Standing down for an episode on screen: how soon its arrival is noticed (releaseArrived).
+	watchedIdle = 5 * time.Second
 
 	// A swarm with no seeders never finishes or errors. Ten idle minutes survives
 	// a bad patch on a slow line without a dead release holding up the queue.
@@ -314,6 +386,7 @@ func (d *Downloader) Run(ctx context.Context) {
 	d.restorePaused(ctx)
 
 	for {
+		d.releaseArrived(ctx)
 		worked := !d.held() && d.step(ctx)
 		if ctx.Err() != nil {
 			return
@@ -333,11 +406,15 @@ func (d *Downloader) Run(ctx context.Context) {
 
 // idle is how long to wait when nothing is due: the usual pause, or until a deferred try comes round.
 func (d *Downloader) idle(ctx context.Context) time.Duration {
+	wait := queueIdle
+	if d.Watching() {
+		wait = watchedIdle
+	}
 	at, ok, err := d.store.NextRetry(ctx)
 	if err != nil || !ok {
-		return queueIdle
+		return wait
 	}
-	return max(time.Millisecond, min(queueIdle, time.Until(at)))
+	return max(time.Millisecond, min(wait, time.Until(at)))
 }
 
 // swarmFailure: the release may be fine and its peers gone for now, which is what a later try is for.

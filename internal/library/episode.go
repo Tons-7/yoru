@@ -91,6 +91,12 @@ type Request struct {
 	// Counted is the franchise's season for an entry whose titles state none; a release saying so is not wrong.
 	Counted int
 
+	// Apart: a film, OVA or special, not counted on from its series; Film: one part alone, no season's episode.
+	Apart, Film bool
+
+	// Shows are a film's franchise series by name (as releaseName spells them), which a numbered release may be.
+	Shows []string
+
 	Cour Cour
 
 	Prefs score.Preferences
@@ -457,8 +463,20 @@ func (f *Finder) numbering(ctx context.Context, req Request, titles []string, en
 		}
 	}
 
+	format := f.store.Format(ctx, req.AnimeID)
+	req.Apart = !series(format)
+	if req.Apart {
+		// An OVA of unknown length may be a run that scene groups number S01E03.
+		total, _ := f.store.EpisodeCount(ctx, req.AnimeID)
+		req.Film = total == 1 || (total == 0 && strings.EqualFold(*format, "MOVIE"))
+	}
+	if req.Film {
+		req.Shows = f.showNames(ctx, req.AnimeID, append([]string{english}, titles...))
+	}
+
 	req.Alias, _ = f.store.EpisodeAlias(ctx, req.AnimeID, req.Episode)
-	if !req.Alias.StatedTvdb || !req.Alias.StatedAbsolute {
+	// Not for a film or OVA: counted on from its series, it would take the next season's first episode.
+	if !req.Apart && (!req.Alias.StatedTvdb || !req.Alias.StatedAbsolute) {
 		derived := f.derivedAlias(ctx, req, titles, english)
 		if !req.Alias.StatedTvdb {
 			req.Alias.Tvdb = derived.Tvdb
@@ -670,6 +688,38 @@ func (f *Finder) cour(ctx context.Context, req Request, titles []string, english
 	return c
 }
 
+// showNames are the franchise's series titles, with and without season markers, minus the film's own.
+func (f *Finder) showNames(ctx context.Context, animeID int, own []string) []string {
+	mine := map[string]bool{}
+	for _, t := range own {
+		mine[releaseName(t)] = true
+	}
+	var out []string
+	for _, m := range f.seriesMembers(ctx, animeID) {
+		if m.ID == animeID || !series(m.Format) {
+			continue
+		}
+		names, _ := f.store.SearchTitles(ctx, m.ID)
+		names = append(names, m.Romaji)
+		if m.English != nil {
+			names = append(names, *m.English)
+		}
+		for _, n := range names {
+			for _, k := range []string{releaseName(n), releaseName(baseTitle(n))} {
+				if k != "" && !mine[k] && !slices.Contains(out, k) {
+					out = append(out, k)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// releaseName is a title as a release's is compared with it: lower case, no punctuation, no season-one marker.
+func releaseName(title string) string {
+	return strings.ToLower(strings.Join(strings.Fields(cleanQuery(title)), " "))
+}
+
 func series(format *string) bool {
 	if format == nil {
 		return true
@@ -864,6 +914,11 @@ func verifies(rel parse.Release, req Request) bool {
 	}
 	// Cours reuse numbers, so a disagreeing stated part is another cour's same-numbered episode.
 	if req.Part > 0 && rel.Part > 0 && rel.Part != req.Part {
+		return false
+	}
+	// A film is no season's episode: "S01E01", or its show's bare name with a number, is the show's.
+	if req.Film && rel.Episode > 0 && !rel.Batch &&
+		(rel.Season > 0 || slices.Contains(req.Shows, releaseName(rel.Title))) {
 		return false
 	}
 

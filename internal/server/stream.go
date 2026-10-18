@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -330,10 +331,21 @@ func (s *Server) streamInit(w http.ResponseWriter, r *http.Request) {
 	animeID, episode, _ := parseSessionID(session.ID)
 	path, err := session.WaitInit(r.Context(), s.resumeSegment(r.Context(), animeID, episode), 60*time.Second)
 	if err != nil {
-		s.fail(w, "stream init", err)
+		if !unconvertible(w, err) {
+			s.fail(w, "stream init", err)
+		}
 		return
 	}
 	serveFile(w, r, path, "video/mp4")
+}
+
+// unconvertible: an encoder failing every pass gets 422, which hls.js doesn't retry, so the player says so.
+func unconvertible(w http.ResponseWriter, err error) bool {
+	u, ok := errors.AsType[*transcode.Unconvertible](err)
+	if ok {
+		send(w, http.StatusUnprocessableEntity, map[string]any{"error": u.Error(), "code": "unconvertible"})
+	}
+	return ok
 }
 
 func (s *Server) streamSegment(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +368,9 @@ func (s *Server) streamSegment(w http.ResponseWriter, r *http.Request) {
 	path, err := session.WaitSegment(r.Context(), n, 90*time.Second)
 	if err != nil {
 		s.log.Warn("segment", "session", session.ID, "n", n, "err", err)
-		http.Error(w, "segment unavailable", http.StatusGatewayTimeout)
+		if !unconvertible(w, err) {
+			http.Error(w, "segment unavailable", http.StatusGatewayTimeout)
+		}
 		return
 	}
 	serveFile(w, r, path, "video/mp4")
@@ -572,8 +586,14 @@ func (s *Server) streamHealth(w http.ResponseWriter, r *http.Request) {
 // streamLoaded is what will play without waiting on the network, as stretches of the episode in
 // seconds: the lighter part of the seek bar. A library file or a finished download is all of it.
 func (s *Server) streamLoaded(w http.ResponseWriter, r *http.Request) {
-	session, ok := s.stream(w, r)
+	if s.streams == nil {
+		send(w, http.StatusServiceUnavailable, map[string]any{"error": "transcoder unavailable"})
+		return
+	}
+	// Peeked, not used: the bar is asked while paused too, which must not keep an idle session alive.
+	session, ok := s.streams.Peek(r.PathValue("id"))
 	if !ok {
+		send(w, http.StatusNotFound, map[string]any{"error": "no such stream session"})
 		return
 	}
 	ctx := r.Context()

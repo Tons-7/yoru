@@ -79,7 +79,18 @@ type Session struct {
 	finished *run
 	// ended: the last pass to finish, its cut tail dropped if it stopped short, so every file it left is whole.
 	ended *run
+	// barren: failed passes in a row with no whole segment; at failedPasses, broken answers every ask.
+	barren int
+	broken *Unconvertible
 }
+
+// Three: a pass cut by a read error still writes something, so only an encoder failing alike gets this far.
+const failedPasses = 3
+
+// Unconvertible is an encoder that failed on every pass without writing a segment; asking again can't help.
+type Unconvertible struct{ Detail string }
+
+func (e *Unconvertible) Error() string { return "the encoder failed on every try: " + e.Detail }
 
 // run is one encoder process: what it was started from and when it has gone,
 // so the file it was writing can be cleaned up only once it has let go of it.
@@ -331,6 +342,14 @@ func (m *Manager) Get(id string) (*Session, bool) {
 	return s, ok
 }
 
+// Peek is Get without counting as use, for a look that must not keep an idle session's ffmpeg alive.
+func (m *Manager) Peek(id string) (*Session, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	return s, ok
+}
+
 // Close releases one hold and reports the last; stopping the download belongs behind a true.
 func (m *Manager) Close(id string) bool {
 	m.mu.Lock()
@@ -575,6 +594,16 @@ func (s *Session) WaitInit(ctx context.Context, from int, timeout time.Duration)
 
 func (s *Session) awaitFile(ctx context.Context, path string, deadline <-chan time.Time) error {
 	for !fileReady(path) {
+		// The pass died without it: said now, not at the deadline a minute on.
+		if !s.running() && !fileReady(path) {
+			s.mu.Lock()
+			broken := s.broken
+			s.mu.Unlock()
+			if broken != nil {
+				return broken
+			}
+			return fmt.Errorf("%s was not produced", filepath.Base(path))
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -819,6 +848,10 @@ func (s *Session) startLocked(from int) error {
 		s.mu.Unlock()
 		return errSessionClosed
 	}
+	if s.broken != nil {
+		s.mu.Unlock()
+		return s.broken
+	}
 	// A caller that raced this one already started a pass reaching this segment;
 	// launching a second encoder into the same directory is what corrupts it.
 	if r := s.run; r != nil && from >= s.headFrom && from-s.headFrom <= restartAfterSegments {
@@ -900,6 +933,7 @@ func (s *Session) await(r *run) {
 	s.run = nil
 
 	if err == nil {
+		s.barren = 0
 		// Its subtitle process may be a few lines behind; stop ends it if the session goes first.
 		s.finished = r
 		if detail != "" {
@@ -923,6 +957,16 @@ func (s *Session) await(r *run) {
 	if !retry || s.closed {
 		// Its cut tail gone, what it wrote is whole; a retry instead rewrites from where it began.
 		s.ended = r
+		// Its cut tail already dropped, so a pass that left nothing wrote no whole segment.
+		if r.wrote(s.SegmentPath(r.from)) {
+			s.barren = 0
+		} else {
+			s.barren++
+		}
+		if s.barren >= failedPasses && s.broken == nil {
+			s.broken = &Unconvertible{Detail: detail}
+			s.log.Warn("the encoder fails on every try; the player is told instead", "session", s.ID, "passes", s.barren)
+		}
 		return
 	}
 

@@ -71,8 +71,7 @@ type Episode struct {
 	AniDBID    int
 }
 
-// anizipEpisode mirrors one entry of the episodes map. Both spellings of the
-// renamed fields are read; TheTVDB's numbering is no longer sent at all.
+// anizipEpisode mirrors one entry of the episodes map. Both spellings of the renamed fields are read.
 type anizipEpisode struct {
 	Episode        string            `json:"episode"`
 	EpisodeNumber  int               `json:"episodeNumber"`
@@ -151,10 +150,15 @@ func (c *Client) Episodes(ctx context.Context, anilistID int) (Mapping, error) {
 		if number == 0 {
 			continue
 		}
+		// TheTVDB's season 0 is its specials, a numbering no release uses.
+		tvdb := ep.EpisodeNumber
+		if ep.SeasonNumber == 0 {
+			tvdb = 0
+		}
 
 		out.Episodes = append(out.Episodes, Episode{
 			Number:     number,
-			TvdbNumber: ep.EpisodeNumber,
+			TvdbNumber: tvdb,
 			Absolute:   ep.AbsoluteNumber,
 			Season:     ep.SeasonNumber,
 			TitleEN:    ep.Title["en"],

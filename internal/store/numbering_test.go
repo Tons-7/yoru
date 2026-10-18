@@ -32,7 +32,7 @@ func TestMigrationRekeysALaterCourByItsOwnNumbering(t *testing.T) {
 	      VALUES (?, 'BLEACH: Sennen Kessen-hen - Kashin-tan', 10, 'RELEASING', 0)`, bleach)
 	exec(`INSERT INTO anime (id, title_romaji, episode_count, synced_at) VALUES (?, 'Plain Show', 12, 0)`, plain)
 	for n := 41; n <= 50; n++ {
-		exec(`INSERT INTO episode (anime_id, ep_key, number, absolute) VALUES (?,?,?,?)`,
+		exec(`INSERT INTO episode (anime_id, ep_key, number, absolute, season_number) VALUES (?,?,?,?,17)`,
 			bleach, strconv.Itoa(n), n, n+366)
 	}
 	for n := 1; n <= 12; n++ {
@@ -152,13 +152,13 @@ func TestSaveEpisodesKeepsAliasesAndPrunesStaleRows(t *testing.T) {
 		}
 	}
 	save(
-		metadata.Episode{Number: 1, TvdbNumber: 41, Absolute: 407},
-		metadata.Episode{Number: 2, TvdbNumber: 42},
-		metadata.Episode{Number: 3, TvdbNumber: 43},
+		metadata.Episode{Number: 1, TvdbNumber: 41, Absolute: 407, Season: 17},
+		metadata.Episode{Number: 2, TvdbNumber: 42, Season: 17},
+		metadata.Episode{Number: 3, TvdbNumber: 43, Season: 17},
 	)
 	save(
-		metadata.Episode{Number: 1, TvdbNumber: 41, Absolute: 407},
-		metadata.Episode{Number: 2, TvdbNumber: 42},
+		metadata.Episode{Number: 1, TvdbNumber: 41, Absolute: 407, Season: 17},
+		metadata.Episode{Number: 2, TvdbNumber: 42, Season: 17},
 	)
 
 	eps, err := s.Episodes(ctx, 7)
@@ -188,5 +188,16 @@ func TestSaveEpisodesKeepsAliasesAndPrunesStaleRows(t *testing.T) {
 	}
 	if alias, _ := s.EpisodeAlias(ctx, 9, 1); len(alias.Numbers()) != 0 {
 		t.Errorf("unknown show has alias %+v", alias)
+	}
+
+	// A number with no season is TheTVDB's specials: no alias, and not stated either.
+	if err := s.EnsureAnime(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveEpisodes(ctx, 10, []metadata.Episode{{Number: 1, TvdbNumber: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	if alias, _ := s.EpisodeAlias(ctx, 10, 1); len(alias.Numbers()) != 0 || alias.StatedTvdb {
+		t.Errorf("a special's number: alias = %+v, want none, left to the franchise count", alias)
 	}
 }

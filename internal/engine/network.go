@@ -158,16 +158,21 @@ func (e *Engine) binding() (bindAddrs, error) {
 var networkEvery = 5 * time.Second
 
 // watchNetwork follows the chosen adapter: the client restarts on its new address, goes down without it, and
-// comes back with it.
+// comes back with it. On any network it follows the machine's addresses instead (followAddresses).
 func (e *Engine) watchNetwork() {
 	tick := time.NewTicker(networkEvery)
 	defer tick.Stop()
+	var addrs map[string]bool
+	var stranded bool
 	for range tick.C {
 		e.mu.Lock()
 		closed, adapter, bound, offline, up := e.closed, e.limits.Adapter, e.bound, e.offline, e.cl != nil
 		e.mu.Unlock()
 		if closed {
 			return
+		}
+		if adapter == "" && up {
+			addrs, stranded = e.followAddresses(addrs, stranded)
 		}
 		// Not started yet: the first request starts it, on the network as it is then.
 		if adapter == "" || (!up && !offline) {
@@ -184,6 +189,150 @@ func (e *Engine) watchNetwork() {
 		case err == nil && up && !now.keeps(bound):
 			e.rebind("the chosen network's address changed")
 		}
+	}
+}
+
+// Var so tests can move the machine between networks.
+var localAddrs = machineAddrs
+
+// machineAddrs are the machine's addresses now: up, not loopback or link-local; nil if unknown.
+func machineAddrs() map[string]bool {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() && !n.IP.IsLinkLocalUnicast() && !n.IP.IsUnspecified() {
+				out[n.IP.String()] = true
+			}
+		}
+	}
+	return out
+}
+
+// followAddresses drops what a network change killed, and redials once an address is up.
+func (e *Engine) followAddresses(prev map[string]bool, stranded bool) (map[string]bool, bool) {
+	now := localAddrs()
+	if now == nil || prev == nil {
+		return now, stranded
+	}
+	added, gone := false, false
+	for a := range now {
+		added = added || !prev[a]
+	}
+	for a := range prev {
+		gone = gone || !now[a]
+	}
+	if !added && !gone {
+		return now, stranded
+	}
+	if e.dropDead(prev, now) > 0 {
+		stranded = true
+	}
+	// Not before an address is up: with no network the dials only fail.
+	if stranded && added {
+		e.redial()
+		stranded = false
+	}
+	return now, stranded
+}
+
+// Var so tests can route as their machine would; nil without a route.
+var routeSource = sourceFor
+
+// sourceFor is the address the machine sends to remote from now; asking sends no packet.
+func sourceFor(remote net.IP) net.IP {
+	c, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: remote, Port: 9})
+	if err != nil {
+		return nil
+	}
+	defer c.Close()
+	return c.LocalAddr().(*net.UDPAddr).IP
+}
+
+// dropDead closes TCP on a gone address, and uTP to a peer unroutable now or reached from a new address.
+func (e *Engine) dropDead(prev, now map[string]bool) int {
+	sources := map[string]net.IP{}
+	dropped := 0
+	for _, t := range e.held() {
+		for _, pc := range t.PeerConns() {
+			local := hostIP(pc.LocalAddr())
+			if local == nil {
+				continue
+			}
+			// Loopback and link-local are never listed, so they never count as gone.
+			dead := prev[local.String()] && !now[local.String()]
+			if local.IsUnspecified() {
+				remote := hostIP(pc.RemoteAddr)
+				if remote == nil {
+					continue
+				}
+				src, asked := sources[remote.String()]
+				if !asked {
+					src = routeSource(remote)
+					sources[remote.String()] = src
+				}
+				dead = src == nil || !(prev[src.String()] || src.IsLoopback() || src.IsLinkLocalUnicast())
+			}
+			if dead {
+				pc.Close()
+				dropped++
+			}
+		}
+	}
+	if dropped > 0 {
+		e.log.Info("the network changed; dropped the connections on the old one", "connections", dropped)
+	}
+	return dropped
+}
+
+func hostIP(a interface{ String() string }) net.IP {
+	if a == nil {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(a.String())
+	if err != nil {
+		return nil
+	}
+	return net.ParseIP(host)
+}
+
+// redial has every download wanting data try its known peers now, its backoff reset.
+func (e *Engine) redial() {
+	type ask struct {
+		t     *bt.Torrent
+		peers []bt.PeerInfo
+	}
+	var asks []ask
+	e.mu.Lock()
+	cl := e.cl
+	for _, en := range e.byID {
+		if en.paused || en.verifying || en.t.Info() == nil || !wantsData(en) {
+			continue
+		}
+		en.aloneSince, en.regroupWait, en.regroups = time.Time{}, 0, 0
+		a := ask{t: en.t}
+		for _, r := range e.known[en.t.InfoHash()] {
+			a.peers = append(a.peers, r.info)
+		}
+		asks = append(asks, a)
+	}
+	e.mu.Unlock()
+	if cl == nil || len(asks) == 0 {
+		return
+	}
+	e.log.Info("the network changed; downloads try their peers again", "downloads", len(asks))
+	for _, a := range asks {
+		askAround(a.t, cl, a.peers)
 	}
 }
 

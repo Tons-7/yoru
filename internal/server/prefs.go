@@ -27,6 +27,7 @@ var allowed = map[string][]string{
 	"playback.voice":           sound.Levels,
 	"playback.boost":           sound.Levels,
 	"downloads.while_watching": {"pause", "continue"},
+	"display.speed":            {"mbps", "mbs"},
 	"downloads.upload":         {torrent.UploadWhileDownloading, torrent.UploadNever},
 	"window.mode":              {"fullscreen", "maximized"},
 }

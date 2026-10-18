@@ -204,6 +204,18 @@ func (s *Store) IsAdult(ctx context.Context, animeID int) (bool, error) {
 	return adult == 1, nil
 }
 
+// Format is the catalogue's format for the entry (TV, MOVIE, OVA...), else the corpus's; nil when unknown.
+func (s *Store) Format(ctx context.Context, animeID int) *string {
+	var format *string
+	if err := s.r.QueryRowContext(ctx, `
+		SELECT coalesce((SELECT format FROM anime WHERE id = ?1),
+		                (SELECT nullif(upper(kind), 'UNKNOWN') FROM corpus_anime WHERE anime_id = ?1))`,
+		animeID).Scan(&format); err != nil {
+		return nil
+	}
+	return format
+}
+
 func (s *Store) ImportList(ctx context.Context, anime []Anime, entries []Entry, mode ImportMode) (ImportResult, error) {
 	if !mode.valid() {
 		mode = ImportMerge

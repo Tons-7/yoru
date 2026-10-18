@@ -30,3 +30,20 @@ func TestEpisodesCountFromTheEntryAndKeepTheTvdbNumber(t *testing.T) {
 		}
 	}
 }
+
+// TheTVDB files a film under its show's specials (S00E02); "02" alone is the show's second episode.
+func TestASpecialsNumberIsNoAlias(t *testing.T) {
+	c := testClient(t, "anizip", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"episodes": {
+		  "1": {"episode":"1","tvdbShowId":377543,"tvdbId":8912617,"seasonNumber":0,"episodeNumber":2,"runtime":105}
+		}}`)
+	})
+
+	got, err := c.Episodes(context.Background(), 131573)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Episodes) != 1 || got.Episodes[0].Number != 1 || got.Episodes[0].TvdbNumber != 0 {
+		t.Fatalf("episodes = %+v, want episode 1 with no TVDB number", got.Episodes)
+	}
+}

@@ -2,6 +2,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"log/slog"
@@ -133,7 +134,7 @@ type Deps struct {
 }
 
 func New(d Deps) *Server {
-	return &Server{
+	s := &Server{
 		cfg: d.Config, store: d.Store, anilist: d.AniList,
 		importer: d.Importer, ingester: d.Ingester,
 		indexer: d.Indexer, log: d.Log,
@@ -166,6 +167,17 @@ func New(d Deps) *Server {
 		fontJobs:    map[string]struct{}{},
 		deriving:    map[int]struct{}{},
 	}
+	s.downloader.WhenArrived(s.watchedArrived)
+	return s
+}
+
+// watchedArrived: the episode a session plays is whole on disk, or the session is gone.
+func (s *Server) watchedArrived(ctx context.Context, id string) bool {
+	if s.streams == nil {
+		return true
+	}
+	session, ok := s.streams.Peek(id)
+	return !ok || s.sourceComplete(ctx, session)
 }
 
 func randomBytes(n int) []byte {
@@ -258,6 +270,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/download/queue/now", s.prioritiseQueued)
 	mux.HandleFunc("POST /api/download/queue/pause", s.pauseQueue)
 	mux.HandleFunc("POST /api/download/queue/resume", s.resumeQueue)
+	mux.HandleFunc("POST /api/download/queue/proceed", s.proceedQueue)
 	mux.HandleFunc("DELETE /api/download/all/{anime}", s.cancelDownloadAll)
 	mux.HandleFunc("GET /api/downloads", s.downloads)
 	mux.HandleFunc("DELETE /api/downloads/{hash}", s.removeDownload)

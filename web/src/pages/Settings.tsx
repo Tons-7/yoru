@@ -2,7 +2,7 @@ import { useContext, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { api, ApiError, withToken } from '../lib/api'
-import { bytes, cx, relativeTime } from '../lib/format'
+import { bytes, cx, relativeTime, speedLimit, type SpeedUnit } from '../lib/format'
 import {
   refreshListState,
   useAccessDevices,
@@ -609,6 +609,15 @@ function QualityTab() {
           <Switch on={f.get('autodownload.enabled')} onChange={(v) => f.set('autodownload.enabled', String(v))} />
         </Row>
         <SpeedLimitRow f={f} />
+        <Row
+          label="Show speeds in"
+          hint="Speed tests and internet plans count megabits; file sizes and most download apps, megabytes. 8 Mbps is about 1 MB/s."
+        >
+          <Select value={f.value('display.speed') || 'mbps'} onChange={(v) => f.set('display.speed', v)}>
+            <option value="mbps">Mbps</option>
+            <option value="mbs">MB/s</option>
+          </Select>
+        </Row>
         <TorrentNetworkRow f={f} />
         <Row
           label="Sharing"
@@ -691,27 +700,33 @@ function PeersFirewallRow() {
   )
 }
 
-// Megabits a second, as speed tests and the downloads list show them; stored as bytes a second.
-const SPEED_LIMITS = [5, 10, 20, 40, 80]
-// A 1080p episode is about 1.4 GB for 24 minutes: some 8 Mbps.
-const STREAM_MBPS = 8
+// Bytes a second, as stored: round numbers in the unit Settings shows speeds in.
+const SPEED_LIMITS: Record<SpeedUnit, number[]> = {
+  mbps: [5, 10, 20, 40, 80].map((m) => (m * 1_000_000) / 8),
+  mbs: [1, 2, 3, 5, 10].map((m) => m * 1024 ** 2),
+}
+// A 1080p episode is about 1.4 GB for 24 minutes: some 8 Mbps, 1 MB/s.
+const STREAM_BYTES = 1_000_000
 
 function SpeedLimitRow({ f }: { f: ReturnType<typeof useFlag> }) {
-  const mbps = (Number(f.value('downloads.limit_bytes')) * 8) / 1_000_000
+  const unit: SpeedUnit = f.value('display.speed') === 'mbs' ? 'mbs' : 'mbps'
+  const limit = Number(f.value('downloads.limit_bytes')) || 0
+  // One picked in the other unit stays listed, or the choice would read as nothing.
+  const choices = limit && !SPEED_LIMITS[unit].includes(limit) ? [...SPEED_LIMITS[unit], limit].sort((a, b) => a - b) : SPEED_LIMITS[unit]
   return (
     <Row
       label="Download speed limit"
       hint={
-        mbps > 0 && mbps < STREAM_MBPS
-          ? `Under about ${STREAM_MBPS} Mbps a 1080p episode plays faster than it downloads, so it stops to wait.`
+        limit > 0 && limit < STREAM_BYTES
+          ? `Under about ${speedLimit(STREAM_BYTES, unit)} a 1080p episode plays faster than it downloads, so it stops to wait.`
           : 'Leaves room on your connection for everything else. Streaming counts against it too.'
       }
     >
-      <Select value={f.value('downloads.limit_bytes') || '0'} onChange={(v) => f.set('downloads.limit_bytes', v)}>
+      <Select value={String(limit)} onChange={(v) => f.set('downloads.limit_bytes', v)}>
         <option value="0">No limit</option>
-        {SPEED_LIMITS.map((m) => (
-          <option key={m} value={String((m * 1_000_000) / 8)}>
-            {m} Mbps
+        {choices.map((b) => (
+          <option key={b} value={String(b)}>
+            {speedLimit(b, unit)}
           </option>
         ))}
       </Select>

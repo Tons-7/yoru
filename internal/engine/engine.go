@@ -65,6 +65,8 @@ type Engine struct {
 	// busy: something downloads, so complete torrents keep off the client's connection budget.
 	busy  bool
 	names *layout
+	// doomed: files a delete left because something still had them open (Windows keeps those), tried again.
+	doomed map[string]doomedFile
 	// secret is what Yoru's own client sends and a web page cannot.
 	secret string
 	closed bool
@@ -358,6 +360,7 @@ func (e *Engine) janitor() {
 	tick := time.NewTicker(janitorEvery)
 	defer tick.Stop()
 	for range tick.C {
+		e.reap(time.Now())
 		e.mu.Lock()
 		if e.closed {
 			e.mu.Unlock()

@@ -4,8 +4,8 @@ import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { copyText, downloadProgress, downloadsReport, retryNote, sortDownloads } from '../lib/downloads'
-import { cx } from '../lib/format'
-import { refreshDownloads, useDownloadQueue, useDownloads, type Download, type Queued } from '../lib/queries'
+import { cx, episodeSpan } from '../lib/format'
+import { refreshDownloads, useDownloadQueue, useDownloads, useSpeedUnit, type Download, type Queued } from '../lib/queries'
 import { ProgressBar } from './ui'
 import { useAnchorBox, useDismiss } from '../lib/hooks'
 import { plainKey, usePortalHome } from './keys'
@@ -29,6 +29,7 @@ export function DownloadsPanel() {
 
   const downloads = useDownloads()
   const queue = useDownloadQueue()
+  const unit = useSpeedUnit()
   const sections = sortDownloads(downloads.data?.items ?? [], queue.data?.items ?? [])
   const { active, held, finished, searching, waitingQueue, failed } = sections
   const busy = active.length + searching.length
@@ -40,9 +41,15 @@ export function DownloadsPanel() {
     mutationFn: (pause: boolean) => api.post(`/api/download/queue/${pause ? 'pause' : 'resume'}`),
     onSuccess: () => refreshDownloads(qc),
   })
+  // Standing down for an episode on screen that is still arriving; said, with the way past it.
+  const watching = !paused && (queue.data?.watching ?? false) && waitingQueue.length > 0
+  const proceed = useMutation({
+    mutationFn: () => api.post('/api/download/queue/proceed'),
+    onSuccess: () => refreshDownloads(qc),
+  })
 
   const copy = async () => {
-    setCopied(await copyText(downloadsReport(sections), home))
+    setCopied(await copyText(downloadsReport(sections, unit), home))
     window.setTimeout(() => setCopied(false), 2000)
   }
 
@@ -107,6 +114,19 @@ export function DownloadsPanel() {
                 </button>
               </div>
             </div>
+
+            {watching && (
+              <div className="flex items-center justify-between gap-3 border-b border-base-750 px-3 py-2 text-xs text-base-300">
+                <p>Waiting until the episode you're watching has downloaded.</p>
+                <button
+                  onClick={() => proceed.mutate()}
+                  disabled={proceed.isPending}
+                  className="shrink-0 rounded bg-base-800 px-2 py-1 text-[11px] font-medium text-base-100 transition-colors hover:bg-base-750"
+                >
+                  Download anyway
+                </button>
+              </div>
+            )}
 
             {/* Shows, in the order the queue works them; each episode line says where it stands. */}
             {busy + held.length + waitingQueue.length + failed.length === 0 ? (
@@ -177,7 +197,13 @@ function byShow(entries: Entry[]): ShowGroup[] {
   return groups
 }
 
+// Nothing to say but its turn: such episodes share one line, or a season buries what is downloading.
+const justWaiting = (e: Entry) => !!e.q && e.note === 'waiting' && !e.q.torrent && !e.q.error
+
 function ShowCard({ group }: { group: ShowGroup }) {
+  const waiting = group.entries.filter(justWaiting).map((e) => e.q!.episode)
+  // The shared line stands where the first of them was, so the order still reads as the queue's.
+  const first = group.entries.findIndex(justWaiting)
   return (
     <li className={row}>
       <div className="flex items-center gap-2">
@@ -185,8 +211,19 @@ function ShowCard({ group }: { group: ShowGroup }) {
         <p className="truncate text-xs font-medium text-base-100">{group.title}</p>
       </div>
       <ul className="mt-2.5 space-y-2.5">
-        {group.entries.map((e) =>
-          e.d ? <EpisodeLine key={e.d.infoHash} d={e.d} /> : <QueuedLine key={`${e.q!.animeId}-${e.q!.epKey}`} {...e} />,
+        {group.entries.map((e, i) =>
+          i === first ? (
+            <li key="waiting">
+              <p className="flex items-baseline gap-2 text-[11px]">
+                <span className="shrink-0 font-medium text-base-200">{episodeSpan(waiting)}</span>
+                <span className="text-base-500">waiting</span>
+              </p>
+            </li>
+          ) : justWaiting(e) ? null : e.d ? (
+            <EpisodeLine key={e.d.infoHash} d={e.d} />
+          ) : (
+            <QueuedLine key={`${e.q!.animeId}-${e.q!.epKey}`} {...e} />
+          ),
         )}
       </ul>
     </li>
@@ -197,12 +234,13 @@ function ShowCard({ group }: { group: ShowGroup }) {
 function EpisodeLine({ d }: { d: Download }) {
   const label = d.title && d.episodes.length > 0 ? `Episode${d.episodes.length > 1 ? 's' : ''} ${d.episode}` : ''
   const retry = retryNote(d.queued)
+  const unit = useSpeedUnit()
   return (
     <li title={d.name}>
       <p className="flex items-baseline gap-2 text-[11px]">
         {label && <span className="shrink-0 font-medium text-base-200">{label}</span>}
         {d.pinned && <span className="shrink-0 text-accent-300">playing</span>}
-        <span className="min-w-0 truncate text-base-500">{downloadProgress(d)}</span>
+        <span className="min-w-0 truncate text-base-500">{downloadProgress(d, unit)}</span>
       </p>
       {retry && <p className="truncate text-[11px] text-amber-300">{retry} · {d.queued?.error}</p>}
       <ProgressBar value={d.percent} className="mt-1.5" />

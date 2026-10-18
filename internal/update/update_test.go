@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -101,6 +102,12 @@ func fakeGitHub(t *testing.T, version string, exeBody []byte, sums bool) *httpte
 
 func fakeGitHubSigned(t *testing.T, version string, exeBody []byte, sums, trusted bool) *httptest.Server {
 	t.Helper()
+	return fakeRelease(t, version, exeBody, sums, trusted, false)
+}
+
+// fakeRelease also serves github.com's own pages; limited, the API says its hourly allowance is spent.
+func fakeRelease(t *testing.T, version string, exeBody []byte, sums, trusted, limited bool) *httptest.Server {
+	t.Helper()
 
 	var archive bytes.Buffer
 	zw := zip.NewWriter(&archive)
@@ -124,6 +131,12 @@ func fakeGitHubSigned(t *testing.T, version string, exeBody []byte, sums, truste
 	mux := http.NewServeMux()
 	var srv *httptest.Server
 	mux.HandleFunc("/repos/"+Repo+"/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		if limited {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", fmt.Sprint(resetAt.Unix()))
+			http.Error(w, `{"message":"API rate limit exceeded"}`, http.StatusForbidden)
+			return
+		}
 		assets := []map[string]string{
 			{"name": AssetName(version), "browser_download_url": srv.URL + "/dl/" + AssetName(version)},
 		}
@@ -141,6 +154,22 @@ func fakeGitHubSigned(t *testing.T, version string, exeBody []byte, sums, truste
 	})
 	mux.HandleFunc("/dl/"+sigFile, func(w http.ResponseWriter, r *http.Request) {
 		w.Write(sig)
+	})
+	site := "/" + Repo + "/releases/"
+	mux.HandleFunc(site+"latest", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, srv.URL+site+"tag/v"+version, http.StatusFound)
+	})
+	files := map[string][]byte{AssetName(version): archive.Bytes()}
+	if sums {
+		files[sumsFile], files[sigFile] = []byte(lines), sig
+	}
+	mux.HandleFunc(site+"download/v"+version+"/", func(w http.ResponseWriter, r *http.Request) {
+		body, ok := files[path.Base(r.URL.Path)]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(body)
 	})
 	srv = httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -185,8 +214,88 @@ func setVersion(t *testing.T, v string) {
 func newUpdater(t *testing.T, st *store.Store, gh *httptest.Server, exe string) *Updater {
 	t.Helper()
 	u := New(st, exe, filepath.Join(t.TempDir(), "staging"), slog.New(slog.NewTextHandler(io.Discard, nil)))
-	u.api = gh.URL
+	u.api, u.web = gh.URL, gh.URL
 	return u
+}
+
+// When the limited API lets this network ask again.
+var resetAt = time.Date(2026, 10, 18, 19, 42, 0, 0, time.Local)
+
+// Behind a VPN the API's hourly allowance is soon spent; github.com's own pages still say what's out.
+func TestRateLimitedCheckReadsTheSite(t *testing.T) {
+	setVersion(t, "2026.08.24")
+	st := testStore(t)
+	gh := fakeRelease(t, "2026.08.27", []byte("new binary"), true, true, true)
+	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
+	os.WriteFile(exe, []byte("old binary"), 0o755)
+	restarted := make(chan struct{})
+	u := newUpdater(t, st, gh, exe).WithRestart(func() { close(restarted) })
+	u.launch = func(string) error { return nil }
+
+	got, err := u.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Available || got.Latest == nil || got.Latest.Version != "2026.08.27" || got.CheckErr != "" {
+		t.Fatalf("status = %+v, want 2026.08.27 available", got)
+	}
+	if len(got.Pending) != 1 || got.Pending[0].Version != "2026.08.27" {
+		t.Errorf("pending = %+v, want the new version listed", got.Pending)
+	}
+	// Signed and checked as any other: the site gives the same files.
+	if err := u.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-restarted:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("no restart; status = %+v", u.Status())
+	}
+	if b, _ := os.ReadFile(exe); string(b) != "new binary" {
+		t.Errorf("executable = %q, want the new one", b)
+	}
+}
+
+// Notes from an earlier check stay; the site has none to give.
+func TestRateLimitedCheckKeepsTheNotesItHad(t *testing.T) {
+	setVersion(t, "2026.08.24")
+	u := newUpdater(t, testStore(t), fakeRelease(t, "2026.08.27", []byte("new"), true, true, true), "yoru.exe")
+	u.set(func(s *Status) { s.Pending = []Notes{{Version: "2026.08.27", Notes: "Faster seeks"}} })
+	got, err := u.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Pending) != 1 || got.Pending[0].Notes != "Faster seeks" {
+		t.Errorf("pending = %+v, want the notes read before", got.Pending)
+	}
+
+	// Up to date, the site's answer adds nothing blank to What's new.
+	setVersion(t, "2026.08.27")
+	u.set(func(s *Status) { s.Pending, s.WhatsNew = nil, nil })
+	if got, _ = u.Check(context.Background()); len(got.WhatsNew) != 0 {
+		t.Errorf("what's new = %+v, want nothing made up for the version running", got.WhatsNew)
+	}
+}
+
+// With the site out of reach too, the check says what's wrong and when it clears, not "HTTP 403".
+func TestRateLimitedCheckSaysUntilWhen(t *testing.T) {
+	setVersion(t, "2026.08.24")
+	gh := fakeRelease(t, "2026.08.27", []byte("new"), true, true, true)
+	u := newUpdater(t, testStore(t), gh, "yoru.exe")
+	u.web = gh.URL + "/elsewhere"
+	_, err := u.Check(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "limiting update checks from this network until 19:42") {
+		t.Fatalf("err = %v, want it to say GitHub limits checks until 19:42", err)
+	}
+	if st := u.Status(); !strings.Contains(st.CheckErr, "until 19:42") {
+		t.Errorf("checkError = %q", st.CheckErr)
+	}
+
+	// A refusal that isn't the allowance is no limit.
+	res := &http.Response{StatusCode: http.StatusForbidden, Header: http.Header{"X-Ratelimit-Remaining": {"12"}}}
+	if limitOf(res) != nil {
+		t.Error("a 403 with allowance left was read as a rate limit")
+	}
 }
 
 func TestCheckNotifiesOncePerVersion(t *testing.T) {

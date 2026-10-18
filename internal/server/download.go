@@ -229,7 +229,14 @@ func (s *Server) downloadQueue(w http.ResponseWriter, r *http.Request) {
 			waiting[q.AnimeID]++
 		}
 	}
-	send(w, http.StatusOK, map[string]any{"items": items, "waiting": waiting, "paused": s.downloader.Paused()})
+	send(w, http.StatusOK, map[string]any{"items": items, "waiting": waiting, "paused": s.downloader.Paused(),
+		"watching": s.downloader.Watching()})
+}
+
+// proceedQueue is "Download anyway": the queue runs beside the episodes playing now.
+func (s *Server) proceedQueue(w http.ResponseWriter, r *http.Request) {
+	s.downloader.Proceed()
+	send(w, http.StatusOK, map[string]any{"watching": s.downloader.Watching()})
 }
 
 // pauseQueue stops every download until resumeQueue: pausing one row only lets the next in line start.

@@ -3,12 +3,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api, type DownloadFile, type Page } from '../lib/api'
 import { retryNote, sortDownloads } from '../lib/downloads'
-import { bytes, cx, relativeTime } from '../lib/format'
+import { bytes, cx, relativeTime, speed } from '../lib/format'
 import {
   refreshDownloads,
   useDownloadQueue,
   useDownloads,
   useNotifications,
+  useSpeedUnit,
   type Download,
   type Notification,
   type Queued,
@@ -337,6 +338,10 @@ export function Downloads() {
     mutationFn: (paused: boolean) => api.post(`/api/download/queue/${paused ? 'pause' : 'resume'}`),
     onSuccess: done,
   })
+  const proceed = useMutation({
+    mutationFn: () => api.post('/api/download/queue/proceed'),
+    onSuccess: done,
+  })
 
   const remove = useMutation({
     meta: { inline: true },
@@ -498,6 +503,18 @@ export function Downloads() {
             className="rounded-md bg-accent-500/15 px-2.5 py-1 text-xs font-medium text-accent-300 hover:bg-accent-500/25"
           >
             Resume
+          </button>
+        </p>
+      )}
+      {!queuePaused && queue.data?.watching && waitingQueue.length > 0 && (
+        <p role="status" className={cx(card, 'flex items-center justify-between gap-3 px-3 py-2 text-sm text-base-200')}>
+          Waiting until the episode you're watching has downloaded, so it gets the whole connection.
+          <button
+            onClick={() => proceed.mutate()}
+            disabled={proceed.isPending}
+            className="shrink-0 rounded-md bg-accent-500/15 px-2.5 py-1 text-xs font-medium text-accent-300 hover:bg-accent-500/25"
+          >
+            Download anyway
           </button>
         </p>
       )}
@@ -746,6 +763,7 @@ function DownloadRow({
   const unfinished = d.percent < 100
   const chosen = actions.chosenFor(d)
   const retry = retryNote(d.queued)
+  const unit = useSpeedUnit()
   // What follows "episode": "s 1, 2" for a pack.
   const numbers = d.episodes.length > 0 && `${d.episodes.length > 1 ? 's' : ''} ${d.episode}`
 
@@ -788,7 +806,7 @@ function DownloadRow({
           <p className="mt-0.5 text-xs text-base-400">
             {unfinished && <span className="font-medium text-base-100">{Math.round(d.percent)}% · </span>}
             {unfinished ? `${bytes(d.bytesOnDisk)} of ${bytes(d.totalBytes)}` : bytes(d.bytesOnDisk)}
-            {!d.paused && unfinished && d.mbps ? ` · ${d.mbps.toFixed(1)} Mbps` : ''}
+            {!d.paused && unfinished && d.mbps ? ` · ${speed(d.mbps, unit)}` : ''}
             {!d.paused && unfinished && d.peers ? ` · ${d.peers} peers` : ''}
             {!d.paused && unfinished && d.mbps ? ` · ${timeLeft(d.totalBytes - d.bytesOnDisk, d.mbps)}` : ''}
           </p>

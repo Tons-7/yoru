@@ -101,6 +101,8 @@ type Updater struct {
 	exe     string
 	staging string
 	api     string
+	// web is github.com itself, asked when the API's hourly allowance is spent (latestFromSite).
+	web     string
 	http    *http.Client
 	log     *slog.Logger
 	restart func()
@@ -111,14 +113,14 @@ type Updater struct {
 }
 
 func New(st *store.Store, exe, staging string, log *slog.Logger) *Updater {
-	api := "https://api.github.com"
+	api, web := "https://api.github.com", "https://github.com"
 	// An end-to-end test points a real build at a fake release server.
 	if override := config.Env("UPDATE_API"); override != "" {
-		api = override
+		api, web = override, override
 	}
 	return &Updater{
 		store: st, exe: exe, staging: staging,
-		api:    api,
+		api: api, web: web,
 		http:   &http.Client{Timeout: 10 * time.Minute},
 		log:    log,
 		launch: relaunch,
@@ -161,7 +163,15 @@ func (u *Updater) Check(ctx context.Context) (Status, error) {
 
 	rel, err := u.latest(ctx)
 	var all []Notes
-	if err == nil {
+	if _, limited := errors.AsType[*rateLimited](err); limited {
+		// The API allows 60 asks an hour per address, which a VPN's shares; the site's own pages aren't counted.
+		if site, serr := u.latestFromSite(ctx); serr == nil {
+			u.log.Info("GitHub's API is limiting this network; read the latest release from its site", "version", site.Version)
+			rel, err, all = site, nil, u.knownNotes(site.Version)
+		} else {
+			u.log.Warn("latest release from GitHub's site", "err", serr)
+		}
+	} else if err == nil {
 		// Best effort: without the list, the latest release's own notes still show.
 		if all, err = u.releases(ctx); err != nil {
 			u.log.Warn("release notes", "err", err)
@@ -207,6 +217,9 @@ func (u *Updater) latest(ctx context.Context) (Release, error) {
 	if res.StatusCode == http.StatusNotFound {
 		return Release{}, errors.New("no releases published yet")
 	}
+	if err := limitOf(res); err != nil {
+		return Release{}, err
+	}
 	if res.StatusCode != http.StatusOK {
 		return Release{}, fmt.Errorf("github: HTTP %d", res.StatusCode)
 	}
@@ -229,6 +242,102 @@ func (u *Updater) latest(ctx context.Context) (Release, error) {
 		}
 	}
 	return rel, nil
+}
+
+// rateLimited is GitHub's API refusing for the hour; reset is when it lets this network ask again.
+type rateLimited struct{ reset time.Time }
+
+func (e *rateLimited) Error() string {
+	if e.reset.IsZero() {
+		return "GitHub is limiting update checks from this network for now; Yoru tries again later"
+	}
+	return fmt.Sprintf("GitHub is limiting update checks from this network until %s; Yoru tries again later",
+		e.reset.Local().Format("15:04"))
+}
+
+// limitOf reads a 403 or 429 that is the API's allowance spent, not a refusal of the repository.
+func limitOf(res *http.Response) error {
+	if res.StatusCode != http.StatusForbidden && res.StatusCode != http.StatusTooManyRequests {
+		return nil
+	}
+	if after, err := strconv.Atoi(res.Header.Get("Retry-After")); err == nil {
+		return &rateLimited{reset: time.Now().Add(time.Duration(after) * time.Second)}
+	}
+	if res.Header.Get("X-RateLimit-Remaining") != "0" {
+		return nil
+	}
+	reset, _ := strconv.ParseInt(res.Header.Get("X-RateLimit-Reset"), 10, 64)
+	if reset == 0 {
+		return &rateLimited{}
+	}
+	return &rateLimited{reset: time.Unix(reset, 0)}
+}
+
+// latestFromSite reads the newest tag from github.com's redirect, its assets at fixed addresses; no notes.
+func (u *Updater) latestFromSite(ctx context.Context) (Release, error) {
+	noFollow := *u.http
+	noFollow.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.web+"/"+Repo+"/releases/latest", nil)
+	if err != nil {
+		return Release{}, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	res, err := noFollow.Do(req)
+	if err != nil {
+		return Release{}, err
+	}
+	res.Body.Close()
+	loc := res.Header.Get("Location")
+	i := strings.LastIndex(loc, "/tag/")
+	if res.StatusCode/100 != 3 || i < 0 {
+		return Release{}, fmt.Errorf("github: no latest release (HTTP %d)", res.StatusCode)
+	}
+	tag := loc[i+len("/tag/"):]
+	rel := Release{Version: strings.TrimPrefix(tag, "v")}
+	base := u.web + "/" + Repo + "/releases/download/" + tag + "/"
+	rel.Sums, rel.Sig = base+sumsFile, base+sigFile
+	// A release without this platform's zip is no update here, as with the API's asset list.
+	asset := base + AssetName(rel.Version)
+	head, err := http.NewRequestWithContext(ctx, http.MethodHead, asset, nil)
+	if err != nil {
+		return Release{}, err
+	}
+	head.Header.Set("User-Agent", userAgent)
+	found, err := u.http.Do(head)
+	if err != nil {
+		return Release{}, err
+	}
+	found.Body.Close()
+	switch {
+	case found.StatusCode == http.StatusOK:
+		rel.URL = asset
+	case found.StatusCode != http.StatusNotFound:
+		return Release{}, fmt.Errorf("github: %s: HTTP %d", AssetName(rel.Version), found.StatusCode)
+	}
+	return rel, nil
+}
+
+// knownNotes are notes fetched before, plus a newer latest without any; none blank for the version running.
+func (u *Updater) knownNotes(latest string) []Notes {
+	st := u.Status()
+	all := append(slices.Clone(st.Pending), st.WhatsNew...)
+	if Newer(latest, Version) && !slices.ContainsFunc(all, func(n Notes) bool { return n.Version == latest }) {
+		all = append(all, Notes{Version: latest})
+	}
+	return newestFirst(all)
+}
+
+func newestFirst(out []Notes) []Notes {
+	slices.SortStableFunc(out, func(a, b Notes) int {
+		switch {
+		case Newer(a.Version, b.Version):
+			return -1
+		case Newer(b.Version, a.Version):
+			return 1
+		}
+		return 0
+	})
+	return out
 }
 
 // releases lists the published releases' notes, newest first; drafts and pre-releases are nobody's update.
@@ -259,16 +368,7 @@ func (u *Updater) releases(ctx context.Context) ([]Notes, error) {
 		}
 		out = append(out, Notes{Version: strings.TrimPrefix(r.Tag, "v"), Notes: r.Body, Published: r.Published})
 	}
-	slices.SortStableFunc(out, func(a, b Notes) int {
-		switch {
-		case Newer(a.Version, b.Version):
-			return -1
-		case Newer(b.Version, a.Version):
-			return 1
-		}
-		return 0
-	})
-	return out, nil
+	return newestFirst(out), nil
 }
 
 // pending is every release newer than current.

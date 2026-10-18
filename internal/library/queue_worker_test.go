@@ -262,6 +262,75 @@ func TestReleaseGivesTheQueueBackOnlyOnceNothingIsWatching(t *testing.T) {
 	}
 }
 
+// The queue waits only while the episode on screen still arrives: once it is whole, the queue carries on.
+func TestQueueCarriesOnOnceTheWatchedEpisodeArrives(t *testing.T) {
+	d, _ := pausableQueue(t)
+	whole := map[string]bool{}
+	d.WhenArrived(func(_ context.Context, id string) bool { return whole[id] })
+	d.Hold("1-1")
+	d.Hold("2-1")
+
+	d.releaseArrived(context.Background())
+	if !d.held() || !d.Watching() {
+		t.Fatal("the queue carried on while both episodes still arrive")
+	}
+	whole["1-1"] = true
+	d.releaseArrived(context.Background())
+	if !d.held() {
+		t.Fatal("the queue carried on while one episode still arrives")
+	}
+	// Looked at every few seconds while it waits, not on the half-minute idle tick.
+	if got := d.idle(context.Background()); got != watchedIdle {
+		t.Errorf("waiting for an episode on screen, the worker looks again after %s, want %s", got, watchedIdle)
+	}
+	whole["2-1"] = true
+	d.releaseArrived(context.Background())
+	if d.held() || d.Watching() {
+		t.Error("the queue still waits with every episode on screen downloaded")
+	}
+	if got := d.idle(context.Background()); got != queueIdle {
+		t.Errorf("with nothing to wait for, idle = %s, want %s", got, queueIdle)
+	}
+}
+
+// "Download anyway" lets the queue run beside the episode on screen; the next episode waits again.
+func TestProceedLastsUntilNothingIsWatched(t *testing.T) {
+	d, _ := pausableQueue(t)
+	d.Hold("1-1")
+	d.Proceed()
+	if d.held() || d.Watching() {
+		t.Fatal("Download anyway left the queue waiting")
+	}
+	stopped := false
+	d.current = &inFlight{animeID: 3, epKey: "1", stop: func() { stopped = true }}
+	// The same episode opened again (a reopened session) is the same viewing.
+	d.Hold("1-1")
+	if stopped || d.held() {
+		t.Fatal("reopening the episode stopped the queue again")
+	}
+
+	// The next episode opens before the last one closes, as the player does: it waits again.
+	d.Hold("2-1")
+	d.Release("1-1")
+	if !stopped || !d.held() || !d.Watching() {
+		t.Errorf("the next episode didn't wait as the setting asks: stopped=%v held=%v", stopped, d.held())
+	}
+
+	d.current = nil
+	d.Release("2-1")
+	d.Hold("4-1")
+	if !d.held() || !d.Watching() {
+		t.Error("the next viewing didn't wait as the setting asks")
+	}
+	// Nothing playing: nothing to proceed past, and no lasting pass.
+	d.Release("4-1")
+	d.Proceed()
+	d.Hold("5-1")
+	if !d.held() {
+		t.Error("Download anyway with nothing playing outlived the moment")
+	}
+}
+
 // Cancelling reaches the episode in flight, which has no queue row left to delete.
 func TestCancelStopsTheEpisodeInFlight(t *testing.T) {
 	d, st := pausableQueue(t)

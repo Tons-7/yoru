@@ -60,6 +60,8 @@ var Defaults = map[string]string{
 	"downloads.while_watching": "pause",
 	// Download cap in bytes a second, 0 for none; streams count against it too.
 	"downloads.limit_bytes": "0",
+	// Speeds shown in "mbps" (megabits, as speed tests give them) or "mbs" (megabytes, as file sizes are).
+	"display.speed": "mbps",
 	// "while_downloading": share pieces of what downloads, never once it's done; "never": share nothing.
 	"downloads.upload": "while_downloading",
 	// The network adapter torrents keep to, a VPN's; empty is any. They wait while it's down.

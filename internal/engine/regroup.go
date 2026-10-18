@@ -120,8 +120,12 @@ func (e *Engine) regroup(en *entry, now time.Time) {
 		level = e.log.Debug
 	}
 	level("download has no peers; trying the ones it had again", "name", t.Name(), "peers", len(again), "try", tries+1)
-	t.AddPeers(again)
-	// And asking around afresh, where that is on.
+	askAround(t, cl, again)
+}
+
+// askAround dials the peers again and asks the DHT afresh, where that is on.
+func askAround(t *bt.Torrent, cl *bt.Client, peers []bt.PeerInfo) {
+	t.AddPeers(peers)
 	for _, dht := range cl.DhtServers() {
 		if _, stop, err := t.AnnounceToDht(dht); err == nil {
 			time.AfterFunc(time.Minute, stop)

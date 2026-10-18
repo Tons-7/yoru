@@ -57,6 +57,7 @@ const CHECKS = [
   ['tour-check.mjs', {}, ALONE],
   ['ui-bits-check.mjs'],
   ['ui-shared-check.mjs'],
+  ['unconvertible-check.mjs'],
   ['vlc-check.mjs'],
   ['sound-check.mjs'],
 ]
@@ -120,6 +121,8 @@ if (!built) {
 
 // The updater end to end on two real builds; its own ports, so it never meets a lane.
 if (built && !only.length) await step('self-update', 'node scripts/update-check.mjs', webDir)
+// While releases still carry kuro-named zips (package.ps1), the last kuro must reach Yoru through them.
+if (built && !only.length) await step('self-update from kuro', 'node scripts/update-kuro-check.mjs', webDir)
 
 if (built) {
   console.log(`\n▶ ${checks.length} checks (logs: ${logs})`)

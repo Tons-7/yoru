@@ -16,8 +16,14 @@ export function useHlsSource(
   onGone?: () => void,
 ) {
   // Tagged with what it was about: the last episode's error never sits over the next one's search.
-  const [failure, setFailure] = useState<{ video: HTMLVideoElement; playlist: string; message: string } | null>(null)
-  const error = failure && failure.video === video && failure.playlist === playlist ? failure.message : null
+  const [failure, setFailure] = useState<{
+    video: HTMLVideoElement
+    playlist: string
+    message: string
+    final?: boolean
+  } | null>(null)
+  const current = failure && failure.video === video && failure.playlist === playlist ? failure : null
+  const error = current?.message ?? null
   const hls = useRef<Hls | null>(null)
   // Read at attach time, not tracked: a resume update mid-episode must not tear the player down.
   const readStart = useEffectEvent(() => startAt)
@@ -25,7 +31,8 @@ export function useHlsSource(
 
   useEffect(() => {
     if (!video || !playlist) return
-    const setError = (message: string) => setFailure({ video, playlist, message })
+    // final: trying the same release again can't help.
+    const setError = (message: string, final = false) => setFailure({ video, playlist, message, final })
 
     let cancelled = false
     let native = false
@@ -82,6 +89,12 @@ export function useHlsSource(
       })
 
       instance.on(HlsCtor.Events.ERROR, (_event, data) => {
+        // 422: the encoder fails every pass (transcode.Unconvertible); said now, not after hls.js retries.
+        if (data.response?.code === 422) {
+          instance.stopLoad()
+          setError("Yoru couldn't convert this release to play here. Try another release, or mpv.", true)
+          return
+        }
         if (!data.fatal) return
         switch (data.type) {
           case HlsCtor.ErrorTypes.NETWORK_ERROR:
@@ -135,7 +148,7 @@ export function useHlsSource(
     }
   }, [video, playlist])
 
-  return { error, hls }
+  return { error, final: !!current?.final, hls }
 }
 
 /** Nudges a phone decoder that stops presenting frames after a seek, only while the page itself paints. */
@@ -511,6 +524,7 @@ function bufferedEnd(video: HTMLVideoElement): number {
 }
 
 // Polls wait here: on a paused or hidden tab they'd keep the session alive and hold the queue.
+// Without a video, only until the page is on screen.
 export async function untilWatching(video: HTMLVideoElement | null, cancelled: () => boolean) {
   while (!cancelled() && (document.visibilityState !== 'visible' || (video && video.paused))) {
     await new Promise((r) => setTimeout(r, 1000))

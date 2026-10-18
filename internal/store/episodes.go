@@ -62,6 +62,7 @@ func (s *Store) SaveEpisodes(ctx context.Context, animeID int, eps []metadata.Ep
 		VALUES (?,?,?,?,?,?,0,?,?,?,?,?,?,?)
 		ON CONFLICT(anime_id, ep_key) DO UPDATE SET
 		    tvdb_number=excluded.tvdb_number,
+		    season_number=excluded.season_number,
 		    absolute=excluded.absolute,
 		    title_en=coalesce(excluded.title_en, episode.title_en),
 		    title_ja=coalesce(excluded.title_ja, episode.title_ja),
@@ -569,15 +570,19 @@ func (a EpisodeAlias) Numbers() []int {
 }
 
 func (s *Store) EpisodeAlias(ctx context.Context, animeID, episode int) (EpisodeAlias, error) {
-	var tvdb, absolute *int
+	var tvdb, absolute, season *int
 	err := s.r.QueryRowContext(ctx,
-		`SELECT tvdb_number, absolute FROM episode WHERE anime_id = ? AND ep_key = ?`,
-		animeID, strconv.Itoa(episode)).Scan(&tvdb, &absolute)
+		`SELECT tvdb_number, absolute, season_number FROM episode WHERE anime_id = ? AND ep_key = ?`,
+		animeID, strconv.Itoa(episode)).Scan(&tvdb, &absolute, &season)
 	if err != nil {
 		// No catalogue row is the normal case for an unlisted show.
 		return EpisodeAlias{}, nil
 	}
 
+	// No season is TheTVDB's 0, its specials: not stated, so the franchise count stands in.
+	if season == nil {
+		tvdb = nil
+	}
 	// Decided per number: a stated one is the catalogue's, a missing one may still be counted through the franchise.
 	out := EpisodeAlias{StatedTvdb: tvdb != nil, StatedAbsolute: absolute != nil}
 	if tvdb != nil && *tvdb != episode {

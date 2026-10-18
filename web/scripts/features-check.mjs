@@ -247,6 +247,18 @@ const speedLimit = page.getByLabel('Download speed limit')
 await speedLimit.selectOption({ label: '5 Mbps' })
 check(await until(async () => (await effective())['downloads.limit_bytes'] === '625000'), 'speed limit saved in bytes a second')
 check(await until(() => page.getByText(/plays faster than it downloads/).isVisible()), 'a cap under a 1080p stream says playback waits')
+// Megabytes instead: the limits read in them, and one picked in megabits stays chosen.
+const unit = page.getByLabel('Show speeds in')
+await unit.selectOption('mbs')
+check(await until(async () => (await effective())['display.speed'] === 'mbs'), 'speeds set to MB/s')
+check(await until(async () => (await speedLimit.locator('option:checked').innerText()) === '0.6 MB/s'), 'the 5 Mbps cap now reads in MB/s',
+  await speedLimit.locator('option:checked').innerText())
+check(await until(() => page.getByText(/Under about 1 MB\/s/).isVisible()), 'the warning names its speed in MB/s too')
+await speedLimit.selectOption({ label: '2 MB/s' })
+check(await until(async () => (await effective())['downloads.limit_bytes'] === '2097152'), 'a cap in MB/s saved in bytes a second')
+await unit.selectOption('mbps')
+check(await until(async () => (await speedLimit.locator('option:checked').innerText()) === '16.8 Mbps'), 'and back in Mbps it reads 16.8 Mbps',
+  await speedLimit.locator('option:checked').innerText())
 await page.getByLabel('Sharing').selectOption('never')
 check(await until(async () => (await effective())['downloads.upload'] === 'never'), 'sharing set to never')
 check(await until(() => page.getByText(/Downloads get slower/).isVisible()), 'never sharing says downloads get slower')

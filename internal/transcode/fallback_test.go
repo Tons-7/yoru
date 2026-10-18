@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"yoru/internal/sound"
 )
 
 // The test binary doubles as an ffmpeg that refuses one encoder and passes the
@@ -129,6 +131,54 @@ func TestSoftwareFailureIsNotRetried(t *testing.T) {
 	// A lost input exits like an init failure, but switching to software wouldn't help.
 	if s.canFallBack(4, "tcp://127.0.0.1: Connection refused\nError opening input") {
 		t.Error("a source read error is not an encoder failure")
+	}
+}
+
+// An encoder failing every pass is reported, not relaunched per ask; a new sound plan retries.
+func TestEncoderFailingEveryPassIsReported(t *testing.T) {
+	ffmpeg, ffprobe := binaries(t)
+	clip := tenBitClip(t, ffmpeg, 4)
+	m := NewManager(fakeBinary(t, ffmpeg, softwareEncoder), ffprobe, t.TempDir(), softwareEncoder, slog.Default())
+	ctx := context.Background()
+	s, err := m.Open(ctx, "1-1", clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close("1-1") })
+
+	// As the player asks: init, each a pass or two, every answer as soon as the pass has died.
+	asked := time.Now()
+	var last error
+	for range failedPasses {
+		if _, last = s.WaitInit(ctx, 0, 30*time.Second); last == nil {
+			t.Fatal("an encoder refusing every pass wrote the init segment")
+		}
+		if _, ok := errors.AsType[*Unconvertible](last); ok {
+			break
+		}
+	}
+	if _, ok := errors.AsType[*Unconvertible](last); !ok {
+		t.Fatalf("after %d failed passes: %v, want the session to say it can't convert", failedPasses, last)
+	}
+	if took := time.Since(asked); took > 10*time.Second {
+		t.Errorf("took %s to say so; each ask waited out its deadline", took.Round(time.Second))
+	}
+
+	began := time.Now()
+	_, err = s.WaitSegment(ctx, 0, 30*time.Second)
+	if u, ok := errors.AsType[*Unconvertible](err); !ok || !strings.Contains(u.Detail, "InitializeEncoder failed") {
+		t.Fatalf("a later ask: %v, want the same answer with ffmpeg's words", err)
+	}
+	if time.Since(began) > time.Second || s.running() {
+		t.Error("a later ask launched the encoder again")
+	}
+
+	s.SetSound(sound.Options{Voice: "high"})
+	s.mu.Lock()
+	broken := s.broken
+	s.mu.Unlock()
+	if broken != nil {
+		t.Error("another sound plan was refused without a try")
 	}
 }
 

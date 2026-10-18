@@ -259,7 +259,12 @@ func (e *Engine) remove(en *entry, data bool) error {
 	}
 	var failed []string
 	for _, p := range paths {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		switch err := os.Remove(p); {
+		case err == nil || os.IsNotExist(err):
+		case inUse(err):
+			// A stream switching releases still reads the old file for a moment; it goes once let go.
+			e.doom(p, folder, err)
+		default:
 			failed = append(failed, p)
 		}
 	}
@@ -271,6 +276,54 @@ func (e *Engine) remove(en *entry, data bool) error {
 		return fmt.Errorf("could not remove %s", strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// Long enough for any reader to finish closing; past it, the file stays for the orphan cleanup.
+const doomedFor = 30 * time.Minute
+
+type doomedFile struct {
+	folder string
+	until  time.Time
+}
+
+func (e *Engine) doom(path, folder string, err error) {
+	e.log.Info("a deleted download's file is still open; removing it once released", "path", path, "err", err)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.doomed == nil {
+		e.doomed = map[string]doomedFile{}
+	}
+	e.doomed[path] = doomedFile{folder: folder, until: time.Now().Add(doomedFor)}
+}
+
+// reap tries the doomed files again; one a torrent maps to again, added back since, is that torrent's now.
+func (e *Engine) reap(now time.Time) {
+	e.mu.Lock()
+	doomed := maps.Clone(e.doomed)
+	e.mu.Unlock()
+	if len(doomed) == 0 {
+		return
+	}
+	held := e.held()
+	for path, d := range doomed {
+		claimed := e.names.shared(path, metainfo.Hash{}, held)
+		if !claimed {
+			switch err := os.Remove(path); {
+			case err == nil || os.IsNotExist(err):
+				e.log.Info("removed a deleted download's file once it was released", "path", path)
+				if d.folder != filepath.Clean(e.opts.CacheDir) {
+					removeEmptyDirs(d.folder)
+				}
+			case now.After(d.until):
+				e.log.Warn("a deleted download's file stayed open; it is left on disk", "path", path, "err", err)
+			default:
+				continue
+			}
+		}
+		e.mu.Lock()
+		delete(e.doomed, path)
+		e.mu.Unlock()
+	}
 }
 
 // held lists the torrents the engine manages.

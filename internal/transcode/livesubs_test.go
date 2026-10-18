@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"yoru/internal/sound"
 )
 
 func liveSession(on bool) *Session {
@@ -334,6 +336,49 @@ func TestFLACConversionKeepsSurround(t *testing.T) {
 	}
 	if got := args(8); got != "-c:a flac -ac 6" {
 		t.Errorf("7.1: %q, want it folded to 5.1", got)
+	}
+}
+
+// Lossless surround with sound options on: FLAC after the limiter still encodes.
+func TestLosslessSurroundPlaysWithSoundOptions(t *testing.T) {
+	ffmpeg, ffprobe := binaries(t)
+	clip := filepath.Join(t.TempDir(), "clip.mkv")
+	if o, err := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+		"-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=30",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=30:sample_rate=48000",
+		// 40-sample frames, as TrueHD decodes: only small frames left the limiter's first one a single sample.
+		"-filter_complex", "[1]asplit=6[a][b][c][d][e][f];[a][b][c][d][e][f]amerge=inputs=6,aformat=channel_layouts=5.1,asetnsamples=n=40[s]",
+		"-map", "0:v", "-map", "[s]",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "48",
+		"-c:a", "pcm_s24le", clip).CombinedOutput(); err != nil {
+		t.Fatalf("build clip: %v\n%s", err, o)
+	}
+
+	m := NewManager(ffmpeg, ffprobe, t.TempDir(), "libx264", slog.New(slog.NewTextHandler(testWriter{t}, nil)))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	session, err := m.Open(ctx, "flac-sound", clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close("flac-sound")
+	session.SetSound(sound.Options{Voice: "high", Headphones: true})
+	if plan := session.CurrentPlan(); plan.AudioCodec != "flac" {
+		t.Fatalf("plan = %+v, want FLAC", plan)
+	}
+	for n := range 2 {
+		if _, err := session.WaitSegment(ctx, n, 90*time.Second); err != nil {
+			t.Fatalf("segment %d: %v", n, err)
+		}
+	}
+	init, _ := os.ReadFile(session.InitPath())
+	body, _ := os.ReadFile(session.SegmentPath(0))
+	whole := filepath.Join(t.TempDir(), "whole.mp4")
+	os.WriteFile(whole, append(init, body...), 0o644)
+	out, err := exec.Command(ffprobe, "-v", "error", "-select_streams", "a:0",
+		"-show_entries", "stream=codec_name,channels", "-of", "csv=p=0", whole).Output()
+	if err != nil || strings.TrimSpace(string(out)) != "flac,2" {
+		t.Fatalf("segment audio is %q (err %v), want stereo FLAC", strings.TrimSpace(string(out)), err)
 	}
 }
 

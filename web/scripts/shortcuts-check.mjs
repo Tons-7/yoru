@@ -7,6 +7,10 @@ const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const SHOTS = process.env.SHOTS ?? '.'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const until = async (fn, ms = 8000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(150)) if (await fn()) return true
+  return false
+}
 
 let failures = 0
 const check = (ok, label, detail = '') => {
@@ -34,6 +38,8 @@ const queued = [
   { animeId: 3, epKey: '7', episode: 7, state: 'failed', error: 'no release found', title: 'Show Three' },
   { animeId: 1, epKey: '5', episode: 5, state: 'pending', title: 'Show One', cover },
   { animeId: 1, epKey: '9', episode: 9, state: 'failed', title: 'Show One', cover, error: 'no peers sent anything for 10 minutes; 87% is on disk' },
+  // A whole season queued while an episode plays.
+  ...Array.from({ length: 22 }, (_, i) => ({ animeId: 4, epKey: String(i + 1), episode: i + 1, state: 'pending', title: 'Show Four' })),
 ]
 
 const browser = await chromium.launch()
@@ -41,7 +47,12 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
 const page = await context.newPage()
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
-await page.route('**/api/download/queue', (route) => route.fulfill({ json: { items: queued, waiting: {} } }))
+let proceeded = 0
+await page.route('**/api/download/queue', (route) => route.fulfill({ json: { items: queued, waiting: {}, watching: proceeded === 0 } }))
+await page.route('**/api/download/queue/proceed', (route) => {
+  proceeded++
+  return route.fulfill({ json: { watching: false } })
+})
 await page.route('**/api/downloads', (route) => route.fulfill({ json: { items, count: items.length } }))
 // An opening over the first minute and a half, so the skip button shows from the start.
 await page.route('**/api/episode/skips**', (route) => route.fulfill({ json: { ranges: [{ kind: 'op', start: 0, end: 90 }] } }))
@@ -71,6 +82,12 @@ check(/Show Three[ |]+Episode 7[ |]+no release found/.test(text), 'a failed one 
 check((text.match(/Episode 9/g) ?? []).length === 1 && /Episode 9[ |]+87% on disk[ |]+no peers sent anything/.test(text),
   'a failed download is one line with what it got, not that and a paused one', text)
 check(!/Show Two/.test(text) && /1 on disk/.test(text), 'finished ones are counted, not listed')
+check(/Show Four[ |]+Episodes 1–22[ |]+waiting/.test(text) && !/Episode 15\b/.test(text),
+  'a season waiting its turn is one line, not twenty-two', text)
+check(/Waiting until the episode you're watching has downloaded/.test(text), 'it says the queue waits for the episode on screen')
+await panel.getByRole('button', { name: 'Download anyway' }).click()
+check(await until(() => proceeded > 0), 'Download anyway asks the queue to carry on')
+check(await until(() => panel.getByText(/Waiting until the episode/).isHidden()), 'and the note goes once it does')
 check(page.url().includes('/watch/'), 'the episode page is still open')
 check((await state()).paused === before.paused, 'opening it does not pause or start the video')
 await sleep(600)
@@ -158,6 +175,20 @@ if (!full) {
   await page.screenshot({ path: `${SHOTS}/shortcuts-fullscreen.png` })
   await page.keyboard.press('d')
 }
+
+// Speeds in megabytes once Settings says so: 1.2 Mbps is 146 KB/s, counted as file sizes are.
+const setSpeed = (value) => fetch(`${BASE}/api/prefs`, {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'display.speed', value }),
+})
+await setSpeed('mbs')
+await page.reload({ waitUntil: 'domcontentloaded' })
+await video.waitFor({ timeout: 30_000 })
+await page.locator('body').click({ position: { x: 5, y: 400 } })
+await page.keyboard.press('d')
+await panel.waitFor({ timeout: 3000 }).catch(() => {})
+const inBytes = (await panel.innerText().catch(() => '')).replace(/\n/g, ' | ')
+check(/146 KB\/s/.test(inBytes) && !/Mbps/.test(inBytes), 'with MB/s chosen the panel shows speeds in them', inBytes.slice(0, 200))
+await setSpeed('mbps')
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 await browser.close()
