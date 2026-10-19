@@ -12,7 +12,7 @@ import {
 } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { api, ApiError, withToken } from '../lib/api'
+import { api, ApiError, withToken, type Tracker } from '../lib/api'
 import { bytes, cx, relativeTime, speedLimit, type SpeedUnit } from '../lib/format'
 import {
   refreshListState,
@@ -21,6 +21,7 @@ import {
   usePrefs,
   useSetPref,
   useSetup,
+  useTrackers,
   type AccessDevice,
   type ApprovalMode,
 } from '../lib/queries'
@@ -1092,26 +1093,9 @@ function PreferGroups({ f }: { f: ReturnType<typeof useFlag> }) {
   )
 }
 
-interface Tracker {
-  provider: string
-  name: string
-  clientId: string
-  hasSecret: boolean
-  configured: boolean
-  connected: boolean
-  reconnect?: boolean
-  user?: string
-  redirect: string
-  register: string
-  secretRequired: boolean
-}
-
 function AccountsTab() {
   const f = useFlag()
-  const trackers = useQuery({
-    queryKey: ['trackers'],
-    queryFn: () => api.get<{ trackers: Tracker[] }>('/api/trackers'),
-  })
+  const trackers = useTrackers()
   // Signing in or out and the keys are the host's; a paired device only reads the state.
   const access = useQuery({ queryKey: ['access'], queryFn: () => api.get<{ host?: boolean }>('/api/access') })
   const host = access.data?.host !== false

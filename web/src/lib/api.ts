@@ -423,6 +423,20 @@ export const LIST_STATUSES = [
 
 export type ListStatus = (typeof LIST_STATUSES)[number]['value']
 
+export interface Tracker {
+  provider: string
+  name: string
+  clientId: string
+  hasSecret: boolean
+  configured: boolean
+  connected: boolean
+  reconnect?: boolean
+  user?: string
+  redirect: string
+  register: string
+  secretRequired: boolean
+}
+
 export function statusLabel(value?: string | null) {
   return LIST_STATUSES.find((s) => s.value === value)?.label ?? ''
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"yoru/internal/metadata"
 )
 
 func airingAnime(t *testing.T, nextEpisode int, airingAt int64) *Store {
@@ -19,6 +21,50 @@ func airingAnime(t *testing.T, nextEpisode int, airingAt int64) *Store {
 		t.Fatal(err)
 	}
 	return st
+}
+
+// The list agrees with the schedule: a day-only date can't call an aired episode upcoming, or the reverse.
+func TestEpisodeListKeepsToTheSchedule(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Unix()
+	at := now + 6*24*3600
+
+	st := airingAnime(t, 10, at)
+	if _, err := st.SaveEpisodes(ctx, 7, []metadata.Episode{
+		{Number: 8, AirDate: now - 7*24*3600},
+		{Number: 9, AirDate: now + 6*3600},
+		{Number: 10, AirDate: at + 9*3600},
+		{Number: 11, AirDate: at - 3600},
+		{Number: 12, AirDate: at + 7*24*3600},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	eps, err := st.Episodes(ctx, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	airs := map[int]int64{}
+	for _, e := range eps {
+		if e.AirDate != nil {
+			airs[e.Number] = *e.AirDate
+		}
+	}
+	if airs[8] != now-7*24*3600 {
+		t.Errorf("episode 8 airs %d, want its own date kept", airs[8])
+	}
+	if airs[9] > time.Now().Unix() {
+		t.Errorf("episode 9 is behind the next one yet airs in %d s", airs[9]-now)
+	}
+	if airs[10] != at {
+		t.Errorf("episode 10 airs %d, want the schedule's %d", airs[10], at)
+	}
+	if airs[11] != at {
+		t.Errorf("episode 11 airs %d, want no earlier than the next one", airs[11])
+	}
+	if airs[12] != at+7*24*3600 {
+		t.Errorf("episode 12 airs %d, want its own later date kept", airs[12])
+	}
 }
 
 // Auto-next and prefetch skip, as the watcher does, an episode airing next Saturday.

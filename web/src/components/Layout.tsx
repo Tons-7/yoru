@@ -11,7 +11,7 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { api, LIST_STATUSES, statusLabel, type LibraryItem } from '../lib/api'
 import { cx } from '../lib/format'
-import { usePrefs, useSetPref, useSetup } from '../lib/queries'
+import { useLibraryCounts, usePrefs, useSetPref, useSetup, useTrackers } from '../lib/queries'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Unpaired } from './Unpaired'
 import { AccessRequests } from './AccessRequests'
@@ -414,74 +414,219 @@ const MENU_ITEMS = [
 
 function ProfileMenu() {
   const [open, setOpen] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
+  // Opened from the keyboard, focus starts on the first item; a click leaves it on the button.
+  const byKey = useRef(false)
   const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close, open)
+  const dismiss = useCallback(() => {
+    if (menu.current?.contains(document.activeElement)) trigger.current?.focus()
+    setOpen(false)
+  }, [])
+  const ref = useDismiss<HTMLDivElement>(dismiss, open)
+
+  const trackers = useTrackers().data?.trackers ?? []
+  const signedIn = trackers.filter((t) => t.connected)
+  const user = signedIn.find((t) => t.user)?.user
+  const attention = trackers.some((t) => t.reconnect)
+
+  useEffect(() => {
+    if (open && byKey.current) menuItems(menu.current)[0]?.focus()
+  }, [open])
+
+  // Arrow keys walk the items in reading order, Home and End jump to either end.
+  const onMenuKey = (e: React.KeyboardEvent) => {
+    const all = menuItems(menu.current)
+    const at = all.indexOf(document.activeElement as HTMLElement)
+    const moves: Record<string, number | undefined> = {
+      ArrowDown: at + 1,
+      ArrowUp: Math.max(at, 0) - 1,
+      Home: 0,
+      End: -1,
+    }
+    const to = moves[e.key]
+    if (to === undefined || all.length === 0) return
+    e.preventDefault()
+    all[(to + all.length) % all.length].focus()
+  }
 
   return (
     <div className="relative shrink-0" ref={ref}>
       <button
+        ref={trigger}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Profile and settings"
-        onClick={() => setOpen((v) => !v)}
-        className="tap relative grid size-9 place-items-center rounded-full bg-base-800 text-sm font-medium text-base-200 transition-colors hover:bg-base-700"
+        onClick={(e) => {
+          byKey.current = e.detail === 0
+          setOpen((v) => !v)
+        }}
+        onKeyDown={(e) => {
+          if (open && e.key === 'ArrowDown') {
+            e.preventDefault()
+            menuItems(menu.current)[0]?.focus()
+          }
+        }}
+        className={cx(
+          'tap relative grid size-9 place-items-center rounded-full bg-base-800 text-base-200 transition-[background-color,box-shadow] duration-150 hover:bg-base-700',
+          user && 'p-0.5',
+          open && 'ring-2 ring-accent-500/70 ring-offset-2 ring-offset-base-950',
+        )}
       >
-        <UserIcon />
+        {user ? <Initial name={user} /> : <UserIcon />}
+        {attention && (
+          <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-amber-400 ring-2 ring-base-950" />
+        )}
       </button>
 
       {open && (
         <div
+          ref={menu}
           role="menu"
-          className="absolute right-0 z-50 mt-2 w-64 origin-top-right animate-rise overflow-hidden rounded-xl border border-base-750 bg-base-850 p-1.5 shadow-panel"
+          aria-label="Profile"
+          onKeyDown={onMenuKey}
+          className="absolute right-0 z-50 mt-2.5 w-80 max-w-[calc(100vw-1rem)] origin-top-right animate-rise overflow-hidden rounded-2xl border border-base-750 bg-base-850/95 p-2 shadow-lift backdrop-blur-xl"
         >
-          {/* The list statuses read as a set, the reason this menu exists. */}
-          <p className="px-2 pt-1 pb-1.5 text-[11px] font-medium tracking-wide text-base-500 uppercase">
-            My list
-          </p>
-          <div className="grid grid-cols-2 gap-0.5">
-            {LIST_STATUSES.map((status) => (
-              <Link
-                key={status.value}
-                role="menuitem"
-                to={`/library?status=${status.value}`}
-                onClick={close}
-                className="rounded-lg px-2.5 py-1.5 text-sm text-base-200 transition-colors hover:bg-base-800 hover:text-white"
-              >
-                {status.label}
-              </Link>
-            ))}
-          </div>
+          <Link
+            role="menuitem"
+            to="/settings?tab=Accounts"
+            onClick={close}
+            className="group flex items-center gap-3 rounded-xl p-2 transition-colors hover:bg-base-800 focus-visible:bg-base-800 focus-visible:outline-none"
+          >
+            <span className="grid size-10 shrink-0 place-items-center rounded-full bg-base-800 text-base-300 ring-1 ring-white/10">
+              {user ? <Initial name={user} large /> : <UserIcon />}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold text-white">
+                {user ?? (signedIn.length > 0 ? 'Signed in' : 'Not signed in')}
+              </span>
+              {attention ? (
+                <span className="block truncate text-xs text-amber-300">Reconnect to resume syncing</span>
+              ) : (
+                <span className="block truncate text-xs text-base-400">
+                  {signedIn.length > 0 ? signedIn.map((t) => t.name).join(' · ') : 'Connect AniList to sync your list'}
+                </span>
+              )}
+            </span>
+            <ChevronIcon />
+          </Link>
 
-          <div className="my-1.5 border-t border-base-750" />
+          <div className="my-2 h-px bg-base-750" />
+          <ListShortcuts close={close} />
+          <div className="my-2 h-px bg-base-750" />
 
           {MENU_ITEMS.map((item) => (
-            <Link
+            <NavLink
               key={item.to}
               role="menuitem"
               to={item.to}
               onClick={close}
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm text-base-200 transition-colors hover:bg-base-800 hover:text-white"
+              className={({ isActive }) => cx(menuRow, isActive ? 'bg-base-800 text-white' : 'text-base-200')}
             >
-              <span className="text-base-500">{item.icon}</span>
+              <span className={iconChip}>{item.icon}</span>
               {item.label}
-            </Link>
+            </NavLink>
           ))}
           {/* Not on a phone, which has no keys to press. */}
           <button
+            type="button"
             role="menuitem"
             onClick={() => {
               close()
               window.dispatchEvent(new Event(SHOW_SHORTCUTS))
             }}
-            className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm text-base-200 transition-colors hover:bg-base-800 hover:text-white max-sm:hidden"
+            className={cx(menuRow, 'w-full text-left text-base-200 max-sm:hidden')}
           >
-            <kbd className="grid size-4 place-items-center font-sans text-xs text-base-500">?</kbd>
+            <span className={iconChip}>
+              <KeyboardIcon />
+            </span>
             Keyboard shortcuts
+            <kbd className="ml-auto rounded border border-base-700 bg-base-800 px-1.5 font-mono text-[11px] leading-5 text-base-400">
+              ?
+            </kbd>
           </button>
         </div>
       )}
     </div>
+  )
+}
+
+// The visible items: Keyboard shortcuts is hidden on a phone.
+const menuItems = (menu: HTMLElement | null) =>
+  [...(menu?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])].filter((el) => el.offsetParent !== null)
+
+const menuRow =
+  'group flex items-center gap-3 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-base-800 hover:text-white focus-visible:bg-base-800 focus-visible:text-white focus-visible:outline-none pointer-coarse:py-2'
+const iconChip =
+  'grid size-7 shrink-0 place-items-center rounded-md bg-base-800 text-base-400 ring-1 ring-white/5 transition-colors group-hover:bg-base-750 group-hover:text-base-100 group-focus-visible:text-base-100'
+
+/** The list statuses with how many shows each holds, the reason this menu exists. */
+function ListShortcuts({ close }: { close: () => void }) {
+  const counts = useLibraryCounts().data
+  return (
+    <>
+      <div className="flex items-center justify-between px-2 pb-1.5">
+        <span className="text-xs font-medium text-base-400">My list</span>
+        <Link
+          role="menuitem"
+          to="/library"
+          onClick={close}
+          className="tap relative rounded text-xs font-medium text-accent-400 transition-colors hover:text-accent-300 focus-visible:text-accent-300 focus-visible:outline-none"
+        >
+          {counts?.total ? `All ${counts.total}` : 'All'}
+        </Link>
+      </div>
+      <div className="grid grid-cols-2 gap-1">
+        {LIST_STATUSES.map((status) => {
+          const n = counts?.statuses[status.value] ?? 0
+          return (
+            <Link
+              key={status.value}
+              role="menuitem"
+              to={`/library?status=${status.value}`}
+              onClick={close}
+              className="flex min-h-10 items-center justify-between gap-2 rounded-lg bg-base-800/50 px-3 text-sm text-base-200 ring-1 ring-white/[0.04] transition-colors hover:bg-base-750 hover:text-white focus-visible:bg-base-750 focus-visible:text-white focus-visible:outline-none pointer-coarse:min-h-11"
+            >
+              <span className="truncate">{status.label}</span>
+              {counts && (
+                <span className={cx('text-xs tabular-nums', n > 0 ? 'text-base-300' : 'text-base-600')}>{n}</span>
+              )}
+            </Link>
+          )
+        })}
+      </div>
+    </>
+  )
+}
+
+function Initial({ name, large }: { name: string; large?: boolean }) {
+  return (
+    <span
+      className={cx(
+        'grid size-full place-items-center rounded-full bg-gradient-to-br from-accent-400 to-accent-600 font-display font-semibold text-white',
+        large ? 'text-lg' : 'text-sm',
+      )}
+    >
+      {Array.from(name.trim())[0]?.toUpperCase()}
+    </span>
+  )
+}
+
+function ChevronIcon() {
+  return (
+    <svg viewBox="0 0 20 20" className="size-4 shrink-0 text-base-500 transition-colors group-hover:text-base-300" aria-hidden>
+      <path d="m8 5 5 5-5 5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function KeyboardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <rect x="3" y="6" width="18" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M7 10h.01M10.5 10h.01M14 10h.01M17 10h.01M8 14h8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
   )
 }
 

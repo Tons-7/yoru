@@ -17,6 +17,7 @@ import {
   type Page,
   type ScheduleDay,
   type ScheduleItem,
+  type Tracker,
   type UpNextItem,
 } from './api'
 import type { SpeedUnit } from './format'
@@ -142,6 +143,14 @@ export function useLibraryCounts() {
     queryKey: ['library', 'counts'],
     queryFn: () => api.get<LibraryCounts>('/api/library/counts'),
     staleTime: 30_000,
+  })
+}
+
+export function useTrackers() {
+  return useQuery({
+    queryKey: ['trackers'],
+    queryFn: () => api.get<{ trackers: Tracker[] }>('/api/trackers'),
+    staleTime: 60_000,
   })
 }
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func testClient(t *testing.T, name string, h http.HandlerFunc) *Client {
@@ -69,6 +70,30 @@ func TestEpisodesSkipsSpecials(t *testing.T) {
 	}
 	if first.Runtime != 24 || first.AniDBID != 260525 {
 		t.Errorf("episode = %+v", first)
+	}
+}
+
+func TestEpisodesAirAtBroadcastTime(t *testing.T) {
+	c := testClient(t, "anizip", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"episodes": {
+		  "9":  {"episode":"9","airDate":"2026-10-19","airDateUtc":"2026-10-19T14:00:00Z","airdate":"2026-10-20"},
+		  "10": {"episode":"10","airDate":"2026-10-26","airdate":"2026-10-27"},
+		  "11": {"episode":"11","airdate":"2026-11-03"}}}`)
+	})
+
+	got, err := c.Episodes(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[int]string{
+		9:  "2026-10-19T14:00:00Z",
+		10: "2026-10-26T00:00:00Z",
+		11: "2026-11-03T00:00:00Z",
+	}
+	for _, e := range got.Episodes {
+		if at := time.Unix(e.AirDate, 0).UTC().Format(time.RFC3339); at != want[e.Number] {
+			t.Errorf("episode %d airs %s, want %s", e.Number, at, want[e.Number])
+		}
 	}
 }
 

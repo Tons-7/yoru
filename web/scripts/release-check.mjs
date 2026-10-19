@@ -23,6 +23,7 @@ const CHECKS = [
   ['recovery-check.mjs'],
   ['thumbs-check.mjs'],
   ['prefs-scope-check.mjs'],
+  ['profile-menu-check.mjs'],
   ['about-folders-check.mjs'],
   ['anime4k-tiers-check.mjs', {}, ALONE],
   ['autonext-seek-check.mjs'],

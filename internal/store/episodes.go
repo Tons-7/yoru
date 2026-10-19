@@ -289,14 +289,38 @@ func (s *Store) Episodes(ctx context.Context, animeID int) ([]EpisodeRow, error)
 		if err != nil {
 			return nil, err
 		}
-		return s.asItself(ctx, animeID, s.markLocal(ctx, animeID, planned)), nil
+		return s.asScheduled(ctx, animeID, s.asItself(ctx, animeID, s.markLocal(ctx, animeID, planned))), nil
 	}
 
 	out = s.padToCount(ctx, animeID, out)
 	for i := range out {
 		out[i].Display = out[i].Number
 	}
-	return s.asItself(ctx, animeID, s.markLocal(ctx, animeID, out)), nil
+	return s.asScheduled(ctx, animeID, s.asItself(ctx, animeID, s.markLocal(ctx, animeID, out))), nil
+}
+
+// asScheduled holds air dates to the catalogue's next airing, so the list and playback agree on what aired.
+func (s *Store) asScheduled(ctx context.Context, animeID int, out []EpisodeRow) []EpisodeRow {
+	var next int
+	var at int64
+	if err := s.r.QueryRowContext(ctx,
+		`SELECT coalesce(next_episode, 0), coalesce(next_airing_at, 0) FROM anime WHERE id = ?`,
+		animeID).Scan(&next, &at); err != nil || next <= 0 || at <= 0 {
+		return out
+	}
+	now := time.Now().Unix()
+	for i := range out {
+		e := &out[i]
+		switch {
+		case e.Number == next:
+			e.AirDate = &at
+		case e.Number < next && e.AirDate != nil && *e.AirDate > now:
+			e.AirDate = &now
+		case e.Number > next && e.AirDate != nil && *e.AirDate < at:
+			e.AirDate = &at
+		}
+	}
+	return out
 }
 
 // markLocal flags the episodes a library file holds, by the number playback looks them up by.

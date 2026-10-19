@@ -71,7 +71,8 @@ type Episode struct {
 	AniDBID    int
 }
 
-// anizipEpisode mirrors one entry of the episodes map. Both spellings of the renamed fields are read.
+// anizipEpisode mirrors one entry of the episodes map, reading both spellings of renamed fields. airdate is
+// AniDB's day, named so the decoder, which matches keys case-insensitively, can't take it for airDate.
 type anizipEpisode struct {
 	Episode        string            `json:"episode"`
 	EpisodeNumber  int               `json:"episodeNumber"`
@@ -81,7 +82,9 @@ type anizipEpisode struct {
 	Overview       string            `json:"overview"`
 	Summary        string            `json:"summary"`
 	Image          string            `json:"image"`
+	AirDateUTC     string            `json:"airDateUtc"`
 	AirDate        string            `json:"airDate"`
+	AniDBAirDate   string            `json:"airdate"`
 	RuntimeMinutes int               `json:"runtime"`
 	Length         int               `json:"length"`
 	AniDBEpisodeID int               `json:"anidbEid"`
@@ -92,6 +95,16 @@ func (e anizipEpisode) overview() string {
 		return e.Overview
 	}
 	return e.Summary
+}
+
+// airTime prefers the broadcast instant; the plain dates are a Japanese day read as UTC midnight, hours off.
+func (e anizipEpisode) airTime() int64 {
+	for _, s := range []string{e.AirDateUTC, e.AirDate, e.AniDBAirDate} {
+		if t := parseDate(s); t != 0 {
+			return t
+		}
+	}
+	return 0
 }
 
 func (e anizipEpisode) runtime() int {
@@ -165,7 +178,7 @@ func (c *Client) Episodes(ctx context.Context, anilistID int) (Mapping, error) {
 			TitleJA:    firstOf(ep.Title, "ja", "x-jat"),
 			Overview:   ep.overview(),
 			Image:      ep.Image,
-			AirDate:    parseDate(ep.AirDate),
+			AirDate:    ep.airTime(),
 			Runtime:    ep.runtime(),
 			AniDBID:    ep.AniDBEpisodeID,
 		})
