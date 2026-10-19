@@ -89,11 +89,10 @@ func TestHardwareEncoderFailureFallsBackToSoftware(t *testing.T) {
 		t.Fatalf("plan should re-encode with the hardware encoder first: %+v", s.Plan)
 	}
 
-	path, err := s.WaitSegment(ctx, 0, 90*time.Second)
-	if err != nil {
+	if err := s.WaitSegment(ctx, 0, 90*time.Second); err != nil {
 		t.Fatalf("segment 0 never came: %v", err)
 	}
-	if !fileReady(path) {
+	if !fileReady(s.SegmentPath(0)) {
 		t.Fatal("segment 0 is empty")
 	}
 	if s.Plan.VideoCodec != softwareEncoder {
@@ -165,7 +164,7 @@ func TestEncoderFailingEveryPassIsReported(t *testing.T) {
 	}
 
 	began := time.Now()
-	_, err = s.WaitSegment(ctx, 0, 30*time.Second)
+	err = s.WaitSegment(ctx, 0, 30*time.Second)
 	if u, ok := errors.AsType[*Unconvertible](err); !ok || !strings.Contains(u.Detail, "InitializeEncoder failed") {
 		t.Fatalf("a later ask: %v, want the same answer with ffmpeg's words", err)
 	}

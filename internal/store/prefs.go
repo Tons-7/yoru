@@ -45,6 +45,8 @@ var Defaults = map[string]string{
 	"window.mode": "fullscreen",
 
 	"quality.ladder":         `["1080p:BD:HEVC:10","1080p:BD","1080p:WEB","720p"]`,
+	// "best", or "720p"/"480p": the best release up to that, a bigger one only when nothing fits.
+	"quality.prefer": "best",
 	"quality.max_auto_bytes": "3221225472",
 	"quality.allow_hi10p":    "false",
 	// Release groups to favour, as a JSON array; a match earns a scoring bonus.

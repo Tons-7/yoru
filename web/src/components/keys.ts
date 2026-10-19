@@ -36,6 +36,7 @@ export const SHORTCUTS: { where: string; items: Shortcut[] }[] = [
       { keys: ['←', '→'], does: 'Back or forward 5 seconds' },
       { keys: ['J', 'L'], does: 'Back or forward 10 seconds' },
       { keys: ['S'], does: 'Skip the opening or ending, while the button shows' },
+      { keys: ['N'], does: 'Next episode' },
       { keys: ['↑', '↓'], does: 'Volume up or down' },
       { keys: ['M'], does: 'Mute' },
       { keys: ['V'], does: 'Voice boost: off, medium, high' },

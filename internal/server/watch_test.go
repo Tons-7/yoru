@@ -3,7 +3,10 @@ package server
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"testing"
 
 	"yoru/internal/config"
@@ -274,5 +277,46 @@ func TestRemoveStatusTakesTheShowOffTheList(t *testing.T) {
 	}
 	if code, _ := h.call(t, "DELETE", "/api/status/abc", ""); code != http.StatusBadRequest {
 		t.Errorf("a bad id answered %d, want 400", code)
+	}
+}
+
+// lockedBuffer collects log lines from whichever goroutine writes them.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// The page's end-of-episode notes reach the log: a known event, a few short fields, nothing else.
+func TestPlayerNoteIsLogged(t *testing.T) {
+	var logged lockedBuffer
+	h := newHarness(t, config.Config{}, nil, func(d *Deps) { d.Log = slog.New(slog.NewTextHandler(&logged, nil)) })
+
+	code, _ := h.call(t, "POST", "/api/playback/note",
+		`{"animeId":145064,"episode":6,"event":"ended","detail":{"next":7,"autoNext":true,"card":"up-next"}}`)
+	if code != http.StatusNoContent {
+		t.Fatalf("a note answered %d", code)
+	}
+	if want := "msg=player anime=145064 episode=6 event=ended autoNext=true card=up-next next=7"; !strings.Contains(logged.String(), want) {
+		t.Errorf("log = %q, want a line with %q", logged.String(), want)
+	}
+
+	if code, _ := h.call(t, "POST", "/api/playback/note", `{"animeId":1,"episode":1,"event":"rm -rf"}`); code != http.StatusBadRequest {
+		t.Errorf("an unknown event answered %d, want 400", code)
+	}
+	h.call(t, "POST", "/api/playback/note", `{"animeId":1,"episode":1,"event":"next","detail":{"by":"`+strings.Repeat("x", 500)+`"}}`)
+	if strings.Contains(logged.String(), strings.Repeat("x", 81)) {
+		t.Error("a long field was logged whole")
 	}
 }

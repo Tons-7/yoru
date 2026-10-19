@@ -153,9 +153,12 @@ export interface PlayerProps {
   /** final: the episode's last report (its end, Next, leaving the page), worth waiting on. */
   onProgress: (position: number, duration: number, played: number, final: boolean, paused: boolean) => void
   onEnded: () => void
-  onNext?: () => void
+  /** by: which control asked, for the log. */
+  onNext?: (by: 'button' | 'key' | 'media') => void
   /** Playing or seeking again, which after the end means the viewer went back. */
-  onResume?: () => void
+  onResume?: (by: 'play' | 'seek') => void
+  /** Sat at the very end without ending, so no countdown comes; told once per stream. */
+  onEndStuck?: (detail: Record<string, unknown>) => void
   /** The server no longer knows the stream; reopen it under the same URLs. */
   onSessionLost?: () => Promise<unknown>
   /** Opens the release picker, offered when this release won't play. */
@@ -181,6 +184,7 @@ export function Player({
   onEnded,
   onNext,
   onResume,
+  onEndStuck,
   onSessionLost,
   onPickRelease,
   overlay,
@@ -332,7 +336,7 @@ export function Player({
   const recovering = useRef(false)
   const recover = useCallback(() => recoverRef.current(), [])
 
-  const { error, final, hls } = useHlsSource(video, playlist, resumeAt, recover)
+  const { error, final, hls, streamEnded } = useHlsSource(video, playlist, resumeAt, recover)
   useKeepAlive(video, playlist, recover)
   recoverRef.current = () => {
     if (recovering.current || !onSessionLost) return
@@ -472,6 +476,53 @@ export function Player({
     }
   }, [video, stream?.id])
 
+  // Still for 5 s in the last segment (6 s, 7 with a sliver; a seek that never lands counts), not ended: no
+  // countdown will come, so the log is told, and a stall at the very end is ended here as a real end would be.
+  const stuckRef = useRef(onEndStuck)
+  stuckRef.current = onEndStuck
+  const planned = stream?.duration
+  const copied = stream?.plan?.videoCopy
+  useEffect(() => {
+    if (!video || !stream?.id) return
+    let last = -1
+    let still = 0
+    let told = false
+    const id = window.setInterval(() => {
+      const t = video.currentTime
+      const d = video.duration
+      if (told || video.ended || video.paused || !(d > 0) || d - t > 8 || Math.abs(t - last) > 0.05) {
+        last = t
+        still = 0
+        return
+      }
+      if (++still < 5) return
+      told = true
+      let bufferedEnd = 0
+      for (let i = 0; i < video.buffered.length; i++) bufferedEnd = Math.max(bufferedEnd, video.buffered.end(i))
+      // The last segment in and played, under 2 s left: a browser that never ends it (a shorter picture track) is
+      // ended here; a last segment still on its way is waited for.
+      const assumed = streamEnded.current && d - t < 2 && bufferedEnd - t < 0.5
+      // planned is the server's length: a player duration far past it means hls.js shifted its timeline.
+      stuckRef.current?.({
+        t: t.toFixed(2),
+        duration: d.toFixed(2),
+        planned: planned?.toFixed(2),
+        bufferedEnd: bufferedEnd.toFixed(2),
+        ready: video.readyState,
+        network: video.networkState,
+        seeking: video.seeking,
+        copied,
+        eos: streamEnded.current,
+        assumed,
+      })
+      if (assumed) {
+        video.pause()
+        video.dispatchEvent(new Event('ended'))
+      }
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [video, stream?.id, planned, copied, streamEnded])
+
   const togglePlay = useCallback(() => {
     if (!video) return
     if (video.paused) void video.play().catch(() => {})
@@ -490,6 +541,8 @@ export function Player({
   const onNextRef = useRef(onNext)
   onNextRef.current = onNext
   const hasNext = !!onNext
+  // Steady, so the keyboard's listener isn't rebuilt each render; N presses the same button.
+  const goNext = useCallback(() => onNextRef.current?.('key'), [])
   useEffect(() => {
     if (!video || !('mediaSession' in navigator)) return
     const session = navigator.mediaSession
@@ -504,7 +557,7 @@ export function Player({
       ['seekbackward', (d) => seekBy(-(d.seekOffset ?? 10))],
       ['seekforward', (d) => seekBy(d.seekOffset ?? 10)],
       ['seekto', (d) => d.seekTime !== undefined && (video.currentTime = d.seekTime)],
-      ['nexttrack', hasNext ? () => onNextRef.current?.() : null],
+      ['nexttrack', hasNext ? () => onNextRef.current?.('media') : null],
     ]
     for (const [action, handler] of handlers) {
       try {
@@ -650,6 +703,7 @@ export function Player({
     skipTo: activeSkip?.end,
     // Only where the control shows: a file with no audio has nothing to lift.
     cycleVoice: (stream?.audio?.length ?? 0) > 0 ? cycleVoice : undefined,
+    next: hasNext ? goNext : undefined,
   })
 
   // How long the picture has been stuck, so a slow swarm can say so rather than looking like a hang.
@@ -754,7 +808,7 @@ export function Player({
         onPointerUp={onSurfaceTouch}
         onPlay={() => {
           setPlaying(true)
-          onResume?.()
+          onResume?.('play')
           // Any resume re-arms the hide timer, as a keyboard one moves no pointer.
           nudge()
         }}
@@ -770,7 +824,7 @@ export function Player({
         // Paused seeks repaint only once the new position decodes.
         onSeeking={() => {
           markSeeking(true)
-          onResume?.()
+          onResume?.('seek')
         }}
         onSeeked={() => markSeeking(false)}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
@@ -925,7 +979,7 @@ export function Player({
           </span>
 
           {onNext && (
-            <IconButton label="Next episode" onClick={onNext}>
+            <IconButton label="Next episode" hint="N" onClick={() => onNext('button')}>
               <NextIcon />
             </IconButton>
           )}
@@ -1626,6 +1680,7 @@ function useKeyboard({
   shiftSubDelay,
   skipTo,
   cycleVoice,
+  next,
 }: {
   video: HTMLVideoElement | null
   togglePlay: () => void
@@ -1641,6 +1696,8 @@ function useKeyboard({
   skipTo?: number
   /** v: off, medium, high, round again; absent before the stream is open. */
   cycleVoice?: () => void
+  /** n: the Next episode button's, absent while it doesn't show. */
+  next?: () => void
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1702,6 +1759,12 @@ function useKeyboard({
           if (!cycleVoice) return
           cycleVoice()
           break
+        // Shift as well: N is YouTube's next.
+        case 'n':
+        case 'N':
+          if (!next) return
+          next()
+          break
         default:
           return
       }
@@ -1714,7 +1777,7 @@ function useKeyboard({
       window.removeEventListener('keydown', onKey)
       extra?.removeEventListener('keydown', onKey)
     }
-  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skipTo, cycleVoice])
+  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skipTo, cycleVoice, next])
 }
 
 function IconButton({

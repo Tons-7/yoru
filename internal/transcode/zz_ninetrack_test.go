@@ -33,7 +33,7 @@ func TestNineTrackFileEncodes(t *testing.T) {
 	var initErr, segErr error
 	go func() { defer wg.Done(); _ = s.Prestart(0) }()
 	go func() { defer wg.Done(); _, initErr = s.WaitInit(ctx, 0, 60*time.Second) }()
-	go func() { defer wg.Done(); _, segErr = s.WaitSegment(ctx, 0, 60*time.Second) }()
+	go func() { defer wg.Done(); segErr = s.WaitSegment(ctx, 0, 60*time.Second) }()
 	wg.Wait()
 	if initErr != nil || segErr != nil {
 		t.Fatalf("init=%v seg=%v (produced: %v)", initErr, segErr, s.produced())

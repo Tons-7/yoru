@@ -61,24 +61,24 @@ func TestSeekingForwardAndBackDelivers(t *testing.T) {
 	}
 	defer m.Close("seek")
 
-	if _, err := session.WaitSegment(ctx, 0, 90*time.Second); err != nil {
+	if err := session.WaitSegment(ctx, 0, 90*time.Second); err != nil {
 		t.Fatalf("first segment: %v", err)
 	}
 
 	last := session.Segments - 1
-	if _, err := session.WaitSegment(ctx, last, 90*time.Second); err != nil {
+	if err := session.WaitSegment(ctx, last, 90*time.Second); err != nil {
 		t.Fatalf("seek to the final segment: %v", err)
 	}
 
 	// Back to the start, behind the pass near the end: it must relaunch, not wait.
 	start := time.Now()
-	if _, err := session.WaitSegment(ctx, 1, 90*time.Second); err != nil {
+	if err := session.WaitSegment(ctx, 1, 90*time.Second); err != nil {
 		t.Fatalf("seek back to segment 1: %v", err)
 	}
 	t.Logf("backward seek delivered in %s", time.Since(start).Round(time.Millisecond))
 
 	// A mid-file forward jump after the backward seek.
-	if _, err := session.WaitSegment(ctx, last/2, 90*time.Second); err != nil {
+	if err := session.WaitSegment(ctx, last/2, 90*time.Second); err != nil {
 		t.Fatalf("mid seek: %v", err)
 	}
 }
@@ -103,7 +103,7 @@ func TestAdvanceHeadTracksProducedSegments(t *testing.T) {
 	// Every segment in order, no stall, and no forward request taken for a backward seek.
 	last := -1
 	for n := 0; n < session.Segments; n++ {
-		if _, err := session.WaitSegment(ctx, n, 60*time.Second); err != nil {
+		if err := session.WaitSegment(ctx, n, 60*time.Second); err != nil {
 			t.Fatalf("segment %d: %v", n, err)
 		}
 		session.mu.Lock()

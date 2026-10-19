@@ -19,8 +19,9 @@ const pages = [
   ['downloads', '/downloads'],
   ['local', '/local'],
   ['settings', '/settings'],
-  ['settings-quality', '/settings?tab=Quality'],
-  ['settings-access', '/settings?tab=Access'],
+  ['settings-downloads', '/settings?tab=Downloads'],
+  ['settings-devices', '/settings?tab=Devices'],
+  ['settings-search', '/settings?q=speed'],
   ['setup', '/setup'],
 ].filter(([name]) => !ONLY || ONLY.includes(name))
 

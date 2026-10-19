@@ -332,6 +332,8 @@ export function RefreshFailed({ retry }: { retry: () => void }) {
 export function Skeleton({ className }: { className?: string }) {
   return (
     <div
+      // Something still on its way: a search across tabs doesn't call an empty result before it lands.
+      data-loading
       className={cx(
         'animate-shimmer rounded-lg bg-base-850 bg-[linear-gradient(90deg,transparent_25%,var(--color-base-800)_50%,transparent_75%)] bg-[length:200%_100%]',
         className,

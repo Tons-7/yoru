@@ -215,18 +215,17 @@ func TestSegmentsAreProducedAndSeekable(t *testing.T) {
 		t.Errorf("%d segment entries, want %d", got, session.Segments)
 	}
 
-	first, err := session.WaitSegment(ctx, 0, 90*time.Second)
-	if err != nil {
+	if err := session.WaitSegment(ctx, 0, 90*time.Second); err != nil {
 		t.Fatalf("first segment: %v", err)
 	}
-	if !fileReady(first) || !fileReady(session.InitPath()) {
+	if !session.segmentDone(0) || !fileReady(session.InitPath()) {
 		t.Fatal("segment or init file missing")
 	}
 
 	// Jumping ahead: the encoder restarts at an offset instead of grinding through.
 	start := time.Now()
 	last := session.Segments - 1
-	if _, err := session.WaitSegment(ctx, last, 90*time.Second); err != nil {
+	if err := session.WaitSegment(ctx, last, 90*time.Second); err != nil {
 		t.Fatalf("seek to segment %d: %v", last, err)
 	}
 	t.Logf("seek to final segment in %s", time.Since(start).Round(time.Millisecond))
@@ -401,7 +400,7 @@ func TestRemuxSeekIsBiased(t *testing.T) {
 		Plan:   Plan{VideoCopy: true, AudioCopy: true},
 	}
 
-	args := strings.Join(s.args(60, 10), " ")
+	args := strings.Join(s.args(&run{from: 10}), " ")
 	if !strings.Contains(args, "-ss 60.500") {
 		t.Errorf("expected a biased seek: %s", args)
 	}

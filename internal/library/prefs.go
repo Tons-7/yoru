@@ -2,6 +2,7 @@ package library
 
 import (
 	"encoding/json"
+	"slices"
 
 	"yoru/internal/score"
 	"yoru/internal/store"
@@ -9,6 +10,38 @@ import (
 )
 
 type scorePrefs = score.Preferences
+
+// resolutions, highest first: what "up to" orders the ladder by.
+var resolutions = []string{"2160p", "1440p", "1080p", "720p", "576p", "540p", "480p", "360p"}
+
+// upTo puts the tiers at or under limit first, best first, then any of no listed resolution, then those above,
+// nearest first, so nothing is lost.
+func upTo(limit string, ladder []score.Tier) []score.Tier {
+	at := slices.Index(resolutions, limit)
+	var under, other, over []score.Tier
+	for _, t := range ladder {
+		if !slices.Contains(resolutions, t.Resolution) {
+			other = append(other, t)
+		}
+	}
+	for i, res := range resolutions {
+		var tiers []score.Tier
+		for _, t := range ladder {
+			if t.Resolution == res {
+				tiers = append(tiers, t)
+			}
+		}
+		if len(tiers) == 0 {
+			tiers = []score.Tier{score.ParseTier(res)}
+		}
+		if i >= at {
+			under = append(under, tiers...)
+		} else {
+			over = append(tiers, over...)
+		}
+	}
+	return slices.Concat(under, other, over)
+}
 
 func defaultScorePrefs() scorePrefs { return score.DefaultPreferences() }
 
@@ -23,6 +56,9 @@ func prefsFromSettings(p store.Prefs) scorePrefs {
 		for _, t := range tiers {
 			prefs.Ladder = append(prefs.Ladder, score.ParseTier(t))
 		}
+	}
+	if limit := p.String("quality.prefer"); limit == "720p" || limit == "480p" {
+		prefs.Ladder = upTo(limit, prefs.Ladder)
 	}
 	if n := p.Int64("quality.max_auto_bytes"); n > 0 {
 		prefs.MaxAutoBytes = n

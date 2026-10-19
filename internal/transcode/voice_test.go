@@ -19,13 +19,13 @@ import (
 func TestVoiceForcesAnEncodeAndShapesTheFilterByLayout(t *testing.T) {
 	stereo := &MediaInfo{Video: &Stream{Codec: "h264", BitDepth: 8}, Audio: []Stream{{Codec: "aac", Channels: 2}}}
 	s := &Session{Info: stereo, encoder: "libx264", Plan: PlanFor(stereo, "libx264")}
-	if !s.Plan.AudioCopy || strings.Contains(strings.Join(s.args(0, 0), " "), "-af") {
+	if !s.Plan.AudioCopy || strings.Contains(strings.Join(s.args(&run{}), " "), "-af") {
 		t.Fatal("off: an aac track is copied and no filter is set")
 	}
 
 	s.sound = sound.Options{Voice: "medium"}
 	s.Plan = planFor(stereo, "libx264", 0, sound.Options{Voice: "medium"})
-	args := strings.Join(s.args(0, 0), " ")
+	args := strings.Join(s.args(&run{}), " ")
 	if s.Plan.AudioCopy || s.Plan.AudioCodec != "aac" || s.Plan.Sound.Voice != "medium" {
 		t.Errorf("plan = %+v, want an aac encode with the lift", s.Plan)
 	}
@@ -35,7 +35,7 @@ func TestVoiceForcesAnEncodeAndShapesTheFilterByLayout(t *testing.T) {
 
 	surround := &MediaInfo{Video: &Stream{Codec: "h264", BitDepth: 8}, Audio: []Stream{{Codec: "truehd", Channels: 6}}}
 	s = &Session{Info: surround, encoder: "libx264", sound: sound.Options{Voice: "high"}, Plan: planFor(surround, "libx264", 0, sound.Options{Voice: "high"})}
-	args = strings.Join(s.args(0, 0), " ")
+	args = strings.Join(s.args(&run{}), " ")
 	if s.Plan.AudioCodec != "flac" {
 		t.Errorf("a lossless source stays lossless under the lift: %+v", s.Plan)
 	}
@@ -99,11 +99,11 @@ func firstSegment(t *testing.T, ffmpeg, ffprobe, clip, level string) string {
 	}
 	defer m.Close(id)
 	session.SetVoice(level)
-	if _, err := session.WaitSegment(ctx, 0, 90*time.Second); err != nil {
+	if err := session.WaitSegment(ctx, 0, 90*time.Second); err != nil {
 		t.Fatalf("segment 0 at %s: %v", level, err)
 	}
 	init, _ := os.ReadFile(session.InitPath())
-	body, _ := os.ReadFile(session.SegmentPath(0))
+	body := segmentBytes(t, session, 0)
 	whole := filepath.Join(t.TempDir(), level+".mp4")
 	os.WriteFile(whole, append(init, body...), 0o644)
 	return whole
@@ -190,7 +190,7 @@ func TestVoiceKeepsSoundInStepWithThePicture(t *testing.T) {
 	defer m.Close("voice-sync")
 	session.SetVoice("high")
 	for n := range 3 {
-		if _, err := session.WaitSegment(ctx, n, 90*time.Second); err != nil {
+		if err := session.WaitSegment(ctx, n, 90*time.Second); err != nil {
 			t.Fatalf("segment %d: %v", n, err)
 		}
 	}
@@ -215,11 +215,11 @@ func segmentWith(t *testing.T, ffmpeg, ffprobe, clip string, o sound.Options) st
 	}
 	defer m.Close(id)
 	session.SetSound(o)
-	if _, err := session.WaitSegment(ctx, 0, 90*time.Second); err != nil {
+	if err := session.WaitSegment(ctx, 0, 90*time.Second); err != nil {
 		t.Fatalf("segment 0: %v", err)
 	}
 	init, _ := os.ReadFile(session.InitPath())
-	body, _ := os.ReadFile(session.SegmentPath(0))
+	body := segmentBytes(t, session, 0)
 	whole := filepath.Join(t.TempDir(), "seg.mp4")
 	os.WriteFile(whole, append(init, body...), 0o644)
 	return whole

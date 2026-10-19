@@ -1,4 +1,4 @@
-// Settings → About shows where things go and lets the data folder be moved.
+// Settings → Storage shows where things go and lets the data folder be moved.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -11,10 +11,10 @@ const check = (ok, label, detail = '') => {
 
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
-await page.goto(`${BASE}/settings?tab=About`, { waitUntil: 'domcontentloaded' })
-await page.getByRole('tab', { name: 'About' }).click().catch(() => {})
+await page.goto(`${BASE}/settings?tab=Storage`, { waitUntil: 'domcontentloaded' })
+await page.getByRole('tab', { name: 'Storage' }).click().catch(() => {})
 const heading = page.getByRole('heading', { name: 'Where things go' })
-check(await heading.isVisible({ timeout: 15000 }).catch(() => false), 'About lists where things go')
+check(await heading.isVisible({ timeout: 15000 }).catch(() => false), 'Storage lists where things go')
 check(await page.getByText('History and settings').first().isVisible().catch(() => false), 'the data folder row is shown')
 const setup = await (await fetch(`${BASE}/api/setup`)).json()
 for (const [label, key, path] of [

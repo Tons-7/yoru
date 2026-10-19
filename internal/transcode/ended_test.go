@@ -60,7 +60,7 @@ func TestReconnectOnlyForHTTP(t *testing.T) {
 		t.Errorf("reconnect options on a file: %v", got)
 	}
 	s := &Session{Source: "http://127.0.0.1:1234/torrents/1/stream/0", Plan: Plan{VideoCopy: true, AudioCopy: true}}
-	args := s.args(0, 0)
+	args := s.args(&run{})
 	if i, j := slices.Index(args, "-reconnect"), slices.Index(args, "-i"); i < 0 || i > j {
 		t.Errorf("reconnect must come before -i: %v", args)
 	}

@@ -178,10 +178,10 @@ func fetch(t *testing.T, s *Session, n int, start time.Time, patience time.Durat
 	deadline := time.Now().Add(patience)
 	for tries := 1; ; tries++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		path, err := s.WaitSegment(ctx, n, 90*time.Second)
+		err := s.WaitSegment(ctx, n, 90*time.Second)
 		cancel()
 		if err == nil {
-			seg, rerr := os.ReadFile(path)
+			seg, rerr := readSegment(s, n)
 			init, _ := os.ReadFile(s.InitPath())
 			s.mu.Lock()
 			hf, ht, run := s.headFrom, s.headTo, s.run != nil
@@ -471,7 +471,7 @@ func TestArrivingRealtimePlayer(t *testing.T) {
 			mu.Unlock()
 			var gone []int
 			for n := 0; n < s.Segments; n++ {
-				if !fileReady(s.SegmentPath(n)) {
+				if !s.segmentDone(n) {
 					gone = append(gone, n)
 				}
 			}

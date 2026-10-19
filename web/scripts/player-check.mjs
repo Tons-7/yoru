@@ -114,7 +114,7 @@ await page.screenshot({ path: `${shots}/downloads-kept.png` })
 
 // Settings offer the auto-delete rule, and the downloads toggle only once it is on.
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
-await page.getByRole('tab', { name: 'Quality' }).click()
+await page.getByRole('tab', { name: 'Storage' }).click()
 const autodelete = page.getByRole('combobox').filter({ has: page.locator('option[value="keep2"]') })
 // The tab is in the URL now, so its panel renders a moment after the click.
 check(await autodelete.waitFor({ timeout: 5000 }).then(() => true, () => false), 'auto-delete watched setting is offered')

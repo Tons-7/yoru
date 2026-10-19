@@ -134,7 +134,7 @@ func (s *Server) prestart(session *transcode.Session, animeID, episode int) {
 	ctx, cancel := detached(30 * time.Second)
 	defer cancel()
 
-	from := s.resumeSegment(ctx, animeID, episode)
+	from := s.resumeSegment(ctx, session, animeID, episode)
 	if err := session.Prestart(from); err != nil {
 		s.log.Debug("prestart encoder", "session", session.ID, "from", from, "err", err)
 	}
@@ -142,9 +142,9 @@ func (s *Server) prestart(session *transcode.Session, animeID, episode int) {
 
 // resumeSegment is the segment the resume position falls in, the first one the
 // client asks for. Encoder and init both aim here so a resume needs one pass.
-func (s *Server) resumeSegment(ctx context.Context, animeID, episode int) int {
+func (s *Server) resumeSegment(ctx context.Context, session *transcode.Session, animeID, episode int) int {
 	if at, err := s.store.ResumeAt(ctx, animeID, strconv.Itoa(episode)); err == nil && at > 0 {
-		return int(at / transcode.SegmentSeconds)
+		return session.SegmentAt(at)
 	}
 	return 0
 }
@@ -329,7 +329,7 @@ func (s *Server) streamInit(w http.ResponseWriter, r *http.Request) {
 
 	// See WaitInit: starts a pass at the resume point only if none runs.
 	animeID, episode, _ := parseSessionID(session.ID)
-	path, err := session.WaitInit(r.Context(), s.resumeSegment(r.Context(), animeID, episode), 60*time.Second)
+	path, err := session.WaitInit(r.Context(), s.resumeSegment(r.Context(), session, animeID, episode), 60*time.Second)
 	if err != nil {
 		if !unconvertible(w, err) {
 			s.fail(w, "stream init", err)
@@ -365,15 +365,25 @@ func (s *Server) streamSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path, err := session.WaitSegment(r.Context(), n, 90*time.Second)
-	if err != nil {
+	if err := session.WaitSegment(r.Context(), n, 90*time.Second); err != nil {
 		s.log.Warn("segment", "session", session.ID, "n", n, "err", err)
 		if !unconvertible(w, err) {
 			http.Error(w, "segment unavailable", http.StatusGatewayTimeout)
 		}
 		return
 	}
-	serveFile(w, r, path, "video/mp4")
+	// One read even over a sliced segment's several parts; opened shareably, it can be replaced mid-send.
+	seg, err := session.OpenSegment(n)
+	if err != nil {
+		// Dropped between the wait and here, by a sound or track switch: the player asks again.
+		s.log.Warn("segment", "session", session.ID, "n", n, "err", err)
+		http.Error(w, "segment unavailable", http.StatusGatewayTimeout)
+		return
+	}
+	defer seg.Close()
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, "", seg.Modified, seg)
 }
 
 func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {

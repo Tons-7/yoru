@@ -241,7 +241,7 @@ try {
     env: {
       ...process.env,
       YORU_URL: URL, YORU_LIB: lib, YORU_ANIME: ANIME, SHOTS: shots,
-      YORU_DB: join(appdata, 'yoru', 'yoru.db'), YORU_REPO: repo,
+      YORU_DB: join(appdata, 'yoru', 'yoru.db'), YORU_REPO: repo, YORU_LOG: serverLog,
     },
   })
   process.exitCode = check.status ?? 1

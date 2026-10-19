@@ -40,7 +40,7 @@ const box = await panel.boundingBox().catch(() => null)
 if (box) await page.screenshot({ path: `${SHOTS}/released-hover.png`, clip: box })
 
 // Settings: Off / Next episode / Next 2 episodes, and it sticks.
-await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
+await page.goto(`${BASE}/settings?tab=Downloads`, { waitUntil: 'domcontentloaded' })
 const select = page.locator('select', { has: page.locator('option', { hasText: 'Next 2 episodes' }) })
 await select.waitFor({ timeout: 30000 })
 await select.selectOption('2')

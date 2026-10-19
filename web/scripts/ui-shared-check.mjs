@@ -23,10 +23,10 @@ const tab = (name) => page.getByRole('tab', { name, exact: true })
 
 // The tab lives in the URL: a reload keeps it, and a link to another one switches even from here.
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
-await tab('Quality').click()
-check(await until(async () => new URL(page.url()).searchParams.get('tab') === 'Quality'), 'a picked tab is in the URL', page.url())
+await tab('Downloads').click()
+check(await until(async () => new URL(page.url()).searchParams.get('tab') === 'Downloads'), 'a picked tab is in the URL', page.url())
 await page.reload({ waitUntil: 'domcontentloaded' })
-check(await until(() => tab('Quality').getAttribute('aria-selected').then((v) => v === 'true')), 'a reload keeps the tab')
+check(await until(() => tab('Downloads').getAttribute('aria-selected').then((v) => v === 'true')), 'a reload keeps the tab')
 await page.goto(`${BASE}/settings?tab=About`, { waitUntil: 'domcontentloaded' })
 await tab('Playback').click()
 await page.evaluate(() => {
@@ -35,7 +35,7 @@ await page.evaluate(() => {
 })
 check(await until(() => tab('About').getAttribute('aria-selected').then((v) => v === 'true')), 'the same ?tab= link again switches back')
 
-// The inline confirm on a faked network-open Access tab (this instance listens on 127.0.0.1 alone).
+// The inline confirm on a faked network-open Devices tab (this instance listens on 127.0.0.1 alone).
 let rotated = 0
 await page.route('**/api/access', (route) =>
   route.fulfill({
@@ -47,7 +47,7 @@ await page.route('**/api/access/rotate', (route) => {
   return route.fulfill({ json: {} })
 })
 // A fresh load: the access state fetched at startup is kept a while, so the fake would go unasked.
-await page.goto(`${BASE}/settings?tab=Access`, { waitUntil: 'domcontentloaded' })
+await page.goto(`${BASE}/settings?tab=Devices`, { waitUntil: 'domcontentloaded' })
 const signOut = page.getByRole('button', { name: 'Sign out all devices' })
 if (await signOut.waitFor({ timeout: 8000 }).then(() => true, () => false)) {
   await signOut.click()
@@ -67,7 +67,7 @@ await page.unroute('**/api/access/rotate')
 await page.route('**/api/jobs/*', (route) =>
   route.request().method() === 'POST' ? route.fulfill({ status: 500, json: { error: 'job exploded' } }) : route.fallback(),
 )
-await tab('Jobs').click()
+await tab('About').click()
 const run = page.getByRole('button', { name: 'Run', exact: true }).first()
 await run.waitFor({ timeout: 8000 })
 await run.click()
@@ -124,13 +124,13 @@ check(await until(() => page.getByRole('button', { name: 'Clear', exact: true })
 check(deleted === 1, 'backing out deletes nothing')
 await page.unroute('**/api/notifications*')
 
-// On a phone the eight tabs are a menu; the strip hid the last ones off-screen.
+// On a phone the tabs are a menu; a strip hid the last ones off-screen.
 const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
 phone.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 await phone.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
 const menu = phone.getByRole('combobox', { name: 'Settings section' })
 check(await menu.waitFor({ timeout: 8000 }).then(() => true, () => false), 'a phone gets a section menu')
-check((await menu.locator('option').count()) === 8, 'every section is in it')
+check((await menu.locator('option').count()) === 9, 'every section is in it')
 await menu.selectOption('About')
 check(await until(async () => new URL(phone.url()).searchParams.get('tab') === 'About'), 'choosing a section switches to it', phone.url())
 const width = await phone.evaluate(() => document.documentElement.scrollWidth)

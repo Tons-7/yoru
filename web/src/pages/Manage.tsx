@@ -509,13 +509,21 @@ export function Downloads() {
       {!queuePaused && queue.data?.watching && waitingQueue.length > 0 && (
         <p role="status" className={cx(card, 'flex items-center justify-between gap-3 px-3 py-2 text-sm text-base-200')}>
           Waiting until the episode you're watching has downloaded, so it gets the whole connection.
-          <button
-            onClick={() => proceed.mutate()}
-            disabled={proceed.isPending}
-            className="shrink-0 rounded-md bg-accent-500/15 px-2.5 py-1 text-xs font-medium text-accent-300 hover:bg-accent-500/25"
-          >
-            Download anyway
-          </button>
+          <span className="flex shrink-0 items-center gap-1">
+            <Link
+              to={`/settings?q=${encodeURIComponent('download queue')}`}
+              className="rounded-md px-2.5 py-1 text-xs text-base-400 hover:bg-base-800 hover:text-white"
+            >
+              Change
+            </Link>
+            <button
+              onClick={() => proceed.mutate()}
+              disabled={proceed.isPending}
+              className="rounded-md bg-accent-500/15 px-2.5 py-1 text-xs font-medium text-accent-300 hover:bg-accent-500/25"
+            >
+              Download anyway
+            </button>
+          </span>
         </p>
       )}
 

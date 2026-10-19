@@ -146,7 +146,7 @@ export function Library() {
             ) : status ? (
               <LinkButton to="/browse">Browse anime</LinkButton>
             ) : (
-              <LinkButton to="/settings?tab=Trackers" variant="primary">
+              <LinkButton to="/settings?tab=Accounts" variant="primary">
                 Connect a tracker
               </LinkButton>
             )

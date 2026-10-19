@@ -82,7 +82,15 @@ type Session struct {
 	// barren: failed passes in a row with no whole segment; at failedPasses, broken answers every ask.
 	barren int
 	broken *Unconvertible
+	// starts: each segment's start, on the source's keyframes (see sliced.go); nil when evenly spaced.
+	starts []float64
+	// segs: a sliced session's finished segments, served from the parts a pass wrote (see publish).
+	segs map[int]sliceSegment
 }
+
+// passes numbers launches across sessions, so no pass reuses the name of a part still held open from another
+// (on Windows a removed file being read keeps its name until let go).
+var passes atomic.Int64
 
 // Three: a pass cut by a read error still writes something, so only an encoder failing alike gets this far.
 const failedPasses = 3
@@ -105,6 +113,12 @@ type run struct {
 	subs        *exec.Cmd
 	subsStopped atomic.Bool
 	subsAlive   atomic.Bool
+	// A sliced pass: its number, whether it read to the end, and when its files are all gathered.
+	id       int
+	clean    atomic.Bool
+	gathered chan struct{}
+	// Stopped: nothing it gathers after this is published, however late, so a wipe can't be undone by it.
+	discarded atomic.Bool
 }
 
 // wrote reports whether segment n is this pass's own output.
@@ -266,11 +280,31 @@ func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource strin
 		return nil, err
 	}
 
+	// An open that finished while this one probed: its session, index and all, rather than reading the index again.
+	m.mu.Lock()
+	if existing, ok := m.sessions[id]; ok && existing.Source == source {
+		existing.mu.Lock()
+		existing.refs++
+		existing.mu.Unlock()
+		m.mu.Unlock()
+		existing.touch()
+		return existing, nil
+	}
+	m.mu.Unlock()
+
 	encoder := m.currentEncoder()
+	plan := PlanFor(info, encoder)
+	// From disk when the file is there: through the engine, the index's pieces would be fetched first.
+	starts := m.indexKeyframes(ctx, id, probeSource, info, plan)
+	segments := segmentCount(info.Duration)
+	if starts != nil {
+		segments = len(starts)
+	}
 	s := &Session{
 		ID: id, Source: source, Info: info,
-		Plan:     PlanFor(info, encoder),
-		Segments: segmentCount(info.Duration),
+		Plan:     plan,
+		Segments: segments,
+		starts:   starts,
 		dir:      dir, encoder: encoder, ffmpeg: m.ffmpeg, log: m.log,
 		onSeek:     m.onSeek,
 		onFallback: m.softwareOnly,
@@ -297,9 +331,13 @@ func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource strin
 	m.sessions[id] = s
 	m.mu.Unlock()
 
+	cuts := "even"
+	if s.sliced() {
+		cuts = "keyframes"
+	}
 	m.log.Info("stream session opened", "id", id,
 		"duration", int(info.Duration), "plan", s.Plan.Reason, "probed", probed,
-		"audio", len(info.Audio), "subtitles", len(info.Subtitles))
+		"audio", len(info.Audio), "subtitles", len(info.Subtitles), "segments", s.Segments, "cuts", cuts)
 	return s, nil
 }
 
@@ -502,16 +540,16 @@ func segmentCount(duration float64) int {
 func (s *Session) Playlist() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "#EXTM3U\n#EXT-X-VERSION:7\n")
-	fmt.Fprintf(&b, "#EXT-X-TARGETDURATION:%d\n", int(SegmentSeconds)+1)
+	fmt.Fprintf(&b, "#EXT-X-TARGETDURATION:%d\n", s.targetDuration())
 	fmt.Fprintf(&b, "#EXT-X-MEDIA-SEQUENCE:0\n")
 	fmt.Fprintf(&b, "#EXT-X-PLAYLIST-TYPE:VOD\n")
 	fmt.Fprintf(&b, "#EXT-X-MAP:URI=\"init.mp4\"\n")
 
 	for i := 0; i < s.Segments; i++ {
-		d := SegmentSeconds
+		// The last one takes whatever is left, sliver included.
+		d := max(s.segmentStart(i+1)-s.segmentStart(i), 0.001)
 		if i == s.Segments-1 {
-			// The last one takes whatever is left, sliver included.
-			d = max(s.Info.Duration-float64(i)*SegmentSeconds, 0.001)
+			d = max(s.Info.Duration-s.segmentStart(i), 0.001)
 		}
 		fmt.Fprintf(&b, "#EXTINF:%.3f,\n%d.mp4\n", d, i)
 	}
@@ -528,7 +566,7 @@ func (s *Session) InitPath() string { return filepath.Join(s.dir, "init.mp4") }
 // Prestart launches the encoder at a segment not on disk if nothing runs, and
 // returns at once. It never moves a running pass; only the player's requests do.
 func (s *Session) Prestart(from int) error {
-	if fileReady(s.SegmentPath(from)) {
+	if s.segmentDone(from) {
 		return nil
 	}
 	return s.startIfIdle(from)
@@ -616,12 +654,11 @@ func (s *Session) awaitFile(ctx context.Context, path string, deadline <-chan ti
 	return nil
 }
 
-// WaitSegment returns once a segment exists, starting or moving the encoder if needed.
-func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration) (string, error) {
-	path := s.SegmentPath(n)
-	if segmentReady(path) {
+// WaitSegment returns once segment n can be served, starting or moving the encoder if needed; OpenSegment reads it.
+func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration) error {
+	if s.segmentDone(n) {
 		s.touch()
-		return path, nil
+		return nil
 	}
 
 	// Known to restarts, so a pass about to serve this request is not killed under it.
@@ -629,7 +666,7 @@ func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration)
 	defer s.dropWaiter(n)
 
 	if err := s.ensureHead(n); err != nil {
-		return "", err
+		return err
 	}
 
 	deadline := time.After(timeout)
@@ -637,29 +674,29 @@ func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration)
 	for {
 		s.advanceHead()
 
-		// Complete once the next appears, it is the last advertised, or a pass that read to the end wrote it.
-		ready := segmentReady(path)
-		if ready && (s.nextStarted(n) || n >= s.Segments-1 || s.wroteWhole(path)) {
+		// Complete once the next appears, it is the last advertised, or a pass that read to the end wrote it;
+		// a sliced segment is whole the moment it appears.
+		if s.segmentDone(n) && (s.sliced() || s.nextStarted(n) || n >= s.Segments-1 || s.wroteWhole(s.SegmentPath(n))) {
 			s.touch()
-			return path, nil
+			return nil
 		}
 
 		// The pass ended short (copy cuts on keyframes, or a read failed); one pass aimed at the segment writes it.
 		if !s.running() {
 			if restarted {
-				return "", fmt.Errorf("segment %d was not produced", n)
+				return fmt.Errorf("segment %d was not produced", n)
 			}
 			restarted = true
 			if err := s.start(n); err != nil {
-				return "", err
+				return err
 			}
 			continue
 		}
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return ctx.Err()
 		case <-deadline:
-			return "", fmt.Errorf("segment %d not ready in %s (produced: %s)",
+			return fmt.Errorf("segment %d not ready in %s (produced: %s)",
 				n, timeout, strings.Join(s.produced(), ", "))
 		case <-time.After(150 * time.Millisecond):
 		}
@@ -743,8 +780,8 @@ func (s *Session) advanceHead() {
 	if s.run == nil {
 		return
 	}
-	// Done once the next has started (WaitSegment's rule), and only this pass's files count.
-	for s.run.wrote(s.SegmentPath(s.headTo+1)) && s.run.wrote(s.SegmentPath(s.headTo+2)) {
+	// Done once the next has started (WaitSegment's rule; sliced, once it exists), this pass's alone.
+	for s.madeByLocked(s.run, s.headTo+1) && (s.sliced() || s.madeByLocked(s.run, s.headTo+2)) {
 		s.headTo++
 	}
 }
@@ -869,13 +906,13 @@ func (s *Session) startLocked(from int) error {
 		s.dropTail(killed)
 	}
 
-	// Segments an earlier pass left from here on would read as this pass's
-	// progress; clear the contiguous run. Ones past a gap stay for fast seeks.
-	for n := from; fileReady(s.SegmentPath(n)); n++ {
+	// An earlier pass's segments from here would read as this pass's progress, so the run goes (past a gap
+	// they stay, for fast seeks); sliced ones all stay, whole and the same whichever pass made them.
+	for n := from; !s.sliced() && fileReady(s.SegmentPath(n)); n++ {
 		os.Remove(s.SegmentPath(n))
 	}
 
-	offset := float64(from) * SegmentSeconds
+	offset := s.segmentStart(from)
 
 	// A seek: tell whoever supplies the bytes to fetch there now, rather than
 	// waiting for the encoder to open the source and ask for itself.
@@ -903,8 +940,8 @@ func (s *Session) startLocked(from int) error {
 }
 
 func (s *Session) launch(from int) (*run, error) {
-	r := &run{from: from, exited: make(chan struct{}), began: time.Now()}
-	r.cmd = exec.Command(s.ffmpeg, s.args(float64(from)*SegmentSeconds, from)...)
+	r := &run{from: from, exited: make(chan struct{}), began: time.Now(), id: int(passes.Add(1)), gathered: make(chan struct{})}
+	r.cmd = exec.Command(s.ffmpeg, s.args(r)...)
 	r.cmd.Dir = s.dir
 	// Or an encoder dying on startup leaves no trace beyond segments that never come.
 	r.cmd.Stderr = &r.stderr
@@ -914,14 +951,23 @@ func (s *Session) launch(from int) (*run, error) {
 	}
 	s.log.Debug("encoder started", "session", s.ID, "encoder", s.Plan.VideoCodec, "fromSegment", from)
 	s.startSubtitles(r)
+	if s.sliced() {
+		go s.gather(r)
+	} else {
+		close(r.gathered)
+	}
 	return r, nil
 }
 
 // await sees an encoder out, swapping a hardware one that died at once for software under the lock.
 func (s *Session) await(r *run) {
 	err := r.cmd.Wait()
-	close(r.exited)
 	detail := lastLines(r.stderr.String(), encoderLogLines)
+	// Before exited closes, so gather knows whether what it holds at the end is the episode's end.
+	r.clean.Store(err == nil && !cutShort(s.Source, detail))
+	close(r.exited)
+	// Running until its segments are gathered: a waiter seeing it gone sooner restarts it over init.mp4.
+	<-r.gathered
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -958,7 +1004,7 @@ func (s *Session) await(r *run) {
 		// Its cut tail gone, what it wrote is whole; a retry instead rewrites from where it began.
 		s.ended = r
 		// Its cut tail already dropped, so a pass that left nothing wrote no whole segment.
-		if r.wrote(s.SegmentPath(r.from)) {
+		if s.madeByLocked(r, r.from) {
 			s.barren = 0
 		} else {
 			s.barren++
@@ -986,6 +1032,7 @@ func (s *Session) await(r *run) {
 }
 
 // switchToSoftware moves to libx264, dropping the hardware encoder's segments and init, which don't match.
+// Under s.mu: only a re-encode falls back, never a sliced (copied) session, so wipeOutput takes no lock here.
 func (s *Session) switchToSoftware() (previous string) {
 	previous = s.Plan.VideoCodec
 	s.Plan.VideoCodec, s.encoder, s.fellBack = softwareEncoder, softwareEncoder, true
@@ -997,9 +1044,7 @@ func (s *Session) switchToSoftware() (previous string) {
 
 // wipeOutput removes every segment and the init file.
 func (s *Session) wipeOutput() {
-	for n := 0; n < s.Segments; n++ {
-		os.Remove(s.SegmentPath(n))
-	}
+	s.dropSegments()
 	os.Remove(s.InitPath())
 }
 
@@ -1025,7 +1070,11 @@ func encoderInitFailed(detail string) bool {
 }
 
 // dropTail removes the last segment r wrote, likely cut short; an older pass's files right after it stay.
+// A sliced pass's segments are only ever written whole.
 func (s *Session) dropTail(r *run) {
+	if s.sliced() {
+		return
+	}
 	last := -1
 	for n := r.from; r.wrote(s.SegmentPath(n)); n++ {
 		last = n
@@ -1059,6 +1108,9 @@ func (s *Session) stop() *run {
 		done.stopSubtitles()
 		s.finished = nil
 	}
+	if r != nil {
+		r.discarded.Store(true)
+	}
 	s.mu.Unlock()
 
 	if r == nil {
@@ -1068,6 +1120,11 @@ func (s *Session) stop() *run {
 	r.stopSubtitles()
 	select {
 	case <-r.exited:
+	case <-time.After(3 * time.Second):
+	}
+	// Its parts tidied before the next pass starts; anything it still gathers later is never published.
+	select {
+	case <-r.gathered:
 	case <-time.After(3 * time.Second):
 	}
 	return r

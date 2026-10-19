@@ -215,7 +215,7 @@ check(/genres=Romance%2CComedy/.test(randomRequest ?? '') && /format=TV/.test(ra
 
 // ---------------------------------------------------------------- settings: orphans
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
-await page.getByRole('tab', { name: 'Quality' }).click()
+await page.getByRole('tab', { name: 'Storage' }).click()
 // Two steps: Find lists what would go, then Delete N.
 const find = page.getByRole('button', { name: 'Find', exact: true })
 check(await until(() => find.isVisible()), 'orphan clean-up is offered')
@@ -230,6 +230,7 @@ check(
 )
 
 // ---------------------------------------------------------------- settings: preferred groups
+await page.getByRole('tab', { name: 'Downloads' }).click()
 const groups = page.getByLabel('Preferred release groups')
 await groups.fill('SubsPlease, Erai-raws')
 await groups.blur()
@@ -238,7 +239,6 @@ check(
   'preferred groups saved as a list',
 )
 await page.reload({ waitUntil: 'domcontentloaded' })
-await page.getByRole('tab', { name: 'Quality' }).click()
 check(await until(() => page.getByLabel('Preferred release groups').inputValue().then((v) => v === 'SubsPlease, Erai-raws')), 'preferred groups survive a reload')
 
 // ---------------------------------------------------------------- settings: speed limit and sharing

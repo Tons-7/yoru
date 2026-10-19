@@ -78,7 +78,7 @@ func TestAudioTrackDrivesArgsAndPlan(t *testing.T) {
 	}
 	s := &Session{Info: info, encoder: "libx264", Plan: PlanFor(info, "libx264")}
 
-	if !strings.Contains(strings.Join(s.args(0, 0), " "), "0:a:0?") {
+	if !strings.Contains(strings.Join(s.args(&run{}), " "), "0:a:0?") {
 		t.Error("default maps the first audio stream")
 	}
 	if !s.Plan.AudioCopy {
@@ -87,7 +87,7 @@ func TestAudioTrackDrivesArgsAndPlan(t *testing.T) {
 
 	s.audioTrack = 1
 	s.Plan = planFor(info, "libx264", 1, sound.Options{})
-	if !strings.Contains(strings.Join(s.args(0, 0), " "), "0:a:1?") {
+	if !strings.Contains(strings.Join(s.args(&run{}), " "), "0:a:1?") {
 		t.Error("switched track is mapped")
 	}
 	if s.Plan.AudioCopy {

@@ -247,6 +247,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/play/stage", s.playStage)
 	mux.HandleFunc("POST /api/stop", s.stopPlayback)
 	mux.HandleFunc("POST /api/progress", s.progress)
+	mux.HandleFunc("POST /api/playback/note", s.playerNote)
 	mux.HandleFunc("POST /api/prepare", s.prepare)
 	mux.HandleFunc("GET /api/episode/skips", s.skips)
 	mux.HandleFunc("POST /api/watched", s.setWatched)

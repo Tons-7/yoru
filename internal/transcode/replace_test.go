@@ -23,7 +23,7 @@ func TestReopenOnAnotherSourceReplacesTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := old.WaitSegment(ctx, 0, 60*time.Second); err != nil {
+	if err := old.WaitSegment(ctx, 0, 60*time.Second); err != nil {
 		t.Fatal(err)
 	}
 
@@ -40,7 +40,7 @@ func TestReopenOnAnotherSourceReplacesTheSession(t *testing.T) {
 	if got, _ := m.Get("1-1"); got != fresh {
 		t.Fatal("the manager does not hold the new session")
 	}
-	if _, err := fresh.WaitSegment(ctx, 0, 60*time.Second); err != nil {
+	if err := fresh.WaitSegment(ctx, 0, 60*time.Second); err != nil {
 		t.Fatalf("new session cannot produce: %v", err)
 	}
 	if _, err := os.Stat(fresh.dir); err != nil {

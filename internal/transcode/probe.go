@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -93,6 +95,7 @@ type ffprobeOutput struct {
 		Channels    int    `json:"channels"`
 		PixFmt      string `json:"pix_fmt"`
 		BitsPerRaw  string `json:"bits_per_raw_sample"`
+		Duration    string `json:"duration"`
 		Disposition struct {
 			Default  int `json:"default"`
 			Forced   int `json:"forced"`
@@ -170,6 +173,14 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 	info.Duration, _ = strconv.ParseFloat(raw.Format.Duration, 64)
 	info.Bitrate, _ = strconv.ParseInt(raw.Format.BitRate, 10, 64)
 
+	var mediaEnd float64
+	// A track that does not say how long it is could be the one that runs longest.
+	lengthsKnown := true
+	media := func(duration string, tags map[string]string) {
+		n := streamSeconds(duration, tags)
+		lengthsKnown = lengthsKnown && n > 0
+		mediaEnd = max(mediaEnd, n)
+	}
 	for _, s := range raw.Streams {
 		stream := Stream{
 			Index:    s.Index,
@@ -195,8 +206,10 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 			if info.Video == nil {
 				info.Video = &stream
 			}
+			media(s.Duration, s.Tags)
 		case "audio":
 			info.Audio = append(info.Audio, stream)
+			media(s.Duration, s.Tags)
 		case "subtitle":
 			info.Subtitles = append(info.Subtitles, stream)
 		case "attachment":
@@ -228,9 +241,35 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 	if info.Video == nil {
 		return nil, fmt.Errorf("no video stream in %s", url)
 	}
+	// The playlist ends with the picture and sound: subtitles running past them left slots with nothing to play.
+	// Only by a little: a stale length tag from an older cut of the file must not cut real minutes off the end.
+	if lengthsKnown && mediaEnd > 0 && mediaEnd < info.Duration && info.Duration-mediaEnd <= maxSubtitleOverhang {
+		info.Duration = mediaEnd
+	}
 	info.Audio = dropMirror(info.Audio)
 	info.Subtitles = dropMirror(info.Subtitles)
 	return info, nil
+}
+
+// How far subtitles may run past the picture and sound before the tracks' own lengths are doubted.
+const maxSubtitleOverhang = 30.0
+
+// streamSeconds is one track's own length: ffprobe's, or the DURATION tag Matroska muxers write; 0 when neither.
+func streamSeconds(duration string, tags map[string]string) float64 {
+	if v, err := strconv.ParseFloat(duration, 64); err == nil && v > 0 {
+		return v
+	}
+	// In sorted order, the plain DURATION before a DURATION-eng: a map's own order changes run to run.
+	for _, k := range slices.Sorted(maps.Keys(tags)) {
+		var h, m int
+		var s float64
+		if strings.HasPrefix(strings.ToUpper(k), "DURATION") {
+			if n, _ := fmt.Sscanf(tags[k], "%d:%d:%f", &h, &m, &s); n == 3 {
+				return float64(h*3600+m*60) + s
+			}
+		}
+	}
+	return 0
 }
 
 // dropMirror removes the phantom second copy of the tracks ffprobe reports mid-download.

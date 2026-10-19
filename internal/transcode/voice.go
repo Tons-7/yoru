@@ -1,10 +1,6 @@
 package transcode
 
-import (
-	"os"
-
-	"yoru/internal/sound"
-)
+import "yoru/internal/sound"
 
 // Sound is what is being done to the audio on its way out; see package sound.
 func (s *Session) Sound() sound.Options {
@@ -49,10 +45,7 @@ func (s *Session) SetSound(o sound.Options) bool {
 	s.mu.Unlock()
 
 	s.stop()
-	for n := 0; n < s.Segments; n++ {
-		os.Remove(s.SegmentPath(n))
-	}
-	os.Remove(s.InitPath())
+	s.wipeOutput()
 	s.log.Info("sound switched", "session", s.ID, "voice", o.Level(), "night", o.Night,
 		"headphones", o.Headphones, "mono", o.Mono, "boost", o.Boost)
 	return true

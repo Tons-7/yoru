@@ -54,7 +54,7 @@ func TestPassCarriesNoSubtitleOutputs(t *testing.T) {
 	for _, plan := range []Plan{{VideoCopy: true, AudioCopy: true}, {VideoCopy: true}} {
 		s := liveSession(true)
 		s.Plan = plan
-		if args := strings.Join(s.args(60, 10), " "); strings.Contains(args, "live-") || strings.Contains(args, "-c:s") {
+		if args := strings.Join(s.args(&run{from: 10}), " "); strings.Contains(args, "live-") || strings.Contains(args, "-c:s") {
 			t.Errorf("subtitle output on the pass (audio copied: %v): %s", plan.AudioCopy, args)
 		}
 	}
@@ -211,10 +211,7 @@ func lastPacket(t *testing.T, ffprobe string, session *Session, segment int, str
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile(session.SegmentPath(segment))
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := segmentBytes(t, session, segment)
 	whole := filepath.Join(t.TempDir(), "whole.mp4")
 	if err := os.WriteFile(whole, append(init, body...), 0o644); err != nil {
 		t.Fatal(err)
@@ -272,7 +269,7 @@ func TestReEncodedAudioKeepsUpWithThePictureWhileSubtitlesAreWritten(t *testing.
 
 	// In order, as a player asks: jumping ahead would restart the pass there. Segment 3 means 0 to 2 are whole.
 	for n := range 4 {
-		if _, err := session.WaitSegment(ctx, n, 90*time.Second); err != nil {
+		if err := session.WaitSegment(ctx, n, 90*time.Second); err != nil {
 			t.Fatalf("segment %d: %v", n, err)
 		}
 	}
@@ -367,12 +364,12 @@ func TestLosslessSurroundPlaysWithSoundOptions(t *testing.T) {
 		t.Fatalf("plan = %+v, want FLAC", plan)
 	}
 	for n := range 2 {
-		if _, err := session.WaitSegment(ctx, n, 90*time.Second); err != nil {
+		if err := session.WaitSegment(ctx, n, 90*time.Second); err != nil {
 			t.Fatalf("segment %d: %v", n, err)
 		}
 	}
 	init, _ := os.ReadFile(session.InitPath())
-	body, _ := os.ReadFile(session.SegmentPath(0))
+	body := segmentBytes(t, session, 0)
 	whole := filepath.Join(t.TempDir(), "whole.mp4")
 	os.WriteFile(whole, append(init, body...), 0o644)
 	out, err := exec.Command(ffprobe, "-v", "error", "-select_streams", "a:0",
@@ -407,13 +404,13 @@ func TestLosslessSourcePlaysAsFLAC(t *testing.T) {
 		t.Fatalf("plan = %+v", plan)
 	}
 	for n := range 3 {
-		if _, err := session.WaitSegment(ctx, n, 90*time.Second); err != nil {
+		if err := session.WaitSegment(ctx, n, 90*time.Second); err != nil {
 			t.Fatalf("segment %d: %v", n, err)
 		}
 	}
 
 	init, _ := os.ReadFile(session.InitPath())
-	body, _ := os.ReadFile(session.SegmentPath(0))
+	body := segmentBytes(t, session, 0)
 	whole := filepath.Join(t.TempDir(), "whole.mp4")
 	os.WriteFile(whole, append(init, body...), 0o644)
 	codec, err := exec.Command(ffprobe, "-v", "error", "-select_streams", "a:0",

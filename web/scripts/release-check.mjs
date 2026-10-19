@@ -18,12 +18,14 @@ const ALONE = true
 // access-approval-check); subs-sync-check never starts under Playwright, which draws hidden tabs.
 const CHECKS = [
   ['player-check.mjs'],
-  ['features-check.mjs'],
+  // Its search lists the library show from AniList's data, which four lanes at once left unloaded.
+  ['features-check.mjs', {}, ALONE],
   ['recovery-check.mjs'],
   ['thumbs-check.mjs'],
   ['prefs-scope-check.mjs'],
   ['about-folders-check.mjs'],
   ['anime4k-tiers-check.mjs', {}, ALONE],
+  ['autonext-seek-check.mjs'],
   ['backup-check.mjs'],
   ['browse-filters-check.mjs', {}, ALONE],
   ['browse-paging-check.mjs', {}, ALONE],
@@ -47,6 +49,7 @@ const CHECKS = [
   ['saved-copy-check.mjs', {}, ALONE],
   ['seek-spinner-check.mjs'],
   ['segmented-scroll-check.mjs'],
+  ['settings-check.mjs'],
   ['setup-transcoder-check.mjs', { BIN_ONLY: 'ffmpeg' }],
   ['shortcuts-check.mjs'],
   ['show-groups-check.mjs'],
@@ -59,6 +62,7 @@ const CHECKS = [
   ['ui-shared-check.mjs'],
   ['unconvertible-check.mjs'],
   ['vlc-check.mjs'],
+  ['wifi-drop-check.mjs'],
   ['sound-check.mjs'],
 ]
 

@@ -71,7 +71,7 @@ func (s *Session) LiveSubtitles() (start float64, ok bool) {
 	if !s.liveSubs || s.run == nil || !s.run.subsAlive.Load() {
 		return 0, false
 	}
-	return float64(s.headFrom) * SegmentSeconds, true
+	return s.segmentStart(s.headFrom), true
 }
 
 // How long a first request waits for the subtitle process to open the file and write the track's header.
@@ -103,7 +103,7 @@ func LiveCovers(start, at float64) bool { return start == 0 || at >= start+aroun
 // startSubtitles runs the subtitle process beside a pass. The picture never waits on it: failing to
 // start, or dying, only means lines are read the slower way.
 func (s *Session) startSubtitles(r *run) {
-	args := s.subtitleArgs(float64(r.from)*SegmentSeconds, r.from)
+	args := s.subtitleArgs(s.segmentStart(r.from), r.from)
 	if args == nil {
 		return
 	}

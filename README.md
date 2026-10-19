@@ -24,7 +24,8 @@ Yoru and keeps your history, library and settings.
   ahead of everything else queued; the rest is fetched in the background so the
   next episode is already there.
 - **Built-in torrent engine.** Picks the best release (resolution, codec, group,
-  seeders, SeaDex), handles season packs, and needs nothing else installed.
+  seeders, SeaDex), or the best up to 720p or 480p if you'd rather, handles
+  season packs, and needs nothing else installed.
 - **Plays anywhere.** In the browser by default, so a phone or TV on the same
   network works the same as the laptop. mpv and VLC are available as external
   players, with Anime4K upscaling. On a phone, **Open in app** hands the
@@ -168,7 +169,7 @@ vlc_path = 'E:\VideoLAN\VLC'
 
 ### Watching on a phone or TV
 
-Turn on **Settings → Access → Allow other devices**; no restart needed.
+Turn on **Settings → Devices → Allow other devices**; no restart needed.
 Anything off this machine then needs a token, so the same page shows a QR code
 to scan. Loopback stays open, so watching on the machine itself needs nothing.
 
@@ -189,7 +190,7 @@ itself from a free [DuckDNS](https://www.duckdns.org) name; nothing is installed
 on the phone:
 
 1. Sign in at duckdns.org, add a name (say `myyoru`) and copy the token.
-2. In **Settings → Access → Install as an app on a phone**, paste the name and
+2. In **Settings → Devices → Install as an app on a phone**, paste the name and
    the token.
 
 A minute or two later the QR code leads to `https://myyoru.duckdns.org:4321`.

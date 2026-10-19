@@ -3,7 +3,9 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -21,6 +23,31 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 
 // Must match the episode catalogue's key, which is the bare number.
 func epKey(episode int) string { return fmt.Sprint(episode) }
+
+// playerNotes are what the browser player may log: an episode's end is decided in the page, so only it can say.
+var playerNotes = map[string]bool{"ended": true, "end-stuck": true, "countdown-cleared": true, "next": true}
+
+// playerNote logs one end-of-episode event from the page, a few short fields at most.
+func (s *Server) playerNote(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AnimeID int            `json:"animeId"`
+		Episode int            `json:"episode"`
+		Event   string         `json:"event"`
+		Detail  map[string]any `json:"detail"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil || !playerNotes[body.Event] {
+		send(w, http.StatusBadRequest, map[string]any{"error": "unknown note"})
+		return
+	}
+	args := []any{"anime", body.AnimeID, "episode", body.Episode, "event", body.Event}
+	keys := slices.Sorted(maps.Keys(body.Detail))
+	for _, k := range keys[:min(len(keys), 12)] {
+		v := fmt.Sprint(body.Detail[k])
+		args = append(args, k[:min(len(k), 24)], v[:min(len(v), 80)])
+	}
+	s.log.Info("player", args...)
+	w.WriteHeader(http.StatusNoContent)
+}
 
 // progress takes the browser player's reports, which resuming and the trackers depend on.
 func (s *Server) progress(w http.ResponseWriter, r *http.Request) {

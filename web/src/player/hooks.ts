@@ -25,6 +25,8 @@ export function useHlsSource(
   const current = failure && failure.video === video && failure.playlist === playlist ? failure : null
   const error = current?.message ?? null
   const hls = useRef<Hls | null>(null)
+  // hls.js has appended the playlist's last segment: what is buffered is all there will be.
+  const streamEnded = useRef(false)
   // Read at attach time, not tracked: a resume update mid-episode must not tear the player down.
   const readStart = useEffectEvent(() => startAt)
   const gone = useEffectEvent(() => onGone?.())
@@ -36,6 +38,7 @@ export function useHlsSource(
 
     let cancelled = false
     let native = false
+    streamEnded.current = false
     let seek: (() => void) | undefined
     let recoveries = 0
     let recoveredAt = 0
@@ -50,6 +53,11 @@ export function useHlsSource(
       )
     }
     video.addEventListener('error', onMediaError)
+    // A seek takes hls.js out of its ended state; it says so again once it reaches the end.
+    const onSeeking = () => {
+      streamEnded.current = false
+    }
+    video.addEventListener('seeking', onSeeking)
 
     void (async () => {
       const { default: HlsCtor } = await import('hls.js')
@@ -88,6 +96,13 @@ export function useHlsSource(
         fragLoadingMaxRetry: 10,
       })
 
+      instance.on(HlsCtor.Events.BUFFER_EOS, () => {
+        streamEnded.current = true
+      })
+      // A recovery empties the buffers: what was all there is no longer is.
+      instance.on(HlsCtor.Events.BUFFER_RESET, () => {
+        streamEnded.current = false
+      })
       instance.on(HlsCtor.Events.ERROR, (_event, data) => {
         // 422: the encoder fails every pass (transcode.Unconvertible); said now, not after hls.js retries.
         if (data.response?.code === 422) {
@@ -139,6 +154,7 @@ export function useHlsSource(
     return () => {
       cancelled = true
       video.removeEventListener('error', onMediaError)
+      video.removeEventListener('seeking', onSeeking)
       hls.current?.destroy()
       hls.current = null
       if (native && seek) video.removeEventListener('loadedmetadata', seek)
@@ -148,7 +164,7 @@ export function useHlsSource(
     }
   }, [video, playlist])
 
-  return { error, final: !!current?.final, hls }
+  return { error, final: !!current?.final, hls, streamEnded }
 }
 
 /** Nudges a phone decoder that stops presenting frames after a seek, only while the page itself paints. */

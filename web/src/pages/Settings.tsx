@@ -1,4 +1,15 @@
-import { useContext, useEffect, useState } from 'react'
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { api, ApiError, withToken } from '../lib/api'
@@ -26,6 +37,7 @@ import {
   PageHeader,
   ProgressBar,
   SaveHint,
+  SearchInput,
   Segmented,
   Select,
   Skeleton,
@@ -34,26 +46,69 @@ import {
 } from '../components/ui'
 import { buttonClass, ControlLabel } from '../lib/ui'
 
-const TABS = ['Playback', 'Quality', 'Trackers', 'Library', 'Notifications', 'Access', 'Jobs', 'About'] as const
-type Tab = (typeof TABS)[number]
+// The id is what ?tab= says; the label is what a person reads.
+const TABS = [
+  { id: 'Playback', label: 'Playback' },
+  { id: 'Sound', label: 'Sound & picture' },
+  { id: 'Downloads', label: 'Downloads' },
+  { id: 'Storage', label: 'Storage' },
+  { id: 'Accounts', label: 'Accounts' },
+  { id: 'Library', label: 'Library' },
+  { id: 'Notifications', label: 'Notifications' },
+  { id: 'Devices', label: 'Devices' },
+  { id: 'About', label: 'About' },
+] as const
+type Tab = (typeof TABS)[number]['id']
+// Tabs before the regrouping, still in links, bookmarks and update notices.
+const RENAMED: Record<string, Tab> = { Quality: 'Downloads', Trackers: 'Accounts', Access: 'Devices', Jobs: 'About' }
+const isTab = (v: string | null): v is Tab => TABS.some((t) => t.id === v)
 
 export function Settings() {
   // The OAuth callback and update notifications land here on their tab (?tab=).
   const [params, setParams] = useSearchParams()
   const connected = params.get('connected')
-  const wanted = params.get('tab') as Tab | null
+  const wanted = params.get('tab')
+  const renamed = wanted ? RENAMED[wanted] : undefined
   // The URL holds the tab: a reload keeps it, and a link to another one always switches.
-  const tab: Tab = wanted && TABS.includes(wanted) ? wanted : connected ? 'Trackers' : 'Playback'
+  const tab: Tab = isTab(wanted) ? wanted : (renamed ?? (connected ? 'Accounts' : 'Playback'))
+  // So does the search (?q=), so a link from elsewhere can open on the setting it is about.
+  const query = (params.get('q') ?? '').trim().toLowerCase()
+  // Every tab renders under a search; deferred, typing stays quick while the results catch up.
+  const shownQuery = useDeferredValue(query)
+  const setParam = (key: string, value: string | null) => {
+    const next = new URLSearchParams(params)
+    if (value) next.set(key, value)
+    else next.delete(key)
+    setParams(next, { replace: true })
+  }
   const setTab = (t: Tab) => {
     const next = new URLSearchParams(params)
     next.set('tab', t)
+    next.delete('q')
     setParams(next, { replace: true })
   }
+  // The latest handlers behind steady ones, or the memoised results would redraw on every keystroke anyway.
+  const handlers = useRef({ setTab, clear: () => setParam('q', null) })
+  useLayoutEffect(() => {
+    handlers.current = { setTab, clear: () => setParam('q', null) }
+  })
+  const openTab = useCallback((t: Tab) => handlers.current.setTab(t), [])
+  const clearSearch = useCallback(() => handlers.current.clear(), [])
 
   return (
     // Centred as one block: the slack becomes margins, not a gulf between every label and its control.
     <div className="mx-auto max-w-[59rem] space-y-5">
-      <PageHeader title="Settings" />
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <PageHeader title="Settings" />
+        <SearchInput
+          value={params.get('q') ?? ''}
+          onChange={(e) => setParam('q', e.target.value)}
+          onKeyDown={(e) => e.key === 'Escape' && setParam('q', null)}
+          placeholder="Search settings"
+          aria-label="Search settings"
+          className="w-full sm:w-72"
+        />
+      </div>
 
       {connected && (
         <div className="animate-fade-in flex items-center justify-between gap-4 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2">
@@ -70,64 +125,199 @@ export function Settings() {
         </div>
       )}
 
-      {/* Beside the settings on a desktop; on a phone a menu, as a strip of eight hid the last ones off-screen. */}
-      <Select value={tab} onChange={(v) => setTab(v as Tab)} aria-label="Settings section" className="lg:hidden">
-        {TABS.map((name) => (
-          <option key={name} value={name}>
-            {name}
-          </option>
-        ))}
-      </Select>
+      {query ? (
+        <SearchResults query={shownQuery || query} onOpen={openTab} onClear={clearSearch} />
+      ) : (
+        <>
+          {/* Beside the settings on a desktop; on a phone a menu, as a strip hid the last tabs off-screen. */}
+          <Select value={tab} onChange={(v) => setTab(v as Tab)} aria-label="Settings section" className="lg:hidden">
+            {TABS.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </Select>
 
-      <div className="flex gap-6">
-        <SideTabs tab={tab} onChange={setTab} />
-
-        <div className="animate-fade-in w-full max-w-[47rem] min-w-0">
-        {tab === 'Playback' && <PlaybackTab />}
-        {tab === 'Quality' && <QualityTab />}
-        {tab === 'Trackers' && <TrackersTab />}
-        {tab === 'Library' && <LibraryTab />}
-        {tab === 'Notifications' && <NotificationsTab />}
-        {tab === 'Access' && <AccessTab />}
-        {tab === 'Jobs' && <JobsTab />}
-        {tab === 'About' && <AboutTab />}
-        </div>
-      </div>
+          <div className="flex gap-6">
+            <SideTabs tab={tab} onChange={setTab} />
+            <div className="animate-fade-in w-full max-w-[47rem] min-w-0">
+              <TabBody tab={tab} />
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
 
+function TabBody({ tab }: { tab: Tab }) {
+  switch (tab) {
+    case 'Playback':
+      return <PlaybackTab />
+    case 'Sound':
+      return <SoundTab />
+    case 'Downloads':
+      return <DownloadsTab />
+    case 'Storage':
+      return <StorageTab />
+    case 'Accounts':
+      return <AccountsTab />
+    case 'Library':
+      return <LibraryTab />
+    case 'Notifications':
+      return <NotificationsTab />
+    case 'Devices':
+      return <DevicesTab />
+    case 'About':
+      return <AboutTab />
+  }
+}
+
+// The search: lower-cased words, every one of which a setting's words must hold.
+const SearchQuery = createContext('')
+// The section's own title matched, so all of it shows.
+const SectionMatched = createContext(false)
+
+function matches(query: string, ...texts: Array<string | undefined>) {
+  const words = texts.filter(Boolean).join(' ').toLowerCase()
+  return query.split(/\s+/).every((w) => words.includes(w))
+}
+
+// Every tab at once, each showing only its matching settings; a tab with none drops out.
+const SearchResults = memo(function SearchResults({
+  query,
+  onOpen,
+  onClear,
+}: {
+  query: string
+  onOpen: (t: Tab) => void
+  onClear: () => void
+}) {
+  return (
+    <SearchQuery.Provider value={query}>
+      <div className="animate-fade-in mx-auto max-w-[47rem] space-y-6 [&:not(:has([data-shown])):not(:has([data-loading]))>[data-empty]]:block">
+        {TABS.map((t) => (
+          <div key={t.id} className="space-y-3 [&:not(:has([data-shown]))]:hidden">
+            <button
+              onClick={() => onOpen(t.id)}
+              className="flex items-center gap-2 rounded-md text-sm font-medium text-base-300 transition-colors hover:text-white"
+            >
+              <TabIcon tab={t.id} />
+              {t.label} ›
+            </button>
+            <SectionMatched.Provider value={matches(query, t.label)}>
+              <TabBody tab={t.id} />
+            </SectionMatched.Provider>
+          </div>
+        ))}
+        <div data-empty className="surface hidden p-6 text-center">
+          <p className="text-sm text-base-300">No setting matches “{query}”.</p>
+          <button onClick={onClear} className={cx(buttonClass(), 'mt-3')}>
+            Clear search
+          </button>
+        </div>
+      </div>
+    </SearchQuery.Provider>
+  )
+})
+
 function SideTabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
   return (
     // Stays beside a long tab instead of scrolling away with its top.
-    <div role="tablist" className="sticky top-20 hidden w-42 shrink-0 flex-col gap-0.5 self-start lg:flex">
-      {TABS.map((name) => (
+    <div role="tablist" className="sticky top-20 hidden w-44 shrink-0 flex-col gap-0.5 self-start lg:flex">
+      {TABS.map((t) => (
         <button
-          key={name}
+          key={t.id}
           role="tab"
-          aria-selected={name === tab}
-          onClick={() => onChange(name)}
+          aria-selected={t.id === tab}
+          onClick={() => onChange(t.id)}
           className={cx(
-            'rounded-lg px-3 py-1.5 text-left text-sm transition-colors',
-            name === tab
+            'flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors',
+            t.id === tab
               ? 'bg-accent-500/15 font-medium text-accent-200 shadow-[inset_2px_0_0_var(--color-accent-500)]'
               : 'text-base-400 hover:bg-base-900 hover:text-base-100',
           )}
         >
-          {name}
+          <TabIcon tab={t.id} />
+          {t.label}
         </button>
       ))}
     </div>
   )
 }
 
-function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+// One line icon per tab, drawn as the app's other glyphs are (24 grid, 1.6 stroke).
+const TAB_ICONS: Record<Tab, ReactNode> = {
+  Playback: <path d="M8.5 5.5v13l10-6.5-10-6.5Z" strokeLinejoin="round" />,
+  Sound: (
+    <>
+      <path d="M4.5 9.5h3l4-3.5v12l-4-3.5h-3v-5Z" strokeLinejoin="round" />
+      <path d="M15 9.5a3.5 3.5 0 0 1 0 5M17.5 7a7 7 0 0 1 0 10" strokeLinecap="round" />
+    </>
+  ),
+  Downloads: <path d="M12 4v10m0 0 4-4m-4 4-4-4M5 18.5h14" strokeLinecap="round" strokeLinejoin="round" />,
+  Storage: (
+    <>
+      <ellipse cx="12" cy="6.5" rx="7" ry="2.5" />
+      <path d="M5 6.5v11c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-11M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" />
+    </>
+  ),
+  Accounts: (
+    <>
+      <circle cx="12" cy="8.5" r="3.5" />
+      <path d="M5 20c1-3.5 3.8-5 7-5s6 1.5 7 5" strokeLinecap="round" />
+    </>
+  ),
+  Library: (
+    <path
+      d="M4 7.5A1.5 1.5 0 0 1 5.5 6h3.4a1.5 1.5 0 0 1 1.2.6l.9 1.2h7.5A1.5 1.5 0 0 1 20 9.3v8.2a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5v-10Z"
+      strokeLinejoin="round"
+    />
+  ),
+  Notifications: (
+    <>
+      <path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 1.5H5l1.5-1.5Z" strokeLinejoin="round" />
+      <path d="M10 20.5a2 2 0 0 0 4 0" strokeLinecap="round" />
+    </>
+  ),
+  Devices: (
+    <>
+      <rect x="7.5" y="3.5" width="9" height="17" rx="1.5" />
+      <path d="M11 17.5h2" strokeLinecap="round" />
+    </>
+  ),
+  About: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 11v5.5M12 7.75v.25" strokeLinecap="round" />
+    </>
+  ),
+}
+
+function TabIcon({ tab }: { tab: Tab }) {
   return (
-    <section className="surface p-5">
+    <svg viewBox="0 0 24 24" className="size-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+      {TAB_ICONS[tab]}
+    </svg>
+  )
+}
+
+function Section({ title, hint, keywords, children }: { title: string; hint?: string; keywords?: string; children: ReactNode }) {
+  const query = useContext(SearchQuery)
+  const tabMatched = useContext(SectionMatched)
+  // Searching, an unmatched section keeps only its matching rows, and goes when none is left.
+  const all = !query || tabMatched || matches(query, title, hint, keywords)
+  return (
+    <section
+      data-shown={query && all ? '' : undefined}
+      className={cx('surface p-5', !all && '[&:not(:has([data-shown]))]:hidden')}
+    >
       <h2 className="font-display text-base font-semibold text-white">{title}</h2>
       {hint && <p className="mt-1 text-xs leading-relaxed text-base-500">{hint}</p>}
       {/* A rule per row: a two-line hint otherwise runs into the row below it. */}
-      <div className="mt-2 divide-y divide-white/5">{children}</div>
+      <div className={cx('mt-2 divide-y divide-white/5', !all && '[&>:not([data-row])]:hidden')}>
+        <SectionMatched.Provider value={all}>{children}</SectionMatched.Provider>
+      </div>
     </section>
   )
 }
@@ -135,16 +325,39 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 // The row's label names its control for screen readers, as the controls show no text.
 const RowLabel = ControlLabel
 
-function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Row({
+  label,
+  hint,
+  keywords,
+  stacked,
+  children,
+}: {
+  label: string
+  hint?: string
+  /** Other words someone might search for it by. */
+  keywords?: string
+  /** The control under the words, for one too wide to sit beside them. */
+  stacked?: boolean
+  children: ReactNode
+}) {
+  const query = useContext(SearchQuery)
+  const all = useContext(SectionMatched)
+  const shown = !query || all || matches(query, label, hint, keywords)
   return (
     // Wraps on a narrow screen rather than clipping buttons off the edge.
-    <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2 py-2.5">
-      <div className="min-w-0 flex-1 basis-48">
-        <p className="text-sm text-base-200">{label}</p>
-        {hint && <p className="text-xs text-base-500">{hint}</p>}
+    <div
+      data-row
+      data-shown={query && shown ? '' : undefined}
+      hidden={!shown}
+      className={cx('flex flex-wrap justify-between gap-x-5 gap-y-2 py-3', stacked ? 'flex-col' : 'items-center')}
+    >
+      {/* basis-48 is a width beside the control; in a stacked (column) row it became a 12rem height. */}
+      <div className={cx('min-w-0', !stacked && 'flex-1 basis-48')}>
+        <p className="text-sm text-base-100">{label}</p>
+        {hint && <p className="mt-0.5 text-xs leading-relaxed text-base-500">{hint}</p>}
       </div>
       {/* One track so the right edge doesn't zigzag (not on a phone, where it leaves the label). */}
-      <div className="flex max-w-full justify-end sm:min-w-36">
+      <div className={cx('flex max-w-full', stacked ? '' : 'justify-end sm:min-w-36')}>
         <RowLabel.Provider value={label}>{children}</RowLabel.Provider>
       </div>
     </div>
@@ -160,7 +373,7 @@ function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
       aria-label={label ?? rowLabel}
       onClick={() => onChange(!on)}
       className={cx(
-        'relative h-5 w-9 rounded-full transition-colors',
+        'tap relative h-5 w-9 shrink-0 rounded-full transition-colors',
         on ? 'bg-accent-500' : 'bg-base-700',
       )}
     >
@@ -205,26 +418,26 @@ function PlaybackTab() {
 
   return (
     <div className="space-y-4">
-      <Section title="Automatic behaviour" hint="All off by default. Flipping one here or in the player makes it the new default.">
-        <Row label="Auto play" hint="Start playing as soon as the page opens">
+      <Section title="Automatic" hint="Flipping one in the player changes it here too.">
+        <Row label="Auto play" hint="Starts as soon as the page opens." keywords="autoplay">
           <Switch on={f.get('playback.autoplay')} onChange={(v) => f.set('playback.autoplay', String(v))} />
         </Row>
-        <Row label="Auto next episode">
+        <Row label="Auto next episode" hint="Counts down at the end, then plays the next." keywords="autonext countdown">
           <Switch on={f.get('playback.autonext')} onChange={(v) => f.set('playback.autonext', String(v))} />
         </Row>
-        <Row label="Skip opening">
+        <Row label="Skip opening" keywords="intro op">
           <Switch on={f.get('playback.autoskip_op')} onChange={(v) => f.set('playback.autoskip_op', String(v))} />
         </Row>
-        <Row label="Skip ending">
+        <Row label="Skip ending" keywords="outro ed credits">
           <Switch on={f.get('playback.autoskip_ed')} onChange={(v) => f.set('playback.autoskip_ed', String(v))} />
         </Row>
-        <Row label="Skip filler and recaps" hint="Auto-next and prefetch step over them; the list still shows them">
+        <Row label="Skip filler and recaps" hint="Next and download ahead step over them; the list still shows them.">
           <Switch on={f.get('playback.skip_filler')} onChange={(v) => f.set('playback.skip_filler', String(v))} />
         </Row>
       </Section>
 
       <Section title="Player">
-        <Row label="Default player" hint="Desktop players only work on this machine; a phone or TV needs the browser. Progress, skips and auto-next work in all three.">
+        <Row label="Default player" hint="mpv and VLC play on this computer only; a phone or TV uses the browser." keywords="mpv vlc external">
           <Select
             value={f.value('playback.player')}
             onChange={(v) => f.set('playback.player', v)}
@@ -235,38 +448,84 @@ function PlaybackTab() {
           </Select>
         </Row>
         <VLCNote />
-        <Row
-          label="Voice boost"
-          hint="Lifts dialogue over music and effects, like Prime Video's Dialogue Boost. Surround films lift the centre channel; stereo shows have the centred voice picked out. Browser player only; also under the player, or press V."
-        >
+        <Row label="Open Yoru" hint="From the next start. F11 switches either way." keywords="window fullscreen maximized">
+          <Select value={f.value('window.mode') || 'fullscreen'} onChange={(v) => f.set('window.mode', v)}>
+            <option value="fullscreen">Fullscreen</option>
+            <option value="maximized">Maximized</option>
+          </Select>
+        </Row>
+      </Section>
+
+      <Section title="Language">
+        <Row label="Audio preference" keywords="sub dub dubbed subbed">
+          <Select
+            value={f.value('audio.prefer')}
+            onChange={(v) => f.set('audio.prefer', v)}
+          >
+            <option value="sub">Subbed</option>
+            <option value="dub">Dubbed</option>
+            <option value="either">Either</option>
+          </Select>
+        </Row>
+        <SubtitleLanguages f={f} />
+        <Row label="Show titles as" keywords="english romaji names">
+          <Select
+            value={f.value('display.titles')}
+            onChange={(v) => f.set('display.titles', v)}
+          >
+            <option value="english">English</option>
+            <option value="romaji">Romaji</option>
+          </Select>
+        </Row>
+      </Section>
+    </div>
+  )
+}
+
+function SoundTab() {
+  const f = useFlag()
+  if (f.loading) return <Skeleton className="h-64 w-full" />
+
+  return (
+    <div className="space-y-4">
+      <Section title="Sound" hint="Browser player only; also in the player's sound menu.">
+        <Row label="Voice boost" hint="Lifts dialogue over music and effects. Press V in the player." keywords="dialogue speech clear">
           <Select value={f.value('playback.voice') || 'off'} onChange={(v) => f.set('playback.voice', v)}>
             <option value="off">Off</option>
             <option value="medium">Medium (+6 dB)</option>
             <option value="high">High (+12 dB)</option>
           </Select>
         </Row>
-        <Row label="Night mode" hint="Evens out loud effects and quiet lines, so late at night nothing needs the volume knob.">
+        <Row label="Night mode" hint="Evens out loud effects and quiet lines." keywords="compress dynamic range">
           <Switch on={f.get('playback.night')} onChange={(v) => f.set('playback.night', String(v))} />
         </Row>
-        <Row label="Headphones" hint="A little of each channel in the other ear, as speakers in a room do; eases hard-panned sound.">
+        <Row label="Headphones" hint="Eases hard-panned sound, as speakers in a room do." keywords="crossfeed">
           <Switch on={f.get('playback.headphones')} onChange={(v) => f.set('playback.headphones', String(v))} />
         </Row>
-        <Row label="Mono" hint="Both channels in both ears, for a release with the voices mixed to one side.">
+        <Row label="Mono" hint="Both channels in both ears, for voices mixed to one side.">
           <Switch on={f.get('playback.mono')} onChange={(v) => f.set('playback.mono', String(v))} />
         </Row>
-        <Row label="Volume boost" hint="Raises the whole mix for a quiet release, limited so nothing clips. Separate from the voice boost.">
+        <Row label="Volume boost" hint="Raises a quiet release, limited so nothing clips." keywords="louder gain">
           <Select value={f.value('playback.boost') || 'off'} onChange={(v) => f.set('playback.boost', v)}>
             <option value="off">Off</option>
             <option value="medium">Medium (twice as loud)</option>
             <option value="high">High (four times)</option>
           </Select>
         </Row>
-        <Row label="Anime4K upscaling" hint="Needs mpv, or a browser with WebGPU. Phones and tablets leave it off unless turned on there, under the player.">
+      </Section>
+
+      <Section title="Picture">
+        <Row
+          label="Anime4K upscaling"
+          hint="Sharpens the picture. Needs mpv or a browser with WebGPU; phones keep it off unless turned on there."
+          keywords="upscale sharpen"
+        >
           <Switch on={f.get('playback.anime4k')} onChange={(v) => f.set('playback.anime4k', String(v))} />
         </Row>
         <Row
           label="Anime4K mode"
           hint={ANIME4K_MODES.find((m) => m.id === f.value('playback.anime4k_mode'))?.hint}
+          keywords="upscale"
         >
           <Select
             value={f.value('playback.anime4k_mode')}
@@ -279,9 +538,10 @@ function PlaybackTab() {
         </Row>
         <Row
           label="Anime4K size"
-          hint={`mpv only. Each step up roughly doubles GPU cost. ${
+          hint={`mpv only; each step up roughly doubles GPU cost. ${
             ANIME4K_SIZES.find((s) => s.id === f.value('playback.anime4k_size'))?.hint ?? ''
           }`}
+          keywords="upscale gpu"
         >
           <Select
             value={f.value('playback.anime4k_size')}
@@ -292,70 +552,7 @@ function PlaybackTab() {
             ))}
           </Select>
         </Row>
-        <Row
-          label="Find the next episode ahead of time"
-          hint="Looks up its release while you watch, so pressing next starts at once instead of searching. Costs no real bandwidth."
-        >
-          <Switch
-            on={f.get('playback.prepare_next')}
-            onChange={(v) => f.set('playback.prepare_next', String(v))}
-          />
-        </Row>
-        <Row
-          label="Download ahead while watching"
-          hint="Shares your connection with the episode playing; with two, the second starts once the first has landed. Leave off on a slow line."
-        >
-          <Select
-            value={f.get('cache.prefetch_next') ? (f.value('cache.prefetch_count') === '2' ? '2' : '1') : '0'}
-            onChange={(v) => {
-              f.set('cache.prefetch_next', String(v !== '0'))
-              if (v !== '0') f.set('cache.prefetch_count', v)
-            }}
-          >
-            <option value="0">Off</option>
-            <option value="1">Next episode</option>
-            <option value="2">Next 2 episodes</option>
-          </Select>
-        </Row>
       </Section>
-
-      <Section title="Titles">
-        <Row label="Show titles as">
-          <Select
-            value={f.value('display.titles')}
-            onChange={(v) => f.set('display.titles', v)}
-          >
-            <option value="english">English</option>
-            <option value="romaji">Romaji</option>
-          </Select>
-        </Row>
-        <Row label="Audio preference">
-          <Select
-            value={f.value('audio.prefer')}
-            onChange={(v) => f.set('audio.prefer', v)}
-          >
-            <option value="sub">Subbed</option>
-            <option value="dub">Dubbed</option>
-            <option value="either">Either</option>
-          </Select>
-        </Row>
-      </Section>
-
-      <Section title="Window">
-        <Row
-          label="Open Yoru"
-          hint="Takes effect the next time Yoru starts. F11 switches either way."
-        >
-          <Select value={f.value('window.mode') || 'fullscreen'} onChange={(v) => f.set('window.mode', v)}>
-            <option value="fullscreen">Fullscreen</option>
-            <option value="maximized">Maximized</option>
-          </Select>
-        </Row>
-      </Section>
-
-      <DiscordSection f={f} />
-
-      <SubtitleLanguages f={f} />
     </div>
   )
 }
@@ -369,14 +566,15 @@ function DiscordSection({ f }: { f: ReturnType<typeof useFlag> }) {
     <Section title="Discord">
       <Row
         label="Show what I'm watching"
-        hint="Your Discord profile shows Watching Yoru, with the show, the episode and the time left. Needs the Discord desktop app on this computer. Adult titles never show."
+        hint="Your profile shows the show, episode and time left. Needs the Discord desktop app here; adult titles never show."
+        keywords="rich presence status"
       >
         <Switch on={on} onChange={(v) => f.set('discord.enabled', String(v))} />
       </Row>
       {on && (
         <Row
           label="Include other devices"
-          hint="Also when you watch on a phone or TV through this Yoru. Off, only what plays on this computer shows."
+          hint="Also what plays on a phone or TV through this Yoru."
         >
           <Switch on={f.get('discord.everywhere')} onChange={(v) => f.set('discord.everywhere', String(v))} />
         </Row>
@@ -417,19 +615,26 @@ function SubtitleLanguages({ f }: { f: ReturnType<typeof useFlag> }) {
     set(chosen.includes(code) ? chosen.filter((c) => c !== code) : [...chosen, code])
 
   return (
-    <Section
-      title="Subtitle languages"
-      hint="Best first. A release in none of them is ranked lower, never refused: for some shows it is the only one there is."
+    <Row
+      label="Subtitle languages"
+      hint={
+        chosen.length === 0
+          ? 'With none chosen, subtitle language is ignored when ranking releases.'
+          : 'In order, best first. A release in none of them ranks lower, never refused.'
+      }
+      keywords="subs captions"
+      stacked
     >
-      <div className="flex flex-wrap gap-1.5 px-3 py-2">
+      <div className="flex flex-wrap gap-1.5">
         {LANGUAGES.map((lang) => {
           const at = chosen.indexOf(lang.code)
           return (
             <button
               key={lang.code}
+              aria-pressed={at >= 0}
               onClick={() => toggle(lang.code)}
               className={cx(
-                'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                'rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors',
                 at >= 0
                   ? 'bg-accent-500/20 text-accent-300 ring-1 ring-accent-500/40'
                   : 'bg-base-850 text-base-400 hover:bg-base-800 hover:text-base-200',
@@ -441,12 +646,7 @@ function SubtitleLanguages({ f }: { f: ReturnType<typeof useFlag> }) {
           )
         })}
       </div>
-      {chosen.length === 0 && (
-        <p className="px-3 pb-2 text-xs text-base-500">
-          With none chosen, subtitle language is ignored when ranking releases.
-        </p>
-      )}
-    </Section>
+    </Row>
   )
 }
 
@@ -458,7 +658,7 @@ interface OrphanResult {
   kept?: string[]
 }
 
-function QualityTab() {
+function StorageTab() {
   const f = useFlag()
   const qc = useQueryClient()
   const cache = useQuery({ queryKey: ['cache'], queryFn: () => api.get<Record<string, number>>('/api/cache') })
@@ -486,8 +686,12 @@ function QualityTab() {
 
   return (
     <div className="space-y-4">
-      <Section title="Cache" hint="Watched episodes stay on disk so a rewatch is instant. Oldest are evicted first. Episodes you download yourself are kept outside this budget.">
-        <Row label="Budget">
+      <Section
+        title="Space"
+        hint="Watched episodes stay so a rewatch is instant; the oldest go first. Episodes you download yourself don't count."
+        keywords="cache disk"
+      >
+        <Row label="Budget" hint="How much watched episodes may take." keywords="size space gb cache">
           <Select
             value={f.value('cache.budget_bytes')}
             onChange={(v) => f.set('cache.budget_bytes', v)}
@@ -498,23 +702,9 @@ function QualityTab() {
           </Select>
         </Row>
         <Row
-          label="Keep whole episode"
-          hint="Keep downloading after you stop, so coming back needs no swarm. Off, a download pauses the moment you leave."
-        >
-          <Switch on={f.get('cache.prefetch_full')} onChange={(v) => f.set('cache.prefetch_full', String(v))} />
-        </Row>
-        <Row
-          label="Downloads while watching"
-          hint="Standing down gives the episode on screen the whole line. An episode already on disk never pauses anything."
-        >
-          <Select value={f.value('downloads.while_watching') || 'pause'} onChange={(v) => f.set('downloads.while_watching', v)}>
-            <option value="pause">Pause while the episode is still arriving</option>
-            <option value="continue">Never pause</option>
-          </Select>
-        </Row>
-        <Row
           label="Auto-delete watched"
           hint="Once two more are watched keeps the last one, so going back is still free."
+          keywords="remove clean up"
         >
           <Select value={f.value('cache.autodelete') || 'off'} onChange={(v) => f.set('cache.autodelete', v)}>
             <option value="off">Off</option>
@@ -560,8 +750,9 @@ function QualityTab() {
                 ? found.removed === 0
                   ? 'Nothing orphaned.'
                   : `${found.removed} found · ${bytes(found.freedBytes)}`
-                : 'Folders in the cache the torrent engine no longer knows about, left by a crash or a delete outside Yoru. They escape the budget until removed.'
+                : 'Files the torrent engine no longer knows, left by a crash or a delete outside Yoru.'
           }
+          keywords="leftover clean up"
         >
           {found && found.removed > 0 ? (
             <div className="flex gap-2">
@@ -600,18 +791,92 @@ function QualityTab() {
         )}
       </Section>
 
-      <Section title="Downloads">
+      <WhereSection />
+    </div>
+  )
+}
+
+function DownloadsTab() {
+  const f = useFlag()
+  if (f.loading) return <Skeleton className="h-64 w-full" />
+
+  return (
+    <div className="space-y-4">
+      <Section title="While you watch">
+        <Row
+          label="Find the next episode ahead of time"
+          hint="Looks up its release while you watch, so Next starts at once. Downloads nothing."
+          keywords="prefetch prepare search"
+        >
+          <Switch on={f.get('playback.prepare_next')} onChange={(v) => f.set('playback.prepare_next', String(v))} />
+        </Row>
+        <Row
+          label="Download ahead while watching"
+          hint="Downloads the next episodes while one plays, sharing your connection. Leave off on a slow line."
+          keywords="prefetch preload next"
+        >
+          <Select
+            value={f.get('cache.prefetch_next') ? (f.value('cache.prefetch_count') === '2' ? '2' : '1') : '0'}
+            onChange={(v) => {
+              f.set('cache.prefetch_next', String(v !== '0'))
+              if (v !== '0') f.set('cache.prefetch_count', v)
+            }}
+          >
+            <option value="0">Off</option>
+            <option value="1">Next episode</option>
+            <option value="2">Next 2 episodes</option>
+          </Select>
+        </Row>
+        <Row
+          label="Download queue while watching"
+          hint="Pausing gives the episode on screen the whole connection; one already on disk pauses nothing."
+          keywords="pause queued wait"
+        >
+          <Select value={f.value('downloads.while_watching') || 'pause'} onChange={(v) => f.set('downloads.while_watching', v)}>
+            <option value="pause">Pause while the episode is still arriving</option>
+            <option value="continue">Never pause</option>
+          </Select>
+        </Row>
+        <Row
+          label="Keep whole episode"
+          hint="Finishes downloading after you stop, so coming back is instant. Off, it pauses when you leave."
+          keywords="finish complete"
+        >
+          <Switch on={f.get('cache.prefetch_full')} onChange={(v) => f.set('cache.prefetch_full', String(v))} />
+        </Row>
+      </Section>
+
+      <Section title="Releases" hint="What Yoru picks when it finds an episode.">
+        <Row
+          label="Preferred quality"
+          hint={
+            (f.value('quality.prefer') || 'best') === 'best'
+              ? 'The best release there is, 1080p first.'
+              : 'The best release up to this; a bigger one only when nothing smaller exists.'
+          }
+          keywords="resolution 1080p 720p 480p quality data saver"
+        >
+          <Select value={f.value('quality.prefer') || 'best'} onChange={(v) => f.set('quality.prefer', v)}>
+            <option value="best">Best available</option>
+            <option value="720p">Up to 720p</option>
+            <option value="480p">Up to 480p</option>
+          </Select>
+        </Row>
         <PreferGroups f={f} />
-        <Row label="Allow 10-bit H.264 (Hi10P)" hint="No hardware decodes it; expect high CPU">
+        <Row label="Allow 10-bit H.264 (Hi10P)" hint="No hardware decodes it; expect high CPU." keywords="hi10p codec">
           <Switch on={f.get('quality.allow_hi10p')} onChange={(v) => f.set('quality.allow_hi10p', String(v))} />
         </Row>
-        <Row label="Auto-download followed anime">
+        <Row label="Auto-download followed anime" hint="New episodes of shows you follow download by themselves." keywords="automatic new episodes">
           <Switch on={f.get('autodownload.enabled')} onChange={(v) => f.set('autodownload.enabled', String(v))} />
         </Row>
+      </Section>
+
+      <Section title="Connection">
         <SpeedLimitRow f={f} />
         <Row
           label="Show speeds in"
-          hint="Speed tests and internet plans count megabits; file sizes and most download apps, megabytes. 8 Mbps is about 1 MB/s."
+          hint="Speed tests count megabits, file sizes megabytes. 8 Mbps is about 1 MB/s."
+          keywords="mbps mb/s units"
         >
           <Select value={f.value('display.speed') || 'mbps'} onChange={(v) => f.set('display.speed', v)}>
             <option value="mbps">Mbps</option>
@@ -624,8 +889,9 @@ function QualityTab() {
           hint={
             f.value('downloads.upload') === 'never'
               ? 'Nothing is shared. Downloads get slower, as peers send most to those who share back.'
-              : 'Pieces of an episode go to other viewers only while you download it, which keeps them sending to you. Finished episodes are never shared.'
+              : 'Pieces go to other viewers only while you download, which keeps them sending to you.'
           }
+          keywords="upload seed seeding"
         >
           <Select value={f.value('downloads.upload') || 'while_downloading'} onChange={(v) => f.set('downloads.upload', v)}>
             <option value="while_downloading">While downloading</option>
@@ -668,15 +934,13 @@ function PeersFirewallRow() {
   if (!status.supported) {
     if (!status.firewall) return null
     return (
-      <div className="py-2.5">
-        <p className="text-sm text-base-200">Incoming peers</p>
-        <p className="text-xs text-base-500">{status.hint}</p>
+      <Row label="Incoming peers" hint={status.hint} keywords="firewall port" stacked>
         {status.command && (
-          <code className="mt-2 block rounded bg-base-900 px-2 py-1.5 text-xs break-all text-accent-300 select-all">
+          <code className="block rounded bg-base-900 px-2 py-1.5 text-xs break-all text-accent-300 select-all">
             {status.command}
           </code>
         )}
-      </div>
+      </Row>
     )
   }
 
@@ -688,7 +952,7 @@ function PeersFirewallRow() {
         ? 'Windows Firewall is blocking Yoru, probably from an earlier Cancel on its prompt. Downloads find fewer peers.'
         : `Windows Firewall keeps peers from connecting in on port ${port}. Downloads still work, from fewer peers.`
   return (
-    <Row label="Incoming peers" hint={hint}>
+    <Row label="Incoming peers" hint={hint} keywords="firewall port">
       {allowed ? (
         <span className="text-sm text-accent-400">✓ Allowed</span>
       ) : (
@@ -716,6 +980,7 @@ function SpeedLimitRow({ f }: { f: ReturnType<typeof useFlag> }) {
   return (
     <Row
       label="Download speed limit"
+      keywords="bandwidth throttle cap"
       hint={
         limit > 0 && limit < STREAM_BYTES
           ? `Under about ${speedLimit(STREAM_BYTES, unit)} a 1080p episode plays faster than it downloads, so it stops to wait.`
@@ -766,7 +1031,7 @@ function TorrentNetworkRow({ f }: { f: ReturnType<typeof useFlag> }) {
       'The VPN must allow torrent traffic, and peers can rarely connect in through one, so expect fewer peers and slower downloads.'
   }
   return (
-    <Row label="Network for torrents" hint={hint}>
+    <Row label="Network for torrents" hint={hint} keywords="vpn adapter interface">
       <Select value={chosen} onChange={(v) => f.set('downloads.adapter', v)}>
         <option value="">Any network</option>
         {missing && <option value={chosen}>{chosen} (not connected)</option>}
@@ -808,7 +1073,11 @@ function PreferGroups({ f }: { f: ReturnType<typeof useFlag> }) {
   }
 
   return (
-    <Row label="Preferred release groups" hint="Comma separated, e.g. SubsPlease, Erai-raws. A match ranks the release higher.">
+    <Row
+      label="Preferred release groups"
+      hint="Comma separated, e.g. SubsPlease, Erai-raws. A match ranks the release higher."
+      keywords="fansub uploader"
+    >
       <TextInput
         value={text}
         onChange={(e) => setText(e.target.value)}
@@ -837,7 +1106,8 @@ interface Tracker {
   secretRequired: boolean
 }
 
-function TrackersTab() {
+function AccountsTab() {
+  const f = useFlag()
   const trackers = useQuery({
     queryKey: ['trackers'],
     queryFn: () => api.get<{ trackers: Tracker[] }>('/api/trackers'),
@@ -857,6 +1127,7 @@ function TrackersTab() {
           <TrackerCard key={tracker.provider} tracker={tracker} host={host} />
         ))
       )}
+      {!f.loading && <DiscordSection f={f} />}
     </div>
   )
 }
@@ -922,6 +1193,7 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
           ? 'Progress syncs automatically as you watch.'
           : 'Optional second tracker, kept in step from the same local progress.'
       }
+      keywords="tracker sync list account login mal"
     >
       <Row label={status}>
         <div className="flex gap-2">
@@ -1185,7 +1457,7 @@ function LibraryTab() {
 
   return (
     <div className="space-y-4">
-    <Section title="Local files" hint="Anime already on disk plays instantly, with no torrent involved.">
+    <Section title="Local files" hint="Anime already on disk plays instantly, with no torrent involved." keywords="folders library scan disk">
       <ul className="space-y-1">
         {roots.map((root) => (
           <li key={root} className="flex items-center justify-between gap-2 rounded-md bg-base-900 px-3 py-1.5">
@@ -1290,6 +1562,7 @@ function BackupSection() {
     <Section
       title="Backup"
       hint="Everything watched, rated and favourited, in one file. Importing merges: progress never moves backwards."
+      keywords="export import myanimelist xml json"
     >
       <Row label="Export" hint="JSON to import again, text to read">
         <div className="flex gap-2">
@@ -1376,7 +1649,7 @@ function NotificationsTab() {
   if (f.loading) return <Skeleton className="h-40 w-full" />
 
   return (
-    <Section title="Release notifications" hint="Checks for new episodes of anime you follow.">
+    <Section title="Release notifications" hint="Checks for new episodes of anime you follow." keywords="alerts new episodes">
       <Row label="Enabled">
         <Switch on={f.get('notify.enabled')} onChange={(v) => f.set('notify.enabled', String(v))} />
       </Row>
@@ -1395,7 +1668,7 @@ function NotificationsTab() {
   )
 }
 
-function AccessTab() {
+function DevicesTab() {
   const qc = useQueryClient()
   const access = useQuery({
     queryKey: ['access'],
@@ -1420,6 +1693,7 @@ function AccessTab() {
     <Section
       title="Watch on your phone or TV"
       hint="Opening this listens on every network this machine is on. The link carries a token; anything without it is refused."
+      keywords="devices pair qr access remote"
     >
       {access.data?.canSwitch && (
         <Row
@@ -1908,7 +2182,7 @@ function AboutTab() {
           <p className="text-sm text-base-400">Built from source.</p>
         </Section>
         <ComponentsSection />
-        <WhereSection />
+        <JobsSection />
       </div>
     )
   }
@@ -1986,7 +2260,7 @@ function AboutTab() {
       )}
 
       <ComponentsSection />
-      <WhereSection />
+      <JobsSection />
     </div>
   )
 }
@@ -1996,7 +2270,7 @@ function WhereSection() {
   const setup = useSetup()
   if (!setup.data) return null
   return (
-    <Section title="Where things go" hint="Folders Yoru reads and writes.">
+    <Section title="Where things go" hint="Folders Yoru reads and writes." keywords="folder path data cache location move">
       <WhereThingsGo setup={setup.data} />
     </Section>
   )
@@ -2027,6 +2301,7 @@ function ComponentsSection() {
     <Section
       title="Programs Yoru uses"
       hint="Downloaded on demand. Installing one takes effect straight away."
+      keywords="ffmpeg mpv components install"
     >
       {components.map((c) => {
         const progress = progressFor(c.name)
@@ -2067,7 +2342,7 @@ function ComponentsSection() {
   )
 }
 
-function JobsTab() {
+function JobsSection() {
   const jobs = useQuery({
     queryKey: ['jobs'],
     queryFn: () => api.get<{ jobs: Array<Record<string, unknown>> }>('/api/jobs'),
@@ -2086,35 +2361,37 @@ function JobsTab() {
   const failed = run.isError && busy === undefined ? run.variables : undefined
 
   return (
-    <Section title="Background jobs" hint="Syncing, release checks and data mirrors.">
+    <Section title="Background jobs" hint="Syncing, release checks and data mirrors." keywords="tasks schedule sync">
       {jobs.isPending ? (
         <Skeleton className="h-40 w-full" />
       ) : (
-        <ul className="divide-y divide-base-850">
-          {jobs.data?.jobs?.map((job) => (
-            <li key={String(job.name)} className="flex items-center justify-between gap-3 py-2">
-              <div className="min-w-0">
-                <p className="text-sm text-base-200">{String(job.name)}</p>
-                <p className="text-xs text-base-500">
-                  every {String(job.every)} · {String(job.runs)} runs
-                  {Number(job.failures) > 0 && ` · ${String(job.failures)} failed`}
-                </p>
-                {job.lastError ? (
-                  <p className="mt-0.5 truncate text-xs text-recap">{String(job.lastError)}</p>
-                ) : null}
-                {busy === job.name && !job.running && (
-                  <p className="mt-0.5 text-xs text-base-400">Already running.</p>
-                )}
-                {failed === job.name && (
-                  <p className="mt-0.5 text-xs text-recap">Didn't start: {(run.error as Error).message}</p>
-                )}
-              </div>
-              <Button size="sm" onClick={() => run.mutate(String(job.name))} disabled={Boolean(job.running)}>
+        jobs.data?.jobs?.map((job) => {
+          const name = String(job.name)
+          const note =
+            busy === name && !job.running
+              ? 'Already running.'
+              : failed === name
+                ? `Didn't start: ${(run.error as Error).message}`
+                : job.lastError
+                  ? String(job.lastError)
+                  : ''
+          return (
+            <Row
+              key={name}
+              label={name}
+              hint={[
+                `every ${String(job.every)} · ${String(job.runs)} runs${Number(job.failures) > 0 ? ` · ${String(job.failures)} failed` : ''}`,
+                note,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            >
+              <Button size="sm" onClick={() => run.mutate(name)} disabled={Boolean(job.running)}>
                 {job.running ? 'Running' : 'Run'}
               </Button>
-            </li>
-          ))}
-        </ul>
+            </Row>
+          )
+        })
       )}
     </Section>
   )

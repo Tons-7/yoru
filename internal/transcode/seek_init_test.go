@@ -34,7 +34,6 @@ func waitExit(s *Session) {
 
 // Prestart at the resume segment, then segment 0 and init together: every order serves all three.
 func TestReopenRequestsInEveryOrderAreServed(t *testing.T) {
-	const resume = 5
 	orders := [][]string{
 		{"prestart", "init", "zero"},
 		{"prestart", "zero", "init"},
@@ -43,6 +42,8 @@ func TestReopenRequestsInEveryOrderAreServed(t *testing.T) {
 	}
 	for i, order := range orders {
 		s, ctx := openClip(t, 60, "re"+string(rune('a'+i)))
+		// Half a minute in, whichever segment that is (they start on keyframes, not every six seconds).
+		resume := s.SegmentAt(30)
 
 		var wg sync.WaitGroup
 		errs := make(chan error, 3)
@@ -57,7 +58,7 @@ func TestReopenRequestsInEveryOrderAreServed(t *testing.T) {
 				case "init":
 					_, err = s.WaitInit(ctx, resume, 60*time.Second)
 				case "zero":
-					_, err = s.WaitSegment(ctx, 0, 60*time.Second)
+					err = s.WaitSegment(ctx, 0, 60*time.Second)
 				}
 				if err != nil {
 					errs <- err
@@ -71,7 +72,7 @@ func TestReopenRequestsInEveryOrderAreServed(t *testing.T) {
 			t.Errorf("order %v: %v (produced: %v)", order, err, s.produced())
 		}
 		// The resume segment is still reachable afterwards.
-		if _, err := s.WaitSegment(ctx, resume, 60*time.Second); err != nil {
+		if err := s.WaitSegment(ctx, resume, 60*time.Second); err != nil {
 			t.Errorf("order %v: resume segment after reopen: %v", order, err)
 		}
 	}
@@ -81,13 +82,13 @@ func TestReopenRequestsInEveryOrderAreServed(t *testing.T) {
 func TestOpposingSegmentRequestsAreBothServed(t *testing.T) {
 	s, ctx := openClip(t, 60, "oppose")
 
-	const resume = 6
+	resume := s.SegmentAt(36)
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, e := s.WaitSegment(ctx, resume, 90*time.Second)
+		e := s.WaitSegment(ctx, resume, 90*time.Second)
 		if e != nil {
 			errs <- e
 		}
@@ -95,7 +96,7 @@ func TestOpposingSegmentRequestsAreBothServed(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	go func() {
 		defer wg.Done()
-		_, e := s.WaitSegment(ctx, 0, 90*time.Second)
+		e := s.WaitSegment(ctx, 0, 90*time.Second)
 		if e != nil {
 			errs <- e
 		}
@@ -144,7 +145,7 @@ func TestPrestartOnlyWhenIdle(t *testing.T) {
 	if from != 5 {
 		t.Errorf("prestart moved a running pass to %d", from)
 	}
-	if _, err := s.WaitSegment(ctx, 5, 60*time.Second); err != nil {
+	if err := s.WaitSegment(ctx, 5, 60*time.Second); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -153,18 +154,18 @@ func TestPrestartOnlyWhenIdle(t *testing.T) {
 func TestBackwardRequestsDeliver(t *testing.T) {
 	s, ctx := openClip(t, 60, "back")
 
-	if _, err := s.WaitSegment(ctx, 5, 60*time.Second); err != nil {
+	if err := s.WaitSegment(ctx, 5, 60*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	waitExit(s)
-	if _, err := s.WaitSegment(ctx, 0, 60*time.Second); err != nil {
+	if err := s.WaitSegment(ctx, 0, 60*time.Second); err != nil {
 		t.Fatalf("segment 0 after an exited pass: %v (produced: %v)", err, s.produced())
 	}
 
 	if err := s.ensureHead(s.Segments - 2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.WaitSegment(ctx, 2, 60*time.Second); err != nil {
+	if err := s.WaitSegment(ctx, 2, 60*time.Second); err != nil {
 		t.Fatalf("segment 2 while a later pass runs: %v (produced: %v)", err, s.produced())
 	}
 }

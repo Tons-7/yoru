@@ -275,9 +275,21 @@ export function Watch() {
     : next
       ? `/watch/${id}/${next.number}`
       : undefined
-  const goNext = useCallback(() => {
-    if (nextPath) navigate(nextPath)
-  }, [nextPath, navigate])
+  // The end of an episode is decided here, so what this page saw then goes to the server's log.
+  const note = useCallback(
+    (event: string, detail: Record<string, unknown>) =>
+      beacon('/api/playback/note', { animeId: id, episode: ep, event, detail }),
+    [id, ep],
+  )
+  const advance = useCallback(
+    (by: string) => {
+      if (!nextPath) return
+      note('next', { by, to: nextPath })
+      navigate(nextPath)
+    },
+    [nextPath, navigate, note],
+  )
+  const goNext = useCallback((by: 'button' | 'key' | 'media' = 'button') => advance(by), [advance])
 
   // Swapping in the searching panel would destroy the element holding
   // fullscreen, so after the first episode the player waits with its own spinner.
@@ -289,8 +301,39 @@ export function Watch() {
   // Which episode ended, not just that one did: a plain flag survives navigation and skips an episode.
   const [endedKey, setEndedKey] = useState<string | null>(null)
   const ended = endedKey === `${id}-${ep}`
-  const onEnded = useCallback(() => setEndedKey(`${id}-${ep}`), [id, ep])
-  const clearEnded = useCallback(() => setEndedKey(null), [])
+  const endedAt = useRef(0)
+  const endedNow = useRef(ended)
+  endedNow.current = ended
+  // The card the overlay below would show at the end, as the log has it.
+  const card =
+    play.isError && !stream.data
+      ? 'release error'
+      : stream.isError && !stream.data
+        ? 'stream error'
+        : fromList
+          ? 'up next list'
+          : next
+            ? 'up next'
+            : 'none'
+  const autoNext = flag('playback.autonext')
+  const onEnded = useCallback(() => {
+    endedAt.current = Date.now()
+    setEndedKey(`${id}-${ep}`)
+    note('ended', {
+      card,
+      next: next?.number ?? 'none',
+      list: fromList ? `${fromList.animeId}-${fromList.episode}` : 'none',
+      autoNext,
+      episodes: list.length,
+    })
+  }, [id, ep, card, next, fromList, autoNext, list.length, note])
+  const clearEnded = useCallback(
+    (by: string) => {
+      if (endedNow.current) note('countdown-cleared', { by, afterMs: Date.now() - endedAt.current })
+      setEndedKey(null)
+    },
+    [note],
+  )
 
   // A reaped session: /api/play revives the torrent and the reopen rebuilds it; throws so the player shows it.
   const recoverSession = useCallback(async () => {
@@ -385,6 +428,7 @@ export function Watch() {
                   onNext={hasNext ? goNext : undefined}
                   // Back into the finished episode: the countdown must not take the viewer away mid-rewatch.
                   onResume={clearEnded}
+                  onEndStuck={(detail) => note('end-stuck', detail)}
                   onSessionLost={recoverSession}
                   onPickRelease={() => setPicking(true)}
                   // Inside the player, or fullscreen hides it; failures too, unless the player can recover.
@@ -420,17 +464,17 @@ export function Watch() {
                           fromList.animeId === id && fromList.episodeTitle ? ` · ${fromList.episodeTitle}` : ''
                         }`}
                         then={after.data?.then && `Then ${after.data.then.title} · Ep ${after.data.then.episode}`}
-                        auto={flag('playback.autonext')}
-                        onPlay={goNext}
-                        onCancel={() => setEndedKey(null)}
+                        auto={autoNext}
+                        onPlay={advance}
+                        onCancel={() => clearEnded('cancel')}
                       />
                     ) : ended && next ? (
                       <UpNext
                         label="Up next"
                         line={`Episode ${next.display || next.number}${next.titleEn ? ` · ${next.titleEn}` : ''}`}
-                        auto={flag('playback.autonext')}
-                        onPlay={goNext}
-                        onCancel={() => setEndedKey(null)}
+                        auto={autoNext}
+                        onPlay={advance}
+                        onCancel={() => clearEnded('cancel')}
                       />
                     ) : null
                   }
@@ -471,7 +515,7 @@ export function Watch() {
                   {hasNext && (
                     <Button
                       variant="primary"
-                      onClick={goNext}
+                      onClick={() => goNext('button')}
                       title={fromList ? `${fromList.title} · Episode ${fromList.episode}` : undefined}
                     >
                       {fromList ? 'Up next ›' : 'Next episode ›'}
@@ -817,7 +861,7 @@ function NoRelease({
           <Button onClick={onRetry}>Try again</Button>
           <Button onClick={onPick}>Choose a release</Button>
           <LinkButton to={`/anime/${animeId}`}>Other episodes</LinkButton>
-          <LinkButton to="/settings?tab=Quality" variant="ghost">Quality settings</LinkButton>
+          <LinkButton to="/settings?tab=Downloads" variant="ghost">Quality settings</LinkButton>
         </div>
         )}
       </div>
@@ -873,14 +917,15 @@ function UpNext({
   /** What follows it on the Up next list. */
   then?: string
   auto: boolean
-  onPlay: () => void
+  /** By the countdown running out, or a press on the card. */
+  onPlay: (by: 'countdown' | 'card') => void
   onCancel: () => void
 }) {
   const [left, setLeft] = useState(UP_NEXT_SECONDS)
   useEffect(() => {
     if (!auto) return
     if (left <= 0) {
-      onPlay()
+      onPlay('countdown')
       return
     }
     const id = window.setTimeout(() => setLeft((n) => n - 1), 1000)
@@ -898,7 +943,7 @@ function UpNext({
       {then && <p className="mt-0.5 truncate text-xs text-base-500">{then}</p>}
       <div className="mt-2.5 flex items-center gap-2">
         <button
-          onClick={onPlay}
+          onClick={() => onPlay('card')}
           className="rounded-md bg-white px-3 py-1.5 text-sm font-semibold text-base-950 hover:bg-base-100"
         >
           {auto ? `Play now · ${left}` : 'Play next'}

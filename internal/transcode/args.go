@@ -25,7 +25,8 @@ const (
 	initialBurstSeconds = 60.0
 )
 
-func (s *Session) args(offset float64, startSegment int) []string {
+func (s *Session) args(r *run) []string {
+	offset := s.segmentStart(r.from)
 	a := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
 
 	// d3d11 output keeps frames on the GPU, where 10-bit can't be converted.
@@ -33,7 +34,12 @@ func (s *Session) args(offset float64, startSegment int) []string {
 		a = append(a, "-hwaccel", "d3d11va")
 	}
 
-	if offset > 0 {
+	switch {
+	case offset <= 0:
+	case s.sliced():
+		// The index's times are the file's own; B-frames land it a keyframe early, a lead-in gather drops.
+		a = append(a, "-seek_timestamp", "1", "-ss", fmt.Sprintf("%.3f", offset))
+	default:
 		// A copy seek lands on the preceding keyframe; the bias reaches the intended one.
 		seek := offset
 		if s.Plan.VideoCopy {
@@ -61,22 +67,36 @@ func (s *Session) args(offset float64, startSegment int) []string {
 	a = append(a, s.videoArgs()...)
 	a = append(a, s.audioArgs()...)
 
+	cuts := []string{
+		"-hls_time", fmt.Sprintf("%.0f", SegmentSeconds),
+		"-hls_playlist_type", "vod",
+		"-hls_list_size", "0",
+		"-start_number", fmt.Sprint(r.from),
+		"-hls_segment_filename", "%d.mp4",
+	}
+	if s.sliced() {
+		// A file per keyframe, numbered from 0 for this pass alone; gather makes them segments.
+		cuts = []string{
+			"-hls_time", "0.001",
+			"-hls_list_size", "1",
+			"-start_number", "0",
+			"-hls_segment_filename", fmt.Sprintf("p%d_%%d.mp4", r.id),
+		}
+	}
 	a = append(a,
 		// Preserved timestamps keep segments aligned with the playlist handed out up front.
 		"-copyts",
 		"-avoid_negative_ts", "disabled",
 		"-max_muxing_queue_size", "1024",
 		"-f", "hls",
-		"-hls_time", fmt.Sprintf("%.0f", SegmentSeconds),
 		"-hls_segment_type", "fmp4",
-		"-hls_playlist_type", "vod",
-		"-hls_list_size", "0",
-		"-start_number", fmt.Sprint(startSegment),
+	)
+	a = append(a, cuts...)
+	a = append(a,
 		// frag_discont writes real timestamps into each fragment for a mid-file
 		// start; skip_sidx avoids shifting packets at open-GOP boundaries.
 		"-hls_segment_options", "movflags=+frag_discont+skip_sidx",
 		"-hls_fmp4_init_filename", "init.mp4",
-		"-hls_segment_filename", "%d.mp4",
 		"-y", "playlist.m3u8",
 	)
 	return a
