@@ -65,6 +65,11 @@ type Server struct {
 	// relaunch restarts Yoru, for a change that needs one.
 	relaunch func()
 	log      *slog.Logger
+	// exit ends Yoru; showWindow brings its window up.
+	exit, showWindow func()
+	// Other devices playing, by address, for Exit Yoru to say what it would stop.
+	watchingMu sync.Mutex
+	watching   map[string]watching
 
 	// Extracted fonts per stream session, filled in the background so a stream needn't wait.
 	fontsMu  sync.Mutex
@@ -137,6 +142,8 @@ type Deps struct {
 	Engine     *torrent.Client
 	Presence   *library.Presence
 	Relaunch   func()
+	Exit       func() // ends Yoru, from Exit Yoru in the app
+	ShowWindow func() // brings up Yoru's window, for a second launch
 	Token      string
 	Log        *slog.Logger
 }
@@ -169,6 +176,8 @@ func New(d Deps) *Server {
 		engine:      d.Engine,
 		presence:    d.Presence,
 		relaunch:    d.Relaunch,
+		exit:        d.Exit,
+		showWindow:  d.ShowWindow,
 		token:       d.Token,
 		grantSecret: randomBytes(32),
 		fonts:       map[string][]transcode.FontFile{},
@@ -263,6 +272,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/stop", s.stopPlayback)
 	mux.HandleFunc("POST /api/progress", s.progress)
 	mux.HandleFunc("POST /api/playback/note", s.playerNote)
+	mux.HandleFunc("POST /api/app/exit", hostOnly(s.appExit))
+	mux.HandleFunc("POST /api/app/show", hostOnly(s.appShow))
+	mux.HandleFunc("GET /api/app/activity", hostOnly(s.appActivity))
+	mux.HandleFunc("GET /api/log", hostOnly(s.logText))
+	mux.HandleFunc("POST /api/log/folder", hostOnly(s.logFolder))
 	mux.HandleFunc("POST /api/prepare", s.prepare)
 	mux.HandleFunc("GET /api/episode/skips", s.skips)
 	mux.HandleFunc("POST /api/watched", s.setWatched)

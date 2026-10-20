@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/bodgit/sevenzip"
+
+	"yoru/internal/proc"
 )
 
 type Release struct {
@@ -412,7 +414,7 @@ func extract(ctx context.Context, archive, dest string) error {
 	}
 	defer os.Remove(local)
 
-	cmd := exec.CommandContext(ctx, systemTar(), "-xf", name)
+	cmd := proc.Hide(exec.CommandContext(ctx, systemTar(), "-xf", name))
 	cmd.Dir = dest
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tar: %w: %s", err, strings.TrimSpace(string(out)))

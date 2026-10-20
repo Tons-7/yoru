@@ -14,8 +14,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { api, ApiError, withToken, type Tracker } from '../lib/api'
 import { bytes, cx, relativeTime, speedLimit, type SpeedUnit } from '../lib/format'
+import { castImpossible } from '../player/cast'
 import {
   refreshListState,
+  useAccess,
   useAccessDevices,
   useDecideDevice,
   usePrefs,
@@ -417,6 +419,69 @@ function useFlag() {
   }
 }
 
+// Yoru's own window, so on the machine it runs on alone: a phone has nothing of it to set.
+function WindowSection({ f }: { f: ReturnType<typeof useFlag> }) {
+  const access = useAccess()
+  if (!access.data?.host) return null
+  return (
+    <Section title="Window" hint="Yoru's own window on this computer.">
+      <Row label="Open Yoru" hint="From the next start. F11 switches either way." keywords="window fullscreen maximized">
+        <Select value={f.value('window.mode') || 'fullscreen'} onChange={(v) => f.set('window.mode', v)}>
+          <option value="fullscreen">Fullscreen</option>
+          <option value="maximized">Maximized</option>
+        </Select>
+      </Row>
+      <CloseWindowRow f={f} />
+    </Section>
+  )
+}
+
+// On Windows, where Yoru's tray icon is.
+function CloseWindowRow({ f }: { f: ReturnType<typeof useFlag> }) {
+  if (!navigator.userAgent.includes('Windows')) return null
+  const tray = f.value('window.on_close') === 'tray'
+  return (
+    <Row
+      label="When the window closes"
+      hint={
+        tray
+          ? 'Yoru keeps downloading and serving your other devices; its tray icon opens or exits it.'
+          : 'Yoru exits, and downloads and your other devices stop with it.'
+      }
+      keywords="close exit quit tray background minimize"
+    >
+      <Select value={tray ? 'tray' : 'exit'} onChange={(v) => f.set('window.on_close', v)}>
+        <option value="exit">Exit Yoru</option>
+        <option value="tray">Keep running in the tray</option>
+      </Select>
+    </Row>
+  )
+}
+
+// Where casting starts is the player's button; here only how the TV shows subtitles. None on an iPhone.
+function CastingSection({ f }: { f: ReturnType<typeof useFlag> }) {
+  if (castImpossible()) return null
+  return (
+    <Section
+      title="Casting"
+      hint="To a Chromecast or Google TV, from the Cast button in the player's bar. If casting can't start, it says what's missing."
+      keywords="chromecast google tv cast"
+    >
+      <Row
+        label="Draw subtitles into the picture"
+        hint={
+          f.get('cast.burn_subtitles')
+            ? 'The TV shows them as they look here, signs included; this PC re-encodes the video while casting. The episode must be downloaded.'
+            : 'Off, the TV draws plain text it can turn off, without the fonts and signs.'
+        }
+        keywords="burn burned subtitles signs fonts"
+      >
+        <Switch on={f.get('cast.burn_subtitles')} onChange={(v) => f.set('cast.burn_subtitles', String(v))} />
+      </Row>
+    </Section>
+  )
+}
+
 // Only when chosen and missing: Yoru does not install VLC.
 function VLCNote() {
   const f = useFlag()
@@ -479,12 +544,6 @@ function PlaybackTab() {
           </Select>
         </Row>
         <VLCNote />
-        <Row label="Open Yoru" hint="From the next start. F11 switches either way." keywords="window fullscreen maximized">
-          <Select value={f.value('window.mode') || 'fullscreen'} onChange={(v) => f.set('window.mode', v)}>
-            <option value="fullscreen">Fullscreen</option>
-            <option value="maximized">Maximized</option>
-          </Select>
-        </Row>
       </Section>
 
       <Section title="Language">
@@ -500,17 +559,6 @@ function PlaybackTab() {
         </Row>
         <SubtitleLanguages f={f} />
         <SubtitlesWithDub f={f} />
-        <Row
-          label="Casting: draw subtitles into the picture"
-          hint={
-            f.get('cast.burn_subtitles')
-              ? 'The TV shows them as they look here, signs included; this PC re-encodes the video while casting. The episode must be downloaded.'
-              : 'Off, the TV draws plain text it can turn off, without the fonts and signs.'
-          }
-          keywords="chromecast google tv cast burn burned subtitles signs"
-        >
-          <Switch on={f.get('cast.burn_subtitles')} onChange={(v) => f.set('cast.burn_subtitles', String(v))} />
-        </Row>
         <Row label="Show titles as" keywords="english romaji names">
           <Select
             value={f.value('display.titles')}
@@ -521,6 +569,9 @@ function PlaybackTab() {
           </Select>
         </Row>
       </Section>
+
+      <CastingSection f={f} />
+      <WindowSection f={f} />
     </div>
   )
 }
@@ -603,7 +654,7 @@ function SoundTab() {
 
 // The card is this computer's Discord account, so it is set here only.
 function DiscordSection({ f }: { f: ReturnType<typeof useFlag> }) {
-  const access = useQuery({ queryKey: ['access'], queryFn: () => api.get<{ host?: boolean }>('/api/access') })
+  const access = useAccess()
   if (!access.data?.host) return null
   const on = f.get('discord.enabled')
   return (
@@ -1018,7 +1069,7 @@ interface PeersFirewall {
 // peers. Host only: a paired device cannot change this machine's firewall.
 function PeersFirewallRow() {
   const qc = useQueryClient()
-  const access = useQuery({ queryKey: ['access'], queryFn: () => api.get<{ host?: boolean }>('/api/access') })
+  const access = useAccess()
   const host = !!access.data?.host
   const fw = useQuery({
     queryKey: ['torrent-firewall'],
@@ -1109,7 +1160,7 @@ interface TorrentNetwork {
 
 // Torrents kept to one adapter, a VPN's. Host only: it is this machine's network, as the firewall is.
 function TorrentNetworkRow({ f }: { f: ReturnType<typeof useFlag> }) {
-  const access = useQuery({ queryKey: ['access'], queryFn: () => api.get<{ host?: boolean }>('/api/access') })
+  const access = useAccess()
   const host = !!access.data?.host
   // Polled: a VPN connects and drops on its own.
   const net = useQuery({
@@ -1199,7 +1250,7 @@ function AccountsTab() {
   const f = useFlag()
   const trackers = useTrackers()
   // Signing in or out and the keys are the host's; a paired device only reads the state.
-  const access = useQuery({ queryKey: ['access'], queryFn: () => api.get<{ host?: boolean }>('/api/access') })
+  const access = useAccess()
   const host = access.data?.host !== false
 
   return (
@@ -1804,17 +1855,7 @@ function NotificationsTab() {
 
 function DevicesTab() {
   const qc = useQueryClient()
-  const access = useQuery({
-    queryKey: ['access'],
-    queryFn: () =>
-      api.get<{
-        reachable: boolean
-        listening: string
-        urls: string[]
-        canSwitch: boolean
-        host?: boolean
-      }>('/api/access'),
-  })
+  const access = useAccess()
 
   // Moves the listener there and then, so the phone can be tried immediately.
   const setNetwork = useMutation({
@@ -2338,6 +2379,7 @@ function AboutTab() {
         <Section title="Yoru" hint="Development build: updates aren't checked.">
           <p className="text-sm text-base-400">Built from source.</p>
         </Section>
+        <LogSection />
         <ComponentsSection />
         <JobsSection />
       </div>
@@ -2416,9 +2458,52 @@ function AboutTab() {
         </Section>
       )}
 
+      <LogSection />
       <ComponentsSection />
       <JobsSection />
     </div>
+  )
+}
+
+// Yoru's log, this run's and the last one's, to send when something goes wrong; no console shows it.
+function LogSection() {
+  const access = useAccess()
+  const [copied, setCopied] = useState<'' | 'copied' | 'failed'>('')
+  const row = useRef<HTMLDivElement>(null)
+  const folder = useMutation({ meta: { inline: true }, mutationFn: () => api.post('/api/log/folder') })
+  if (!access.data?.host) return null
+
+  const copy = async () => {
+    try {
+      const res = await fetch('/api/log', { cache: 'no-store' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setCopied((await copyText(await res.text(), row.current ?? undefined)) ? 'copied' : 'failed')
+    } catch {
+      setCopied('failed')
+    }
+  }
+  return (
+    <Section
+      title="Log"
+      hint="What Yoru did this run and the last one. Send it when something goes wrong; it names your shows and files."
+      keywords="logs debug report bug copy save send"
+    >
+      <Row label="Yoru's log">
+        <div ref={row} className="flex flex-wrap justify-end gap-2">
+          <button onClick={() => void copy()} className={buttonClass()}>
+            {copied === 'copied' ? 'Copied' : 'Copy log'}
+          </button>
+          <a href="/api/log?download=1" download className={buttonClass()}>
+            Save log
+          </a>
+          <button onClick={() => folder.mutate()} disabled={folder.isPending} className={buttonClass()}>
+            Show in folder
+          </button>
+        </div>
+      </Row>
+      {copied === 'failed' && <p className="text-xs text-recap">Couldn't copy the log; Save log keeps it as a file.</p>}
+      {folder.isError && <p className="text-xs text-recap">{(folder.error as Error).message}</p>}
+    </Section>
   )
 }
 

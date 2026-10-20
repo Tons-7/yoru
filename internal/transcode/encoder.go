@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"yoru/internal/proc"
 )
 
 // Hardware encoders, fastest first. Only H.264: it is the one codec every browser decodes.
@@ -17,7 +19,7 @@ func IsHardwareEncoder(codec string) bool { return usesHardware(codec) }
 
 // DetectEncoder picks the first hardware encoder that really encodes here (all builds list nvenc), or libx264.
 func DetectEncoder(ctx context.Context, ffmpeg string, log *slog.Logger) string {
-	out, err := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-encoders").Output()
+	out, err := proc.Hide(exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-encoders")).Output()
 	if err != nil {
 		return softwareEncoder
 	}
@@ -38,7 +40,7 @@ func DetectEncoder(ctx context.Context, ffmpeg string, log *slog.Logger) string 
 
 // CanEncode: ffmpeg has libx264 (Fedora's ffmpeg-free lacks it) or a working hardware encoder.
 func CanEncode(ctx context.Context, ffmpeg string) bool {
-	out, err := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-encoders").Output()
+	out, err := proc.Hide(exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-encoders")).Output()
 	if err != nil {
 		return false
 	}
@@ -56,7 +58,7 @@ func CanEncode(ctx context.Context, ffmpeg string) bool {
 
 // Version is the version ffmpeg or ffprobe reports, or "".
 func Version(ctx context.Context, binary string) string {
-	out, err := exec.CommandContext(ctx, binary, "-hide_banner", "-version").Output()
+	out, err := proc.Hide(exec.CommandContext(ctx, binary, "-hide_banner", "-version")).Output()
 	if err != nil {
 		return ""
 	}
@@ -82,7 +84,7 @@ func trialEncode(ctx context.Context, ffmpeg, codec string) error {
 	args = append(args, s.videoArgs()...)
 	args = append(args, "-f", "null", "-")
 
-	out, err := exec.CommandContext(ctx, ffmpeg, args...).CombinedOutput()
+	out, err := proc.Hide(exec.CommandContext(ctx, ffmpeg, args...)).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, lastLines(string(out), 3))
 	}

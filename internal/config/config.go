@@ -183,6 +183,12 @@ func (c Config) Path(name string) string {
 	return filepath.Join(c.BinDir, name)
 }
 
+// WithDataDir is c holding its data in dir, for tests.
+func (c Config) WithDataDir(dir string) Config {
+	c.dataDir = dir
+	return c
+}
+
 // ExeName is the platform's filename for an executable: ffmpeg.exe on Windows, ffmpeg elsewhere.
 func ExeName(base string) string {
 	if runtime.GOOS == "windows" {

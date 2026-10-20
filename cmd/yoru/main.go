@@ -46,6 +46,7 @@ import (
 	"yoru/internal/shortcut"
 	"yoru/internal/store"
 	"yoru/internal/transcode"
+	"yoru/internal/tray"
 	"yoru/internal/update"
 )
 
@@ -287,6 +288,9 @@ func run(log *slog.Logger, out *logSink) error {
 	// Also ended by an update handing over to the new binary.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Closed after every deferred cleanup: Windows ending the session waits for it before ending the process.
+	stopped := make(chan struct{})
+	defer close(stopped)
 
 	exe, _ := os.Executable()
 	// kuro.exe running this code, from the old updater: renamed before anything takes its path.
@@ -336,8 +340,9 @@ func run(log *slog.Logger, out *logSink) error {
 			return fmt.Errorf("Yoru is already running on this data folder, or another program holds %s", cfg.Addr)
 		}
 		log.Info("Yoru is already running; showing it", "url", cfg.LocalURL())
-		if windowWanted() {
-			config.OpenApp(ctx, cfg.LocalURL(), cfg.ProfileDir())
+		// Asked of the running Yoru, so its window is one it watches; one from before asking existed opens here.
+		if windowWanted() && !askToShow(cfg.LocalURL()) {
+			config.OpenApp(ctx, cfg.LocalURL(), cfg.ProfileDir(), log)
 		}
 		return nil
 	}
@@ -675,6 +680,31 @@ func run(log *slog.Logger, out *logSink) error {
 		api.SessionIdle(sessionID)
 	})
 
+	// Made before the server, which can bring it up for a second launch.
+	window := &config.Window{
+		Profile: cfg.ProfileDir(),
+		Log:     log,
+		Maximized: func() bool {
+			mode, _ := st.Setting(context.Background(), "window.mode")
+			return mode == "maximized"
+		},
+		// Closing the window exits Yoru unless it was asked to stay in the tray.
+		Closed: func() {
+			if mode, _ := st.Setting(context.Background(), "window.on_close"); mode == "tray" {
+				log.Info("window closed; Yoru keeps running in the tray")
+				return
+			}
+			log.Info("window closed; exiting")
+			cancel()
+		},
+	}
+
+	// Headless, a window this Yoru opened would end it on closing; a second launch opens one of its own.
+	var showWindow func()
+	if windowWanted() {
+		showWindow = func() { window.Show(ctx, cfg.LocalURL()) }
+	}
+
 	api = server.New(server.Deps{
 		Config:     cfg,
 		Streams:    streams,
@@ -700,6 +730,11 @@ func run(log *slog.Logger, out *logSink) error {
 		Engine:     torrents,
 		Presence:   presence,
 		Relaunch:   relaunchSelf(exe, cancel),
+		Exit: func() {
+			log.Info("exit chosen in the app")
+			cancel()
+		},
+		ShowWindow: showWindow,
 		Token:      token,
 		Player:     mpv,
 		Indexer:    sites.General(),
@@ -810,15 +845,29 @@ func run(log *slog.Logger, out *logSink) error {
 		}
 	}
 
-	// Running the executable should show the app, not print a URL to paste.
-	window := &config.Window{
-		Profile: cfg.ProfileDir(),
-		Maximized: func() bool {
-			mode, _ := st.Setting(context.Background(), "window.mode")
-			return mode == "maximized"
-		},
-	}
 	if windowWanted() {
+		// The tray says Yoru is running with no window open, and hears Windows ending the session.
+		icon, err := tray.Start(tray.Options{
+			Tip:  "Yoru",
+			Open: func() { window.Show(ctx, cfg.LocalURL()) },
+			Exit: func() {
+				log.Info("exit chosen in the tray")
+				cancel()
+			},
+			Ending: func() {
+				log.Info("Windows is ending the session; stopping")
+				cancel()
+				select {
+				case <-stopped:
+				case <-time.After(4 * time.Second):
+				}
+			},
+		})
+		if err != nil {
+			log.Warn("tray icon", "err", err)
+		}
+		defer icon.Close()
+		// Running the executable should show the app, not print a URL to paste.
 		go window.Open(ctx, cfg.LocalURL())
 	}
 
@@ -924,6 +973,18 @@ func relaunchSelf(exe string, cancel context.CancelFunc) func() {
 			cancel()
 		}
 	}
+}
+
+// askToShow has the running Yoru bring up its window; false for one too old to be asked.
+func askToShow(base string) bool {
+	config.AllowForeground()
+	client := http.Client{Timeout: 3 * time.Second}
+	res, err := client.Post(strings.TrimSuffix(base, "/")+"/api/app/show", "application/json", nil)
+	if err != nil {
+		return false
+	}
+	res.Body.Close()
+	return res.StatusCode == http.StatusNoContent
 }
 
 // yoruAnswers tells a running Yoru (or kuro, before the rename) from another program holding the port.

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"yoru/internal/proc"
 )
 
 // Scrub frames are laid out as one sprite sheet the player offsets into. One
@@ -162,7 +164,7 @@ func (t *Thumbnails) Generate(source, dir string, duration, aspect float64) {
 
 		started := time.Now()
 		// ffmpeg complains about a downloading file's holes yet makes a sheet; only real failure is reported.
-		out, err := exec.CommandContext(ctx, t.ffmpeg, sheetArgs(source, filter, part)...).CombinedOutput()
+		out, err := proc.Hide(exec.CommandContext(ctx, t.ffmpeg, sheetArgs(source, filter, part)...)).CombinedOutput()
 		if err != nil {
 			t.log.Warn("scrub previews", "err", err, "detail", tail(string(out)))
 			os.Remove(part)

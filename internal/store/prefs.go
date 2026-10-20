@@ -49,6 +49,8 @@ var Defaults = map[string]string{
 	"display.titles": TitleEnglish,
 	// How the app window opens: fullscreen or maximized. Takes effect next launch.
 	"window.mode": "fullscreen",
+	// Closing the window: Yoru exits ("exit"), or keeps running in the tray ("tray").
+	"window.on_close": "exit",
 
 	"quality.ladder": `["1080p:BD:HEVC:10","1080p:BD","1080p:WEB","720p"]`,
 	// "best", or "720p"/"480p": the best release up to that, a bigger one only when nothing fits.

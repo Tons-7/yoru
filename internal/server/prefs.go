@@ -31,6 +31,7 @@ var allowed = map[string][]string{
 	"quality.prefer":           {"best", "720p", "480p"},
 	"downloads.upload":         {torrent.UploadWhileDownloading, torrent.UploadNever},
 	"window.mode":              {"fullscreen", "maximized"},
+	"window.on_close":          {"exit", "tray"},
 	// 2, 3, 5 or 10 GiB an episode, or none.
 	"quality.max_auto_bytes": {"2147483648", "3221225472", "5368709120", "10737418240", "0"},
 	// The share of an episode that counts as watching it.

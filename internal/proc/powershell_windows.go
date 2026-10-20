@@ -5,17 +5,12 @@ import (
 	"encoding/base64"
 	"os/exec"
 	"strings"
-	"syscall"
 	"unicode/utf16"
 )
 
-const createNoWindow = 0x08000000
-
-// PowerShell runs PowerShell with args and no window: Yoru has no console, so each run would flash one.
+// PowerShell runs PowerShell with args and no window.
 func PowerShell(ctx context.Context, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "powershell", append([]string{"-NoProfile", "-NonInteractive"}, args...)...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
-	return cmd
+	return Hide(exec.CommandContext(ctx, "powershell", append([]string{"-NoProfile", "-NonInteractive"}, args...)...))
 }
 
 // Encoded is what -EncodedCommand takes: UTF-16LE, base64. No quoting to get wrong.

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,8 +41,12 @@ func TestCastPlaysASessionThroughItsLink(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("cast link: %d %v", code, link)
 	}
-	playlist := link["url"].(string)
-	root := strings.TrimSuffix(strings.TrimPrefix(playlist, "http://127.0.0.1:4321"), "playlist.m3u8")
+	playlist, _ := url.Parse(link["url"].(string))
+	// Asked from this PC's own window: the TV gets an address it can reach, as loopback is the TV itself.
+	if loopbackHost(playlist.Host) && len(lanAddrs()) > 0 {
+		t.Errorf("the TV was sent %s", playlist)
+	}
+	root := strings.TrimSuffix(playlist.Path, "playlist.m3u8")
 	subs, _ := link["subtitles"].([]any)
 	if len(subs) != 1 {
 		t.Fatalf("subtitles %v, want the one text track", subs)
@@ -60,9 +65,9 @@ func TestCastPlaysASessionThroughItsLink(t *testing.T) {
 			t.Errorf("%s: %d, %d bytes", file, code, len(body))
 		}
 	}
-	vtt := strings.TrimPrefix(subs[0].(map[string]any)["url"].(string), "http://127.0.0.1:4321")
+	vtt, _ := url.Parse(subs[0].(map[string]any)["url"].(string))
 	// The fixture's cut-down event format gives ffmpeg no text to carry; a release's standard one does.
-	if code, body := tv(vtt); code != http.StatusOK || !strings.HasPrefix(string(body), "WEBVTT") || !strings.Contains(string(body), "00:01.000 --> 00:05.000") {
+	if code, body := tv(vtt.Path); code != http.StatusOK || !strings.HasPrefix(string(body), "WEBVTT") || !strings.Contains(string(body), "00:01.000 --> 00:05.000") {
 		t.Errorf("subtitles: %d %q", code, body)
 	}
 }
@@ -94,7 +99,8 @@ func TestCastWithSubtitlesDrawnIn(t *testing.T) {
 	if code != http.StatusOK || link["burned"] != true || len(link["subtitles"].([]any)) != 0 {
 		t.Fatalf("cast link: %d %v; want the subtitles drawn in and no text track", code, link)
 	}
-	root := strings.TrimSuffix(strings.TrimPrefix(link["url"].(string), "http://127.0.0.1:4321"), "playlist.m3u8")
+	playlist, _ := url.Parse(link["url"].(string))
+	root := strings.TrimSuffix(playlist.Path, "playlist.m3u8")
 	// Its encoder stopped before the temp folder goes, which Windows won't delete with files open.
 	t.Cleanup(func() { h.server.streams.Close(fmt.Sprintf("%s-burn%v-0", opened["id"], index)) })
 

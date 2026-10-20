@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
   api,
@@ -17,14 +17,14 @@ import {
   type VoiceLevel,
 } from '../lib/api'
 import { clockTime, cx, languageName, speed } from '../lib/format'
-import { refreshDownloads, useSpeedUnit } from '../lib/queries'
+import { refreshDownloads, useAccess, useSpeedUnit } from '../lib/queries'
 import { SHOW_SHORTCUTS } from '../components/keys'
 import { PlayIcon } from '../components/PosterCard'
 import { Spinner } from '../components/ui'
 import { useDismiss, useRoomAbove } from '../lib/hooks'
 import { buttonClass } from '../lib/ui'
 import { useAnime4K, type UpscaleTier } from './anime4k'
-import { useCast } from './cast'
+import { castImpossible, isBrave, useCast, type CastPhase, type CastSdk } from './cast'
 import {
   skipKind,
   untilWatching,
@@ -550,8 +550,8 @@ export function Player({
 
   // Casting: the TV plays from Yoru itself through a link signed for this session; the video here waits, and
   // carries on where the TV was when casting stops.
-  const { phase: castPhase, device: castDevice, remote, playing: castPlaying, start: startCast, stop: stopCast,
-    playPause: castPlayPause, seek: castSeek } = useCast()
+  const { phase: castPhase, sdkState: castSdk, device: castDevice, remote, playing: castPlaying, start: startCast,
+    stop: stopCast, playPause: castPlayPause, seek: castSeek } = useCast()
   // This stream on the TV, not just a session: another episode, or another page's, leaves this one alone.
   const casting = castPhase === 'connected' && !!stream?.id && castPlaying === stream.id
   const castTo = useCallback(async () => {
@@ -827,13 +827,19 @@ export function Player({
 
   // Hide the controls while playing, but never while paused: a paused player with no controls looks broken.
   const hideTimer = useRef<number | undefined>(undefined)
+  // A panel being read, as casting's needs: the bar it opened from stays.
+  const held = useRef(false)
   const nudge = useCallback(() => {
     setControlsVisible(true)
     window.clearTimeout(hideTimer.current)
     hideTimer.current = window.setTimeout(() => {
-      if (!video?.paused) setControlsVisible(false)
+      if (!video?.paused && !held.current) setControlsVisible(false)
     }, 2600)
   }, [video])
+  const holdControls = useCallback((on: boolean) => {
+    held.current = on
+    if (!on) nudge()
+  }, [nudge])
 
   const activeSkip = skips.find((r) => time >= r.start && time < r.end)
 
@@ -1113,7 +1119,8 @@ export function Player({
           onSeek={(t) => video && (video.currentTime = t)}
         />
 
-        <div className="mt-2 flex items-center gap-2 text-white">
+        {/* Relative: on a phone, a wide panel (Cast's needs) opens across the bar, not off its button's edge. */}
+        <div className="relative mt-2 flex items-center gap-2 text-white">
           <IconButton label={playing ? 'Pause' : 'Play'} hint="K" onClick={togglePlay}>
             {playing ? <PauseIcon /> : <PlayIcon />}
           </IconButton>
@@ -1215,13 +1222,16 @@ export function Player({
                     <KeyboardIcon />
                   </IconButton>
                 </span>
-                {castPhase !== 'none' && (
-                  <IconButton
-                    label={casting ? `Stop casting to ${castDevice || 'the TV'}` : 'Cast to a TV'}
-                    onClick={() => (casting ? stopCast() : void castTo())}
-                  >
-                    <CastIcon on={casting} />
-                  </IconButton>
+                {!castImpossible() && (
+                  <CastButton
+                    casting={casting}
+                    device={castDevice}
+                    phase={castPhase}
+                    sdkState={castSdk}
+                    onCast={() => void castTo()}
+                    onStop={stopCast}
+                    onOpen={holdControls}
+                  />
                 )}
                 {pip.supported && (
                   <IconButton label="Picture in picture" onClick={() => void pip.toggle()}>
@@ -1573,7 +1583,8 @@ function SubtitlePicker({
         className="flex h-9 items-center gap-1.5 rounded-md px-2.5 text-xs text-white/90 transition-colors hover:bg-white/15"
       >
         <CaptionIcon />
-        <span className="max-w-24 truncate">{active ? label(active) : 'Off'}</span>
+        {/* On a phone the icon alone: the bar has no room for words, and the menu names the track. */}
+        <span className="max-w-24 truncate max-sm:hidden">{active ? label(active) : 'Off'}</span>
       </button>
 
       {open && (
@@ -1705,7 +1716,7 @@ function AudioPicker({
         className="flex h-9 items-center gap-1.5 rounded-md px-2.5 text-xs text-white/90 transition-colors hover:bg-white/15"
       >
         <SpeakerIcon />
-        <span className="max-w-24 truncate">{tracks[value] ? label(tracks[value], value) : 'Audio'}</span>
+        <span className="max-w-24 truncate max-sm:hidden">{tracks[value] ? label(tracks[value], value) : 'Audio'}</span>
       </button>
 
       {open && (
@@ -2130,6 +2141,170 @@ function CastIcon({ on }: { on: boolean }) {
       <circle cx="3.5" cy="19" r="0.5" fill="currentColor" />
       {on && <rect x="7" y="8" width="11" height="8" rx="1" fill="currentColor" opacity="0.6" />}
     </svg>
+  )
+}
+
+type Need = { label: string; met: boolean | null; detail?: ReactNode }
+
+// Always in the bar: when casting can't start, it lists what casting needs, each met or not, with the fix.
+function CastButton({
+  casting,
+  device,
+  phase,
+  sdkState,
+  onCast,
+  onStop,
+  onOpen,
+}: {
+  casting: boolean
+  device: string
+  phase: CastPhase
+  sdkState: CastSdk
+  onCast: () => void
+  onStop: () => void
+  onOpen: (open: boolean) => void
+}) {
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const close = useCallback(() => setOpen(false), [])
+  const ref = useDismiss<HTMLDivElement>(close, open)
+  const room = useRoomAbove(ref, open)
+  useEffect(() => {
+    onOpen(open)
+    // Unmounted open (another episode's bar), the controls must not stay held.
+    return () => onOpen(false)
+  }, [open, onOpen])
+  const access = useAccess()
+  const openUp = useMutation({
+    mutationFn: () => api.post('/api/access/network', { lan: true }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['access'] }),
+  })
+
+  const secure = window.isSecureContext
+  const reachable = access.data?.reachable ?? null
+  const ready = secure && sdkState === 'ok' && reachable === true && phase !== 'none'
+  // The same page at the HTTPS address, its token signing this device in there.
+  const https = access.data?.urls?.find((u) => u.startsWith('https://'))
+  const httpsHere = () => {
+    const u = new URL(https!)
+    u.pathname = location.pathname
+    new URLSearchParams(location.search).forEach((v, k) => u.searchParams.set(k, v))
+    return u.toString()
+  }
+
+  const needs: Need[] = [
+    {
+      label: 'A browser that can cast',
+      // Asked only on a secure page, so before that it isn't known.
+      met: !secure || sdkState === 'loading' ? null : sdkState === 'ok',
+      detail: !secure
+        ? undefined
+        : sdkState === 'off'
+          ? isBrave()
+            ? "Brave has casting turned off: turn on Media Router in Brave's Settings, Extensions, then restart Brave."
+            : "This browser can't cast. Chrome can, on a computer or an Android phone."
+          : sdkState === 'failed'
+            ? "Casting didn't load. Check this device is online, then reload the page."
+            : undefined,
+    },
+    {
+      label: 'A secure address',
+      met: secure,
+      detail: secure ? undefined : https ? (
+        <a href={httpsHere()} className="text-accent-300 underline underline-offset-2">Open this page at the HTTPS address</a>
+      ) : (
+        'Casting needs HTTPS. Set it up on the PC running Yoru, in Settings, Devices.'
+      ),
+    },
+    {
+      label: 'Access from other devices',
+      met: reachable,
+      detail: reachable !== false ? undefined : access.data?.canSwitch ? (
+        <span className="flex flex-wrap items-center gap-2">
+          The TV plays from Yoru over your network, which only this PC can reach now.
+          <button
+            type="button"
+            onClick={() => openUp.mutate()}
+            disabled={openUp.isPending}
+            className={buttonClass('secondary', 'sm')}
+          >
+            {openUp.isPending ? 'Turning on…' : 'Turn on'}
+          </button>
+          {openUp.isError && <span className="text-recap">{(openUp.error as Error).message}</span>}
+        </span>
+      ) : (
+        'The TV plays from Yoru over your network: turn this on in Settings, Devices.'
+      ),
+    },
+    {
+      label: 'A TV on this Wi-Fi',
+      met: sdkState !== 'ok' ? null : phase !== 'none',
+      detail:
+        sdkState === 'loading'
+          ? 'Looking…'
+          : sdkState === 'ok' && phase === 'none'
+            ? 'None found yet: a Chromecast or Google TV, switched on and on the same Wi-Fi as this device.'
+            : undefined,
+    },
+  ]
+
+  return (
+    <div className="sm:relative" ref={ref}>
+      <IconButton
+        label={casting ? `Stop casting to ${device || 'the TV'}` : 'Cast to a TV'}
+        onClick={() => (casting ? onStop() : ready ? onCast() : setOpen((v) => !v))}
+      >
+        <CastIcon on={casting} />
+      </IconButton>
+      {open && (
+        <div
+          role="dialog"
+          aria-label="Cast to a TV"
+          style={{ maxHeight: room }}
+          className="absolute right-0 bottom-full z-50 mb-2 w-80 max-w-[calc(100vw-2rem)] origin-bottom-right animate-rise overflow-y-auto rounded-lg border border-base-700 bg-base-850 p-3 text-sm shadow-xl shadow-black/60 scrollbar-thin"
+        >
+          <p className="font-medium text-white">Cast to a TV</p>
+          <p className="mt-0.5 text-xs text-base-400">
+            {ready ? 'Everything is ready.' : 'Casting needs all of these:'}
+          </p>
+          <ul className="mt-2 space-y-2">
+            {needs.map((n) => (
+              <li key={n.label} className="flex gap-2">
+                <NeedMark met={n.met} />
+                <div className="min-w-0">
+                  <p className={n.met === false ? 'text-white' : 'text-base-300'}>{n.label}</p>
+                  {n.detail && <div className="mt-0.5 text-xs text-base-400">{n.detail}</div>}
+                </div>
+              </li>
+            ))}
+          </ul>
+          {ready && (
+            <button
+              type="button"
+              onClick={() => { close(); onCast() }}
+              className={cx(buttonClass('primary', 'sm'), 'mt-3 w-full')}
+            >
+              Choose a TV
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function NeedMark({ met }: { met: boolean | null }) {
+  return (
+    <span
+      role="img"
+      aria-label={met ? 'Done' : met === false ? 'Missing' : 'Not known yet'}
+      className={cx(
+        'mt-0.5 grid size-4 shrink-0 place-items-center rounded-full text-[10px] leading-none',
+        met ? 'bg-accent-500 text-white' : met === false ? 'ring-1 ring-recap text-recap' : 'ring-1 ring-base-600',
+      )}
+    >
+      {met ? '✓' : met === false ? '!' : ''}
+    </span>
   )
 }
 

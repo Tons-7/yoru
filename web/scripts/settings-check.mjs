@@ -38,6 +38,19 @@ check(names.join('|') === 'Playback|Sound & picture|Downloads|Storage|Accounts|L
 check(await until(() => visible('Auto next episode')), 'Playback opens first, with the automatic options')
 check(!(await visible('Download ahead while watching')), 'download ahead is no longer under Playback')
 
+// The window and casting each have a section of their own, not mixed into Player and Language.
+const section = (title) => page.locator('section', { has: page.getByRole('heading', { name: title, exact: true }) })
+check(await until(() => section('Window').getByText('Open Yoru', { exact: true }).isVisible()), 'Window holds how Yoru opens')
+if (process.platform === 'win32') {
+  check(await section('Window').getByText('When the window closes', { exact: true }).isVisible(), 'and what closing it does')
+}
+check(!(await section('Player').getByText('Open Yoru', { exact: true }).isVisible()), 'no longer under Player')
+check(await section('Casting').getByText('Draw subtitles into the picture', { exact: true }).isVisible(),
+  'Casting holds its subtitles choice')
+check(await section('Casting').getByText(/Cast button in the player's bar/).isVisible(), 'and says where casting starts')
+check(!(await section('Language').getByText(/subtitles into the picture/).isVisible()), 'no longer under Language')
+await page.screenshot({ path: `${SHOTS}/settings-playback.png`, fullPage: true })
+
 // A stacked row (the control under its words) keeps the control right under them.
 const stacked = page.locator('[data-row]', { has: page.getByText('Subtitle languages', { exact: true }) })
 const gap = await stacked.evaluate((row) =>
@@ -72,6 +85,10 @@ check(!(await page.getByRole('button', { name: /^Storage ›$/ }).isVisible()), 
 await page.screenshot({ path: `${SHOTS}/settings-search.png` })
 await search.fill('vpn')
 check(await until(() => visible('Network for torrents')), '"vpn" finds the network for torrents, by a keyword')
+await search.fill('chromecast')
+check(await until(() => visible('Draw subtitles into the picture')), '"chromecast" finds the Casting section')
+await search.fill('tray')
+check(await until(() => visible('When the window closes')) || process.platform !== 'win32', '"tray" finds what closing the window does')
 await search.fill('sound')
 const soundRows = ['Voice boost', 'Night mode', 'Headphones', 'Mono', 'Volume boost']
 check(await until(async () => (await Promise.all(soundRows.map(visible))).every(Boolean)), '"sound" shows the whole Sound section')

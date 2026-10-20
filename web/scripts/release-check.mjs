@@ -69,6 +69,7 @@ const CHECKS = [
   ['unconvertible-check.mjs'],
   ['vlc-check.mjs'],
   ['wifi-drop-check.mjs'],
+  ['exit-log-check.mjs'],
   ['sound-check.mjs'],
 ]
 
@@ -126,7 +127,9 @@ if (!only.length) await step('release notes', 'node scripts/notes-check.mjs', we
 let built = process.env.SKIP_BUILD === '1'
 if (!built) {
   const exe = join(tmpdir(), 'yoru-e2e-bin', process.platform === 'win32' ? 'yoru.exe' : 'yoru')
-  built = (await step('web build', 'npm run build', webDir)) && (await step('server build', `go build -o "${exe}" ./cmd/yoru`, repo))
+  // As released: on Windows a windowed app with no console.
+  const gui = process.platform === 'win32' ? '-ldflags "-H windowsgui" ' : ''
+  built = (await step('web build', 'npm run build', webDir)) && (await step('server build', `go build ${gui}-o "${exe}" ./cmd/yoru`, repo))
 }
 
 // The updater end to end on two real builds; its own ports, so it never meets a lane.

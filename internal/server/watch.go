@@ -82,8 +82,11 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "save playback", err)
 		return
 	}
-	s.presence.Report(ctx, body.AnimeID, body.Episode, body.Position, body.Duration, body.Paused, body.Final,
-		isLoopback(r.RemoteAddr) && loopbackHost(r.Host))
+	host := isLoopback(r.RemoteAddr) && loopbackHost(r.Host)
+	s.presence.Report(ctx, body.AnimeID, body.Episode, body.Position, body.Duration, body.Paused, body.Final, host)
+	if !host {
+		s.noteWatching(r, body.AnimeID, body.Episode, body.Final || body.Paused)
+	}
 
 	if watched && s.syncer != nil {
 		if err := s.syncer.Watched(ctx, body.AnimeID, body.Episode); err != nil {

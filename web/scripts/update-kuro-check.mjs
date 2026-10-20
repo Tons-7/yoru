@@ -58,7 +58,8 @@ const trusted = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url').
 const build = (dir, module, version, out) =>
   spawnSync(
     'go',
-    ['build', '-trimpath', '-ldflags', `-s -w -X ${module}/internal/update.Version=${version} -X ${module}/internal/update.signingKeyHex=${trusted}`,
+    // -H windowsgui as package.ps1 builds them; kuro's tag too, which its update path doesn't mind.
+    ['build', '-trimpath', '-ldflags', `-s -w -H windowsgui -X ${module}/internal/update.Version=${version} -X ${module}/internal/update.signingKeyHex=${trusted}`,
       '-o', out, `./cmd/${module}`],
     { cwd: dir, stdio: 'inherit', env: { ...process.env, CGO_ENABLED: '0' } },
   )

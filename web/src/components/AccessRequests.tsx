@@ -1,13 +1,11 @@
-import { useQuery } from '@tanstack/react-query'
 import { createPortal } from 'react-dom'
-import { api } from '../lib/api'
 import { usePortalHome } from './keys'
-import { useAccessDevices, useDecideDevice } from '../lib/queries'
+import { useAccess, useAccessDevices, useDecideDevice } from '../lib/queries'
 import { buttonClass } from '../lib/ui'
 
 /** On the host, over every page: a device is asking to be let in. */
 export function AccessRequests() {
-  const access = useQuery({ queryKey: ['access'], queryFn: () => api.get<{ host?: boolean }>('/api/access') })
+  const access = useAccess()
   const devices = useAccessDevices(!!access.data?.host)
   const decide = useDecideDevice()
   // Inside the fullscreen player when there is one, or a host watching never sees the phone asking.

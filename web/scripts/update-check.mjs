@@ -58,7 +58,8 @@ const trusted = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url').
 const build = (dir, version, out) =>
   spawnSync(
     'go',
-    ['build', '-trimpath', '-ldflags', `-s -w -X yoru/internal/update.Version=${version} -X yoru/internal/update.signingKeyHex=${trusted}`,
+    // -H windowsgui as package.ps1 builds them: a windowed app updating itself, with no console.
+    ['build', '-trimpath', '-ldflags', `-s -w -H windowsgui -X yoru/internal/update.Version=${version} -X yoru/internal/update.signingKeyHex=${trusted}`,
       '-o', out, './cmd/yoru'],
     { cwd: dir, stdio: 'inherit', env: { ...process.env, CGO_ENABLED: '0' } },
   )

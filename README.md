@@ -29,10 +29,11 @@ Yoru and keeps your history, library and settings.
 - **Plays anywhere.** In the browser by default, so a phone or TV on the same
   network works the same as the laptop. mpv and VLC are available as external
   players, with Anime4K upscaling. On a phone, **Open in app** hands the
-  original file to VLC, mpv or Infuse, subtitles and all. In Chrome, **Cast**
-  sends the episode to a Chromecast or Google TV, the player becoming its remote
-  (subtitles go as plain text; the TV must reach Yoru, so turn on access from
-  other devices).
+  original file to VLC, mpv or Infuse, subtitles and all. In Chrome or Brave,
+  the player's **Cast** button sends the episode to a Chromecast or Google TV,
+  the player becoming its remote; until casting can start, the button lists what
+  is missing (the TV must reach Yoru, so access from other devices goes on).
+  Subtitles go as plain text, or drawn into the picture with their fonts.
 - **Sub or dub**, chosen per show, with subtitle delay and size controls.
 - **Knows 34,000+ anime**, including the ~11,700 that exist on MyAnimeList but
   not AniList.
@@ -73,6 +74,12 @@ Get `yoru-<version>.zip` from the [latest release](https://github.com/Tons-7/yor
 extract it to a folder of its own and run `yoru.exe`. The first-run screen
 downloads ffmpeg (or uses one already on your `PATH`) and shows how to add the
 torrent sites to search. Updates are offered in the app.
+
+Yoru runs as a normal Windows app, with no console window. While it runs, its
+icon sits in the tray: click it to open Yoru, right-click it to exit (or use
+**Exit Yoru** in the profile menu). Closing the window exits Yoru too, unless
+Settings → Playback → Window keeps it running in the tray. When something goes wrong,
+Settings → About copies or saves the log to send.
 
 **Coming from kuro?** Update from inside kuro (Settings → About) and it becomes
 Yoru by itself. To do it by hand, put `yoru.exe` in kuro's folder in place of

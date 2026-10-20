@@ -59,9 +59,9 @@ if ($Target) {
     $goos, $goarch = $parts
 }
 
+$targetOS = if ($goos) { $goos } else { go env GOOS }
 if (-not $Out) {
     # Built from its parts: a regex on 'yoru.exe' matched twice, giving yoru-windows-arm64.exe-windows-arm64.
-    $targetOS = if ($goos) { $goos } else { go env GOOS }
     $ext = if ($targetOS -eq 'windows') { '.exe' } else { '' }
     $suffix = if ($Target) { "-$goos-$goarch" } else { '' }
     $Out = Join-Path $root "yoru$suffix$ext"
@@ -76,6 +76,8 @@ if ($goos) { $env:GOOS = $goos; $env:GOARCH = $goarch }
 try {
     # Trimming the symbol table roughly halves the binary; nothing needs a Go stack trace in production.
     $ldflags = '-s -w'
+    # A Windows app, not a console one: a console window would open beside Yoru's and could take its focus.
+    if ($targetOS -eq 'windows') { $ldflags += ' -H windowsgui' }
     if ($Version) { $ldflags += " -X yoru/internal/update.Version=$Version" }
     go -C $root build -trimpath -ldflags $ldflags -o $Out ./cmd/yoru
     if ($LASTEXITCODE -ne 0) { Fail 'go build failed' }

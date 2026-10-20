@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { useAccess } from '../lib/queries'
 import { toast } from '../lib/toast'
 import { Badge, Button, FilterToggle, RefreshFailed, Select, Skeleton, TextInput } from './ui'
 
@@ -28,7 +29,7 @@ const iconButton =
 export function SitesEditor() {
   const qc = useQueryClient()
   const sites = useQuery({ queryKey: ['sites'], queryFn: () => api.get<SitesState>('/api/sites') })
-  const access = useQuery({ queryKey: ['access'], queryFn: () => api.get<{ host?: boolean }>('/api/access') })
+  const access = useAccess()
   const host = !!access.data?.host
 
   const save = useMutation({

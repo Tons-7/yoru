@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Link,
   NavLink,
@@ -10,8 +11,18 @@ import {
 } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, LIST_STATUSES, statusLabel, type LibraryItem } from '../lib/api'
-import { cx } from '../lib/format'
-import { useLibraryCounts, usePrefs, useSetPref, useSetup, useTrackers } from '../lib/queries'
+import { bytes, cx } from '../lib/format'
+import { buttonClass } from '../lib/ui'
+import {
+  useAccess,
+  useDownloads,
+  useLibraryCounts,
+  usePrefs,
+  useSetPref,
+  useSetup,
+  useTrackers,
+  type Download,
+} from '../lib/queries'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Unpaired } from './Unpaired'
 import { AccessRequests } from './AccessRequests'
@@ -20,7 +31,7 @@ import { SHOW_SHORTCUTS } from './keys'
 import { NotificationPanel } from './NotificationPanel'
 import { Shortcuts } from './Shortcuts'
 import { SavedCopyNotice } from './SavedCopyNotice'
-import { useDebounced, useDismiss, useMediaQuery } from '../lib/hooks'
+import { useDebounced, useDismiss, useMediaQuery, useModalFocus } from '../lib/hooks'
 
 const TABS = [
   { to: '/', label: 'Home', end: true },
@@ -445,6 +456,7 @@ const MENU_ITEMS = [
 
 function ProfileMenu() {
   const [open, setOpen] = useState(false)
+  const [exitAsk, setExitAsk] = useState<ExitStops | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
   // Opened from the keyboard, focus starts on the first item; a click leaves it on the button.
@@ -577,9 +589,181 @@ function ProfileMenu() {
               ?
             </kbd>
           </button>
+          <ExitItem
+            onAsk={(stops) => {
+              close()
+              setExitAsk(stops)
+            }}
+          />
         </div>
       )}
+      {/* Outside the menu: a click in it would close the menu, and a dialog inside with it. */}
+      {exitAsk && <ExitDialog stops={exitAsk} onClose={() => setExitAsk(null)} />}
     </div>
+  )
+}
+
+interface Watching {
+  device: string
+  title: string
+  episode: number
+}
+
+/** What exiting would stop: downloads under way, and other devices playing through Yoru. */
+interface ExitStops {
+  downloads: number
+  left: number
+  watching: Watching[]
+  /** Neither could be asked about: exiting asks, saying so, rather than guess nothing runs. */
+  unknown?: boolean
+}
+
+function stopsOf(items: Download[] | undefined, watching: Watching[] | undefined): ExitStops {
+  const active = (items ?? []).filter((d) => d.percent < 100 && !d.paused)
+  return {
+    downloads: active.length,
+    left: active.reduce((sum, d) => sum + Math.max(0, d.totalBytes - d.bytesOnDisk), 0),
+    watching: watching ?? [],
+    unknown: items === undefined || watching === undefined,
+  }
+}
+
+const stopsSummary = (s: ExitStops) =>
+  [
+    s.downloads > 0 && `${s.downloads} downloading`,
+    s.watching.length === 1 && `${s.watching[0].device} is watching`,
+    s.watching.length > 1 && `${s.watching.length} devices watching`,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+/** Asks Yoru to exit; it answers before it stops. */
+function useExitYoru() {
+  const [exiting, setExiting] = useState(false)
+  const [failed, setFailed] = useState('')
+  const exit = () => {
+    setFailed('')
+    setExiting(true)
+    api.post('/api/app/exit').catch((e: unknown) => {
+      setExiting(false)
+      setFailed(e instanceof Error ? e.message : "Couldn't exit Yoru")
+    })
+  }
+  return { exit, exiting, failed }
+}
+
+/** On the machine Yoru runs on: says what runs, and exits at once when nothing would stop; asks otherwise. */
+function ExitItem({ onAsk }: { onAsk: (stops: ExitStops) => void }) {
+  const access = useAccess()
+  const host = !!access.data?.host
+  const downloads = useDownloads()
+  const activity = useQuery({
+    queryKey: ['app-activity'],
+    queryFn: () => api.get<{ watching: Watching[] }>('/api/app/activity'),
+    enabled: host,
+    staleTime: 0,
+    refetchInterval: 5000,
+  })
+  const { exit, exiting, failed } = useExitYoru()
+  const [checking, setChecking] = useState(false)
+  if (!host) return null
+
+  const summary = stopsSummary(stopsOf(downloads.data?.items, activity.data?.watching))
+
+  // Decided on fresh answers: the menu's may be seconds old, or not in yet.
+  const choose = async () => {
+    setChecking(true)
+    const [d, a] = await Promise.all([downloads.refetch(), activity.refetch()])
+    setChecking(false)
+    const stops = stopsOf(d.data?.items, a.data?.watching)
+    if (stops.unknown || stopsSummary(stops)) return onAsk(stops)
+    exit()
+  }
+  return (
+    <>
+      <div className="my-2 h-px bg-base-750" />
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => void choose()}
+        disabled={exiting || checking}
+        className={cx(menuRow, 'w-full text-left text-base-200')}
+      >
+        <span className={iconChip}>
+          <PowerIcon />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block">{exiting ? 'Yoru is exiting…' : 'Exit Yoru'}</span>
+          {summary && !exiting && <span className="block truncate text-xs text-base-400">{summary}</span>}
+        </span>
+      </button>
+      {failed && <p className="px-2 pt-1 text-xs text-recap">{failed}</p>}
+    </>
+  )
+}
+
+/** Exiting would stop something: what, in the middle of the screen, with Cancel the safe default. */
+function ExitDialog({ stops, onClose }: { stops: ExitStops; onClose: () => void }) {
+  const panel = useDismiss<HTMLDivElement>(onClose)
+  useModalFocus(panel)
+  const { exit, exiting, failed } = useExitYoru()
+  return createPortal(
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <div
+        ref={panel}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="exit-title"
+        aria-describedby="exit-stops"
+        className="animate-fade-in relative w-full max-w-sm rounded-xl border border-base-800 bg-base-900 p-5 shadow-2xl"
+      >
+        <h2 id="exit-title" className="text-base font-semibold text-white">
+          Exit Yoru?
+        </h2>
+        <div id="exit-stops">
+          {stops.unknown && (
+            <p className="mt-1 text-sm text-base-400">Yoru couldn't check for downloads or other devices watching.</p>
+          )}
+          {(stops.downloads > 0 || stops.watching.length > 0) && (
+            <p className="mt-1 text-sm text-base-400">These stop until you open Yoru again:</p>
+          )}
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-base-200">
+            {stops.downloads > 0 && (
+              <li>
+                {stops.downloads === 1 ? '1 download' : `${stops.downloads} downloads`}
+                {stops.left > 0 && ` (${bytes(stops.left)} left)`}
+              </li>
+            )}
+            {stops.watching.map((w, i) => (
+              <li key={`${w.device}-${i}`}>
+                {w.device} is watching {w.title || 'an episode'}
+                {w.episode > 0 && `, episode ${w.episode}`}
+              </li>
+            ))}
+          </ul>
+        </div>
+        {failed && <p className="mt-3 text-xs text-recap">{failed}</p>}
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className={buttonClass('secondary')}>
+            Cancel
+          </button>
+          <button type="button" onClick={exit} disabled={exiting} className={buttonClass('danger')}>
+            {exiting ? 'Exiting…' : 'Exit Yoru'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+function PowerIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <path d="M12 4v7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M7.4 7.1a7 7 0 1 0 9.2 0" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
   )
 }
 

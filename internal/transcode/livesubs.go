@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"yoru/internal/proc"
 )
 
 // Live subtitles: a process beside each pass writes every text track's lines as it reads them.
@@ -107,7 +109,7 @@ func (s *Session) startSubtitles(r *run) {
 	if args == nil {
 		return
 	}
-	cmd := exec.Command(s.ffmpeg, args...)
+	cmd := proc.Hide(exec.Command(s.ffmpeg, args...))
 	cmd.Dir = s.dir
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

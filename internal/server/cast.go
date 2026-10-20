@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"yoru/internal/proc"
 	"yoru/internal/transcode"
 )
 
@@ -55,6 +56,9 @@ func (s *Server) castLink(w http.ResponseWriter, r *http.Request) {
 	base := requestOrigin(r)
 	if names := s.httpsNames(); len(names) > 0 && r.TLS == nil {
 		base = fmt.Sprintf("https://%s:%s", names[0], s.port())
+	} else if lan := lanAddrs(); loopbackHost(r.Host) && len(lan) > 0 {
+		// The host's own window is on loopback, which on the TV is the TV itself.
+		base = fmt.Sprintf("http://%s:%s", lan[0], s.port())
 	}
 	expires := time.Now().Add(externalFor)
 	root := base + "/c/" + s.signGrant(grant{Source: castPrefix + target.ID, Expires: expires.Unix()}) + "/"
@@ -100,8 +104,8 @@ func (s *Server) burnedSession(ctx context.Context, session *transcode.Session, 
 	}
 	// Shifted by the player's delay and written as ASS, whatever the track was.
 	file := filepath.Join(session.Dir(), fmt.Sprintf("cast-%s.ass", track))
-	cmd := exec.CommandContext(ctx, s.cfg.Tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
-		"-itsoffset", fmt.Sprintf("%.3f", delay), "-i", "pipe:0", "-c:s", "ass", file)
+	cmd := proc.Hide(exec.CommandContext(ctx, s.cfg.Tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+		"-itsoffset", fmt.Sprintf("%.3f", delay), "-i", "pipe:0", "-c:s", "ass", file))
 	cmd.Stdin = bytes.NewReader(rec.Body.Bytes())
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("subtitles: %v: %s", err, bytes.TrimSpace(out))
@@ -186,7 +190,8 @@ func (s *Server) castSubtitle(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, s.cfg.Tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", "webvtt", "pipe:1")
+	cmd := proc.Hide(exec.CommandContext(ctx, s.cfg.Tool("ffmpeg"), "-hide_banner", "-loglevel", "error",
+		"-i", "pipe:0", "-f", "webvtt", "pipe:1"))
 	cmd.Stdin = bytes.NewReader(rec.Body.Bytes())
 	vtt, err := cmd.Output()
 	if err != nil {

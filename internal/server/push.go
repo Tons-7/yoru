@@ -67,12 +67,7 @@ func (s *Server) pushSubscribe(w http.ResponseWriter, r *http.Request) {
 		Paired: !isLoopback(r.RemoteAddr) || !loopbackHost(r.Host),
 	}
 	// Who asked, so declining or removing the device stops its alerts too.
-	for _, name := range []string{deviceCookie, legacyDeviceCookie} {
-		if c, err := r.Cookie(name); err == nil && c.Value != "" {
-			sub.Device = deviceID(c.Value)
-			break
-		}
-	}
+	sub.Device = requestDevice(r)
 	if err := s.store.SavePushSubscription(r.Context(), sub); err != nil {
 		s.fail(w, "save push subscription", err)
 		return

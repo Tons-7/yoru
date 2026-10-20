@@ -46,17 +46,17 @@ func TestSecondLaunchTakesACleanExitAsTheHandOff(t *testing.T) {
 	var attempts int
 	oldWindow, oldTab := showWindow, showTab
 	tabs := 0
-	showWindow = func(_ context.Context, _, profile string, _, handoff bool) *launched {
+	showWindow = func(_ context.Context, _, profile string, _, handoff bool) (*launched, string) {
 		attempts++
 		if handoff && profile == "P" {
-			return &launched{}
+			return &launched{}, ""
 		}
-		return nil
+		return nil, ""
 	}
 	showTab = func(string) { tabs++ }
 	t.Cleanup(func() { showWindow, showTab = oldWindow, oldTab })
 
-	OpenApp(context.Background(), "http://localhost:4321", "P")
+	OpenApp(context.Background(), "http://localhost:4321", "P", nil)
 	if attempts != 1 || tabs != 0 {
 		t.Fatalf("attempts %d, tabs %d; want one hand-off and no tab", attempts, tabs)
 	}

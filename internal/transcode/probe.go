@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"yoru/internal/proc"
 	"yoru/internal/sound"
 )
 
@@ -137,7 +138,7 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 
 	// -v error rather than quiet: diagnostics go to stderr so stdout JSON stays
 	// clean, and a failure can still say why instead of a bare "exit status 1".
-	cmd := exec.CommandContext(ctx, p.ffprobe,
+	cmd := proc.Hide(exec.CommandContext(ctx, p.ffprobe,
 		"-v", "error",
 		"-print_format", "json",
 		"-show_format",
@@ -148,7 +149,7 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 		"-analyzeduration", "2M",
 		"-probesize", "8M",
 		url,
-	)
+	))
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

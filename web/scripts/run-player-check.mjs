@@ -209,7 +209,9 @@ try {
     run('npm run build', [], { cwd: webDir, shell: true })
     stage('building server (go)')
     mkdirSync(binCache, { recursive: true })
-    run('go', ['build', '-o', yoruExe, './cmd/yoru'], { cwd: repo })
+    // As released: on Windows a windowed app with no console, which must still log to the redirected output.
+    const gui = process.platform === 'win32' ? ['-ldflags', '-H windowsgui'] : []
+    run('go', ['build', ...gui, '-o', yoruExe, './cmd/yoru'], { cwd: repo })
   }
   if (!existsSync(yoruExe)) throw new Error(`no Yoru binary at ${yoruExe}; run once without SKIP_BUILD`)
 

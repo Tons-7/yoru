@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"yoru/internal/proc"
 )
 
 // A track reads as far as the download reached; the rest comes next request, so no longer wait.
@@ -147,7 +149,7 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 	staging := path + ".part"
 	args = append(args, "-f", subtitleExt(codec), "-y", staging)
 
-	out, err := exec.CommandContext(ctx, s.ffmpeg, args...).CombinedOutput()
+	out, err := proc.Hide(exec.CommandContext(ctx, s.ffmpeg, args...)).CombinedOutput()
 
 	// Cues are interleaved through the file, so a track reads only as far as the
 	// download reached. Partial output covers the part that can be watched.
@@ -220,7 +222,7 @@ func (s *Subtitles) ExtractAround(ctx context.Context, source, dir string, track
 	}
 	staging := path + ".around"
 	args = append(args, "-f", subtitleExt(codec), "-y", staging)
-	out, err := exec.CommandContext(ctx, s.ffmpeg, args...).CombinedOutput()
+	out, err := proc.Hide(exec.CommandContext(ctx, s.ffmpeg, args...)).CombinedOutput()
 	defer os.Remove(staging)
 
 	if dialogueLines(staging) == 0 {
@@ -308,7 +310,7 @@ func (s *Subtitles) ExtractFonts(ctx context.Context, source, dir string, attach
 	args = append(args, "-i", source, "-t", "0", "-f", "null", "-")
 
 	// Non-zero is normal here: there is no output stream to write.
-	_ = exec.CommandContext(ctx, s.ffmpeg, args...).Run()
+	_ = proc.Hide(exec.CommandContext(ctx, s.ffmpeg, args...)).Run()
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("fonts: %w", err)
 	}

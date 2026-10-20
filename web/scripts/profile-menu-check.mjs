@@ -94,7 +94,7 @@ async function open(viewport, trackers) {
   await page.keyboard.press('ArrowDown')
   check((await focused()) === 'All 214', 'down moves to the next', await focused())
   await page.keyboard.press('End')
-  check((await focused())?.startsWith('Keyboard shortcuts'), 'End reaches the last', await focused())
+  check((await focused())?.startsWith('Exit Yoru'), 'End reaches the last', await focused())
   await page.keyboard.press('ArrowDown')
   check((await focused())?.includes('Yuki'), 'and down from there wraps to the first', await focused())
   await page.keyboard.press('Escape')

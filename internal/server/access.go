@@ -322,7 +322,8 @@ func (s *Server) accessToken() string {
 }
 
 func (s *Server) accessURLs() []string {
-	var urls []string
+	// Never nil: with no address at all the page gets an empty list, not null.
+	urls := []string{}
 	token := s.accessToken()
 	// First, so the QR code is the address a phone can install from.
 	for _, name := range s.httpsNames() {

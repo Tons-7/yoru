@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-// Google Cast: Chrome's Web Sender SDK sends the episode to a Chromecast, whose Default Media Receiver plays
-// Yoru's own HLS through a link signed for the session. Chrome only, on an HTTPS or localhost page.
+// Google Cast: the Web Sender SDK sends the episode to a Chromecast, whose Default Media Receiver plays
+// Yoru's own HLS through a link signed for the session. Only on an HTTPS or localhost page.
 
 const SDK = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1'
 
@@ -60,15 +60,26 @@ interface ChromeCast {
 const sdk = () =>
   window as unknown as { cast?: { framework: CastFramework }; chrome?: { cast?: ChromeCast }; __onGCastApiAvailable?: (ok: boolean) => void }
 
-/** Casting is offered in Chrome on a secure page; the SDK says whether this Chrome can. */
-export function castSupported(): boolean {
+/** An iPhone or iPad: no browser there can cast, so nothing about it is offered. */
+export function castImpossible(): boolean {
   const ua = navigator.userAgent
-  return window.isSecureContext && /Chrome\//.test(ua) && !/Edg\/|OPR\/|iPhone|iPad/.test(ua)
+  return /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)
 }
 
-let loading: Promise<boolean> | null = null
+/** Brave keeps casting behind a switch of its own, which the needs list names. */
+export const isBrave = () => 'brave' in navigator
 
-function loadSdk(): Promise<boolean> {
+/** Casting needs a secure page; whether this browser can cast is the SDK's answer, not its name. */
+export function castSupported(): boolean {
+  return window.isSecureContext && !castImpossible()
+}
+
+/** 'off': this browser can't cast, or has it turned off. 'failed': the SDK didn't arrive (offline, blocked). */
+export type CastSdk = 'loading' | 'ok' | 'off' | 'failed'
+
+let loading: Promise<CastSdk> | null = null
+
+function loadSdk(): Promise<CastSdk> {
   loading ??= new Promise((resolve) => {
     sdk().__onGCastApiAvailable = (ok) => {
       const { cast, chrome } = sdk()
@@ -78,12 +89,16 @@ function loadSdk(): Promise<boolean> {
           autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
         })
       }
-      resolve(ok)
+      resolve(ok && cast && chrome?.cast ? 'ok' : 'off')
     }
     const script = document.createElement('script')
     script.src = SDK
     script.async = true
-    script.onerror = () => resolve(false)
+    script.onerror = () => {
+      // Tried again on the next player, as the connection may be back.
+      loading = null
+      resolve('failed')
+    }
     document.head.append(script)
   })
   return loading
@@ -111,6 +126,8 @@ let sent: { key: string; url: string; seen: boolean } | null = null
 /** The cast device's state, and the TV's player once connected. 'none': no device found, or no SDK. */
 export function useCast() {
   const [phase, setPhase] = useState<CastPhase>('none')
+  // Not asked on an insecure page: the SDK can't work there, and the needs list says why.
+  const [sdkState, setSdkState] = useState<CastSdk>(() => (castSupported() ? 'loading' : 'off'))
   const [device, setDevice] = useState('')
   const [remote, setRemote] = useState({ time: 0, duration: 0, paused: true })
   // The key of the stream the TV plays, if this page sent it; '' for anything else.
@@ -122,9 +139,14 @@ export function useCast() {
     if (!castSupported()) return
     let stop = () => {}
     let cancelled = false
-    void loadSdk().then((ok) => {
+    // A browser the SDK doesn't know may never answer: shown as can't cast, and corrected if it answers late.
+    const silent = window.setTimeout(() => setSdkState((s) => (s === 'loading' ? 'off' : s)), 10_000)
+    void loadSdk().then((state) => {
       const fw = sdk().cast?.framework
-      if (!ok || !fw || cancelled) return
+      window.clearTimeout(silent)
+      if (cancelled) return
+      setSdkState(state)
+      if (state !== 'ok' || !fw) return
       const ctx = fw.CastContext.getInstance()
       const p = new fw.RemotePlayer()
       const c = new fw.RemotePlayerController(p)
@@ -158,6 +180,7 @@ export function useCast() {
     })
     return () => {
       cancelled = true
+      window.clearTimeout(silent)
       stop()
     }
   }, [])
@@ -214,5 +237,5 @@ export function useCast() {
     controller.current.seek()
   }, [])
 
-  return { phase, device, remote, playing, start, stop, playPause, seek }
+  return { phase, sdkState, device, remote, playing, start, stop, playPause, seek }
 }

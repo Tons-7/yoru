@@ -557,6 +557,25 @@ export function useSetup(options?: {
   })
 }
 
+export interface AccessState {
+  /** The address Yoru is bound to. */
+  listening: string
+  /** Reachable from other devices, not loopback alone. */
+  reachable: boolean
+  token: string
+  /** Links another device opens, HTTPS first; empty with no home-network address. */
+  urls: string[]
+  /** The host, whose page may open or close Yoru to the network. */
+  canSwitch: boolean
+  /** This page runs on the machine Yoru runs on. */
+  host: boolean
+}
+
+/** Yoru's reach and whether this page is on its machine; one query, read by every page that needs it. */
+export function useAccess() {
+  return useQuery({ queryKey: ['access'], queryFn: () => api.get<AccessState>('/api/access') })
+}
+
 export interface AccessDevice {
   id: string
   name: string

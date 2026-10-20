@@ -71,6 +71,16 @@ func deviceID(secret string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
+// requestDevice is the device ID the request's cookie names, or "" for a device given none.
+func requestDevice(r *http.Request) string {
+	for _, name := range []string{deviceCookie, legacyDeviceCookie} {
+		if c, err := r.Cookie(name); err == nil && c.Value != "" {
+			return deviceID(c.Value)
+		}
+	}
+	return ""
+}
+
 // admit lets an approved device in (token already checked); any other is recorded and shown the waiting page.
 func (s *Server) admit(w http.ResponseWriter, r *http.Request) bool {
 	a := &s.approvals

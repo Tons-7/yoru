@@ -3,7 +3,9 @@ package library
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -59,6 +61,19 @@ func eventually(t *testing.T, what string, ok func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+// searchesFor counts the queries naming this episode: a start also resolves the next one in the background.
+func (a *askedIndexer) searchesFor(episode int) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, q := range a.asked {
+		if strings.HasSuffix(q, fmt.Sprintf(" %02d", episode)) {
+			n++
+		}
+	}
+	return n
+}
+
 func torrentsAdded(engine *fakeEngine) int {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
@@ -90,7 +105,7 @@ func TestPlayTakesOverTheEpisodeBeingFetchedAhead(t *testing.T) {
 	outcome := fetchInBackground(pref, false)
 	eventually(t, "the fetch to add its torrent", func() bool { _, ok := pref.Fetching(1, 2); return ok })
 	// The fetch's own search is done once its torrent is added; a Find may ask more than one query.
-	searched := idx.searches()
+	searched := idx.searchesFor(2)
 
 	session, err := play.Start(ctx, PlayRequest{AnimeID: 1, Episode: 2, Season: 1, Prefs: score.DefaultPreferences()})
 	if err != nil {
@@ -99,7 +114,7 @@ func TestPlayTakesOverTheEpisodeBeingFetchedAhead(t *testing.T) {
 	if session.InfoHash != ep2Hash {
 		t.Fatalf("played %s, want the torrent being fetched ahead", session.InfoHash)
 	}
-	if n := idx.searches(); n != searched {
+	if n := idx.searchesFor(2); n != searched {
 		t.Errorf("play searched %d more times beside the fetch", n-searched)
 	}
 	if n := torrentsAdded(engine); n != 1 {
@@ -275,8 +290,8 @@ func TestPressingNextResumesTheEpisodeDownloadedAhead(t *testing.T) {
 		rec, ok, _ := play.store.TorrentForEpisode(ctx, 1, "2")
 		return ok && rec.InfoHash == ep2Hash
 	})
-	// Episode 1's search and the resolve of episode 2: the download ahead used the resolve.
-	searched := idx.searches()
+	// The resolve of episode 2: the download ahead used it.
+	searched := idx.searchesFor(2)
 
 	// Back on the series page, which readies what Continue would play.
 	pref.PrepareTarget(1, 2, 1, prefs)
@@ -289,7 +304,7 @@ func TestPressingNextResumesTheEpisodeDownloadedAhead(t *testing.T) {
 	if session.InfoHash != ep2Hash {
 		t.Fatalf("played %s, want the torrent downloaded ahead", session.InfoHash)
 	}
-	if n := idx.searches(); n != searched {
+	if n := idx.searchesFor(2); n != searched {
 		t.Errorf("searched %d more times for an episode already held", n-searched)
 	}
 	if n := torrentsAdded(engine); n != 2 {

@@ -21,12 +21,14 @@ const check = (ok, label, detail = '') => {
 check(await prepareLocalEpisode({ base: BASE, lib: process.env.YORU_LIB, anime: ANIME }), 'test episode ready')
 
 // The SDK's surface as the player uses it: one device, a session that records what it is asked to load.
+// window.__castNoTV before it loads: no device about until __castFound().
 const fakeSdk = `(() => {
   const listeners = {}
   const on = (t, f) => (listeners[t] ??= []).push(f)
   const off = (t, f) => (listeners[t] = (listeners[t] ?? []).filter((g) => g !== f))
   const fire = (t) => (listeners[t] ?? []).forEach((f) => f())
-  let state = 'NOT_CONNECTED'
+  let state = window.__castNoTV ? 'NO_DEVICES_AVAILABLE' : 'NOT_CONNECTED'
+  window.__castFound = () => { state = 'NOT_CONNECTED'; fire('caststatechanged') }
   const player = { currentTime: 0, duration: 0, isPaused: true, isConnected: false }
   const session = {
     getCastDevice: () => ({ friendlyName: 'Living Room TV' }),
@@ -94,14 +96,27 @@ try {
   const castButton = page.getByRole('button', { name: 'Cast to a TV' })
   check(await until(() => castButton.isVisible(), 15_000), 'the player offers a Cast button where a device is about')
 
-  // This instance answers on this machine only: the TV could not reach it, and Yoru says so.
+  // This instance answers on this machine only: the TV could not reach it, so the button says what casting needs.
   await castButton.click()
-  check(await until(() => page.getByText(/Turn on access from other devices/).isVisible()), 'casting with Yoru unreachable from the TV says what to turn on')
+  const needs = page.getByRole('dialog', { name: 'Cast to a TV' })
+  check(await until(() => needs.isVisible()), 'with Yoru unreachable from the TV, Cast lists what casting needs')
+  const need = (label) => needs.locator('li', { has: page.getByText(label, { exact: true }) })
+  check(await need('Access from other devices').getByLabel('Missing').isVisible(), 'naming access from other devices as missing')
+  check(await need('Access from other devices').getByRole('button', { name: 'Turn on' }).isVisible(), 'with Turn on right there')
+  check(await need('A browser that can cast').getByLabel('Done').isVisible() && await need('A secure address').getByLabel('Done').isVisible(),
+    'and what is already met as done')
+  await page.keyboard.press('Escape')
+  check(await until(async () => !(await needs.isVisible())), 'Escape closes it')
 
   // Reachable: the link the server signs is what the TV is given.
+  await page.route('**/api/access', (route) => route.fulfill({ json: { reachable: true, urls: [], canSwitch: true, host: true } }))
   await page.route('**/api/stream/*/cast', (route) => route.fulfill({ json: {
     url: `${BASE}/c/signed/playlist.m3u8`, subtitles: [{ index: 2, language: 'eng', url: `${BASE}/c/signed/sub-2.vtt` }],
   } }))
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await video.waitFor({ timeout: 30_000 })
+  await page.waitForFunction(() => (document.querySelector('video')?.readyState ?? 0) >= 2, null, { timeout: 30_000 }).catch(() => {})
+  await video.evaluate((v) => (v.currentTime = 42))
   await video.hover()
   await castButton.click()
   const loaded = await until(() => page.evaluate(() => !!window.__castLoaded), 8000) && await page.evaluate(() => window.__castLoaded)
@@ -155,6 +170,44 @@ try {
   check(burned?.media?.contentId === `${BASE}/c/burned/playlist.m3u8` && (burned?.media?.tracks ?? []).length === 0,
     'and the TV gets the picture with them, no text track beside', JSON.stringify(burned?.media ?? {}).slice(0, 160))
   await page.getByRole('button', { name: 'Stop casting', exact: true }).click().catch(() => {})
+
+  // No TV about: the button stays, and says what it is looking for; one turning up makes it ready.
+  await page.addInitScript(() => (window.__castNoTV = true))
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await video.waitFor({ timeout: 30_000 })
+  await video.hover()
+  check(await until(() => castButton.isVisible(), 15_000), 'with no TV found, the Cast button is still there')
+  await castButton.click()
+  check(await until(() => need('A TV on this Wi-Fi').getByText(/None found yet/).isVisible()), 'saying no TV is found yet, and what kind')
+  await sleep(400)
+  await page.screenshot({ path: `${SHOTS}/cast-needs.png` })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await sleep(400)
+  await page.screenshot({ path: `${SHOTS}/cast-needs-phone.png` })
+  const box = await needs.boundingBox()
+  check(!!box && box.x >= 0 && box.x + box.width <= 390, 'on a phone the list fits the screen', JSON.stringify(box))
+  // The bar's last button stays on screen beside Cast, with two audio tracks and subtitles in it too.
+  for (const width of [390, 360]) {
+    await page.setViewportSize({ width, height: 844 })
+    await sleep(200)
+    const fs = await page.getByRole('button', { name: 'Fullscreen' }).boundingBox()
+    check(!!fs && fs.x + fs.width <= width, `at ${width}px Fullscreen is still in the bar`, JSON.stringify(fs))
+  }
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.evaluate(() => window.__castFound())
+  check(await until(() => needs.getByRole('button', { name: 'Choose a TV' }).isVisible()), 'a TV turning up makes it ready to cast')
+
+  // A browser with casting turned off (Brave's Media Router): the button says how to turn it on.
+  await page.unroute('https://www.gstatic.com/cv/js/sender/**')
+  await page.route('https://www.gstatic.com/cv/js/sender/**', (route) =>
+    route.fulfill({ contentType: 'text/javascript', body: 'setTimeout(() => window.__onGCastApiAvailable?.(false), 50)' }))
+  await page.addInitScript(() => Object.defineProperty(navigator, 'brave', { value: { isBrave: async () => true } }))
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await video.waitFor({ timeout: 30_000 })
+  await video.hover()
+  await castButton.click()
+  check(await until(() => need('A browser that can cast').getByText(/turn on Media Router/).isVisible()), "in Brave with casting off, it names Brave's switch")
+  check(await need('A TV on this Wi-Fi').getByLabel('Not known yet').isVisible(), 'and cannot say yet whether a TV is about')
   check(errors.length === 0, 'no page errors', errors.join(' | '))
 } finally {
   await browser.close()

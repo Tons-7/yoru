@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"yoru/internal/proc"
 	"yoru/internal/sound"
 )
 
@@ -976,7 +977,7 @@ func (s *Session) startLocked(from int) error {
 
 func (s *Session) launch(from int) (*run, error) {
 	r := &run{from: from, exited: make(chan struct{}), began: time.Now(), id: int(passes.Add(1)), gathered: make(chan struct{})}
-	r.cmd = exec.Command(s.ffmpeg, s.args(r)...)
+	r.cmd = proc.Hide(exec.Command(s.ffmpeg, s.args(r)...))
 	r.cmd.Dir = s.dir
 	// Or an encoder dying on startup leaves no trace beyond segments that never come.
 	r.cmd.Stderr = &r.stderr

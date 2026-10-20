@@ -313,6 +313,11 @@ func TestHostOnlyRoutesRefusePairedDevices(t *testing.T) {
 		{"POST", "/api/access/network-settings", `{}`},
 		{"GET", "/api/torrent/firewall", ""},
 		{"POST", "/api/torrent/firewall", ""},
+		{"POST", "/api/app/exit", ""},
+		{"POST", "/api/app/show", ""},
+		{"GET", "/api/app/activity", ""},
+		{"GET", "/api/log", ""},
+		{"POST", "/api/log/folder", ""},
 	} {
 		req := httptest.NewRequest(route.method, route.path, strings.NewReader(route.body))
 		req.RemoteAddr = "192.168.1.50:5555"
