@@ -180,8 +180,7 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	assert.True(t, 13 <= leecherStats.BytesReadData.Int64())
 	assert.True(t, 8 <= leecherStats.ChunksRead.Int64())
 
-	// Try reading through again for the cases where the torrent data size
-	// exceeds the size of the cache.
+	// Again, for torrents bigger than the cache.
 	assertReadAllGreeting(t, r)
 }
 

@@ -35,6 +35,10 @@ func spa(assets fs.FS) http.Handler {
 		if strings.HasPrefix(name, "assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
+		// The alerts worker: a stale copy would keep old alert handling for a day.
+		if name == "sw.js" {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		// Go doesn't know this extension, and a plain-text manifest blocks installing the app.
 		if strings.HasSuffix(name, ".webmanifest") {
 			w.Header().Set("Content-Type", "application/manifest+json")

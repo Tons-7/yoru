@@ -9,12 +9,7 @@ import (
 	"github.com/anacrolix/missinggo/expect"
 )
 
-//----------------------------------------------------------------------------
-// Errors
-//----------------------------------------------------------------------------
-
-// In case if marshaler cannot encode a type, it will return this error. Typical
-// example of such type is float32/float64 which has no bencode representation.
+// MarshalTypeError is a type bencode can't represent, such as float32/float64.
 type MarshalTypeError struct {
 	Type reflect.Type
 }
@@ -45,8 +40,7 @@ type UnmarshalTypeError struct {
 	UnmarshalTargetType reflect.Type
 }
 
-// This could probably be a value type, but we may already have users assuming
-// that it's passed by pointer.
+// A pointer receiver, as callers may already assume one.
 func (e *UnmarshalTypeError) Error() string {
 	return fmt.Sprintf(
 		"can't unmarshal a bencode %v into a %v",
@@ -77,8 +71,7 @@ func (e *SyntaxError) Error() string {
 	return fmt.Sprintf("bencode: syntax error (offset: %d): %s", e.Offset, e.What)
 }
 
-// A non-nil error was returned after calling MarshalBencode on a type which
-// implements the Marshaler interface.
+// MarshalerError is the error a type's MarshalBencode returned.
 type MarshalerError struct {
 	Type reflect.Type
 	Err  error
@@ -88,8 +81,7 @@ func (e *MarshalerError) Error() string {
 	return "bencode: error calling MarshalBencode for type " + e.Type.String() + ": " + e.Err.Error()
 }
 
-// A non-nil error was returned after calling UnmarshalBencode on a type which
-// implements the Unmarshaler interface.
+// UnmarshalerError is the error a type's UnmarshalBencode returned.
 type UnmarshalerError struct {
 	Type reflect.Type
 	Err  error
@@ -99,24 +91,17 @@ func (e *UnmarshalerError) Error() string {
 	return "bencode: error calling UnmarshalBencode for type " + e.Type.String() + ": " + e.Err.Error()
 }
 
-//----------------------------------------------------------------------------
-// Interfaces
-//----------------------------------------------------------------------------
-
-// Any type which implements this interface, will be marshaled using the
-// specified method.
+// A Marshaler encodes itself with MarshalBencode.
 type Marshaler interface {
 	MarshalBencode() ([]byte, error)
 }
 
-// Any type which implements this interface, will be unmarshaled using the
-// specified method.
+// An Unmarshaler decodes itself with UnmarshalBencode.
 type Unmarshaler interface {
 	UnmarshalBencode([]byte) error
 }
 
-// Marshal the value 'v' to the bencode form, return the result as []byte and
-// an error if any.
+// Marshal returns v's bencode form.
 func Marshal(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	e := Encoder{w: &buf}
@@ -133,10 +118,8 @@ func MustMarshal(v any) []byte {
 	return b
 }
 
-// Unmarshal the bencode value in the 'data' to a value pointed by the 'v' pointer, return a non-nil
-// error if any. If there are trailing bytes, this results in ErrUnusedTrailingBytes, but the value
-// will be valid. It's probably more consistent to use Decoder.Decode if you want to rely on this
-// behaviour (inspired by Rust's serde here).
+// Unmarshal decodes data into the value v points to. Trailing bytes give ErrUnusedTrailingBytes with v still
+// set; Decoder.Decode is the steadier way to rely on that.
 func Unmarshal(data []byte, v any) (err error) {
 	buf := bytes.NewReader(data)
 	dec := Decoder{r: buf}

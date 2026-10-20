@@ -7,6 +7,8 @@ import './index.css'
 import { App } from './App'
 import { Toaster } from './components/Toaster'
 import { toast } from './lib/toast'
+import { desktopNotifyWanted } from './lib/notifications'
+import { registerWorker } from './lib/push'
 
 const client = new QueryClient({
   // A failed action says so, unless meta.inline shows it beside the control instead.
@@ -31,6 +33,22 @@ const client = new QueryClient({
     },
   },
 })
+
+// An update replaced the build under an open page: its old chunks are gone, so load the new one, once.
+window.addEventListener('vite:preloadError', (e) => {
+  try {
+    if (sessionStorage.getItem('yoru.reloaded-for-update') === location.pathname) return
+    sessionStorage.setItem('yoru.reloaded-for-update', location.pathname)
+  } catch {
+    // Unstorable: no guard against a loop, so leave the error to the page.
+    return
+  }
+  e.preventDefault()
+  location.reload()
+})
+
+// While alerts are wanted, the alerts worker is registered again, so an update to it takes over.
+if (desktopNotifyWanted()) void registerWorker()?.catch(() => {})
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

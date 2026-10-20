@@ -123,10 +123,11 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Counted as usable, and the rest named: a bad block is skipped at startup.
+	// Counted as usable, and the rest named: a bad one is skipped, not searched.
 	usable, bad := 0, []string{}
-	for _, in := range s.cfg.Indexers {
-		if _, err := indexer.Build(in.Type, in.URL, in.Adult); err != nil {
+	sites, _, _ := LoadSites(r.Context(), s.store, s.cfg)
+	for _, site := range sites {
+		if _, err := indexer.Build(site.Type, site.URL, site.Adult); err != nil {
 			bad = append(bad, err.Error())
 		} else {
 			usable++

@@ -9,6 +9,7 @@ import {
   useDownloadQueue,
   useDownloads,
   useNotifications,
+  usePrefs,
   useSpeedUnit,
   type Download,
   type Notification,
@@ -32,6 +33,7 @@ import {
 import { useClampPage, useDebounced } from '../lib/hooks'
 import { buttonClass } from '../lib/ui'
 import { notificationTarget } from '../lib/notifications'
+import { toast } from '../lib/toast'
 import { ReleasePicker } from '../components/ReleasePicker'
 
 export function Notifications() {
@@ -239,11 +241,22 @@ function PackEpisodes({ hash }: { hash: string }) {
     <div className="mt-2">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="text-xs text-base-500 hover:text-base-200"
+        aria-expanded={open}
+        className="tap relative py-1 text-xs text-base-500 hover:text-base-200"
       >
         {open ? 'Hide episodes' : 'Keep episodes one by one…'}
       </button>
-      {open && (
+      {/* Empty read as "no episodes" while the list loaded, and forever when it failed. */}
+      {open && files.isPending && <Skeleton className="mt-1 h-16 w-full" />}
+      {open && files.isError && (
+        <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-recap">
+          {(files.error as Error).message}
+          <button onClick={() => void files.refetch()} className="text-accent-300 hover:underline">
+            Try again
+          </button>
+        </p>
+      )}
+      {open && files.isSuccess && (
         <ul className="mt-1 grid gap-1 sm:grid-cols-2">
           {(files.data?.items ?? []).map((f) => (
             <li
@@ -252,7 +265,7 @@ function PackEpisodes({ hash }: { hash: string }) {
             >
               <span className="text-base-300">
                 Episode {f.epKey}
-                {!f.complete && <span className="text-base-600"> · downloading</span>}
+                {!f.complete && <span className="text-base-500"> · downloading</span>}
               </span>
               <button
                 onClick={() => keep.mutate(f)}
@@ -293,6 +306,11 @@ export function Downloads() {
 
   const { data, isPending, isError, error, refetch } = useDownloads()
   const queue = useDownloadQueue()
+  // Settings can have kept downloads deleted after watching; the page says so instead of promising they stay.
+  const prefs = usePrefs()
+  const keptGo =
+    (prefs.data?.effective['cache.autodelete'] ?? 'off') !== 'off' &&
+    prefs.data?.effective['cache.autodelete_downloads'] === 'true'
 
   const done = () => {
     setConfirmClear(false)
@@ -346,6 +364,12 @@ export function Downloads() {
   const remove = useMutation({
     meta: { inline: true },
     mutationFn: (hashes: string[]) => Promise.all(hashes.map((h) => api.del(`/api/downloads/${h}`))),
+    // Said where the viewer is, with a way to try again: a line at the top of a long list went unseen.
+    onError: (err, hashes) =>
+      toast(`Couldn't delete: ${(err as Error).message}`, 'error', {
+        label: 'Try again',
+        run: () => remove.mutate(hashes),
+      }),
     // Settled, not succeeded: some of a show's files may be gone even when one delete failed.
     onSettled: () => {
       setConfirmRemove(null)
@@ -386,8 +410,13 @@ export function Downloads() {
       for (const d of ds) setKept(qc, d.infoHash, !d.kept)
       return { previous }
     },
-    onError: (_err, _ds, context) => {
+    onError: (err, ds, context) => {
       if (context?.previous) qc.setQueryData(['downloads'], context.previous)
+      // The fill reverting said nothing by itself.
+      toast(`Couldn't change what is kept: ${(err as Error).message}`, 'error', {
+        label: 'Try again',
+        run: () => keep.mutate(ds),
+      })
     },
     onSuccess: (res) => res.forEach((r) => setKept(qc, r.infoHash, r.kept)),
     onSettled: done,
@@ -487,13 +516,17 @@ export function Downloads() {
       />
 
       {isError && data && <RefreshFailed retry={() => refetch()} />}
-      {(remove.isError || clear.isError || keep.isError) && (
-        <p className="text-xs text-recap">
-          {((remove.error ?? clear.error ?? keep.error) as Error)?.message}
-        </p>
-      )}
+      {clear.isError && <p className="text-xs text-recap">{(clear.error as Error).message}</p>}
 
       {/* Said outright: a paused queue otherwise looks like downloads that will not start. */}
+      {keptGo && (data?.items.length ?? 0) > 0 && (
+        <p role="status" className={cx(card, 'flex items-center justify-between gap-3 px-3 py-2 text-sm text-base-200')}>
+          Downloaded episodes are deleted once watched.
+          <Link to="/settings?tab=Storage" className="text-xs font-medium text-accent-300 hover:underline">
+            Change
+          </Link>
+        </p>
+      )}
       {queuePaused && (
         <p role="status" className={cx(card, 'flex items-center justify-between gap-3 px-3 py-2 text-sm text-base-200')}>
           Downloads are paused. Nothing starts until you resume.
@@ -532,7 +565,11 @@ export function Downloads() {
       ) : rows.length === 0 ? (
         <Empty
           title="Nothing downloaded"
-          hint="Episodes you watch are cached here, and anything you download stays until you remove it."
+          hint={
+            keptGo
+              ? 'Episodes you watch are cached here; downloads too are deleted once watched (Settings › Storage).'
+              : 'Episodes you watch are cached here, and anything you download stays until you remove it.'
+          }
           icon={<DownloadIcon />}
           action={<LinkButton to="/recent">Find something to watch</LinkButton>}
         />
@@ -796,7 +833,7 @@ function DownloadRow({
             </p>
           )}
           {d.title && (numbers || !nested) && (
-            <p className="truncate text-xs text-base-600" title={d.name}>
+            <p className="truncate text-xs text-base-500" title={d.name}>
               {d.name}
             </p>
           )}
@@ -911,7 +948,7 @@ function Group({ label, meta }: { label: string; meta?: string }) {
   return (
     <li className="flex items-baseline justify-between gap-3 px-1 pt-3 first:pt-0">
       <span className="text-[11px] font-semibold tracking-wider text-base-400 uppercase">{label}</span>
-      {meta && <span className="text-[11px] text-base-600">{meta}</span>}
+      {meta && <span className="text-[11px] text-base-500">{meta}</span>}
     </li>
   )
 }
@@ -938,7 +975,8 @@ function QueueRow({
   const got = q.torrent
   return (
     <li className={cx(card, 'group p-3')}>
-      <div className="flex items-center gap-3">
+      {/* Wraps on a phone, as a download row does: an open delete confirm pushed Cancel off the card. */}
+      <div className="flex items-center gap-3 max-sm:flex-wrap">
       <Gutter>{position}</Gutter>
       {q.cover ? (
         <img src={q.cover} alt="" loading="lazy" className="h-14 w-10 shrink-0 rounded object-cover shadow-card" />
@@ -958,11 +996,11 @@ function QueueRow({
           </p>
         )}
         {got ? (
-          <p className="truncate text-xs text-base-600" title={got.name}>
+          <p className="truncate text-xs text-base-500" title={got.name}>
             {got.name}
           </p>
         ) : q.release ? (
-          <p className="truncate text-xs text-base-600" title={q.release}>
+          <p className="truncate text-xs text-base-500" title={q.release}>
             Chosen: {q.release}
           </p>
         ) : (
@@ -976,7 +1014,7 @@ function QueueRow({
         )}
       </div>
 
-      <div className="flex shrink-0 items-center gap-1.5">
+      <div className={rail}>
         <button
           onClick={onChangeRelease}
           aria-label={`Change release for episode ${q.episode}`}
@@ -1079,8 +1117,8 @@ function AssignFile({ file, onDone }: { file: LocalFile; onDone: () => void }) {
     mutationFn: () =>
       api.post('/api/local/assign', { id: file.id, animeId: picked!.id, episode: Number(episode) }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['localFiles'] })
-      void qc.invalidateQueries({ queryKey: ['local'] })
+      // The show's episode list marks what is on disk and counts Download all without it.
+      for (const key of ['localFiles', 'local', 'episodes', 'anime']) void qc.invalidateQueries({ queryKey: [key] })
       onDone()
     },
   })

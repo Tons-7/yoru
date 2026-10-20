@@ -10,9 +10,8 @@ import (
 	"yoru/internal/bt/bencode"
 )
 
-// Check that if we can unmarshal a Msg that we can marshal it back without an error. We
-// intentionally don't require that it marshals back to the same bytes as fields unknown to Msg may
-// have been dropped. But if it does, then I think that makes it an "interesting" case.
+// A Msg that unmarshals marshals back without error; not to the same bytes, as unknown fields go, but
+// one that does is an interesting case.
 func Fuzz(f *testing.F) {
 	f.Add([]byte("d1:rd2:id20:\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01e1:t1:t1:y1:re"))
 	f.Fuzz(func(t *testing.T, in []byte) {

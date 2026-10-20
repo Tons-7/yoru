@@ -82,11 +82,11 @@ export function NotificationPanel() {
                   </span>
                 )}
               </p>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1 pointer-coarse:gap-2">
                 {unread > 0 && !confirmClear && (
                   <button
                     onClick={() => markRead.mutate(undefined)}
-                    className="rounded px-1.5 py-0.5 text-[11px] text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+                    className="rounded px-1.5 py-0.5 text-[11px] text-base-400 transition-colors hover:bg-base-800 hover:text-white pointer-coarse:min-h-11 pointer-coarse:px-3"
                   >
                     Mark all read
                   </button>
@@ -106,7 +106,7 @@ export function NotificationPanel() {
                   ) : (
                     <button
                       onClick={() => setConfirmClear(true)}
-                      className="rounded px-1.5 py-0.5 text-[11px] text-base-400 transition-colors hover:bg-base-800 hover:text-recap"
+                      className="rounded px-1.5 py-0.5 text-[11px] text-base-400 transition-colors hover:bg-base-800 hover:text-recap pointer-coarse:min-h-11 pointer-coarse:px-3"
                     >
                       Clear
                     </button>
@@ -137,7 +137,7 @@ export function NotificationPanel() {
             <Link
               to="/notifications"
               onClick={close}
-              className="block border-t border-base-750 px-3 py-2 text-center text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+              className="block border-t border-base-750 px-3 py-2 text-center text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white pointer-coarse:py-3"
             >
               See all
             </Link>
@@ -212,11 +212,26 @@ function useDesktopNotifications(items?: Notification[]) {
     }
     if (!first && desktopNotifyWanted() && Notification.permission === 'granted') {
       for (const n of items.filter((n) => n.id > seen && !n.read).reverse()) {
-        const note = new Notification(n.title, { body: n.body, tag: `yoru-${n.id}` })
-        note.onclick = () => {
-          window.focus()
-          window.location.assign(notificationTarget(n))
-        }
+        // The tag and link a pushed alert for it carries, so one shown both ways collapses into one.
+        const target = new URL(notificationTarget(n), window.location.href).href
+        const options = { body: n.body, tag: `yoru-${n.id}`, data: { url: target } }
+        // Through the alerts worker where there is one: Android has no page notifications ("Illegal
+        // constructor"), and that throw would blank the app.
+        void (navigator.serviceWorker?.getRegistration() ?? Promise.resolve(undefined))
+          .catch(() => undefined)
+          .then((reg) => {
+            if (reg) return reg.showNotification(n.title, options)
+            try {
+              const note = new Notification(n.title, options)
+              note.onclick = () => {
+                window.focus()
+                window.location.assign(target)
+              }
+            } catch {
+              // Nowhere to show it.
+            }
+          })
+          .catch(() => {})
       }
     }
     if (newest > seen || first) {

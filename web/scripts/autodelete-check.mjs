@@ -1,186 +1,127 @@
-// Auto-delete "keep last 2": going back to an early episode, then on, keeps the one just left.
-//   YORU_NYAA=<url> YORU_TOKYOTOSHO=<url> [SKIP_BUILD=1] node scripts/autodelete-check.mjs
-import { spawn, spawnSync, execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync, existsSync, openSync, readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { dirname, join, resolve } from 'node:path'
-import { tmpdir } from 'node:os'
+// Auto-delete "keep last 2" on a local swarm (scripts/e2e-swarm, the instance's only site): going back to an
+// early episode, then on, keeps the one just left. Run by release-check, as prefetch-check is.
+import { execFileSync, spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { createInterface } from 'node:readline'
+import { join } from 'node:path'
 import { chromium } from 'playwright'
-import { linkBin } from './harness-lib.mjs'
 
-const scriptDir = dirname(fileURLToPath(import.meta.url))
-const webDir = resolve(scriptDir, '..')
-const repo = resolve(webDir, '..')
+const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
+const ANIME = Number(process.env.YORU_ANIME ?? 127230)
+const LIB = process.env.YORU_LIB
+const REPO = process.env.YORU_REPO
+// The same arithmetic as run-player-check.mjs: the engine's peer port, and the indexer port it wrote.
+const PORT = Number(new URL(BASE).port)
+const PEER_PORT = PORT === 4399 ? 4341 : PORT - 60
+const SEED_PORT = PEER_PORT + 1000
+const EPISODES = 4
+const PROGRESS = 3
 
-const PORT = process.env.PORT ?? '4397'
-const URL = `http://127.0.0.1:${PORT}`
-const ANIME = 185874
-const PROGRESS = 6
-const NYAA = process.env.YORU_NYAA
-const TOKYO = process.env.YORU_TOKYOTOSHO
-
-const exe = (name) => (process.platform === 'win32' ? `${name}.exe` : name)
-const scratch = join(tmpdir(), 'yoru-autodelete-e2e')
-const root = join(scratch, 'root')
-const appdata = join(scratch, 'appdata')
-const binCache = join(tmpdir(), 'yoru-e2e-bin')
-const yoruExe = join(binCache, exe('yoru'))
-const serverLog = join(scratch, 'server.log')
-
-let server
 let failures = 0
 const check = (ok, label, detail = '') => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}${detail ? ` — ${detail}` : ''}`)
   if (!ok) failures++
 }
-const stage = (msg) => console.log(`\n▶ ${msg}`)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const until = async (fn, ms = 10000) => {
+const until = async (fn, ms = 30_000) => {
   const end = Date.now() + ms
   while (Date.now() < end) {
-    if (await fn()) return true
-    await sleep(500)
+    if (await Promise.resolve().then(fn).catch(() => false)) return true
+    await sleep(250)
   }
   return false
 }
-const api = async (p, init) => {
-  const res = await fetch(URL + p, { ...init, headers: { 'content-type': 'application/json' } })
-  let body
-  try {
-    body = await res.json()
-  } catch {}
-  return { ok: res.ok, body }
-}
-const post = (p, b) => api(p, { method: 'POST', body: JSON.stringify(b) })
-const go = (page, path) =>
-  page.evaluate((target) => {
-    window.history.pushState({}, '', target)
-    window.dispatchEvent(new PopStateEvent('popstate'))
-  }, path)
-
+const get = async (p) => (await fetch(BASE + p)).json()
+const post = (p, b) =>
+  fetch(BASE + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) })
 // Which of the show's episodes the Downloads list still holds.
-const held = async () => {
-  const { body } = await api('/api/downloads')
-  return (body?.items ?? []).filter((d) => d.animeId === ANIME).flatMap((d) => d.episodes)
-}
+const held = async () =>
+  ((await get('/api/downloads')).items ?? [])
+    .filter((d) => d.animeId === ANIME)
+    .flatMap((d) => [d.episode, ...(d.episodes ?? [])].filter(Boolean).map(String))
+const serverLog = join(LIB, '..', 'server.log')
 const logLines = () =>
   readFileSync(serverLog, 'utf8')
     .split('\n')
-    .filter((l) => /removed|evict|paused|abandoned|superseded|orphan|sweep|auto-delete/i.test(l))
+    .filter((l) => /removed|evict|auto-delete|superseded|orphan/i.test(l))
     .map((l) => l.replace(/^time=\S+ /, ''))
 
-function killTree(child) {
-  if (!child || child.exitCode !== null) return
+await until(async () => (await fetch(`${BASE}/api/setup`)).ok, 60_000)
+const title = (await get(`/api/anime/${ANIME}`)).title
+check(!!title, 'the show is known to the instance', title)
+
+// The swarm: one torrent per episode, plus the site that lists them.
+const swarm = spawn('go', ['run', './scripts/e2e-swarm',
+  '-src', join(LIB, 'Yoru Test Show - 01.mkv'), '-dir', join(LIB, '..', 'swarm'), '-title', title,
+  '-count', String(EPISODES), '-listen', String(SEED_PORT), '-peer', `127.0.0.1:${PEER_PORT}`,
+  '-http', `127.0.0.1:${PORT + 2000}`,
+], { cwd: REPO, stdio: ['ignore', 'pipe', 'inherit'] })
+const killSwarm = () => {
   try {
-    if (process.platform === 'win32') {
-      execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
-    } else {
-      process.kill(-child.pid, 'SIGKILL')
-    }
+    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(swarm.pid), '/T', '/F'], { stdio: 'ignore' })
+    else process.kill(-swarm.pid, 'SIGKILL')
   } catch {}
 }
-
-try {
-  if (!NYAA || !TOKYO) throw new Error('set YORU_NYAA and YORU_TOKYOTOSHO')
-  stage(`scratch instance at ${scratch}`)
-  rmSync(scratch, { recursive: true, force: true })
-  for (const d of [scratch, root, appdata]) mkdirSync(d, { recursive: true })
-  linkBin(join(repo, 'bin'), join(root, 'bin'))
-  writeFileSync(
-    join(root, 'config.toml'),
-    // Its own engine: the default port is the real app's, and this test deletes downloads.
-    `addr = "127.0.0.1:${PORT}"\n\n[torrent]\nlisten_port = 4344\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "${NYAA}"\n\n[[indexer]]\ntype = "tokyotosho"\nurl = "${TOKYO}"\n`,
-  )
-
-  if (process.env.SKIP_BUILD !== '1') {
-    stage('building')
-    const r1 = spawnSync('npm run build', [], { cwd: webDir, shell: true, stdio: 'inherit' })
-    if (r1.status !== 0) throw new Error('web build failed')
-    mkdirSync(binCache, { recursive: true })
-    const r2 = spawnSync('go', ['build', '-o', yoruExe, './cmd/yoru'], { cwd: repo, stdio: 'inherit' })
-    if (r2.status !== 0) throw new Error('go build failed')
-  }
-
-  stage('starting server')
-  const logFd = openSync(serverLog, 'w')
-  server = spawn(yoruExe, [], {
-    cwd: root,
-    // APPDATA too: the engine imports rqbit's per-user session when it has none.
-    env: { ...process.env, YORU_ROOT: root, LOCALAPPDATA: appdata, APPDATA: appdata, YORU_NO_WINDOW: '1' },
-    stdio: ['ignore', logFd, logFd],
-    detached: process.platform !== 'win32',
+process.on('exit', killSwarm)
+const ready = await new Promise((resolve) => {
+  const lines = createInterface({ input: swarm.stdout })
+  const timer = setTimeout(() => resolve(false), 180_000)
+  lines.on('line', (line) => {
+    if (line.startsWith('{') && JSON.parse(line).ready) {
+      clearTimeout(timer)
+      resolve(true)
+    }
   })
-  for (let i = 0; i < 90; i++) {
-    try {
-      if ((await fetch(`${URL}/api/setup`)).ok) break
-    } catch {}
-    if (server.exitCode !== null) throw new Error(`server exited early; see ${serverLog}`)
-    await sleep(1000)
-  }
+})
+check(ready, 'the swarm seeds one torrent per episode')
+if (!ready) process.exit(1)
 
-  // The user's settings.
-  for (const [key, value] of [
-    ['cache.autodelete', 'keep2'],
-    ['cache.autodelete_downloads', 'true'],
-    ['playback.autonext', 'true'],
-    ['playback.autoplay', 'true'],
-  ]) {
-    await post('/api/prefs', { key, value })
-  }
-
-  const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] })
-  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
-  const video = page.locator('video')
-  const streaming = () => video.evaluate((v) => v.readyState >= 1).catch(() => false)
-
-  stage(`series page, list progress ${PROGRESS}`)
-  await page.goto(`${URL}/`, { waitUntil: 'domcontentloaded' })
-  await go(page, `/anime/${ANIME}`)
-  await until(() => page.getByRole('heading', { name: /bleach/i }).first().isVisible().catch(() => false), 60000)
-  const marked = await post('/api/watched', { animeId: ANIME, episode: PROGRESS })
-  check(marked.ok, `progress set to ${PROGRESS}`)
-
-  stage('play episode 1, leave it mid-way for episode 2')
-  await go(page, `/watch/${ANIME}/1`)
-  check(await until(streaming, 300000), 'episode 1 streams')
-  await sleep(15000)
-  check((await held()).includes('1'), 'episode 1 is in Downloads while playing', JSON.stringify(await held()))
-
-  await go(page, `/watch/${ANIME}/2`)
-  check(await until(streaming, 300000), 'episode 2 streams')
-  await sleep(20000)
-  let after = await held()
-  check(after.includes('1'), 'episode 1 SURVIVES leaving it mid-way', JSON.stringify(after))
-
-  if (process.env.ONLY_MIDWAY === '1') throw new Error('stopping after the mid-way phase')
-  stage('back to episode 1, play it out, auto-next to 2')
-  await go(page, `/watch/${ANIME}/1`)
-  check(await until(streaming, 300000), 'episode 1 streams again')
-  await video.evaluate((v) => {
-    v.currentTime = Math.max(0, v.duration - 8)
-    void v.play()
-  })
-  check(await until(() => page.url().endsWith(`/watch/${ANIME}/2`), 90000), 'auto-next moved to episode 2', page.url())
-  await until(streaming, 300000)
-  await sleep(20000)
-  after = await held()
-  check(after.includes('1'), 'episode 1 SURVIVES being played to the end', JSON.stringify(after))
-
-  console.log('\nserver log, deletion-related lines:')
-  for (const l of logLines()) console.log('  ' + l)
-  await browser.close()
-} catch (err) {
-  console.error(`\n✗ ${err.message}`)
-  failures++
-} finally {
-  killTree(server)
-  console.log(failures === 0 ? '\nall checks passed' : `\n${failures} check(s) failed`)
-  if (process.env.KEEP !== '1') {
-    try {
-      rmSync(scratch, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
-    } catch {}
-  } else {
-    console.log(`scratch kept at ${scratch}`)
-  }
-  process.exit(failures === 0 ? 0 : 1)
+// The user's settings, and a list a few episodes in.
+for (const [key, value] of [
+  ['cache.autodelete', 'keep2'],
+  ['cache.autodelete_downloads', 'true'],
+  ['playback.autonext', 'true'],
+  ['playback.autoplay', 'true'],
+]) {
+  await post('/api/prefs', { key, value })
 }
+check((await post('/api/watched', { animeId: ANIME, episode: PROGRESS })).ok, `progress set to ${PROGRESS}`)
+
+const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] })
+const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+const errors = []
+page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
+const playing = () => page.evaluate(() => {
+  const v = document.querySelector('video')
+  return !!v && v.currentTime > 1 && !v.paused
+})
+
+// 1. Episode 1 left mid-way for episode 2: the one just left stays.
+await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
+check(await until(playing, 120_000), 'episode 1 plays')
+check(await until(async () => (await held()).includes('1'), 60_000), 'episode 1 is in Downloads while it plays', JSON.stringify(await held()))
+await page.goto(`${BASE}/watch/${ANIME}/2`, { waitUntil: 'domcontentloaded' })
+check(await until(playing, 120_000), 'episode 2 plays')
+await sleep(10_000)
+check((await held()).includes('1'), 'episode 1 SURVIVES leaving it mid-way', JSON.stringify(await held()))
+
+// 2. Back to episode 1, played out, auto-next on to 2: still kept, as the last two watched stay.
+await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
+check(await until(playing, 120_000), 'episode 1 plays again')
+await page.evaluate(() => {
+  const v = document.querySelector('video')
+  v.currentTime = Math.max(0, v.duration - 8)
+  void v.play()
+})
+check(await until(() => page.url().endsWith(`/watch/${ANIME}/2`), 90_000), 'auto-next moves on to episode 2', page.url())
+await until(playing, 120_000)
+await sleep(10_000)
+check((await held()).includes('1'), 'episode 1 SURVIVES being played to the end', JSON.stringify(await held()))
+
+check(errors.length === 0, 'no page errors', errors.join(' | '))
+console.log('\nserver log, deletion-related lines:')
+for (const l of logLines()) console.log('  ' + l)
+await browser.close()
+killSwarm()
+console.log(failures ? `\n${failures} FAILED` : '\nall passed')
+process.exit(failures ? 1 : 0)

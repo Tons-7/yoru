@@ -13,9 +13,7 @@ type Store interface {
 	Del(Target) error
 }
 
-// Wrapper is in charge of validate all new items and
-// decide when to store, or ignore them depending of the BEP 44 definition.
-// It is also in charge of removing expired items.
+// Wrapper checks new items, stores or ignores them as BEP 44 says, and removes expired ones.
 type Wrapper struct {
 	s   Store
 	exp time.Duration

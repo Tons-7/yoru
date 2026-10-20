@@ -6,8 +6,14 @@ import (
 	g "github.com/anacrolix/generics"
 )
 
+// Holepunch stats only: a long-running client fails most dials, so each set starts over at a cap.
+const holepunchSetMax = 4096
+
 func setAdd[K comparable](m *map[K]struct{}, elem K) {
 	g.MakeMapIfNil(m)
+	if len(*m) >= holepunchSetMax {
+		clear(*m)
+	}
 	(*m)[elem] = struct{}{}
 }
 
@@ -23,9 +29,8 @@ type clientHolepunchAddrSets struct {
 type ClientStats struct {
 	TorrentStats
 
-	// Ongoing outgoing dial attempts. There may be more than one dial going on per peer address due
-	// to hole-punch connect requests. The total may not match the sum of attempts for all Torrents
-	// if a Torrent is dropped while there are outstanding dials.
+	// Dials under way, several per address with holepunch connects; more than the Torrents' sum when one
+	// was dropped mid-dial.
 	ActiveHalfOpenAttempts int
 
 	NumPeersUndialableWithoutHolepunch int

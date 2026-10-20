@@ -12,14 +12,12 @@ import (
 	"runtime/pprof"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 	"unique"
 
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/generics/heap"
 	"github.com/anacrolix/missinggo/v2/panicif"
-	"github.com/davecgh/go-spew/spew"
 	"yoru/internal/bt/internal/extracmp"
 
 	"yoru/internal/bt/internal/request-strategy"
@@ -65,9 +63,6 @@ func (cl *Client) updateWebseedRequests() {
 	aprioriMap := cl.aprioriMap
 	clear(aprioriMap)
 	for uniqueKey, value := range cl.iterPossibleWebseedRequests() {
-		//if len(aprioriMap) >= webseedHostRequestConcurrency {
-		//	break
-		//}
 		if g.MapContains(existingRequests, uniqueKey) {
 			continue
 		}
@@ -79,9 +74,8 @@ func (cl *Client) updateWebseedRequests() {
 			hasPeerConnRequest := func(reqIndex RequestIndex) bool {
 				return t.requestingPeer(reqIndex) != nil
 			}
-			// Skip the webseed request unless it has a higher priority, is less requested by peer
-			// conns, or has a lower start offset. Including peer conn requests here will bump
-			// webseed requests in favour of peer conns unless there's nothing else to do.
+			// Only a higher priority, fewer peer requests or an earlier start replaces it: counting peers'
+			// requests leaves webseeds what peers aren't fetching.
 			if cmp.Or(
 				cmp.Compare(value.priority, cur.priority),
 				extracmp.CompareBool(hasPeerConnRequest(cur.startRequest), hasPeerConnRequest(value.startRequest)),
@@ -145,9 +139,6 @@ func (cl *Client) updateWebseedRequests() {
 				cmp.Compare(len(l.t.conns), len(r.t.conns)),
 				// Try to complete partial slices first.
 				-extracmp.CompareBool(l.mightHavePartialFiles, r.mightHavePartialFiles),
-				// No need to prefer longer files anymore now that we're using slices?
-				//// Longer files first.
-				//-cmp.Compare(l.longestFile().Unwrap(), r.longestFile().Unwrap()),
 				// Easier to debug than infohashes...
 				cmp.Compare(l.t.info.Name, r.t.info.Name),
 				bytes.Compare(l.t.canonicalShortInfohash()[:], r.t.canonicalShortInfohash()[:]),
@@ -156,9 +147,7 @@ func (cl *Client) updateWebseedRequests() {
 			)
 			// Requests should be unique unless they're for different URLs.
 			if ret == 0 && l.url == r.url {
-				cfg := spew.NewDefaultConfig()
-				cfg.Dump(l)
-				cfg.Dump(r)
+				fmt.Printf("%+v\n%+v\n", l, r)
 				panic("webseed request heap ordering is not stable")
 			}
 			return ret < 0
@@ -202,13 +191,6 @@ func (cl *Client) updateWebseedRequests() {
 		value.existingWebseedRequest.Cancel("deprioritized", key.t)
 	}
 
-	printPlan := sync.OnceFunc(func() {
-		if webseed.PrintDebug {
-			//fmt.Println(plan)
-			//fmt.Println(formatMap(existingRequests))
-		}
-	})
-
 	// TODO: Do we deduplicate requests across different webseeds?
 
 	for costKey, plannedRequests := range plan.byCost {
@@ -230,7 +212,6 @@ func (cl *Client) updateWebseedRequests() {
 			t := request.t
 			peer := t.webSeeds[request.url]
 			panicif.NotEq(peer.hostKey, costKey)
-			printPlan()
 
 			debugLogger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 				Level:     slog.LevelDebug,
@@ -262,8 +243,7 @@ func init() {
 func (t *Torrent) getWebseedRequestEnd(begin RequestIndex, slice webseedSliceIndex, debugLogger *slog.Logger) RequestIndex {
 	chunkEnd := t.endRequestForAlignedWebseedResponse(slice)
 	if !shortenWebseedRequests {
-		// Pending fix to pendingPieces matching piece request order due to missing initial pieces
-		// checks?
+		// Until pendingPieces matches the piece request order (initial piece checks are missing?).
 		return chunkEnd
 	}
 	// Shorten webseed requests to avoid being penalized by webseeds for cancelling requests.
@@ -362,8 +342,7 @@ func (me webseedUniqueRequestKey) String() string {
 // Non-distinct proposed webseed request data.
 type webseedRequestOrderValue struct {
 	aprioriMapValue
-	// Used for cancellation if this is deprioritized. Also, a faster way to sort for existing
-	// requests.
+	// To cancel if deprioritized, and a quicker sort for existing requests.
 	existingWebseedRequest *webseedRequest
 }
 
@@ -389,9 +368,7 @@ func (cl *Client) iterPossibleWebseedRequests() iter.Seq2[webseedUniqueRequestKe
 					if !cleanOpt.Ok {
 						return true
 					}
-					// Pretty sure we want this and not the order state priority. That one is for
-					// client piece request order and ignores other states like hashing, marking
-					// etc. Order state priority would be faster otherwise.
+					// Not the order's priority, which is quicker but ignores hashing, marking and the like.
 					priority := p.effectivePriority()
 					firstRequest := p.requestIndexBegin() + cleanOpt.Value
 					panicif.GreaterThanOrEqual(firstRequest, t.maxEndRequest())
@@ -509,10 +486,8 @@ func (cl *Client) scheduleImmediateWebseedRequestUpdate(reason updateRequestReas
 		// Timer function already running, let it do its thing.
 		return
 	}
-	// Set the timer to fire right away (this will coalesce consecutive updates without forcing an
-	// update on every call to this method). Since we're holding the Client lock, and we cancelled
-	// the timer, and it wasn't active, nobody else should have reset it before us. Do we need to
-	// introduce a "reason" field here, (albeit Client-level?).
+	// Due at once, coalescing calls in a row; under the Client lock with the timer stopped, nobody
+	// else can have reset it.
 	cl.webseedUpdateReason = cmp.Or(cl.webseedUpdateReason, reason)
 	panicif.True(cl.webseedRequestTimer.Reset(0))
 }

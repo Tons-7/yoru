@@ -77,7 +77,7 @@ func TestPlayerExitReleasesTheEpisode(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.store.PinOnly(ctx, goodHash, 0); err != nil {
+	if err := p.store.PinCache(ctx, goodHash, 0, true); err != nil {
 		t.Fatal(err)
 	}
 	p.yieldMu.Lock()
@@ -116,7 +116,7 @@ func TestStaleTrackerDoesNotUnpin(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.store.PinOnly(ctx, goodHash, 0); err != nil {
+	if err := p.store.PinCache(ctx, goodHash, 0, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -174,6 +174,43 @@ func TestQueueStandsDownWhenAStreamOpensAsItStarts(t *testing.T) {
 	rows, _ := st.QueuedDownloads(ctx)
 	if len(rows) != 1 || rows[0].State != "pending" {
 		t.Fatalf("rows = %+v, want the episode back in line", rows)
+	}
+}
+
+// Notifications for dubs: the sub that comes first is fetched but not announced, and the dub that follows
+// still is. It used to mark the episode told, so the dub never was.
+func TestDubNotificationAfterTheSubArrives(t *testing.T) {
+	st := airingStore(t, 6, time.Now().Add(-time.Hour).Unix(), 5)
+	ctx := context.Background()
+	if err := st.SetSetting(ctx, "notify.releases", "dub"); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{"autodownload.enabled": "true", "audio.prefer": "either"} {
+		if err := st.SetAnimePref(ctx, 7, key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := &fixedIndexer{results: []indexer.Torrent{
+		release("1111111111111111111111111111111111111111", "[Group] Bleach - Sennen Kessen-hen - Kashin Tan - 06 [1080p].mkv", 40),
+	}}
+	w := NewWatcher(st, NewFinder(st, source, discard()), source, discard()).
+		WithDownloader(NewDownloader(st, NewPrefetcher(st, nil, nil, discard()), nil, discard()))
+	rep, err := w.Poll(ctx)
+	if err != nil || rep.Notified != 0 || rep.Downloaded != 1 {
+		t.Fatalf("sub only: report = %+v, %v; want it downloaded and nobody told", rep, err)
+	}
+	source.results = append(source.results,
+		release("2222222222222222222222222222222222222222", "[Group] Bleach - Sennen Kessen-hen - Kashin Tan - 06 [1080p][English Dub].mkv", 40))
+	// Not searched again at once: a dub comes days later, and every poll would spend the sites' budget.
+	if rep, err = w.Poll(ctx); err != nil || rep.Found != 0 {
+		t.Fatalf("the next poll: report = %+v, %v; want the episode left alone for now", rep, err)
+	}
+	was := recheckWanted
+	recheckWanted = 0
+	t.Cleanup(func() { recheckWanted = was })
+	rep, err = w.Poll(ctx)
+	if err != nil || rep.Notified != 1 || rep.Downloaded != 0 {
+		t.Fatalf("dub out: report = %+v, %v; want it announced and not queued twice", rep, err)
 	}
 }
 

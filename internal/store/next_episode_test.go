@@ -210,6 +210,3 @@ func TestWatchStatsAccumulateFromPlaybackReports(t *testing.T) {
 		t.Fatalf("windows = %+v", got)
 	}
 }
-
-//go:fix inline
-func ptrStr(v string) *string { return new(v) }

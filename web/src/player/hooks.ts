@@ -8,7 +8,7 @@ import jassubWasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url'
 import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
 import type { SkipRange, StreamInfo, SubtitleTrack } from '../lib/api'
 
-/** Attaches an HLS stream with hls.js wherever it runs (Chrome's own HLS hides errors); native only without MSE. */
+/** Attaches HLS with hls.js wherever it runs (Chrome's own HLS hides errors); native only without MSE. */
 export function useHlsSource(
   video: HTMLVideoElement | null,
   playlist?: string,
@@ -60,8 +60,14 @@ export function useHlsSource(
     video.addEventListener('seeking', onSeeking)
 
     void (async () => {
-      const { default: HlsCtor } = await import('hls.js')
+      // A stale chunk after an update otherwise left the player loading forever.
+      const loaded = await import('hls.js').catch(() => null)
       if (cancelled) return
+      if (!loaded) {
+        setError('The player could not load. Reload the page.')
+        return
+      }
+      const HlsCtor = loaded.default
 
       if (!HlsCtor.isSupported()) {
         if (!video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -161,6 +167,8 @@ export function useHlsSource(
       // Episodes share the element, emptied so the next source doesn't attach to a finished one.
       video.removeAttribute('src')
       video.load()
+      // Every release of an episode has the same playlist URL: the next attach starts without this one's error.
+      setFailure(null)
     }
   }, [video, playlist])
 
@@ -385,11 +393,10 @@ export function useSubtitles(
     let detach: (() => void) | undefined
 
     void (async () => {
-      // Overlap left a dead renderer on screen; capped, as a teardown first waits out a renderer still starting.
+      // Overlap left a dead renderer on screen; capped, as a teardown waits out a renderer still starting.
       await Promise.race([destroying.current?.catch(() => {}), new Promise((done) => setTimeout(done, 250))])
-      if (instance.current) await Promise.resolve(instance.current.destroy()).catch(() => {})
-      instance.current = null
-      if (!track) return
+      // Superseded while waiting: the renderer here now is the next run's, which every cleanup hands over.
+      if (cancelled || !track) return
 
       // No dimensions yet, no canvas; the listeners above rerun this once they arrive.
       if (!video.videoWidth || !video.videoHeight) return
@@ -711,7 +718,7 @@ export function useAutoSkip(
   }, [video, ranges, enabled.op, enabled.ed])
 }
 
-/** Floats the whole player (native PiP drops subtitles); container must be a portal host to keep its handlers. */
+/** Floats the whole player (native PiP drops subtitles); container must be a portal host, to keep handlers. */
 export function useDocumentPiP(container: HTMLElement | null) {
   const [active, setActive] = useState(false)
   const [win, setWin] = useState<Window | null>(null)
@@ -842,6 +849,7 @@ export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null
 
     let timer = 0
     let cancelled = false
+    const opened = Date.now()
 
     let asked = false
     const ask = async () => {
@@ -856,7 +864,9 @@ export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null
         if (cancelled || !body.interval) return
 
         if (body.ready) {
-          setFound({ stream: streamId, sheet: { ...body, url: `/api/stream/${streamId}/thumbs.jpg` } })
+          // Each release of an episode has the same URL; stamped, the browser can't paint the last one's sheet.
+          const url = `/api/stream/${streamId}/thumbs.jpg?at=${opened}`
+          setFound({ stream: streamId, sheet: { ...body, url } })
           return
         }
         // The sheet is only built once the file is whole, which for a torrent
@@ -871,6 +881,8 @@ export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null
     return () => {
       cancelled = true
       window.clearTimeout(timer)
+      // Another release reopens under the same id; its sheet is asked for afresh.
+      setFound(undefined)
     }
   }, [streamId, video])
 

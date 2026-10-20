@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -182,7 +183,55 @@ func (e *Engine) track(t *bt.Torrent, trackers []string) *entry {
 	if len(trackers) > 0 {
 		t.AddTrackers([][]string{trackers})
 	}
+	t.SetOnWriteChunkError(func(err error) { e.writeFailed(en, err) })
 	return en
+}
+
+// vanished has bt re-read the completion of a deleted file's pieces, which storage has just cleared.
+func (e *Engine) vanished(hash metainfo.Hash, first, last int) {
+	e.mu.Lock()
+	en, ok := e.byHash[hash]
+	e.mu.Unlock()
+	if !ok || en.t.Info() == nil {
+		return
+	}
+	e.log.Info("a downloaded file was deleted outside Yoru; its pieces download again", "torrent", en.t.Name())
+	for i := first; i <= last && i < en.t.NumPieces(); i++ {
+		en.t.Piece(i).UpdateCompletion()
+	}
+}
+
+// A failed write stops the torrent's downloading; this long later it tries again, in case space was freed.
+const writeRetry = time.Minute
+
+// writeFailed stops downloading a torrent whose chunks can't be written and says so in its stats.
+func (e *Engine) writeFailed(en *entry, err error) {
+	if errors.Is(err, errStorageClosed) {
+		return
+	}
+	e.mu.Lock()
+	first := en.writeErr == ""
+	en.writeErr = "can't write the download to disk: " + err.Error()
+	en.writeErrAt = time.Now()
+	e.mu.Unlock()
+	if first {
+		e.log.Error("chunk write failed; downloading stopped until it can retry", "torrent", en.t.Name(), "err", err)
+	}
+	en.t.DisallowDataDownload()
+}
+
+// retryWrites lets a torrent stopped by a write failure download again once writeRetry has passed.
+func (e *Engine) retryWrites(en *entry, now time.Time) {
+	e.mu.Lock()
+	due := en.writeErr != "" && now.Sub(en.writeErrAt) >= writeRetry
+	if due {
+		en.writeErr = ""
+	}
+	paused := en.paused
+	e.mu.Unlock()
+	if due && !paused {
+		en.t.AllowDataDownload()
+	}
 }
 
 // apply turns the selection and pause state into file priorities.
@@ -193,6 +242,10 @@ func (e *Engine) apply(en *entry) {
 	e.mu.Lock()
 	selected := maps.Clone(en.selected)
 	paused := en.paused
+	if !paused {
+		// Resumed or added again: that is the retry, now.
+		en.writeErr = ""
+	}
 	e.mu.Unlock()
 	for i, f := range en.t.Files() {
 		// Paused wants nothing: a torrent wanting pieces keeps dialing peers, taking a download's budget.
@@ -253,8 +306,10 @@ func (e *Engine) remove(en *entry, data bool) error {
 	}
 	// Completion would otherwise claim pieces whose bytes are gone.
 	if store := e.pieceStore(); store != nil {
-		for i := range pieces {
-			store.Set(metainfo.PieceKey{InfoHash: hash, Index: i}, false)
+		if f, ok := store.(interface{ Forget(metainfo.Hash) error }); !ok || f.Forget(hash) != nil {
+			for i := range pieces {
+				store.Set(metainfo.PieceKey{InfoHash: hash, Index: i}, false)
+			}
 		}
 	}
 	var failed []string
@@ -366,6 +421,16 @@ func components(t *bt.Torrent, f *bt.File) []string {
 	return slices.Clone(fi.BestPath())
 }
 
+// diskComponents is where a file is under OutputFolder: names made safe, a single file's hash tag.
+func diskComponents(t *bt.Torrent, f *bt.File, names *layout) []string {
+	info := t.Info()
+	if !info.IsDir() {
+		return []string{names.top(info.BestName(), t.InfoHash())}
+	}
+	fi := f.FileInfo()
+	return safePath(fi.BestPath())
+}
+
 func (e *Engine) detail(en *entry) torrent.Detail {
 	e.mu.Lock()
 	selected := maps.Clone(en.selected)
@@ -381,7 +446,7 @@ func detailOf(t *bt.Torrent, names *layout, selected map[int]bool) torrent.Detai
 	for i, f := range t.Files() {
 		d.Files = append(d.Files, torrent.File{
 			Name:       fileName(t, f),
-			Components: components(t, f),
+			Components: diskComponents(t, f, names),
 			Length:     f.Length(),
 			Included:   selected[i],
 		})
@@ -394,10 +459,11 @@ func (e *Engine) stats(en *entry) torrent.Stats {
 	var s torrent.Stats
 	e.mu.Lock()
 	selected := maps.Clone(en.selected)
-	paused, verifying, failure := en.paused, en.verifying, en.err
+	paused, verifying := en.paused, en.verifying
+	// A write failure retries after writeRetry, so it is a warning: as Error, waiters would give up for good.
+	s.Error, s.Warning = en.err, en.writeErr
 	e.mu.Unlock()
 
-	s.Error = failure
 	switch {
 	case en.t.Info() == nil || verifying:
 		s.State = "initializing"

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"yoru/internal/bt/metainfo"
 	"yoru/internal/bt/storage"
@@ -21,10 +23,12 @@ type files struct {
 	pieces storage.PieceCompletion
 	// names decides the folder or file name; nil means the torrent's own.
 	names *layout
+	// vanished hears of a file gone from under complete pieces [first, last], to refresh what bt holds.
+	vanished func(hash metainfo.Hash, first, last int)
 }
 
 func (s files) OpenTorrent(_ context.Context, info *metainfo.Info, hash metainfo.Hash) (storage.TorrentImpl, error) {
-	t := &fileTorrent{info: info, hash: hash, pieces: s.pieces, sparse: map[string]bool{}}
+	t := &fileTorrent{info: info, hash: hash, pieces: s.pieces, sparse: map[string]bool{}, vanished: s.vanished}
 	top := s.names.top(info.BestName(), hash)
 	dir := filepath.Clean(s.base)
 	if info.IsDir() {
@@ -33,7 +37,7 @@ func (s files) OpenTorrent(_ context.Context, info *metainfo.Info, hash metainfo
 	for fi := range info.UpvertedFilesIter() {
 		path := filepath.Join(dir, top)
 		if info.IsDir() {
-			path = filepath.Join(append([]string{dir}, fi.BestPath()...)...)
+			path = filepath.Join(append([]string{dir}, safePath(fi.BestPath())...)...)
 		}
 		if !torrent.Within(s.base, path) {
 			return storage.TorrentImpl{}, errors.New("file path escapes the cache folder")
@@ -45,9 +49,12 @@ func (s files) OpenTorrent(_ context.Context, info *metainfo.Info, hash metainfo
 	}
 	return storage.TorrentImpl{
 		Piece: func(p metainfo.Piece) storage.PieceImpl { return filePiece{t, p} },
-		Close: func() error { return nil },
+		Close: func() error { t.closed.Store(true); return nil },
 	}, nil
 }
+
+// errStorageClosed: a peer's write that lands after its torrent was dropped must not recreate a deleted file.
+var errStorageClosed = errors.New("torrent storage closed")
 
 type segment struct {
 	path           string
@@ -62,8 +69,10 @@ type fileTorrent struct {
 	pieces storage.PieceCompletion
 	files  []segment
 	// sparse: files marked so on this run, once each.
-	mu     sync.Mutex
-	sparse map[string]bool
+	mu       sync.Mutex
+	sparse   map[string]bool
+	closed   atomic.Bool
+	vanished func(hash metainfo.Hash, first, last int)
 }
 
 // each calls f for every file part of the torrent range [off, off+n).
@@ -115,16 +124,52 @@ func (fp filePiece) ReadAt(b []byte, off int64) (int, error) {
 	return len(b), nil
 }
 
+// WriteTo copies the whole piece, opening each file once: hashing would otherwise open it per 32 KiB read.
+func (fp filePiece) WriteTo(w io.Writer) (int64, error) {
+	var total int64
+	err := fp.t.each(fp.p.Offset(), fp.p.Length(), func(s segment, fileOff, _, n int64) error {
+		if s.padding {
+			c, err := io.CopyN(w, zeros{}, n)
+			total += c
+			return err
+		}
+		f, err := os.Open(s.path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		c, err := io.Copy(w, io.NewSectionReader(f, fileOff, n))
+		total += c
+		if err == nil && c < n {
+			err = io.ErrUnexpectedEOF
+		}
+		return err
+	})
+	return total, err
+}
+
+type zeros struct{}
+
+func (zeros) Read(b []byte) (int, error) {
+	clear(b)
+	return len(b), nil
+}
+
 func (fp filePiece) WriteAt(b []byte, off int64) (int, error) {
 	base := fp.p.Offset() + off
 	err := fp.t.each(base, int64(len(b)), func(s segment, fileOff, bufOff, n int64) error {
 		if s.padding {
 			return nil
 		}
-		if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-			return err
+		if fp.t.closed.Load() {
+			return errStorageClosed
 		}
 		f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY, 0o644)
+		if errors.Is(err, fs.ErrNotExist) {
+			if err = os.MkdirAll(filepath.Dir(s.path), 0o755); err == nil {
+				f, err = os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY, 0o644)
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -157,9 +202,37 @@ func (fp filePiece) Completion() storage.Completion {
 		return c
 	}
 	if !fp.onDisk() {
+		if c.Ok && c.Complete {
+			fp.forgetVanished()
+		}
 		return storage.Completion{Ok: true, Complete: false}
 	}
 	return c
+}
+
+// forgetVanished clears the records of every piece of a file that's gone: once a write regrows it,
+// its other pieces' "complete" would serve the zeros of the sparse holes.
+func (fp filePiece) forgetVanished() {
+	pieceLen := fp.t.info.PieceLength
+	fp.t.each(fp.p.Offset(), fp.p.Length(), func(s segment, _, _, _ int64) error {
+		if s.padding || s.length == 0 {
+			return nil
+		}
+		if _, err := os.Stat(s.path); err == nil {
+			return nil
+		}
+		first, last := int(s.offset/pieceLen), int((s.offset+s.length-1)/pieceLen)
+		for i := first; i <= last; i++ {
+			fp.t.pieces.Set(metainfo.PieceKey{InfoHash: fp.t.hash, Index: i}, false)
+		}
+		fp.t.mu.Lock()
+		delete(fp.t.sparse, s.path)
+		fp.t.mu.Unlock()
+		if fp.t.vanished != nil {
+			go fp.t.vanished(fp.t.hash, first, last)
+		}
+		return nil
+	})
 }
 
 // onDisk reports whether every file the piece spans is long enough to hold it.

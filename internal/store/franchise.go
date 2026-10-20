@@ -266,12 +266,32 @@ func (s *Store) RebuildFranchisesFor(ctx context.Context, ids []int, known map[i
 		return 0, err
 	}
 
-	// The components to rebuild: every one when no ids were named.
+	// The components to rebuild: every one when no ids were named. Named ones bring their old franchises'
+	// members along: a root that lost its edges takes its siblings' rows with it, and they must be regrouped.
 	seen := map[int]bool{}
 	var groups [][]int
 	starts := slices.Collect(maps.Keys(adj))
 	if ids != nil {
-		starts = ids
+		starts = slices.Clone(ids)
+		for _, id := range ids {
+			members, err := tx.QueryContext(ctx, `
+				SELECT anime_id FROM franchise WHERE root_id IN (SELECT root_id FROM franchise WHERE anime_id = ?)`, id)
+			if err != nil {
+				return 0, err
+			}
+			for members.Next() {
+				var m int
+				if err := members.Scan(&m); err != nil {
+					members.Close()
+					return 0, err
+				}
+				starts = append(starts, m)
+			}
+			members.Close()
+			if err := members.Err(); err != nil {
+				return 0, err
+			}
+		}
 	}
 	slices.Sort(starts)
 	for _, id := range starts {

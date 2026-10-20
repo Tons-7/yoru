@@ -78,9 +78,8 @@ func TestTorrentString(t *testing.T) {
 	}
 }
 
-// This benchmark is from the observation that a lot of overlapping Readers on
-// a large torrent with small pieces had a lot of overhead in recalculating
-// piece priorities everytime a reader (possibly in another Torrent) changed.
+// Many overlapping Readers on a big torrent of small pieces: every reader change (in any Torrent)
+// recalculates piece priorities.
 func BenchmarkUpdatePiecePriorities(b *testing.B) {
 	const (
 		numPieces   = 13410
@@ -111,9 +110,7 @@ func BenchmarkUpdatePiecePriorities(b *testing.B) {
 	}
 }
 
-// Check that a torrent containing zero-length file(s) will start, and that
-// they're created in the filesystem. The client storage is assumed to be
-// file-based on the native filesystem based.
+// A torrent with zero-length files starts, and creates them (on native file storage).
 func testEmptyFilesAndZeroPieceLength(t *testing.T, cfg *ClientConfig) {
 	cl, err := NewClient(cfg)
 	require.NoError(t, err)

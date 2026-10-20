@@ -101,8 +101,7 @@ func TestUDPTracker(t *testing.T) {
 func TestAnnounceRandomInfoHashThirdParty(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
-		// This test involves contacting third party servers that may have
-		// unpredictable results.
+		// It contacts third-party servers, whose answers vary.
 		t.SkipNow()
 	}
 	req := AnnounceRequest{
@@ -132,8 +131,7 @@ func TestAnnounceRandomInfoHashThirdParty(t *testing.T) {
 				return
 			}
 			if resp.Leechers != 0 || resp.Seeders != 0 || len(resp.Peers) != 0 {
-				// The info hash we generated was random in 2^160 space. If we
-				// get a hit, something is weird.
+				// A random infohash in 2^160 can't have peers.
 				t.Error(resp)
 				return
 			}

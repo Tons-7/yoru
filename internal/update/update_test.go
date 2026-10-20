@@ -3,6 +3,7 @@ package update
 import (
 	"archive/zip"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -108,6 +109,17 @@ func fakeGitHubSigned(t *testing.T, version string, exeBody []byte, sums, truste
 // fakeRelease also serves github.com's own pages; limited, the API says its hourly allowance is spent.
 func fakeRelease(t *testing.T, version string, exeBody []byte, sums, trusted, limited bool) *httptest.Server {
 	t.Helper()
+	return fakeTamperedRelease(t, version, exeBody, sums, trusted, limited, tamper{})
+}
+
+// tamper is what a broken mirror or a mis-listed release does to the files the signed sums vouch for.
+type tamper struct {
+	listedAs string // the name the signed sums give the zip; "" is its own
+	served   []byte // a zip served in place of the one the sums hash
+}
+
+func fakeTamperedRelease(t *testing.T, version string, exeBody []byte, sums, trusted, limited bool, tm tamper) *httptest.Server {
+	t.Helper()
 
 	var archive bytes.Buffer
 	zw := zip.NewWriter(&archive)
@@ -115,7 +127,12 @@ func fakeRelease(t *testing.T, version string, exeBody []byte, sums, trusted, li
 	f.Write(exeBody)
 	zw.Close()
 	sum := sha256.Sum256(archive.Bytes())
-	lines := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), AssetName(version))
+	listed := cmp.Or(tm.listedAs, AssetName(version))
+	lines := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), listed)
+	served := archive.Bytes()
+	if tm.served != nil {
+		served = tm.served
+	}
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -147,7 +164,7 @@ func fakeRelease(t *testing.T, version string, exeBody []byte, sums, trusted, li
 		json.NewEncoder(w).Encode(map[string]any{"tag_name": "v" + version, "body": "notes", "assets": assets})
 	})
 	mux.HandleFunc("/dl/"+AssetName(version), func(w http.ResponseWriter, r *http.Request) {
-		w.Write(archive.Bytes())
+		w.Write(served)
 	})
 	mux.HandleFunc("/dl/"+sumsFile, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, lines)
@@ -159,7 +176,7 @@ func fakeRelease(t *testing.T, version string, exeBody []byte, sums, trusted, li
 	mux.HandleFunc(site+"latest", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, srv.URL+site+"tag/v"+version, http.StatusFound)
 	})
-	files := map[string][]byte{AssetName(version): archive.Bytes()}
+	files := map[string][]byte{AssetName(version): served}
 	if sums {
 		files[sumsFile], files[sigFile] = []byte(lines), sig
 	}
@@ -201,6 +218,44 @@ func TestApplyRefusesAReleaseSignedByAStranger(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(exe); string(got) != "old binary" {
 		t.Fatal("the executable was replaced")
+	}
+}
+
+// A signed sums file vouches for one zip: a different one, or none listed for this platform, installs nothing.
+func TestApplyRefusesAnArchiveItsSignedSumsDontVouchFor(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		tm   tamper
+		want string
+	}{
+		{"mismatch", tamper{served: []byte("PK not the zip that was hashed")}, "checksum mismatch"},
+		{"unlisted", tamper{listedAs: "yoru-2026.08.27-plan9-update.zip"}, "no entry"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			setVersion(t, "2026.08.24")
+			st := testStore(t)
+			gh := fakeTamperedRelease(t, "2026.08.27", []byte("new binary"), true, true, false, c.tm)
+			exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
+			os.WriteFile(exe, []byte("old binary"), 0o755)
+			u := newUpdater(t, st, gh, exe)
+			u.launch = func(string) error { return nil }
+			if _, err := u.Check(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := u.Apply(); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			for u.Status().Stage != StageFailed && time.Now().Before(deadline) {
+				time.Sleep(20 * time.Millisecond)
+			}
+			if s := u.Status(); s.Stage != StageFailed || !strings.Contains(s.Error, c.want) {
+				t.Fatalf("status = %+v, want it refused (%q)", s, c.want)
+			}
+			if got, _ := os.ReadFile(exe); string(got) != "old binary" {
+				t.Fatal("the executable was replaced")
+			}
+		})
 	}
 }
 
@@ -430,7 +485,7 @@ func TestApplyRestoresTheOldBinaryWhenTheNewOneWontStart(t *testing.T) {
 	}
 }
 
-// The old updater installs the first Yoru as kuro.exe; it takes its new name on start, and a later start leaves it.
+// The old updater installs the first Yoru as kuro.exe; it renames itself on start, and a later start leaves it.
 func TestTakeNameAfterTheRename(t *testing.T) {
 	dir := t.TempDir()
 	kuro, yoru := filepath.Join(dir, config.ExeName("kuro")), filepath.Join(dir, config.ExeName("yoru"))

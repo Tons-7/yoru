@@ -65,7 +65,10 @@ const menu = page.getByRole('menu')
 const row = (name, which = 'first') => menu.getByRole('menuitemradio', { name })[which]()
 // The menu stays open after a choice, so several switches can be flipped in a row.
 const openMenu = async () => {
-  if ((await button.getAttribute('aria-expanded')) !== 'true') await button.click()
+  if ((await button.getAttribute('aria-expanded')) === 'true') return
+  // The bar hides while playing; the pointer brings it back.
+  await video.hover()
+  await button.click()
 }
 
 await openMenu()
@@ -95,6 +98,8 @@ check(await until(() => posts.at(-1) === 'voice=high'), 'V steps the voice up to
 check(await until(async () => (await pref('playback.voice')) === 'high' && (await pref('playback.mono')) === 'true' && (await pref('playback.boost')) === 'high'), 'every choice is remembered')
 await page.keyboard.press('v')
 check(await until(() => posts.at(-1) === 'voice=off'), 'V rounds the voice back to Off', posts.at(-1))
+// Remembered once the server takes it; a reload before then would drop it.
+check(await until(async () => (await pref('playback.voice')) === 'off'), 'Off is remembered')
 
 // A fresh open honours what was remembered.
 await page.reload({ waitUntil: 'domcontentloaded' })

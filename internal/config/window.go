@@ -2,7 +2,9 @@ package config
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -158,10 +160,12 @@ func findChromium() string {
 			`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
 		}
 	case "darwin":
-		candidates = []string{
-			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-			"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-			"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+		// System-wide first, then a per-user install in ~/Applications.
+		home, _ := os.UserHomeDir()
+		for _, apps := range []string{"/Applications", filepath.Join(home, "Applications")} {
+			for _, app := range []string{"Google Chrome", "Microsoft Edge", "Brave Browser", "Chromium"} {
+				candidates = append(candidates, filepath.Join(apps, app+".app", "Contents", "MacOS", app))
+			}
 		}
 	default:
 		for _, name := range []string{"google-chrome", "chromium", "chromium-browser", "microsoft-edge", "brave-browser"} {

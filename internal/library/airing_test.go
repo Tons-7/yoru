@@ -139,7 +139,7 @@ func TestCatchingUpAnnouncesOnlyTheLatestAiredEpisode(t *testing.T) {
 	}
 }
 
-// A pack that states no range covers nothing in particular; announcing one claims an episode that may not exist.
+// A pack stating no range covers nothing in particular; announcing it claims an episode that may not exist.
 func TestUnnumberedPackDoesNotAnnounceAnEpisode(t *testing.T) {
 	st := airingStore(t, 6, time.Now().Add(-time.Hour).Unix(), 5)
 

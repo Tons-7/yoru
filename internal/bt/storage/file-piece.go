@@ -392,9 +392,3 @@ func (me *filePieceImpl) writeFileTo(w io.Writer, fileIndex int, extent segments
 	written += n1
 	return
 }
-
-//
-//// TODO: Just implement StorageReader already.
-//func (me *filePieceImpl) NewReader() (PieceReader, error) {
-//
-//}

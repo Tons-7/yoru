@@ -124,7 +124,7 @@ func TestSegmentReaderOutlivesRemovedParts(t *testing.T) {
 	}
 }
 
-// Replacing a segment leaves an open reader on the old parts and gives the next one the new; dropping clears it.
+// Replacing a segment leaves an open reader on the old parts, gives the next one the new; dropping clears it.
 func TestPublishReplacesWithoutDisturbingAReader(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{dir: dir, starts: []float64{0, 6}, Segments: 2, Info: &MediaInfo{Duration: 12}}
@@ -181,8 +181,8 @@ func TestPublishReplacesWithoutDisturbingAReader(t *testing.T) {
 
 func segmentBytesOf(t *testing.T, s *Session, n int) []byte { return segmentBytes(t, s, n) }
 
-// A player whose connection drops mid-segment gets it whole on asking again, and the cut send holds no file open
-// (on Windows a leaked handle would keep the session's folder from going).
+// A player whose connection drops mid-segment gets it whole on asking again, and the cut send holds no file
+// open (on Windows a leaked handle would keep the session's folder from going).
 func TestSegmentServingSurvivesACutConnection(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "session")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

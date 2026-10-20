@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -77,17 +78,9 @@ func (p Piece) WriteTo(w io.Writer) (_ int64, err error) {
 }
 
 func (p Piece) WriteAt(b []byte, off int64) (n int, err error) {
-	// Callers should not be writing to completed pieces, but it's too
-	// expensive to be checking this on every single write using uncached
-	// completions.
-
-	// c := p.Completion()
-	// if c.Ok && c.Complete {
-	// 	err = errors.New("piece already completed")
-	// 	return
-	// }
-	if off+int64(len(b)) > p.mip.Length() {
-		panic("write overflows piece")
+	// Writes to a completed piece aren't refused: checking uncached completion on every write costs too much.
+	if off < 0 || off+int64(len(b)) > p.mip.Length() {
+		return 0, errors.New("write overflows piece")
 	}
 	return p.PieceImpl.WriteAt(b, off)
 }
@@ -116,9 +109,8 @@ func (p Piece) ReadAt(b []byte, off int64) (n int, err error) {
 	}
 	off += int64(n)
 
-	// Doing this here may be inaccurate. There's legitimate reasons we may fail to read while the
-	// data is still there, such as too many open files. There should probably be a specific error
-	// to return if the data has been lost.
+	// Maybe wrong: a read can fail with the data still there (too many open files). A lost-data error
+	// would be exact.
 	if off < p.mip.Length() {
 		if err == io.EOF {
 			// TODO: Hey, this guy over here isn't checking errors.

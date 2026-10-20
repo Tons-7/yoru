@@ -39,9 +39,7 @@ func listen(n network, addr string, f firewallCallback, logger log.Logger) (sock
 	}
 }
 
-// Dialing TCP from a local port limits us to a single outgoing TCP connection to each remote
-// client. Instead, this should be a last resort if we need to use holepunching, and only then to
-// connect to other clients that actually try to holepunch TCP.
+// From one local port, only one TCP connection per remote client: a last resort for clients that holepunch TCP.
 const dialTcpFromListenPort = false
 
 var SocketIPTypeOfService = 0
@@ -72,9 +70,7 @@ func listenTcp(network, address string) (s socket, err error) {
 		return
 	}
 	netDialer := net.Dialer{
-		// We don't want fallback, as we explicitly manage the IPv4/IPv6 distinction ourselves,
-		// although it's probably not triggered as I think the network is already constrained to
-		// tcp4 or tcp6 at this point.
+		// No fallback: IPv4 and IPv6 are told apart here (the network is already tcp4 or tcp6).
 		FallbackDelay: -1,
 		// BitTorrent connections manage their own keepalives.
 		KeepAlive: tcpListenConfig.KeepAlive,
@@ -150,15 +146,10 @@ type networkAndHost struct {
 
 func isUnsupportedNetworkError(err error) bool {
 	var sysErr *os.SyscallError
-	//spewCfg := spew.NewDefaultConfig()
-	//spewCfg.ContinueOnMethod = true
-	//spewCfg.Dump(err)
 	if !errors.As(err, &sysErr) {
 		return false
 	}
-	//spewCfg.Dump(sysErr)
-	//spewCfg.Dump(sysErr.Err.Error())
-	// This might only be Linux specific.
+	// Possibly Linux only.
 	return sysErr.Syscall == "bind" && sysErr.Err.Error() == "cannot assign requested address"
 }
 

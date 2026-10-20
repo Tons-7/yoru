@@ -10,13 +10,14 @@ import {
   useDownloadQueue,
   useDownloads,
   useNow,
+  usePrefs,
   useUpNextEdit,
 } from '../lib/queries'
 import { isUnaired } from '../lib/episodes'
 import { Badge, ConfirmInline, inputClass, TextInput } from './ui'
 import { ListCheckGlyph, ListPlusGlyph } from './UpNext'
 import { useInUpNext } from '../lib/upnext'
-import { useAnchorBox, useDismiss } from '../lib/hooks'
+import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 
 const PAGE_SIZE = 50
 
@@ -163,9 +164,8 @@ export function EpisodeList({
   const at = Math.min(page, Math.max(0, pages - 1))
   const paged = pages > 1 ? filtered.slice(at * PAGE_SIZE, (at + 1) * PAGE_SIZE) : filtered
 
-  // Open on the page holding the episode being watched, not on the first. Once
-  // per episode: a refetch rebuilds `filtered` and would undo manual paging.
-  // Set during render, so the first paint is already that page.
+  // Open on the page holding the episode being watched, once per episode (a refetch would undo manual
+  // paging), set during render so the first paint is already that page.
   const [placedFor, setPlacedFor] = useState<number>()
   if (current && placedFor !== current) {
     const index = filtered.findIndex((e) => e.number === current)
@@ -257,7 +257,8 @@ export function EpisodeList({
           {selecting ? (
             <>
               <span className="text-xs tabular-nums text-base-400">{picked.size} selected</span>
-              <div className="flex items-center gap-1.5">
+              {/* Apart on touch: Cancel beside Download selected was an easy mis-tap. */}
+              <div className="flex items-center gap-1.5 pointer-coarse:gap-3">
                 <PageStep
                   label="Select page"
                   disabled={false}
@@ -273,7 +274,7 @@ export function EpisodeList({
                 <button
                   onClick={() => download.mutate([...picked].sort((a, b) => a - b))}
                   disabled={picked.size === 0 || download.isPending}
-                  className="rounded-lg bg-accent-500 px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-accent-600 disabled:opacity-40"
+                  className="rounded-lg bg-accent-500 px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-accent-600 disabled:opacity-40 pointer-coarse:min-h-11 pointer-coarse:px-3.5"
                 >
                   {download.isPending ? 'Queuing…' : 'Download selected'}
                 </button>
@@ -391,7 +392,7 @@ function Filters({
           aria-selected={value === o.value}
           onClick={() => onChange(o.value)}
           className={cx(
-            'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+            'rounded-md px-2.5 py-1 text-xs font-medium transition-colors pointer-coarse:min-h-11',
             value === o.value ? 'bg-base-750 text-white shadow-card' : 'text-base-400 hover:text-base-100',
           )}
         >
@@ -421,6 +422,9 @@ function RangeMenu({
   const trigger = useRef<HTMLButtonElement>(null)
 
   const box = useAnchorBox(trigger, open)
+  // Portalled to the end of the page: without this, Tab went on through the page, never into the list.
+  const listRef = useRef<HTMLDivElement>(null)
+  useModalFocus(listRef, open)
 
   return (
     <div className="relative" ref={ref}>
@@ -430,7 +434,7 @@ function RangeMenu({
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex min-w-36 items-center justify-center gap-1.5 rounded-lg px-2 py-1 text-xs tabular-nums text-base-300 transition-colors hover:bg-base-850 hover:text-white"
+        className="flex min-w-36 items-center justify-center gap-1.5 rounded-lg px-2 py-1 text-xs tabular-nums text-base-300 transition-colors hover:bg-base-850 hover:text-white pointer-coarse:min-h-11"
       >
         {rangeFor(page)}
         <span className="text-base-600">of {total}</span>
@@ -442,6 +446,7 @@ function RangeMenu({
       {open && box &&
         createPortal(
           <div
+            ref={listRef}
             role="listbox"
             data-portal-menu
             style={{
@@ -455,6 +460,7 @@ function RangeMenu({
                 key={n}
                 role="option"
                 aria-selected={n === page}
+                autoFocus={n === page}
                 onClick={() => {
                   onPick(n)
                   setOpen(false)
@@ -487,7 +493,7 @@ function PageStep({
     <button
       disabled={disabled}
       onClick={onClick}
-      className="rounded-lg bg-base-850 px-2.5 py-1 text-xs text-base-200 transition-colors hover:bg-base-750 disabled:opacity-40"
+      className="rounded-lg bg-base-850 px-2.5 py-1 text-xs text-base-200 transition-colors hover:bg-base-750 disabled:opacity-40 pointer-coarse:min-h-11 pointer-coarse:px-3.5"
     >
       {label}
     </button>
@@ -661,13 +667,13 @@ function EpisodeRow({
             {episode.onDisk ? (
               <span className="flex items-center gap-1 text-emerald-300" title="On this machine">
                 <DiskGlyph />
-                {compact ? '' : 'Downloaded'}
+                {compact ? <span className="sr-only">On disk</span> : 'Downloaded'}
               </span>
             ) : (
               episode.local && (
                 <span className="flex items-center gap-1 text-emerald-300" title="In one of your library folders">
                   <DiskGlyph />
-                  {compact ? '' : 'In your library'}
+                  {compact ? <span className="sr-only">In your library</span> : 'In your library'}
                 </span>
               )
             )}
@@ -682,6 +688,9 @@ function EpisodeRow({
 
   // A tick reaching past this episode, either way, asks first: auto-delete and the trackers follow it.
   const spans = watched ? unmarksTo !== undefined : marksFrom !== undefined
+  // So does one that deletes the file at once ("right after watching"), which unticking doesn't bring back.
+  const prefs = usePrefs()
+  const deletes = !watched && !!episode.onDisk && prefs.data?.effective['cache.autodelete'] === 'now'
   const tickLabel = watched
     ? unmarksTo !== undefined
       ? `Mark ${number} to ${unmarksTo} not watched`
@@ -699,7 +708,14 @@ function EpisodeRow({
         <ConfirmInline
           tone="accent"
           size="sm"
-          label={watched ? `Unmark ${number}–${unmarksTo}` : `Mark ${marksFrom}–${number}`}
+          label={
+            watched
+              ? `Unmark ${number}–${unmarksTo}`
+              : marksFrom !== undefined
+                ? `Mark ${marksFrom}–${number}`
+                : `Mark ${number}`
+          }
+          note={deletes ? 'Deletes the file' : undefined}
           onConfirm={() => mark.mutate(!watched)}
           onCancel={() => setConfirming(false)}
           pending={mark.isPending}
@@ -708,7 +724,7 @@ function EpisodeRow({
     ) : (
       <button
         type="button"
-        onClick={() => (spans ? setConfirming(true) : mark.mutate(!watched))}
+        onClick={() => (spans || deletes ? setConfirming(true) : mark.mutate(!watched))}
         disabled={mark.isPending}
         aria-label={tickLabel}
         title={mark.isError ? (mark.error as Error).message : tickLabel}
@@ -731,11 +747,13 @@ function EpisodeRow({
     mutationFn: () => api.post<{ queued: boolean }>('/api/download', { animeId, episode: number }),
     onSuccess: () => refreshDownloads(qc),
   })
-  // A click that queued it, until the queue says it failed.
+  // A click that queued it, until the queue answers: it failed, or its entry, once there, has gone.
   const resetFetch = fetch.reset
+  const wasQueued = useRef(queued)
   useEffect(() => {
-    if (failed) resetFetch()
-  }, [failed, resetFetch])
+    if (failed || (wasQueued.current && !queued)) resetFetch()
+    wasQueued.current = queued
+  }, [failed, queued, resetFetch])
   const isQueued = (fetch.isSuccess && !failed) || queued
   const download =
     !unaired &&
@@ -882,10 +900,19 @@ function PlayGlyph() {
   )
 }
 
+// A filled check, a state: the arrow beside it on the next row is the Download action.
 function DiskGlyph() {
   return (
-    <svg viewBox="0 0 24 24" className="size-3" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden>
-      <path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14" strokeLinecap="round" strokeLinejoin="round" />
+    <svg viewBox="0 0 24 24" className="size-3" aria-hidden>
+      <circle cx="12" cy="12" r="10" fill="currentColor" />
+      <path
+        d="m7.5 12.5 3 3 6-7"
+        fill="none"
+        stroke="var(--color-base-950)"
+        strokeWidth="2.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   )
 }

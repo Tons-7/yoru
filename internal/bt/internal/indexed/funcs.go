@@ -5,12 +5,10 @@ import (
 	"iter"
 
 	g "github.com/anacrolix/generics"
-	"github.com/google/go-cmp/cmp"
 	"yoru/internal/bt/internal/amortize"
 )
 
-// Iters from a point, assuming that where can only be true consecutively from that point and
-// nowhere else.
+// Iterates from gte while where holds, which it does only in one run from there.
 func IterClusteredWhere[R any](t relation[R], gte R, where func(r R) bool) Iter[R] {
 	return func(yield func(R) bool) {
 		first := true
@@ -50,7 +48,6 @@ func checkWhereGotFirst[R any](me relation[R], first g.Option[R], where func(r R
 	if first.Ok != slowRet.Ok || first.Ok && me.GetCmp()(first.Value, slowRet.Value) != 0 {
 		fmt.Printf("%#v\n", first.Value)
 		fmt.Printf("%#v\n", slowRet.Value)
-		fmt.Printf("diff: %s\n", cmp.Diff(first.Value, slowRet.Value))
 		panic("iterating where got different first value than caller")
 	}
 }

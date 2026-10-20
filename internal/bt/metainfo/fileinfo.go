@@ -10,8 +10,7 @@ import (
 
 // Information specific to a single file inside the MetaInfo structure.
 type FileInfo struct {
-	// BEP3. With BEP 47 this can be optional, but we have no way to describe that without breaking
-	// the API.
+	// BEP 3; optional under BEP 47, which the API can't say without breaking.
 	Length int64    `bencode:"length"`
 	Path   []string `bencode:"path"` // BEP3
 	// Unofficial extension by BiglyBT? https://github.com/BiglySoftware/BiglyBT/issues/1274. Might
@@ -20,8 +19,7 @@ type FileInfo struct {
 
 	ExtendedFileAttrs
 
-	// BEP 52. This isn't encoded in a v1 FileInfo, but is exposed here for APIs that expect to deal
-	// v1 files.
+	// BEP 52, not encoded in a v1 FileInfo but here for APIs dealing in v1 files.
 	PiecesRoot    g.Option[infohash_v2.T] `bencode:"-" json:"-"`
 	TorrentOffset int64                   `bencode:"-" json:"-"`
 }

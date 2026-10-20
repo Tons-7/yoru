@@ -427,6 +427,8 @@ func swarmFailure(err error) bool {
 func describe(err error) error {
 	var stall *torrent.StallError
 	switch {
+	case errors.As(err, &stall) && stall.Cause != "":
+		return fmt.Errorf("%s; %.0f%% is on disk", stall.Cause, stall.Percent)
 	case errors.As(err, &stall):
 		minutes := max(1, int(stall.Quiet.Round(time.Minute).Minutes()))
 		return fmt.Errorf("no peers sent anything for %d minute%s; %.0f%% is on disk",
@@ -451,6 +453,20 @@ func (d *Downloader) Cancel(ctx context.Context, animeID int, epKey string) (int
 		return 0, nil
 	}
 
+	// The episode in flight is counted once: by Dequeue when its active row is there, else here.
+	d.mu.Lock()
+	c := d.current
+	d.mu.Unlock()
+	matches := c != nil && c.animeID == animeID && (epKey == "" || c.epKey == epKey)
+	hasRow := false
+	if matches {
+		if rows, err := d.store.QueuedDownloads(ctx); err == nil {
+			for _, r := range rows {
+				hasRow = hasRow || (r.AnimeID == c.animeID && r.EpKey == c.epKey)
+			}
+		}
+	}
+
 	removed, err := d.store.Dequeue(ctx, animeID, epKey)
 	if err != nil {
 		return 0, err
@@ -459,7 +475,9 @@ func (d *Downloader) Cancel(ctx context.Context, animeID int, epKey string) (int
 	d.mu.Lock()
 	if c := d.current; c != nil && c.animeID == animeID && (epKey == "" || c.epKey == epKey) {
 		c.stop()
-		removed++
+		if !hasRow {
+			removed++
+		}
 	}
 	d.mu.Unlock()
 
@@ -516,8 +534,9 @@ func (d *Downloader) step(parent context.Context) bool {
 
 	d.mu.Lock()
 	d.current = &inFlight{animeID: next.AnimeID, epKey: next.EpKey, stop: stop}
-	// A stream opened or a pause landed since Run looked: stood down at once, back in line.
-	if d.paused || len(d.watching) > 0 {
+	// A stream opened or a pause landed since Run looked: stood down at once, back in line. The same test
+	// as Run's: one stricter here would requeue a Download anyway at once, in a tight loop.
+	if d.paused || d.holding() {
 		stop()
 	}
 	d.mu.Unlock()

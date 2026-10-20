@@ -74,7 +74,7 @@ func New(log *slog.Logger) *Presence {
 	return p
 }
 
-// SetEnabled turns the card on or off, from Settings; off lets go of the Discord app, which takes the card down.
+// SetEnabled turns the card on or off from Settings; off lets go of Discord, which takes the card down.
 func (p *Presence) SetEnabled(on bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

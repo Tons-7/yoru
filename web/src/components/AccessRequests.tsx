@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
+import { createPortal } from 'react-dom'
 import { api } from '../lib/api'
+import { usePortalHome } from './keys'
 import { useAccessDevices, useDecideDevice } from '../lib/queries'
 import { buttonClass } from '../lib/ui'
 
@@ -8,11 +10,13 @@ export function AccessRequests() {
   const access = useQuery({ queryKey: ['access'], queryFn: () => api.get<{ host?: boolean }>('/api/access') })
   const devices = useAccessDevices(!!access.data?.host)
   const decide = useDecideDevice()
+  // Inside the fullscreen player when there is one, or a host watching never sees the phone asking.
+  const home = usePortalHome()
 
   const waiting = (devices.data?.devices ?? []).filter((d) => d.status === 'pending')
   if (!waiting.length) return null
 
-  return (
+  return createPortal(
     <div className="fixed right-4 bottom-4 z-[90] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2" role="alert">
       {waiting.slice(0, 3).map((d) => (
         <div key={d.id} className="rounded-xl border border-white/10 bg-base-900 p-4 shadow-2xl">
@@ -36,11 +40,16 @@ export function AccessRequests() {
               Decline
             </button>
           </div>
+          {/* The answer is inline-only, so a failed one says so here; the buttons try again. */}
+          {decide.isError && decide.variables?.id === d.id && (
+            <p className="mt-2 text-xs text-recap">{(decide.error as Error).message}</p>
+          )}
         </div>
       ))}
       {waiting.length > 3 && (
         <p className="text-right text-xs text-base-400">+{waiting.length - 3} more in Settings</p>
       )}
-    </div>
+    </div>,
+    home,
   )
 }

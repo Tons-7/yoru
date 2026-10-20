@@ -29,8 +29,8 @@ func (s *Session) args(r *run) []string {
 	offset := s.segmentStart(r.from)
 	a := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
 
-	// d3d11 output keeps frames on the GPU, where 10-bit can't be converted.
-	if !s.Plan.VideoCopy && usesHardware(s.encoder) && s.canDecodeInHardware() {
+	// d3d11 output keeps frames on the GPU, where 10-bit can't be converted, nor subtitles drawn in.
+	if !s.Plan.VideoCopy && usesHardware(s.encoder) && s.canDecodeInHardware() && !s.burned {
 		a = append(a, "-hwaccel", "d3d11va")
 	}
 
@@ -109,6 +109,10 @@ func (s *Session) videoArgs() []string {
 
 	codec := s.Plan.VideoCodec
 	args := []string{"-c:v", codec}
+	// With -copyts the frames keep the file's own times, so the lines land where they belong after any seek.
+	if s.burned {
+		args = append([]string{"-vf", s.burnFilter()}, args...)
+	}
 
 	// Hardware encoders ignore -force_key_frames, so the interval is set directly.
 	gop := int(SegmentSeconds * 24)
@@ -148,7 +152,7 @@ func (s *Session) audioArgs() []string {
 	if filter := s.soundFilter(); filter != "" {
 		a := []string{"-af", filter, "-c:a", "aac", "-b:a", "192k"}
 		if s.Plan.AudioCodec == "flac" {
-			// Even blocks: the limiter's first frame is one sample, and FLAC takes that as its block size and fails.
+			// Even blocks: FLAC takes the limiter's one-sample first frame as its block size, and fails.
 			a = []string{"-af", filter + ",asetnsamples=n=4096:p=0", "-c:a", "flac"}
 		}
 		return a

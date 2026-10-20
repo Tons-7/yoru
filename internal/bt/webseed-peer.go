@@ -71,9 +71,7 @@ func (me *webseedPeer) isLowOnRequests() bool {
 
 // Webseed requests are issued globally so per-connection reasons or handling make no sense.
 func (me *webseedPeer) onNeedUpdateRequests(reason updateRequestReason) {
-	// Too many reasons here: Can't predictably determine when we need to rerun updates.
-	// TODO: Can trigger this when we have Client-level active-requests map.
-	//me.peer.cl.scheduleImmediateWebseedRequestUpdate(reason)
+	// Too many reasons to tell when a rerun is due. TODO: schedule one once the Client tracks active requests.
 }
 
 func (me *webseedPeer) expectingChunks() bool {
@@ -117,8 +115,7 @@ func (ws *webseedPeer) String() string {
 
 func (ws *webseedPeer) onGotInfo(info *metainfo.Info) {
 	ws.client.SetInfo(info, ws.peer.t.fileSegmentsIndex.UnwrapPtr())
-	// There should be probably be a callback in Client instead, so it can remove pieces at its whim
-	// too.
+	// A Client callback would let it remove pieces as well.
 	ws.client.Pieces.Iterate(func(x uint32) bool {
 		ws.peer.t.incPieceAvailability(pieceIndex(x))
 		return true
@@ -239,9 +236,8 @@ func (ws *webseedPeer) sliceProcessor(webseedRequest *webseedRequest) {
 		level := ws.readChunksErrorLevel(err, webseedRequest)
 		ws.slogger().Log(context.TODO(), level, "webseed request error", "err", err)
 		torrent.Add("webseed request error count", 1)
-		// This used to occur only on webseed.ErrTooFast but I think it makes sense to slow down any
-		// kind of error. Pausing here will starve the available requester slots which slows things
-		// down. TODO: Use the Retry-After implementation from Erigon.
+		// Any error slows down, not only ErrTooFast: the pause holds a requester slot, which is the
+		// point. TODO: honour Retry-After.
 		select {
 		case <-ws.peer.closed.Done():
 		case <-time.After(time.Duration(rand.Int63n(int64(10 * time.Second)))):

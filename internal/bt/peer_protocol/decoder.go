@@ -3,19 +3,18 @@ package peer_protocol
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
 
 	g "github.com/anacrolix/generics"
-	"github.com/pkg/errors"
 )
 
 type Decoder struct {
 	R *bufio.Reader
-	// This must return *[]byte where the slices can fit data for piece messages. I think we store
-	// *[]byte in the pool to avoid an extra allocation every time we put the slice back into the
-	// pool. The chunk size should not change for the life of the decoder.
+	// Gives *[]byte (no allocation putting one back) big enough for a piece message's data; the chunk size
+	// holds for the decoder's life.
 	Pool      *sync.Pool
 	MaxLength Integer // TODO: Should this include the length header or not?
 }
@@ -57,9 +56,7 @@ func (dr *decodeReader) UnreadLength() int64 {
 	return dr.lr.N
 }
 
-// This expects reads to have enough bytes. io.EOF is mapped to io.ErrUnexpectedEOF. It's probably
-// not a good idea to pass this to functions that expect to read until the end of something, because
-// they will probably expect io.EOF.
+// Reads that must be satisfied: io.EOF becomes io.ErrUnexpectedEOF, so not for readers that read to the end.
 type expectReader struct {
 	dr *decodeReader
 }

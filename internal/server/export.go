@@ -89,7 +89,7 @@ func orDash(s string) string {
 	return s
 }
 
-// importLibrary merges a Yoru, kuro or MAL export; progress never goes back, and changes queue for the trackers.
+// importLibrary merges a Yoru, kuro or MAL export: progress never goes back, and changes queue for trackers.
 func (s *Server) importLibrary(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<20))
 	if err != nil {

@@ -1,8 +1,6 @@
 package bt
 
-// It's possible that we either need to use JS-specific way to allow port reuse, or to fall back to
-// dialling TCP without forcing the local address to match the listener. If the fallback is
-// implemented, then this should probably return an error to trigger it.
+// Port reuse may need a JS way, or dialling TCP from any local address; that fallback would want an error here.
 func setReusePortSockOpts(fd uintptr) error {
 	return nil
 }

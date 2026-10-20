@@ -55,35 +55,49 @@ func (s *Store) HasTorrent(ctx context.Context, infoHash string) bool {
 	return err == nil && n > 0
 }
 
-// TorrentClaimed reports a download someone recorded, not merely one the sweep adopted from the engine:
-// adoption leaves only the whole-torrent placeholder, tied to no episode.
+// TorrentClaimed reports a download someone recorded, not one the sweep only adopted (no episode tied to
+// it). A failed read counts as claimed, as callers delete what is unclaimed.
 func (s *Store) TorrentClaimed(ctx context.Context, infoHash string) bool {
 	var n int
 	err := s.r.QueryRowContext(ctx, `
 		SELECT count(*) FROM torrent_file
 		WHERE lower(info_hash) = lower(?) AND (file_index <> ? OR anime_id IS NOT NULL)`,
 		infoHash, WholeTorrent).Scan(&n)
-	return err == nil && n > 0
+	return err != nil || n > 0
 }
 
-// TorrentNames lists the top-level names on disk of every download on record.
-func (s *Store) TorrentNames(ctx context.Context) ([]string, error) {
+// TorrentFinishedOrKept: a download complete or kept on any row; a failed read counts as yes.
+func (s *Store) TorrentFinishedOrKept(ctx context.Context, infoHash string) bool {
+	var n int
+	err := s.r.QueryRowContext(ctx, `
+		SELECT count(*) FROM cache_entry WHERE lower(info_hash) = lower(?) AND (complete = 1 OR kept = 1)`,
+		infoHash).Scan(&n)
+	return err != nil || n > 0
+}
+
+// TorrentName is a download's top-level name as its torrent gives it; on disk it may be made safe or tagged.
+type TorrentName struct {
+	Name, InfoHash string
+}
+
+// TorrentNames lists the top-level names of every download on record.
+func (s *Store) TorrentNames(ctx context.Context) ([]TorrentName, error) {
 	rows, err := s.r.QueryContext(ctx, `
-		SELECT name FROM torrent WHERE name <> ''
-		UNION SELECT path FROM torrent_file WHERE path <> ''`)
+		SELECT name, info_hash FROM torrent WHERE name <> ''
+		UNION SELECT path, info_hash FROM torrent_file WHERE path <> ''`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var out []string
+	var out []TorrentName
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var name, hash string
+		if err := rows.Scan(&name, &hash); err != nil {
 			return nil, err
 		}
 		if parts := strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }); len(parts) > 0 {
-			out = append(out, parts[0])
+			out = append(out, TorrentName{parts[0], hash})
 		}
 	}
 	return out, rows.Err()
@@ -280,6 +294,52 @@ func (s *Store) Superseded(ctx context.Context, animeID int, epKey string) ([]st
 	return out, rows.Err()
 }
 
+// SupersededReady: a replaced release may go now. Playing never; a finished one, or a kept one with data, only
+// once the episode's new release is complete, so a dead swarm can't cost the copy the user had.
+func (s *Store) SupersededReady(ctx context.Context, animeID int, epKey, infoHash string) (bool, error) {
+	var pinned, held, replaced int
+	err := s.r.QueryRowContext(ctx, `
+		SELECT
+		  EXISTS (SELECT 1 FROM cache_entry WHERE info_hash = ? AND pinned = 1),
+		  EXISTS (SELECT 1 FROM cache_entry WHERE info_hash = ? AND (complete = 1 OR (kept = 1 AND bytes_on_disk > 0))),
+		  EXISTS (SELECT 1 FROM torrent_file n
+		          JOIN cache_entry c ON c.info_hash = n.info_hash AND (c.file_index = n.file_index OR c.file_index = ?)
+		          WHERE n.anime_id = ? AND n.ep_key = ? AND n.selected = 1 AND n.info_hash <> ? AND c.complete = 1)`,
+		infoHash, infoHash, WholeTorrent, animeID, epKey, infoHash).Scan(&pinned, &held, &replaced)
+	if err != nil {
+		return false, err
+	}
+	return pinned == 0 && (held == 0 || replaced == 1), nil
+}
+
+// EpisodeRef names one episode of a show.
+type EpisodeRef struct {
+	AnimeID int
+	EpKey   string
+}
+
+// SupersededEpisodes lists episodes with a replaced release still held, for the sweep to finish dropping.
+func (s *Store) SupersededEpisodes(ctx context.Context) ([]EpisodeRef, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT DISTINCT f.anime_id, f.ep_key FROM torrent_file f
+		WHERE f.selected = 0 AND f.anime_id IS NOT NULL
+		  AND NOT EXISTS (SELECT 1 FROM torrent_file s
+		                  WHERE s.info_hash = f.info_hash AND s.selected = 1 AND s.file_index <> ?)`, WholeTorrent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EpisodeRef
+	for rows.Next() {
+		var r EpisodeRef
+		if err := rows.Scan(&r.AnimeID, &r.EpKey); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // WatchedEpisodes: finished in the player, or below the list's progress and
 // never played here. One gone back to and left unfinished is not seen.
 func (s *Store) WatchedEpisodes(ctx context.Context, animeID int) (map[int]bool, error) {
@@ -349,17 +409,22 @@ func (s *Store) UnpinAll(ctx context.Context) error {
 	return err
 }
 
-// PinOnly pins the file being watched and clears every other pin: one episode plays at a time.
-func (s *Store) PinOnly(ctx context.Context, infoHash string, fileIndex int) error {
+// PinPlaying pins the file being watched and unpins its episode's other releases, which a mid-episode swap
+// leaves with no session to unpin them. Other episodes' pins stay: another device may be playing them.
+func (s *Store) PinPlaying(ctx context.Context, animeID int, epKey, infoHash string, fileIndex int) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE cache_entry SET pinned = 0 WHERE pinned = 1 AND NOT (info_hash = ? AND file_index = ?)`,
-		infoHash, fileIndex); err != nil {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE cache_entry SET pinned = 0
+		WHERE pinned = 1 AND NOT (info_hash = ? AND file_index = ?) AND EXISTS (
+		    SELECT 1 FROM torrent_file f
+		    WHERE f.info_hash = cache_entry.info_hash AND (f.file_index = cache_entry.file_index OR cache_entry.file_index = ?)
+		      AND f.anime_id = ? AND f.ep_key = ?)`,
+		infoHash, fileIndex, WholeTorrent, animeID, epKey); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -392,26 +457,4 @@ func (s *Store) FileComplete(ctx context.Context, infoHash string, fileIndex int
 		`SELECT complete FROM cache_entry WHERE info_hash = ? AND file_index = ?`,
 		infoHash, fileIndex).Scan(&complete)
 	return err == nil && complete == 1
-}
-
-func (s *Store) DropCacheEntry(ctx context.Context, infoHash string, fileIndex int) error {
-	tx, err := s.w.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM cache_entry WHERE info_hash = ? AND file_index = ?`,
-		infoHash, fileIndex); err != nil {
-		return err
-	}
-	// The torrent row is only useful while a file of it is cached.
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM torrent WHERE info_hash = ?
-		AND NOT EXISTS (SELECT 1 FROM cache_entry WHERE info_hash = ?)`,
-		infoHash, infoHash); err != nil {
-		return err
-	}
-	return tx.Commit()
 }

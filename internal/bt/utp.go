@@ -5,8 +5,7 @@ import (
 	"net"
 )
 
-// Abstracts the utp Socket, so the implementation can be selected from
-// different packages.
+// The uTP socket, so the implementation can come from another package.
 type utpSocket interface {
 	net.PacketConn
 	// net.Listener, but we can't have duplicate Close.

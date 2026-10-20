@@ -1,4 +1,4 @@
-// Pre-release run: the Go suite, then each browser check on its own instance; logs in %TEMP%/yoru-release-check.
+// Pre-release run: the Go suite, then each browser check on its own instance; logs in %TEMP%/yoru-release-check
 //   node scripts/release-check.mjs [only.mjs …]    env: LANES=4, SKIP_BUILD=1, SKIP_GO=1
 import { spawn } from 'node:child_process'
 import { createWriteStream, mkdirSync, rmSync } from 'node:fs'
@@ -14,7 +14,7 @@ const logs = join(tmpdir(), 'yoru-release-check')
 // ALONE checks run one at a time: AniList throttles parallel catalogue loads, or they need the foreground.
 const ALONE = true
 
-// [check, extra env, alone]. Missing ones are tools or need real sites (subs-lag-probe, sources-, autodelete-,
+// [check, extra env, alone]. Missing ones are tools or need real sites (subs-lag-probe, sources-,
 // access-approval-check); subs-sync-check never starts under Playwright, which draws hidden tabs.
 const CHECKS = [
   ['player-check.mjs'],
@@ -25,11 +25,15 @@ const CHECKS = [
   ['prefs-scope-check.mjs'],
   ['profile-menu-check.mjs'],
   ['about-folders-check.mjs'],
+  ['alerts-check.mjs'],
   ['anime4k-tiers-check.mjs', {}, ALONE],
+  // On the local swarm, as prefetch-check: real sites would compete with it.
+  ['autodelete-check.mjs', { YORU_EXTRA_CONFIG: '' }, ALONE],
   ['autonext-seek-check.mjs'],
   ['backup-check.mjs'],
   ['browse-filters-check.mjs', {}, ALONE],
   ['browse-paging-check.mjs', {}, ALONE],
+  ['cast-check.mjs'],
   ['change-release-check.mjs'],
   ['continue-next-check.mjs'],
   ['downloads-fresh-check.mjs'],
@@ -53,6 +57,7 @@ const CHECKS = [
   ['settings-check.mjs'],
   ['setup-transcoder-check.mjs', { BIN_ONLY: 'ffmpeg' }],
   ['shortcuts-check.mjs'],
+  ['sites-check.mjs'],
   ['show-groups-check.mjs'],
   ['starting-note-check.mjs'],
   ['studio-check.mjs', {}, ALONE],

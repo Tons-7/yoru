@@ -15,6 +15,7 @@ func main() {
 	key := flag.String("key", "", "file holding the hex-encoded private key seed")
 	sums := flag.String("sums", "", "the SHA256SUMS.txt to sign")
 	out := flag.String("out", "", "where the 64-byte signature goes")
+	trust := flag.String("trust", "", "hex public key installs trust; the signature must verify with it")
 	flag.Parse()
 	if *key == "" || *sums == "" || *out == "" {
 		fmt.Fprintln(os.Stderr, "signsums: -key, -sums and -out are all needed")
@@ -36,7 +37,16 @@ func main() {
 		os.Exit(1)
 	}
 	priv := ed25519.NewKeyFromSeed(seed)
-	if err := os.WriteFile(*out, ed25519.Sign(priv, body), 0o644); err != nil {
+	sig := ed25519.Sign(priv, body)
+	// Signed with any other key, the release is refused by every installed copy.
+	if *trust != "" {
+		pub, err := hex.DecodeString(*trust)
+		if err != nil || len(pub) != ed25519.PublicKeySize || !ed25519.Verify(pub, body, sig) {
+			fmt.Fprintf(os.Stderr, "signsums: %s is not the release key installs trust (%s)\n", *key, *trust)
+			os.Exit(1)
+		}
+	}
+	if err := os.WriteFile(*out, sig, 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "signsums:", err)
 		os.Exit(1)
 	}

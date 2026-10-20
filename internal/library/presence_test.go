@@ -18,7 +18,7 @@ func (f *fakeCard) SetEnabled(bool)         {}
 func (f *fakeCard) Show(w discord.Watching) { f.shown = append(f.shown, w) }
 func (f *fakeCard) Clear()                  { f.cleared++ }
 
-// The card shows this machine's playback, others' only when allowed, never an adult title, and goes when it ends.
+// The card shows this machine's playback, others' if allowed, never an adult title, and goes when it ends.
 func TestPresenceReports(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
@@ -65,7 +65,7 @@ func TestPresenceReports(t *testing.T) {
 	if len(card.shown) != 2 {
 		t.Errorf("an unknown show was shown")
 	}
-	// Nor one without AniList's record, which is what says adult or not: a MAL-only title, or a show not yet loaded.
+	// Nor one without AniList's record, which says adult or not: a MAL-only title, or a show not yet loaded.
 	for _, id := range []int{-424242, 777} {
 		if err := st.EnsureAnime(ctx, id); err != nil {
 			t.Fatal(err)

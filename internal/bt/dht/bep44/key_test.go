@@ -112,8 +112,7 @@ func TestVectorMutable(t *testing.T) {
 // ed25519 sign with pre-sha512-summed private key. I believe this means we also need the public key
 // since we can't derive it from the hash. See https://stackoverflow.com/a/43689064/149482.
 func EdwardsSignSha512(privateKey [64]byte, publicKey []byte, message []byte) []byte {
-	// Outline the function body so that the returned signature can be
-	// stack-allocated.
+	// Outlined so the returned signature can live on the stack.
 	signature := make([]byte, ed25519.SignatureSize)
 	edwardsSignSha512(signature, privateKey, publicKey, message)
 	return signature

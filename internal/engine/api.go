@@ -18,7 +18,7 @@ import (
 // episode, enough to ride out a slow block without starving other files.
 const streamReadahead = 16 << 20
 
-// guard keeps the API to Yoru, ffmpeg and mpv: no browser headers or rebound name, and the secret off the streams.
+// guard keeps the API to Yoru, ffmpeg and mpv: no browser headers or rebound names, the secret off streams.
 func (e *Engine) guard(addr string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Origin") != "" || r.Header.Get("Sec-Fetch-Site") != "" || r.Header.Get("Sec-Fetch-Mode") != "" || r.Host != addr {
@@ -56,7 +56,7 @@ func (e *Engine) routes() http.Handler {
 		reply(w, fileRanges(en.t.Files()[i]))
 	})))
 	mux.HandleFunc("POST /torrents/{id}/pause", e.started(e.withEntry(func(w http.ResponseWriter, r *http.Request, en *entry) {
-		// Always said: a pause ends any stream reading the torrent, and a silent one cannot be traced afterwards.
+		// Always logged: a pause ends any stream reading the torrent, and a silent one can't be traced later.
 		e.log.Info("torrent paused", "id", en.id, "name", en.t.Name())
 		e.setPaused(en, true)
 		reply(w, struct{}{})

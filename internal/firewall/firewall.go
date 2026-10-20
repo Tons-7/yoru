@@ -42,6 +42,21 @@ type Status struct {
 	Command  string `json:"command,omitempty"`
 }
 
+// Keep judges only the networks keep accepts (phones reach Yoru on the home network, not a VPN's or
+// Hyper-V's); when it accepts none, the status stays whole rather than judged on nothing.
+func (s Status) Keep(keep func(Network) bool) Status {
+	var nets []Network
+	for _, n := range s.Networks {
+		if keep(n) {
+			nets = append(nets, n)
+		}
+	}
+	if len(nets) > 0 {
+		s.Networks = nets
+	}
+	return s
+}
+
 // Blocked reports a block rule for yoru.exe on a connected network's profile; it wins over every allow there.
 func (s Status) Blocked() bool {
 	for _, n := range s.Networks {

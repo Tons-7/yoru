@@ -74,7 +74,7 @@ func withPatience(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { racePatience = old })
 }
 
-// A better release still loading after the patience window loses to a ready one.
+// Past the patience window a ready release plays over a slow better one of the same resolution.
 func TestReadyReleasePlaysWhenTheBetterOneIsSlow(t *testing.T) {
 	quickWarm(t)
 	withPatience(t, 200*time.Millisecond)
@@ -83,7 +83,7 @@ func TestReadyReleasePlaysWhenTheBetterOneIsSlow(t *testing.T) {
 
 	p := newPlayback(t, engine, []indexer.Torrent{
 		release(goodHash, "[Best] Sousou no Frieren - 01 [1080p BluRay].mkv", 900),
-		release(otherHash, "[Worse] Sousou no Frieren - 01 [720p].mkv", 50),
+		release(otherHash, "[Worse] Sousou no Frieren - 01 [1080p WEB].mkv", 50),
 	})
 	start := time.Now()
 	rel, _, _, _, _, err := p.attach(context.Background(), PlayRequest{
@@ -104,6 +104,86 @@ func TestReadyReleasePlaysWhenTheBetterOneIsSlow(t *testing.T) {
 	}
 	if !engine.wasDeleted(goodHash) {
 		t.Error("the slow release kept downloading after losing")
+	}
+}
+
+// Past the patience, a release as sharp as the slow best one plays when ready, not when the slow one resolves.
+func TestSameResolutionReadyAfterThePatiencePlays(t *testing.T) {
+	quickWarm(t)
+	withPatience(t, 200*time.Millisecond)
+	const midHash = "4444444444444444444444444444444444444444"
+	engine := newFakeEngine()
+	engine.trickle[goodHash] = 5 * time.Second
+	engine.trickle[midHash] = 600 * time.Millisecond
+
+	p := newPlayback(t, engine, []indexer.Torrent{
+		release(goodHash, "[Best] Sousou no Frieren - 01 [1080p BluRay].mkv", 900),
+		release(midHash, "[Mid] Sousou no Frieren - 01 [1080p WEB].mkv", 300),
+		release(otherHash, "[Worse] Sousou no Frieren - 01 [720p].mkv", 50),
+	})
+	start := time.Now()
+	rel, _, _, _, _, err := p.attach(context.Background(), PlayRequest{
+		AnimeID: 1, Episode: 1, Season: 1, Prefs: score.DefaultPreferences(),
+	})
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if rel.Torrent.InfoHash != midHash {
+		t.Fatalf("picked %s, want the 1080p release that was ready", rel.Torrent.InfoHash)
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("waited %s for the slow one after a sharp one was ready", took)
+	}
+}
+
+// With 720p preferred, a 1080p ranked below still loading doesn't hold back a ready 720p.
+func TestLowerRankedSharperOneDoesNotBlockTheReadyOne(t *testing.T) {
+	quickWarm(t)
+	withPatience(t, 200*time.Millisecond)
+	const midHash = "4444444444444444444444444444444444444444"
+	engine := newFakeEngine()
+	engine.trickle[goodHash] = 5 * time.Second
+	engine.trickle[otherHash] = 5 * time.Second
+
+	p := newPlayback(t, engine, []indexer.Torrent{
+		release(goodHash, "[Best] Sousou no Frieren - 01 [720p BluRay].mkv", 900),
+		release(midHash, "[Mid] Sousou no Frieren - 01 [720p WEB].mkv", 300),
+		release(otherHash, "[Big] Sousou no Frieren - 01 [1080p WEB].mkv", 800),
+	})
+	prefs := score.DefaultPreferences()
+	prefs.Ladder = upTo("720p", prefs.Ladder)
+	start := time.Now()
+	rel, _, _, _, _, err := p.attach(context.Background(), PlayRequest{AnimeID: 1, Episode: 1, Season: 1, Prefs: prefs})
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if rel.Torrent.InfoHash != midHash {
+		t.Fatalf("picked %s, want the ready 720p", rel.Torrent.InfoHash)
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("waited %s on releases that weren't ahead of the ready one", took)
+	}
+}
+
+// Resolution outranks speed: a slow 1080p still delivering is waited for, never passed over for a ready 720p.
+func TestSlowHigherResolutionStillWins(t *testing.T) {
+	quickWarm(t)
+	withPatience(t, 200*time.Millisecond)
+	engine := newFakeEngine()
+	engine.trickle[goodHash] = 1500 * time.Millisecond
+
+	p := newPlayback(t, engine, []indexer.Torrent{
+		release(goodHash, "[Best] Sousou no Frieren - 01 [1080p BluRay].mkv", 900),
+		release(otherHash, "[Worse] Sousou no Frieren - 01 [720p].mkv", 50),
+	})
+	rel, _, _, _, _, err := p.attach(context.Background(), PlayRequest{
+		AnimeID: 1, Episode: 1, Season: 1, Prefs: score.DefaultPreferences(),
+	})
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if rel.Torrent.InfoHash != goodHash {
+		t.Fatalf("picked %s, want the 1080p release", rel.Torrent.InfoHash)
 	}
 }
 

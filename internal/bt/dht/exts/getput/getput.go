@@ -141,9 +141,7 @@ notDone:
 		if v.Mutable && v.Seq > autoSeq {
 			autoSeq = v.Seq
 		}
-		// There are more optimizations that can be done here. We can set CAS automatically, and we
-		// can skip updating the sequence number if the existing content already matches (and
-		// presumably republish the existing seq).
+		// Could set CAS itself, and keep (republish) the seq when the content already matches.
 		goto notDone
 	case <-op.Stalled():
 	case <-ctx.Done():

@@ -22,9 +22,8 @@ type ExtensionBit uint
 const (
 	ExtensionBitDht  = 0 // http://www.bittorrent.org/beps/bep_0005.html
 	ExtensionBitFast = 2 // http://www.bittorrent.org/beps/bep_0006.html
-	// A peer connection initiator can set this when sending a v1 infohash during handshake if they
-	// allow the receiving end to upgrade to v2 by responding with the corresponding v2 infohash.
-	// BEP 52, and BEP 4. TODO: Set by default and then clear it when it's not appropriate to send.
+	// Set by a dialler sending a v1 infohash to let the other end upgrade with the v2 one (BEP 52, BEP 4).
+	// TODO: on by default, cleared where it doesn't belong.
 	ExtensionBitV2Upgrade                    = 4
 	ExtensionBitAzureusExtensionNegotiation1 = 16
 	ExtensionBitAzureusExtensionNegotiation2 = 17
@@ -120,9 +119,8 @@ type HandshakeResult struct {
 	metainfo.Hash
 }
 
-// ih is nil if we expect the peer to declare the InfoHash, such as when the peer initiated the
-// connection. Returns ok if the Handshake was successful, and err if there was an unexpected
-// condition other than the peer simply abandoning the Handshake.
+// Handshake with ih nil waits for the peer to name the InfoHash (a peer that dialled us). ok is success;
+// err is anything worse than the peer giving up.
 func Handshake(
 	ctx context.Context,
 	sock io.ReadWriter,
@@ -188,9 +186,7 @@ func Handshake(
 	panicif.NotEq(len(b), 0)
 	// peerExtensions.Add(res.PeerExtensionBits.String(), 1)
 
-	// TODO: Maybe we can just drop peers here if we're not interested. This
-	// could prevent them trying to reconnect, falsely believing there was
-	// just a problem.
+	// TODO: drop peers we don't want here, so they don't retry thinking it went wrong.
 	if ih == nil { // We were waiting for the peer to tell us what they wanted.
 		post(res.Hash[:])
 		post(peerID[:])

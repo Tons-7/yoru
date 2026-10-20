@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { api } from '../lib/api'
+import { api, beacon } from '../lib/api'
 import { clockTime, cx, groupByDay, relativeTime } from '../lib/format'
 import {
   Badge,
@@ -13,6 +13,7 @@ import {
   PageHeader,
   Pager,
   ProgressBar,
+  RefreshFailed,
   Skeleton,
 } from '../components/ui'
 import { useClampPage } from '../lib/hooks'
@@ -41,6 +42,20 @@ interface HistoryPage {
   hasMore: boolean
 }
 
+// The show page's resume button reads history too.
+const FORGET_REFRESHES = ['history', 'continue', 'watch-stats', 'episodes', 'anime', 'upnext']
+
+// Outside the page: its toast and Undo stay up after leaving it, so the wait does too.
+const pendingForgets = new Map<string, { timer: number; body: { animeId: number; epKey: string } }>()
+// Closing the tab inside the Undo window still forgets: a beacon outlives the page, a fetch does not.
+window.addEventListener('pagehide', () => {
+  for (const [key, { timer, body }] of [...pendingForgets]) {
+    window.clearTimeout(timer)
+    pendingForgets.delete(key)
+    beacon('/api/history/forget', body)
+  }
+})
+
 export function History() {
   const [params, setParams] = useSearchParams()
   const page = Number(params.get('page') ?? 1)
@@ -52,49 +67,43 @@ export function History() {
     queryFn: () => api.get<HistoryPage>(`/api/history?page=${page}&perPage=40`),
   })
 
+  const refresh = () => {
+    for (const key of FORGET_REFRESHES) void qc.invalidateQueries({ queryKey: [key] })
+  }
   const forget = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.post('/api/history/forget', body),
     onSuccess: () => {
       setConfirmClear(false)
-      for (const key of ['history', 'continue', 'watch-stats', 'episodes']) {
-        void qc.invalidateQueries({ queryKey: [key] })
-      }
+      refresh()
     },
   })
 
-  // A removed row goes at once but is only forgotten when its Undo runs out (or the page is left).
+  // A removed row goes at once but is only forgotten when its Undo runs out.
   const [hidden, setHidden] = useState<Set<string>>(() => new Set())
-  const pending = useRef(new Map<string, { timer: number; send: () => void }>())
-  useEffect(() => {
-    const queued = pending.current
-    return () => {
-      for (const { timer, send } of queued.values()) {
-        window.clearTimeout(timer)
-        send()
-      }
-      queued.clear()
-    }
-  }, [])
   const forgetSoon = (entry: HistoryEntry) => {
     const key = `${entry.animeId}-${entry.epKey}`
+    const unhide = () =>
+      setHidden((h) => {
+        const next = new Set(h)
+        next.delete(key)
+        return next
+      })
+    const body = { animeId: entry.animeId, epKey: entry.epKey }
     const send = () => {
-      pending.current.delete(key)
-      void api.post('/api/history/forget', { animeId: entry.animeId, epKey: entry.epKey }).then(() => {
-        for (const k of ['history', 'continue', 'watch-stats', 'episodes']) void qc.invalidateQueries({ queryKey: [k] })
+      pendingForgets.delete(key)
+      api.post('/api/history/forget', body).then(refresh, () => {
+        unhide()
+        toast(`Couldn't remove episode ${entry.episode} of ${entry.title} from history`)
       })
     }
     setHidden((h) => new Set(h).add(key))
-    pending.current.set(key, { timer: window.setTimeout(send, TOAST_MS), send })
+    pendingForgets.set(key, { timer: window.setTimeout(send, TOAST_MS), body })
     toast(`Removed episode ${entry.episode} of ${entry.title}`, 'info', {
       label: 'Undo',
       run: () => {
-        window.clearTimeout(pending.current.get(key)?.timer)
-        pending.current.delete(key)
-        setHidden((h) => {
-          const next = new Set(h)
-          next.delete(key)
-          return next
-        })
+        window.clearTimeout(pendingForgets.get(key)?.timer)
+        pendingForgets.delete(key)
+        unhide()
       },
     })
   }
@@ -126,7 +135,9 @@ export function History() {
       />
       <Stats />
 
-      {isError ? (
+      {/* A failed refresh keeps the list it has, as the other pages do. */}
+      {isError && data && <RefreshFailed retry={() => refetch()} />}
+      {isError && !data ? (
         <ErrorState error={error} retry={() => refetch()} />
       ) : isPending ? (
         <div className="space-y-2">

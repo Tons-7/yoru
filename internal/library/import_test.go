@@ -14,9 +14,6 @@ import (
 	"yoru/internal/store"
 )
 
-//go:fix inline
-func ptr[T any](v T) *T { return new(v) }
-
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func TestToAnimePrefersRomajiThenUserPreferred(t *testing.T) {

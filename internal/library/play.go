@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -297,11 +298,21 @@ func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, boo
 	if err != nil {
 		return nil, false, nil
 	}
+	// Set once the episode plays from it: then it is never handed back, even if its record failed to save.
+	playing := false
 	// Being fetched ahead this moment, not yet on record: its torrent is taken over, not fetched twice.
 	if !ok {
 		if rec, ok = p.prefetch.Fetching(req.AnimeID, req.Episode); !ok {
 			return nil, false, nil
 		}
+		// Unused after all: back to the fetch, or gone if the fetch let it go; never left running unrecorded.
+		recorded := false
+		defer func() {
+			if !recorded && !playing {
+				p.handBack(context.WithoutCancel(ctx), req, rec.InfoHash)
+			}
+		}()
+		defer func() { recorded = p.store.TorrentClaimed(context.WithoutCancel(ctx), rec.InfoHash) }()
 	}
 
 	// Recorded before identity was enforced, this can be another show entirely.
@@ -321,6 +332,26 @@ func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, boo
 		return nil, false, fmt.Errorf("list downloads: %w", err)
 	}
 	id, held := live[strings.ToLower(rec.InfoHash)]
+	if !held && p.store.TorrentFinishedOrKept(ctx, rec.InfoHash) {
+		// Kept or finished, but the engine lost it (a session entry gone): added back by its hash, so the
+		// engine checks the bytes on disk rather than a search fetching the episode again.
+		magnet := "magnet:?xt=urn:btih:" + strings.ToLower(rec.InfoHash)
+		// The add waits for metadata from peers; a dead swarm must not hold play, which then searches.
+		readd, cancel := context.WithTimeout(ctx, 20*time.Second)
+		added, err := p.torrent.Add(readd, magnet, torrent.File{Name: rec.FilePath})
+		cancel()
+		if err == nil {
+			p.log.Info("re-added a kept download the engine had lost", "anime", req.AnimeID, "episode", req.Episode)
+			id, held = added.ID, true
+		} else if now, lerr := p.torrent.Live(context.WithoutCancel(ctx)); lerr == nil {
+			// No metadata came: let go again (its files stay), or the engine would look for it every run.
+			if stuck, ok := now[strings.ToLower(rec.InfoHash)]; ok {
+				if ferr := p.torrent.Forget(context.WithoutCancel(ctx), stuck); ferr != nil {
+					p.log.Warn("let go of a re-add that got no metadata", "torrent", stuck, "err", ferr)
+				}
+			}
+		}
+	}
 	if !held {
 		return nil, false, nil
 	}
@@ -348,6 +379,7 @@ func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, boo
 	}); err != nil {
 		p.log.Warn("record torrent", "err", err)
 	}
+	playing = true
 
 	resume, _ := p.store.ResumeAt(ctx, req.AnimeID, epKey(req.Episode))
 	session := &Session{
@@ -591,7 +623,7 @@ func (p *Playback) race(
 
 	results := make(chan attempt)
 	slots := make(chan struct{}, raceWidth)
-	// A candidate failing at once (a dead magnet, the episode not in the pack) starts the next without the stagger.
+	// A candidate failing at once (dead magnet, episode not in the pack) starts the next without the stagger.
 	failed := make(chan struct{}, n)
 	go func() {
 		for i := range n {
@@ -632,21 +664,38 @@ func (p *Playback) race(
 		return o.release, o.added, o.live, o.file, o.fileIndex, nil
 	}
 
+	// A better release is still loading: the best ready one, if every one still loading ahead of it has its
+	// resolution. Resolution outranks speed, and ones ranked below (the preferred quality's order) never count.
+	asSharp := func() (int, bool) {
+	next:
+		for i := range n {
+			o := outcomes[i]
+			if o == nil || o.err != nil {
+				continue
+			}
+			for j := range i {
+				if outcomes[j] == nil && lines(candidates[j].Release.Resolution) != lines(o.release.Release.Resolution) {
+					continue next
+				}
+			}
+			p.log.Info("a better release is slow, playing one that is ready", "title", o.release.Torrent.Title)
+			return i, true
+		}
+		return 0, false
+	}
+
 	var lastErr error
 	var patience <-chan time.Time
+	waited := false
 	for received := 0; received < n; {
 		var a attempt
 		select {
 		case a = <-results:
 			received++
 		case <-patience:
-			// A better release is still loading; play the best one that's ready.
-			for i := range n {
-				if o := outcomes[i]; o != nil && o.err == nil {
-					p.log.Info("a better release is slow, playing one that is ready",
-						"title", o.release.Torrent.Title)
-					return commit(i)
-				}
+			waited, patience = true, nil
+			if i, ok := asSharp(); ok {
+				return commit(i)
 			}
 			continue
 		case <-ctx.Done():
@@ -657,7 +706,7 @@ func (p *Playback) race(
 		outcomes[a.index] = &a
 		if a.err != nil {
 			lastErr = a.err
-		} else if patience == nil {
+		} else if patience == nil && !waited {
 			patience = time.After(racePatience)
 		}
 		// The first success with every better-ranked rival resolved; a nil ahead is still racing.
@@ -669,6 +718,13 @@ func (p *Playback) race(
 				return commit(i)
 			}
 		}
+		// Past the patience, each result is weighed again: one as sharp may be ready only now, or the
+		// sharper ones still racing may have just failed.
+		if waited {
+			if i, ok := asSharp(); ok {
+				return commit(i)
+			}
+		}
 	}
 
 	if lastErr == nil {
@@ -677,6 +733,12 @@ func (p *Playback) race(
 	return zero, nil, nil, torrent.File{}, 0, fmt.Errorf(
 		"tried %d release(s) for episode %d without one that would download: %w",
 		n, req.Episode, lastErr)
+}
+
+// lines is a resolution's height, "1080p" as 1080; 0 when unknown.
+func lines(resolution string) int {
+	n, _ := strconv.Atoi(strings.TrimSuffix(strings.ToLower(resolution), "p"))
+	return n
 }
 
 // discardLosers drops the torrents of races that finished but were not chosen.
@@ -850,6 +912,9 @@ func (p *Playback) yieldWanted(ctx context.Context, animeID, episode int) bool {
 	return !p.store.FileComplete(ctx, hash, index) && !(p.cache != nil && p.cache.Finished(ctx, hash))
 }
 
+// ResumeYielded resumes the downloads a Start paused, for a play that never became a stream.
+func (p *Playback) ResumeYielded(ctx context.Context) { p.resumeYielded(ctx) }
+
 // resumeYielded restarts what yield paused once no episode is playing or starting.
 func (p *Playback) resumeYielded(ctx context.Context) {
 	p.yieldMu.Lock()
@@ -885,6 +950,21 @@ func (p *Playback) resumeYielded(ctx context.Context) {
 	}
 }
 
+// handBack returns a prefetch's torrent play took over and didn't use; if the fetch let it go meanwhile,
+// it is removed here, as nobody else will.
+func (p *Playback) handBack(ctx context.Context, req PlayRequest, hash string) {
+	if p.prefetch.HandBack(req.AnimeID, req.Episode, hash) {
+		return
+	}
+	live, err := p.torrent.Live(ctx)
+	if err != nil {
+		return
+	}
+	if id, ok := live[strings.ToLower(hash)]; ok {
+		discardUnclaimed(ctx, p.store, p.torrent, p.log, id, hash)
+	}
+}
+
 // An abandoned candidate keeps its disk space until it is removed.
 func (p *Playback) discard(ctx context.Context, id int, hash string) {
 	discardUnclaimed(ctx, p.store, p.torrent, p.log, id, hash)
@@ -893,7 +973,8 @@ func (p *Playback) discard(ctx context.Context, id int, hash string) {
 // discardUnclaimed removes a release that was tried and dropped, unless it is on record for an episode:
 // that one is someone's download, whatever the caller assumed.
 func discardUnclaimed(ctx context.Context, st *store.Store, tc *torrent.Client, log *slog.Logger, id int, hash string) {
-	if st.TorrentClaimed(ctx, hash) {
+	// Held finished or kept before this try (an adopted pack the add returned): the user's data, not ours.
+	if st.TorrentClaimed(ctx, hash) || st.TorrentFinishedOrKept(ctx, hash) {
 		return
 	}
 	if err := tc.Delete(ctx, id); err != nil {
@@ -1034,10 +1115,10 @@ func (p *Playback) launch(ctx context.Context, req PlayRequest, s *Session) erro
 		opts.URL = s.LocalPath
 	}
 
-	// The browser pins when its stream opens; mpv has no stream session, so this
-	// is the only place that knows an episode is now being watched.
+	// The browser pins when its stream opens; mpv has no stream session, so this is the only place that
+	// knows an episode is now being watched. Beside other devices' pins: mpv's tracker unpins its own.
 	if s.InfoHash != "" {
-		if err := p.store.PinOnly(ctx, s.InfoHash, s.FileIndex); err != nil {
+		if err := p.store.PinPlaying(ctx, req.AnimeID, epKey(req.Episode), s.InfoHash, s.FileIndex); err != nil {
 			p.log.Warn("pin playing episode", "anime", req.AnimeID, "err", err)
 		}
 	}
@@ -1052,13 +1133,14 @@ func (p *Playback) launch(ctx context.Context, req PlayRequest, s *Session) erro
 		Boost: prefs.String("playback.boost"),
 	}
 
-	// mpv only auto-skips from these, so they have to be resolved here.
-	if ranges := p.skipRanges(ctx, req, opts.URL); len(ranges) > 0 {
-		opts.SkipRanges = ranges
-		opts.AutoSkip = true
+	// mpv only auto-skips from these, so they have to be resolved here. Every range becomes a chapter;
+	// only the kinds Settings ask for are skipped, as the browser player does.
+	if ranges, duration := p.skipRanges(ctx, req, opts.URL); len(ranges) > 0 {
+		opts.SkipRanges = autoSkipped(ranges, prefs.Bool("playback.autoskip_op"), prefs.Bool("playback.autoskip_ed"))
+		opts.AutoSkip = len(opts.SkipRanges) > 0
 
 		path := filepath.Join(p.cacheDir, fmt.Sprintf("chapters-%d-%d.ini", req.AnimeID, req.Episode))
-		if err := player.WriteChapters(path, ranges, 0); err == nil {
+		if err := player.WriteChapters(path, ranges, duration); err == nil {
 			opts.ChaptersFile = path
 		}
 	}
@@ -1078,8 +1160,8 @@ func (p *Playback) launch(ctx context.Context, req PlayRequest, s *Session) erro
 }
 
 // skipRanges resolves the opening and ending for mpv: the file's own chapters
-// first, then AniSkip, which needs the real length the probe gives.
-func (p *Playback) skipRanges(ctx context.Context, req PlayRequest, source string) []player.SkipRange {
+// first, then AniSkip, which needs the real length the probe gives; that length comes back too.
+func (p *Playback) skipRanges(ctx context.Context, req PlayRequest, source string) ([]player.SkipRange, float64) {
 	var chapters []player.SkipRange
 	var duration int
 
@@ -1100,7 +1182,7 @@ func (p *Playback) skipRanges(ctx context.Context, req PlayRequest, source strin
 	}
 
 	if hasKind(chapters, "op") && hasKind(chapters, "ed") {
-		return chapters
+		return chapters, float64(duration)
 	}
 	if p.enricher != nil {
 		if err := p.enricher.Skips(ctx, req.AnimeID, req.Episode, duration); err != nil {
@@ -1110,14 +1192,32 @@ func (p *Playback) skipRanges(ctx context.Context, req PlayRequest, source strin
 
 	stored, err := p.store.SkipRanges(ctx, req.AnimeID, req.Episode)
 	if err != nil {
-		return chapters
+		return chapters, float64(duration)
 	}
 	for _, r := range stored {
 		if !hasKind(chapters, r.Kind) {
 			chapters = append(chapters, r)
 		}
 	}
-	return chapters
+	return chapters, float64(duration)
+}
+
+// autoSkipped keeps the openings and endings the user asked to skip; recaps never skip on their own.
+func autoSkipped(ranges []player.SkipRange, op, ed bool) []player.SkipRange {
+	var out []player.SkipRange
+	for _, r := range ranges {
+		switch r.Kind {
+		case "op", "mixed-op":
+			if op {
+				out = append(out, r)
+			}
+		case "ed", "mixed-ed":
+			if ed {
+				out = append(out, r)
+			}
+		}
+	}
+	return out
 }
 
 func hasKind(ranges []player.SkipRange, kind string) bool {
@@ -1193,7 +1293,7 @@ func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64) {
 			if !reported && !positioned && ev.Reason == "eof" {
 				p.watched(animeID, episode)
 			}
-			// The player closing is the stream closing: unpinned, paused per the prefs, and what yielded resumes.
+			// The player closing ends the stream: unpinned, paused per the prefs, and what yielded resumes.
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			p.Suspend(ctx, animeID, episode)
 			cancel()
@@ -1263,20 +1363,6 @@ func (p *Playback) autoDelete(animeID int) {
 	defer cancel()
 	if _, err := p.cache.AutoDelete(ctx, animeID); err != nil {
 		p.log.Warn("auto-delete watched", "anime", animeID, "err", err)
-	}
-}
-
-// Releasing the pin returns the file to the cache manager's control.
-func (p *Playback) unpin(animeID, episode int) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	hash, index, err := p.store.CachedFile(ctx, animeID, epKey(episode))
-	if err != nil || hash == "" {
-		return
-	}
-	if err := p.store.PinCache(ctx, hash, index, false); err != nil {
-		p.log.Warn("unpin", "err", err)
 	}
 }
 

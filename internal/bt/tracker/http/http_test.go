@@ -12,6 +12,20 @@ import (
 	"yoru/internal/bt/tracker/udp"
 )
 
+// A tracker is whoever a magnet names: a malformed peer entry is an error, not a crash.
+func TestUnmarshalHTTPResponseMalformedPeerDicts(t *testing.T) {
+	for _, body := range []string{
+		"d5:peersld2:ipi0e4:porti0eeee",
+		"d5:peersld4:porti1eeee",
+		"d5:peersld2:ip7:1.2.3.4ee",
+		"d5:peersld2:ip7:1.2.3.44:port3:abceee",
+		"d5:peersli1eee",
+	} {
+		var hr HttpResponse
+		qt.Check(t, qt.IsNotNil(bencode.Unmarshal([]byte(body), &hr)), qt.Commentf("%s", body))
+	}
+}
+
 func TestUnmarshalHTTPResponsePeerDicts(t *testing.T) {
 	var hr HttpResponse
 	require.NoError(t, bencode.Unmarshal(

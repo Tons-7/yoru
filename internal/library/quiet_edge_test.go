@@ -4,11 +4,11 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"yoru/internal/db"
@@ -16,24 +16,32 @@ import (
 	"yoru/internal/torrent"
 )
 
-func checkingEngine(t *testing.T, polls *int, mu *sync.Mutex) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// checkingEngine answers in memory, a torrent whose check never ends; synctest's clock moves only while
+// every goroutine waits on it, which a real socket never counts as.
+func checkingEngine(polls *atomic.Int32) http.RoundTripper {
+	return roundTrip(func(r *http.Request) (*http.Response, error) {
+		body := "{}"
 		switch {
 		case r.URL.Path == "/torrents":
-			io.WriteString(w, `{"torrents":[{"id":1,"info_hash":"AAAA","name":"a"}]}`)
+			body = `{"torrents":[{"id":1,"info_hash":"AAAA","name":"a"}]}`
 		case strings.HasSuffix(r.URL.Path, "/stats/v1"):
-			*polls++
-			io.WriteString(w, `{"state":"initializing","finished":false,"progress_bytes":1,"total_bytes":10000}`)
+			polls.Add(1)
+			body = `{"state":"initializing","finished":false,"progress_bytes":1,"total_bytes":10000}`
 		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    r,
+		}, nil
+	})
 }
 
-func quietDownloader(t *testing.T, url string) *Downloader {
+func quietDownloader(t *testing.T, engine http.RoundTripper) *Downloader {
 	t.Helper()
 	conn, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -42,54 +50,42 @@ func quietDownloader(t *testing.T, url string) *Downloader {
 	t.Cleanup(func() { conn.Close() })
 	conn.Migrate()
 	st := store.New(conn)
-	return NewDownloader(st, NewPrefetcher(st, nil, torrent.NewClient(url), discard()), nil, discard())
+	tc := torrent.NewClient("http://engine.test").WithTransport(engine)
+	return NewDownloader(st, NewPrefetcher(st, nil, tc, discard()), nil, discard())
 }
 
-// A torrent whose check never ends must not keep the startup pass polling for good.
+// A torrent whose check never ends must not keep the startup pass polling for good: the first pass, then one
+// a recheck apart until the deadline, then none.
 func TestQuietGivesUpAfterTheDeadline(t *testing.T) {
-	var mu sync.Mutex
-	polls := 0
-	srv := checkingEngine(t, &polls, &mu)
+	synctest.Test(t, func(t *testing.T) {
+		var polls atomic.Int32
+		wasEvery, wasFor := quietRecheck, quietFor
+		quietRecheck, quietFor = 10*time.Millisecond, 60*time.Millisecond
+		t.Cleanup(func() { quietRecheck, quietFor = wasEvery, wasFor })
 
-	wasEvery, wasFor := quietRecheck, quietFor
-	quietRecheck, quietFor = 10*time.Millisecond, 60*time.Millisecond
-	t.Cleanup(func() { quietRecheck, quietFor = wasEvery, wasFor })
-
-	quietDownloader(t, srv.URL).Quiet(context.Background())
-	time.Sleep(200 * time.Millisecond)
-	mu.Lock()
-	n := polls
-	mu.Unlock()
-	time.Sleep(100 * time.Millisecond)
-	mu.Lock()
-	defer mu.Unlock()
-	if polls != n {
-		t.Fatalf("still polling after the deadline: %d then %d", n, polls)
-	}
-	if n < 2 || n > 10 {
-		t.Fatalf("%d polls inside a 60ms window at 10ms", n)
-	}
+		quietDownloader(t, checkingEngine(&polls)).Quiet(context.Background())
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if n := polls.Load(); n != 1+6 {
+			t.Fatalf("%d passes, want the first and one every 10ms for 60ms", n)
+		}
+	})
 }
 
 func TestQuietStopsWhenCancelled(t *testing.T) {
-	var mu sync.Mutex
-	polls := 0
-	srv := checkingEngine(t, &polls, &mu)
-	was := quietRecheck
-	quietRecheck = 10 * time.Millisecond
-	t.Cleanup(func() { quietRecheck = was })
+	synctest.Test(t, func(t *testing.T) {
+		var polls atomic.Int32
+		was := quietRecheck
+		quietRecheck = 10 * time.Millisecond
+		t.Cleanup(func() { quietRecheck = was })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	quietDownloader(t, srv.URL).Quiet(ctx)
-	cancel()
-	time.Sleep(50 * time.Millisecond)
-	mu.Lock()
-	n := polls
-	mu.Unlock()
-	time.Sleep(50 * time.Millisecond)
-	mu.Lock()
-	defer mu.Unlock()
-	if polls != n {
-		t.Fatalf("kept polling after cancel: %d then %d", n, polls)
-	}
+		ctx, cancel := context.WithCancel(context.Background())
+		quietDownloader(t, checkingEngine(&polls)).Quiet(ctx)
+		cancel()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if n := polls.Load(); n != 1 {
+			t.Fatalf("%d passes, want only the first: it was cancelled before any recheck", n)
+		}
+	})
 }

@@ -10,9 +10,7 @@ func (t *Torrent) UseSources(sources []string) {
 	t.AddSources(sources)
 }
 
-// Deprecated: Max requests are done Client-wide by host or cost-function applied to the webseed
-// URL. Max concurrent requests to a WebSeed for a given torrent. This could easily be reimplemented
-// by not assigning requests to a (Torrent, webseed URL) tuple keyed component in the webseed plan.
+// Deprecated: Webseed requests are capped Client-wide, per host or by a cost function on the URL.
 func WebSeedTorrentMaxRequests(maxRequests int) AddWebSeedsOpt {
 	return func(c *webseed.Client) {
 		c.MaxRequests = maxRequests

@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-//go:fix inline
-func strptr(s string) *string { return new(s) }
-
 func exportStore(t *testing.T) *Store {
 	t.Helper()
 	st := newTestStore(t)

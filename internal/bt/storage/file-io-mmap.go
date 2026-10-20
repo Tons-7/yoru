@@ -5,10 +5,10 @@ package storage
 import (
 	"errors"
 	"fmt"
-	"github.com/anacrolix/sync"
 	"io"
 	"io/fs"
 	"os"
+	"sync"
 	"sync/atomic"
 
 	g "github.com/anacrolix/generics"
@@ -61,9 +61,8 @@ func (me *mmapFileIo) rename(from, to string) (err error) {
 func (me *mmapFileIo) close(name string) {
 	v, ok := me.paths[name]
 	if ok {
-		// We're forcibly closing the handle. Leave the store's ref intact so we're the only one
-		// that closes it, then delete it anyway. We must be holding the IO context lock to be doing
-		// this if we're not using operation locks.
+		// Forced shut, with the store's ref left so only this closes it, then deleted; needs the IO
+		// context lock without operation locks.
 		panicif.Err(v.close())
 		g.MustDelete(me.paths, name)
 	}
@@ -116,10 +115,8 @@ func (me *fileMmap) dec() error {
 }
 
 func (me *fileMmap) close() (err error) {
-	// I can't see any way to avoid this. We need to forcibly alter the actual state of the handle
-	// underneath other consumers to kick them off. Additionally, we need to exclude users of its raw
-	// file descriptor. This is a potential deadlock zone if handles have lifetimes that escape the
-	// file storage implementation (like with NewReader, which don't provide for it).
+	// Unavoidable: other users are kicked off the handle and its raw descriptor. Handles outliving the
+	// storage (NewReader's) could deadlock here.
 	me.mu.Lock()
 	defer me.mu.Unlock()
 	// There's no double-close protection here. Not sure if that's an issue. Probably not since we
@@ -333,13 +330,8 @@ func (me *mmapFileHandle) Read(p []byte) (n int, err error) {
 }
 
 func (me *mmapFileHandle) seekDataOrEof(offset int64) (ret int64, err error) {
-	// This should be fine as it's an atomic operation, on a shared file handle, so nobody will be
-	// relying non-atomic operations on the file. TODO: Does this require msync first so we don't
-	// skip our own writes.
-
-	//  We do need to protect the file descriptor as that's not synchronized outside os.File. If
-	//  it's already closed before we call this, that's fine, we'll get EBADF. Don't recursively
-	//  RLock here if we're RLocking at the reference level.
+	// Atomic on a shared handle, so safe; the descriptor still needs its lock (closed first, EBADF is
+	// fine). TODO: msync first, so our own writes aren't skipped?
 	mu := &me.shared.f.mu
 	if lockHandleOperations {
 		mu.RLock()

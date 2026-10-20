@@ -523,9 +523,9 @@ export interface SetupProgress {
 export interface SetupState {
   components: SetupComponent[]
   ready: boolean
-  /** Torrent sites in config.toml. None ship with Yoru. */
+  /** Torrent sites searched, saved in the app or config.toml's. None ship with Yoru. */
   indexers: number
-  /** [[indexer]] blocks skipped at startup, with the reason. */
+  /** Sites skipped, with the reason. */
   badIndexers?: string[]
   /** Where history lives when data_dir is empty. */
   defaultDataDir?: string

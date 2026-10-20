@@ -195,7 +195,7 @@ func (v *VLC) watch(cmd *exec.Cmd, ctl control, opts Options, events chan Event)
 			}
 			v.mu.Unlock()
 			if !ended {
-				emit(Event{Kind: EventExit, Position: lastPos, Duration: lastLen, Reason: "vlc"})
+				deliver(events, Event{Kind: EventExit, Position: lastPos, Duration: lastLen, Reason: "vlc"})
 			}
 			return
 		case <-tick.C:
@@ -250,7 +250,7 @@ func (v *VLC) watch(cmd *exec.Cmd, ctl control, opts Options, events chan Event)
 			if lastLen > 0 && lastLen-lastPos <= 3 {
 				reason = "eof"
 			}
-			emit(Event{Kind: EventEnd, Position: lastPos, Duration: lastLen, Reason: reason})
+			deliver(events, Event{Kind: EventEnd, Position: lastPos, Duration: lastLen, Reason: reason})
 			v.Stop()
 		}
 	}

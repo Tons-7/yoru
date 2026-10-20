@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"time"
 
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
@@ -52,8 +53,10 @@ func Open(path string) (*DB, error) {
 	}
 	readers := max(4, runtime.NumCPU())
 	read.SetMaxOpenConns(readers)
-	// Idle defaults to two, so a burst reopens connections and re-runs every pragma on each one.
+	// Idle defaults to two, so a burst reopens connections and re-runs every pragma on each one. Each keeps
+	// its own ~31 MiB page cache, so after a quiet spell they go, and their caches with them.
 	read.SetMaxIdleConns(readers)
+	read.SetConnMaxIdleTime(5 * time.Minute)
 	if err := read.Ping(); err != nil {
 		write.Close()
 		read.Close()
@@ -81,9 +84,12 @@ func (d *DB) Migrate() error {
 	if err := goose.Up(migrator, "migrations"); err != nil {
 		return err
 	}
-	var table string
-	if err := migrator.QueryRow("PRAGMA foreign_key_check").Scan(&table); err == nil {
-		return fmt.Errorf("migration left a dangling foreign key in %s", table)
+	// Four columns per row: the table, its rowid, the parent it points at, and which foreign key.
+	var table, parent string
+	var rowid sql.NullInt64
+	var fkid int
+	if err := migrator.QueryRow("PRAGMA foreign_key_check").Scan(&table, &rowid, &parent, &fkid); err == nil {
+		return fmt.Errorf("migration left a dangling foreign key in %s (row %d) to %s", table, rowid.Int64, parent)
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}

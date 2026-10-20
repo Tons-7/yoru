@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
+
 	"yoru/internal/bt"
 	"yoru/internal/torrent"
 )
@@ -30,6 +32,88 @@ func TestKeepsTheBoundAddress(t *testing.T) {
 		if got := c.now.keeps(bound); got != c.want {
 			t.Errorf("%v keeps %v: %v, want %v", c.now.all, bound, got, c.want)
 		}
+	}
+}
+
+// fakeDNS answers every A query with answer and reports where each query came from.
+func fakeDNS(t *testing.T, answer net.IP) (port string, from <-chan net.Addr) {
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	seen := make(chan net.Addr, 256)
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			var p dnsmessage.Parser
+			h, err := p.Start(buf[:n])
+			if err != nil {
+				continue
+			}
+			q, err := p.Question()
+			if err != nil {
+				continue
+			}
+			select {
+			case seen <- addr:
+			default:
+			}
+			b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: h.ID, Response: true, RecursionAvailable: true})
+			b.StartQuestions()
+			b.Question(q)
+			b.StartAnswers()
+			if q.Type == dnsmessage.TypeA {
+				hdr := dnsmessage.ResourceHeader{Name: q.Name, Class: dnsmessage.ClassINET, TTL: 60}
+				b.AResource(hdr, dnsmessage.AResource{A: [4]byte(answer.To4())})
+			}
+			if msg, err := b.Finish(); err == nil {
+				pc.WriteTo(msg, addr)
+			}
+		}
+	}()
+	_, port, _ = net.SplitHostPort(pc.LocalAddr().String())
+	return port, seen
+}
+
+// With a network chosen, tracker and DHT router names are asked of its DNS server, from its address.
+func TestBoundLookupsAskTheNetworksDNS(t *testing.T) {
+	port, from := fakeDNS(t, net.IPv4(10, 9, 8, 7))
+	old := dnsPort
+	dnsPort = port
+	t.Cleanup(func() { dnsPort = old })
+
+	vpn := bindAddrs{v4: net.IPv4(127, 0, 0, 2).To4(), dns: []net.IP{net.IPv4(127, 0, 0, 1).To4()}}
+	cfg := bt.NewDefaultClientConfig()
+	applyBinding(cfg, vpn)
+	if cfg.TrackerResolver == nil {
+		t.Fatal("no resolver for UDP trackers")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ips, err := cfg.TrackerResolver.LookupHost(ctx, "tracker.example")
+	if err != nil || len(ips) != 1 || ips[0] != "10.9.8.7" {
+		t.Fatalf("lookup = %v, %v", ips, err)
+	}
+	nodes, err := cfg.DhtStartingNodes("udp")()
+	if err != nil || len(nodes) == 0 {
+		t.Fatalf("DHT routers = %v, %v", nodes, err)
+	}
+	for len(from) > 0 {
+		if a := <-from; !hostIP(a).Equal(vpn.v4) {
+			t.Fatalf("a query left from %v, not the chosen network's address", a)
+		}
+	}
+
+	// An adapter given no DNS servers leaves names to the system.
+	cfg = bt.NewDefaultClientConfig()
+	applyBinding(cfg, bindAddrs{v4: vpn.v4})
+	if cfg.TrackerResolver != nil {
+		t.Error("a resolver was set without DNS servers to ask")
 	}
 }
 

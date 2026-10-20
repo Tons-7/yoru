@@ -96,9 +96,6 @@ func testLookuperSimple(t *testing.T, iplist Ranger) {
 		{"1.2.3.255", false, ""},
 		{"1.2.8.0", true, "b"},
 		{"1.2.4.255", true, "a"},
-		// Try to roll over to the next octet on the parse. Note the final
-		// octet is overbounds. In the next case.
-		// {"1.2.7.256", true, "bad IP"},
 		{"1.2.8.1", true, "b"},
 		{"1.2.8.2", true, "eff"},
 	} {

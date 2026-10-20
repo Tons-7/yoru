@@ -7,7 +7,7 @@ import (
 	"syscall"
 )
 
-// Lock takes an exclusive lock on path for the life of the process; a second Yoru on the same data gets an error.
+// Lock holds an exclusive lock on path for the process's life; a second Yoru on the same data gets an error.
 func Lock(path string) (func(), error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {

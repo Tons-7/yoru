@@ -18,11 +18,21 @@ func NewMemory() *Memory {
 	}
 }
 
+// Puts come from anyone on the DHT; past this many, an arbitrary old item makes room.
+const memoryMaxItems = 1000
+
 func (m *Memory) Put(i *Item) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.m[i.Target()] = i
+	t := i.Target()
+	if _, ok := m.m[t]; !ok && len(m.m) >= memoryMaxItems {
+		for old := range m.m {
+			delete(m.m, old)
+			break
+		}
+	}
+	m.m[t] = i
 
 	return nil
 }

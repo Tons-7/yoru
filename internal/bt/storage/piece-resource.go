@@ -147,8 +147,7 @@ func (s piecePerResourcePiece) writeConsecutiveChunks(
 	return io.Copy(w, r)
 }
 
-// Returns if the piece is complete. Ok should be true, because we are the definitive source of
-// truth here.
+// Whether the piece is complete; Ok must be true, as this storage is the final word.
 func (s piecePerResourcePiece) mustIsComplete() bool {
 	completion := s.completionLocked()
 	if !completion.Ok {
@@ -217,10 +216,8 @@ func (s piecePerResourcePiece) MarkComplete() (err error) {
 		return
 	}
 
-	// I think we do this synchronously here since we don't want callers to act on the completed
-	// piece if we're concurrently still deleting chunks. The caller may decide to start
-	// downloading chunks again and won't expect us to delete them. It seems to be much faster
-	// to let the resource provider do this if possible.
+	// Synchronously: a caller acting on the completed piece (fetching chunks again, even) mustn't see
+	// them deleted under it. The provider deletes faster, where it can.
 	if pd, ok := s.rp.(PrefixDeleter); ok {
 		err = pd.DeletePrefix(s.incompleteDirPath() + "/")
 		if err != nil {

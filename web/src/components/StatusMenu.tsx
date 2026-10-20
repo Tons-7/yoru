@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { ConfirmInline } from './ui'
 import { LIST_STATUSES, type ListStatus } from '../lib/api'
 import { useRemoveStatus, useSetStatus } from '../lib/queries'
 import { cx } from '../lib/format'
@@ -58,8 +59,8 @@ export function StatusMenu({
           remove.reset()
         }}
         className={cx(
-          'flex items-center gap-1.5 font-medium transition-colors',
-          compact ? 'tap relative size-8 justify-center rounded-md' : 'rounded-lg px-4 py-2 text-sm',
+          'flex items-center gap-1.5 font-medium transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400',
+          compact ? 'tap relative size-8 justify-center rounded-md' : 'rounded-lg px-4 py-2 text-sm pointer-coarse:min-h-11',
           active
             ? 'bg-accent-500/20 text-accent-400 hover:bg-accent-500/30'
             : 'bg-base-800/90 text-base-200 hover:bg-base-700',
@@ -85,7 +86,8 @@ export function StatusMenu({
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
-                if (status.value === 'REPEATING' && current !== 'REPEATING' && !confirmRewatch) {
+                // Rewatching resets progress, so it only ever goes through the confirm below.
+                if (status.value === 'REPEATING' && current !== 'REPEATING') {
                   setConfirmRewatch(true)
                   return
                 }
@@ -108,36 +110,66 @@ export function StatusMenu({
                   : 'text-base-200 hover:bg-base-750',
               )}
             >
-              {status.value === 'REPEATING' && confirmRewatch
-                ? 'Restart from ep 1?'
-                : status.label}
+              {status.label}
               {status.value === current && <CheckIcon />}
             </button>
           ))}
-          {current && (
-            <button
-              role="menuitem"
-              disabled={remove.isPending}
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                if (!confirmRemove) {
-                  setConfirmRemove(true)
-                  return
+          {/* A Cancel that takes focus: relabelled in place, a double tap confirmed what the first armed. */}
+          {confirmRewatch && (
+            <Confirming note="Progress and ticks reset">
+              <ConfirmInline
+                label={setStatus.isPending ? 'Starting…' : 'Rewatch'}
+                tone="accent"
+                size="sm"
+                pending={setStatus.isPending}
+                onConfirm={() =>
+                  setStatus.mutate(
+                    { animeId, status: 'REPEATING' },
+                    {
+                      onSuccess: () => {
+                        setConfirmRewatch(false)
+                        setOpen(false)
+                        onDone?.()
+                      },
+                    },
+                  )
                 }
-                remove.mutate(animeId, {
-                  onSuccess: () => {
-                    setConfirmRemove(false)
-                    setOpen(false)
-                    onDone?.()
-                  },
-                })
-              }}
-              className="flex w-full items-center border-t border-base-750 px-3 py-1.5 text-left text-sm text-red-300 transition-colors hover:bg-recap/15"
-            >
-              {remove.isPending ? 'Removing…' : confirmRemove ? 'Remove (trackers too)?' : 'Remove from list'}
-            </button>
+                onCancel={() => setConfirmRewatch(false)}
+              />
+            </Confirming>
           )}
+          {current &&
+            (confirmRemove ? (
+              <Confirming note="Also removes it from AniList and MyAnimeList">
+                <ConfirmInline
+                  label={remove.isPending ? 'Removing…' : 'Remove'}
+                  size="sm"
+                  pending={remove.isPending}
+                  onConfirm={() =>
+                    remove.mutate(animeId, {
+                      onSuccess: () => {
+                        setConfirmRemove(false)
+                        setOpen(false)
+                        onDone?.()
+                      },
+                    })
+                  }
+                  onCancel={() => setConfirmRemove(false)}
+                />
+              </Confirming>
+            ) : (
+              <button
+                role="menuitem"
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setConfirmRemove(true)
+                }}
+                className="flex w-full items-center border-t border-base-750 px-3 py-1.5 text-left text-sm text-red-300 transition-colors hover:bg-recap/15"
+              >
+                Remove from list
+              </button>
+            ))}
           {(setStatus.isError || remove.isError) && (
             <p className="border-t border-base-750 px-3 py-1.5 text-xs text-recap">
               {((setStatus.error ?? remove.error) as Error).message}
@@ -147,6 +179,19 @@ export function StatusMenu({
         </div>,
         document.body,
       )}
+    </div>
+  )
+}
+
+// A confirm step inside the menu; its clicks stay here, not with a card the menu belongs to.
+function Confirming({ note, children }: { note: string; children: ReactNode }) {
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      className="flex flex-wrap items-center gap-2 border-t border-base-750 px-3 py-2"
+    >
+      <span className="basis-full text-xs text-base-400">{note}</span>
+      {children}
     </div>
   )
 }

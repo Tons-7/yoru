@@ -12,11 +12,7 @@ import (
 
 type PathEscaper func(pathComps []string) string
 
-// Escapes path name components suitable for appending to a webseed URL. This works for converting
-// S3 object keys to URLs too.
-//
-// Contrary to the name, this actually does a QueryEscape, rather than a PathEscape. This works
-// better with most S3 providers.
+// EscapePath escapes path components to append to a webseed URL; S3 object keys too.
 func EscapePath(pathComps []string) string {
 	return defaultPathEscaper(pathComps)
 }
@@ -25,9 +21,7 @@ func defaultPathEscaper(pathComps []string) string {
 	var ret []string
 	for _, comp := range pathComps {
 		esc := url.PathEscape(comp)
-		// S3 incorrectly escapes + in paths to spaces, so we add an extra encoding for that. This
-		// seems to be handled correctly regardless of whether an endpoint uses query or path
-		// escaping.
+		// S3 reads a + in a path as a space; escaped, it works with query or path escaping alike.
 		esc = strings.ReplaceAll(esc, "+", "%2B")
 		ret = append(ret, esc)
 	}

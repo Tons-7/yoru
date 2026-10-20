@@ -31,12 +31,16 @@ var allowed = map[string][]string{
 	"quality.prefer":           {"best", "720p", "480p"},
 	"downloads.upload":         {torrent.UploadWhileDownloading, torrent.UploadNever},
 	"window.mode":              {"fullscreen", "maximized"},
+	// 2, 3, 5 or 10 GiB an episode, or none.
+	"quality.max_auto_bytes": {"2147483648", "3221225472", "5368709120", "10737418240", "0"},
+	// The share of an episode that counts as watching it.
+	"sync.progress_at":  {"0.8", "0.85", "0.9", "0.95"},
+	"subtitle.with_dub": {"signs", "off", "same"},
 }
 
 // numeric settings take whole numbers; a typo would read as zero.
 var numeric = map[string]bool{
-	"cache.budget_bytes": true, "notify.poll_seconds": true, "playback.progress_at": true, "cache.prefetch_count": true,
-	"downloads.limit_bytes": true,
+	"cache.budget_bytes": true, "notify.poll_seconds": true, "cache.prefetch_count": true, "downloads.limit_bytes": true,
 }
 
 func isBool(def string) bool { return def == "true" || def == "false" }

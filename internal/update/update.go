@@ -164,7 +164,7 @@ func (u *Updater) Check(ctx context.Context) (Status, error) {
 	rel, err := u.latest(ctx)
 	var all []Notes
 	if _, limited := errors.AsType[*rateLimited](err); limited {
-		// The API allows 60 asks an hour per address, which a VPN's shares; the site's own pages aren't counted.
+		// The API allows 60 asks an hour per address, which a VPN's shares; the site's pages aren't counted.
 		if site, serr := u.latestFromSite(ctx); serr == nil {
 			u.log.Info("GitHub's API is limiting this network; read the latest release from its site", "version", site.Version)
 			rel, err, all = site, nil, u.knownNotes(site.Version)
@@ -459,8 +459,8 @@ func (u *Updater) fetchSmall(ctx context.Context, url string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(res.Body, 64<<10))
 }
 
-// AssetName is the zip package.ps1 publishes for this platform. Releases also carry kuro-named ones, holding the
-// program as kuro.exe, for versions from before the rename, which ask for those.
+// AssetName is the zip package.ps1 publishes for this platform. Releases also carry kuro-named ones holding
+// the program as kuro.exe, for versions from before the rename, which ask for those.
 func AssetName(version string) string {
 	if runtime.GOOS == "windows" {
 		return fmt.Sprintf("%s-%s-update.zip", config.Name, version)
@@ -608,9 +608,10 @@ func Handover(args []string) bool {
 	return slices.Contains(args, "--wait-for")
 }
 
-// Relaunch starts exe as a plain launch, for handing back to a restored version.
+// Relaunch hands over to a restored version at once, as this one has let go of the port, data and lock,
+// with this launch's own flags (--no-window).
 func Relaunch(exe string) error {
-	cmd := exec.Command(exe)
+	cmd := exec.Command(exe, carried(os.Args[1:])...)
 	cmd.Dir = filepath.Dir(exe)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	config.Detach(cmd)
@@ -618,15 +619,29 @@ func Relaunch(exe string) error {
 }
 
 func (u *Updater) download(ctx context.Context, url, dest string) error {
+	// No overall deadline, which a slow line would always miss: only silence ends it, besides ctx.
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	quiet := time.AfterFunc(stallAfter, func() { cancel(errStalled) })
+	defer quiet.Stop()
+	stallOr := func(err error) error {
+		if errors.Is(context.Cause(ctx), errStalled) {
+			return errStalled
+		}
+		return err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("User-Agent", userAgent)
 
-	res, err := u.http.Do(req)
+	client := *u.http
+	client.Timeout = 0
+	res, err := client.Do(req)
 	if err != nil {
-		return err
+		return stallOr(err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
@@ -645,6 +660,7 @@ func (u *Updater) download(ctx context.Context, url, dest string) error {
 	for {
 		n, rerr := res.Body.Read(buf)
 		if n > 0 {
+			quiet.Reset(stallAfter)
 			if _, werr := f.Write(buf[:n]); werr != nil {
 				return werr
 			}
@@ -655,10 +671,15 @@ func (u *Updater) download(ctx context.Context, url, dest string) error {
 			return nil
 		}
 		if rerr != nil {
-			return rerr
+			return stallOr(rerr)
 		}
 	}
 }
+
+// Var so tests need not wait.
+var stallAfter = time.Minute
+
+var errStalled = errors.New("the download stopped: no data for a minute")
 
 // verify checks the zip against the published SHA256SUMS line for it, and that file against its signature.
 func (u *Updater) verify(ctx context.Context, rel Release, archive string) error {
@@ -776,7 +797,12 @@ func relaunchCmd(exe string) *exec.Cmd {
 
 // relaunchArgs: a fresh --wait-for, the old pair dropped, the rest carried over.
 func relaunchArgs(pid int, current []string) []string {
-	args := []string{"--wait-for", strconv.Itoa(pid)}
+	return append([]string{"--wait-for", strconv.Itoa(pid)}, carried(current)...)
+}
+
+// carried is a launch's flags without its --wait-for pair.
+func carried(current []string) []string {
+	var args []string
 	skip := false
 	for _, a := range current {
 		switch {

@@ -2,6 +2,7 @@ package deps
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -62,7 +63,7 @@ func TestPublishedSumReadsEitherFormat(t *testing.T) {
 			io.WriteString(w, payload)
 		}))
 		m := New(t.TempDir(), slog.New(slog.DiscardHandler))
-		if got := m.publishedSum(context.Background(), srv.URL); got != hash {
+		if got := m.publishedSum(context.Background(), srv.URL, 64); got != hash {
 			t.Errorf("payload %q gave %q", payload, got)
 		}
 		srv.Close()
@@ -74,7 +75,26 @@ func TestPublishedSumReadsEitherFormat(t *testing.T) {
 	}))
 	t.Cleanup(bad.Close)
 	m := New(t.TempDir(), slog.New(slog.DiscardHandler))
-	if got := m.publishedSum(context.Background(), bad.URL); got != "" {
+	if got := m.publishedSum(context.Background(), bad.URL, 64); got != "" {
 		t.Errorf("got %q, want empty", got)
+	}
+}
+
+// Linux's static ffmpeg publishes only an MD5; it still catches a broken or swapped transfer.
+func TestDownloadChecksAnMD5(t *testing.T) {
+	const body = "static ffmpeg"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	m := New(t.TempDir(), slog.New(slog.DiscardHandler))
+	dest := filepath.Join(t.TempDir(), "payload")
+
+	sum := md5.Sum([]byte(body))
+	if err := m.download(context.Background(), "ffmpeg", srv.URL, dest, "md5:"+hex.EncodeToString(sum[:])); err != nil {
+		t.Fatalf("a matching download was rejected: %v", err)
+	}
+	if err := m.download(context.Background(), "ffmpeg", srv.URL, dest, "md5:"+strings.Repeat("c", 32)); err == nil {
+		t.Fatal("a mismatched download was accepted")
 	}
 }

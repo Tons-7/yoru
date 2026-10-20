@@ -61,7 +61,7 @@ func TestMentionsDub(t *testing.T) {
 func TestSearchTermsLeadWithEpisodeNumber(t *testing.T) {
 	titles := []string{"Sousou no Frieren", "Frieren: Beyond Journey's End", "Фрірен", "葬送のフリーレン"}
 
-	got := searchTerms(titles, "", 10, 0, nil, false)
+	got := searchTerms(titles, "", 10, 0, 0, nil, false)
 	if len(got) == 0 {
 		t.Fatal("no search terms produced")
 	}
@@ -89,7 +89,7 @@ func TestSearchTermsPairEpisodeWithBothNamings(t *testing.T) {
 	}
 	english := "BLEACH: Thousand-Year Blood War - The Calamity"
 
-	got := searchTerms(titles, english, 41, 0, nil, false)
+	got := searchTerms(titles, english, 41, 0, 0, nil, false)
 
 	// Punctuation is stripped: filenames never carry it, and trackers match tokens.
 	var romajiWithEp, englishWithEp bool
@@ -111,7 +111,7 @@ func TestSearchTermsPairEpisodeWithBothNamings(t *testing.T) {
 
 // The English title is often the romaji, and a duplicate query is a wasted request.
 func TestSearchTermsSkipsRedundantEnglish(t *testing.T) {
-	got := searchTerms([]string{"Dandadan"}, "Dandadan", 4, 0, nil, false)
+	got := searchTerms([]string{"Dandadan"}, "Dandadan", 4, 0, 0, nil, false)
 
 	seen := map[string]int{}
 	for _, term := range got {
@@ -123,21 +123,21 @@ func TestSearchTermsSkipsRedundantEnglish(t *testing.T) {
 }
 
 func TestSearchTermsWithoutEpisode(t *testing.T) {
-	got := searchTerms([]string{"Some Show"}, "", 0, 0, nil, false)
+	got := searchTerms([]string{"Some Show"}, "", 0, 0, 0, nil, false)
 	if len(got) != 1 || got[0] != "Some Show" {
 		t.Fatalf("got %v", got)
 	}
 }
 
 func TestSearchTermsAllNonLatin(t *testing.T) {
-	if got := searchTerms([]string{"葬送のフリーレン", "", "Фрірен"}, "", 5, 0, nil, false); len(got) != 0 {
+	if got := searchTerms([]string{"葬送のフリーレン", "", "Фрірен"}, "", 5, 0, 0, nil, false); len(got) != 0 {
 		t.Fatalf("got %v, want nothing searchable", got)
 	}
 }
 
 // The curated release is often not the most seeded, so it is asked for by name.
 func TestSearchTermsLeadWithCuratedGroup(t *testing.T) {
-	got := searchTerms([]string{"Sousou no Frieren"}, "", 10, 0, []string{"PMR"}, false)
+	got := searchTerms([]string{"Sousou no Frieren"}, "", 10, 0, 0, []string{"PMR"}, false)
 	if len(got) == 0 {
 		t.Fatal("no terms")
 	}
@@ -154,14 +154,20 @@ func TestSearchTermsLeadWithCuratedGroup(t *testing.T) {
 func TestCuratedGroupPairsWithShortestTitle(t *testing.T) {
 	titles := []string{"Sousou no Frieren", "Frieren", "Frieren Beyond Journeys End"}
 
-	got := searchTerms(titles, "", 10, 0, []string{"PMR"}, false)
+	got := searchTerms(titles, "", 10, 0, 0, []string{"PMR"}, false)
 	if got[0] != "PMR Frieren" {
 		t.Fatalf("first term = %q, want the group paired with the shortest title", got[0])
+	}
+
+	// An abbreviation synonym is short but matches nothing a group writes.
+	got = searchTerms([]string{"Jujutsu Kaisen", "JJK"}, "", 5, 0, 0, []string{"Okay-Subs"}, false)
+	if got[0] != "Okay-Subs Jujutsu Kaisen" {
+		t.Fatalf("first term = %q, want the group paired with a spelled-out title", got[0])
 	}
 }
 
 func TestSearchTermsIgnoresUnusableGroup(t *testing.T) {
-	got := searchTerms([]string{"Some Show"}, "", 3, 0, []string{"", "  "}, false)
+	got := searchTerms([]string{"Some Show"}, "", 3, 0, 0, []string{"", "  "}, false)
 	if len(got) == 0 || got[0] != "Some Show 03" {
 		t.Fatalf("got %v; a blank group should be skipped", got)
 	}
@@ -256,9 +262,9 @@ func TestVerifiesOwnNumberNeedsAPartMarker(t *testing.T) {
 
 // Both numberings are searched, because which one a group writes is not predictable from the show.
 func TestSearchTermsIncludeBothNumberings(t *testing.T) {
-	got := searchTerms([]string{"Shingeki no Kyojin: The Final Season Part 2"}, "", 1, 17, nil, false)
+	got := searchTerms([]string{"Shingeki no Kyojin: The Final Season Part 2"}, "", 1, 17, 76, nil, false)
 
-	var catalogue, cour bool
+	var catalogue, cour, absolute bool
 	for _, term := range got {
 		if strings.HasSuffix(term, " 17") {
 			catalogue = true
@@ -266,22 +272,25 @@ func TestSearchTermsIncludeBothNumberings(t *testing.T) {
 		if strings.HasSuffix(term, " 01") {
 			cour = true
 		}
+		if strings.HasSuffix(term, " 76") {
+			absolute = true
+		}
 	}
-	if !catalogue || !cour {
-		t.Errorf("catalogue=%v cour=%v in %v", catalogue, cour, got)
+	if !catalogue || !cour || !absolute {
+		t.Errorf("catalogue=%v cour=%v absolute=%v in %v", catalogue, cour, absolute, got)
 	}
 }
 
 // A dub is a handful of releases among hundreds, so it is asked for by name; the sub search is unchanged.
 func TestSearchTermsAskForTheDubByName(t *testing.T) {
-	sub := searchTerms([]string{"Jujutsu Kaisen"}, "", 5, 0, nil, false)
+	sub := searchTerms([]string{"Jujutsu Kaisen"}, "", 5, 0, 0, nil, false)
 	for _, term := range sub {
 		if strings.Contains(strings.ToLower(term), "dub") {
 			t.Errorf("a sub search should not mention dub: %v", sub)
 		}
 	}
 
-	dub := searchTerms([]string{"Jujutsu Kaisen"}, "", 5, 0, nil, true)
+	dub := searchTerms([]string{"Jujutsu Kaisen"}, "", 5, 0, 0, nil, true)
 	var named bool
 	for _, term := range dub {
 		if strings.HasSuffix(strings.ToLower(term), " dub") {

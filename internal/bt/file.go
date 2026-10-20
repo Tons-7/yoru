@@ -104,12 +104,6 @@ func fileBytesLeft(
 	if left > fileLength {
 		left = fileLength
 	}
-	//
-	//numPiecesSpanned := f.EndPieceIndex() - f.BeginPieceIndex()
-	//completedMiddlePieces := f.t._completedPieces.Clone()
-	//completedMiddlePieces.RemoveRange(0, bitmap.BitRange(f.BeginPieceIndex()+1))
-	//completedMiddlePieces.RemoveRange(bitmap.BitRange(f.EndPieceIndex()-1), bitmap.ToEnd)
-	//left += int64(numPiecesSpanned-2-pieceIndex(completedMiddlePieces.GetCardinality())) * torrentUsualPieceSize
 	return
 }
 

@@ -22,7 +22,6 @@ func TestIssue949LastPieceZeroPadding(t *testing.T) {
 	qt.Assert(t, qt.IsTrue(info.FilesArePieceAligned()))
 	// Check the v1 piece length includes the trailing padding file.
 	qt.Check(t, qt.Equals(lastPiece.V1Length(), info.PieceLength))
-	// The v2 piece should only include the file data, which fits inside the piece length for this
-	// file.
+	// The v2 piece holds only the file's data, which fits in one piece length here.
 	qt.Check(t, qt.Equals(lastPiece.Length(), int64(3677645)))
 }

@@ -3,6 +3,7 @@ package bt
 import (
 	"context"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"time"
@@ -85,6 +86,9 @@ func getTorrentSource(ctx context.Context, source string, hc *http.Client) (mi m
 		err = fmt.Errorf("unexpected response status code: %v", resp.StatusCode)
 		return
 	}
-	err = bencode.NewDecoder(resp.Body).Decode(&mi)
+	// A source is whatever a magnet named; real .torrent files stay far below this.
+	dec := bencode.NewDecoder(io.LimitReader(resp.Body, 64<<20))
+	dec.MaxStrLen = 32 << 20
+	err = dec.Decode(&mi)
 	return
 }

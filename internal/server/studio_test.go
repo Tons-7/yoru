@@ -153,7 +153,7 @@ func TestStudioSortsTheWholeList(t *testing.T) {
 		{"title", "[2 5 1 4 6]"},
 		{"no-such-sort", "[4 1 2 6 5]"},
 	} {
-		// A filter that keeps everything, so the answer is the kept list rather than the catalogue's first page.
+		// A filter keeping everything, so the answer is the kept list, not the catalogue's first page.
 		if ids, _ := browseIDs(t, h, "/api/browse?studio=569&excludeGenres=Mecha&sort="+tt.sort); fmt.Sprint(ids) != tt.want {
 			t.Errorf("sort %s: items %v, want %v", tt.sort, ids, tt.want)
 		}

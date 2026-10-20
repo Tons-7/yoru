@@ -8,11 +8,8 @@ import (
 
 type mapTriggerFunc[K, V any] func(key K, old, new g.Option[V])
 
-// A table where the record has a key and value. Currently maps onto Table2 using Pair, but perhaps
-// requiring the record implements a KeyValue interface would be better. K and V are Record to
-// propagate the comparable requirement for now. TODO: We could use an actual map, and implement
-// relation. Another thing we can do is actually use btree.Map's value, I'm not sure if btree is
-// smarter about that.
+// A table of key and value records, on Table2 through Pair (K and V are Record, to stay comparable).
+// TODO: a real map implementing relation, or btree.Map's values.
 type Map[K, V Record] struct {
 	Table2[K, V]
 	keyCmp func(a, b K) int

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -251,7 +252,7 @@ func Load() (Config, error) {
 	}
 	cfg.CacheDir = cfg.resolve(cfg.CacheDir, filepath.Join(root, "cache"))
 	cfg.BinDir = cfg.resolve(cfg.BinDir, filepath.Join(root, "bin"))
-	// The orphan cleanup deletes whatever sits in cache_dir that is not a download: Yoru's own folders must not.
+	// The orphan cleanup deletes whatever in cache_dir is not a download: Yoru's own folders can't be there.
 	for _, dir := range []string{root, cfg.dataDir, cfg.BinDir} {
 		if within(cfg.CacheDir, dir) {
 			return Config{}, fmt.Errorf("cache_dir %s holds %s; downloads need a folder of their own", cfg.CacheDir, dir)
@@ -265,7 +266,7 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-// Root holds config.toml, bin/ and cache/: beside the executable, or YORU_ROOT (KURO_ROOT from before the rename).
+// rootDir holds config.toml, bin/ and cache/: beside the program, or YORU_ROOT (KURO_ROOT before the rename).
 func rootDir() (string, error) {
 	if root := Env("ROOT"); root != "" {
 		return root, nil
@@ -281,7 +282,37 @@ func rootDir() (string, error) {
 	if underTemp(dir) {
 		return os.Getwd()
 	}
+	home, _ := os.UserHomeDir()
+	if support, ok := bundleRoot(dir, home); ok {
+		return support, os.MkdirAll(support, 0o755)
+	}
 	return dir, nil
+}
+
+// bundleRoot: inside a macOS app, files beside the program would sit in the bundle and go with a reinstall.
+func bundleRoot(dir, home string) (string, bool) {
+	if home == "" || !strings.HasSuffix(filepath.ToSlash(dir), ".app/Contents/MacOS") {
+		return "", false
+	}
+	return filepath.Join(home, "Library", "Application Support", "Yoru"), true
+}
+
+// FinderPath adds the package managers' folders to PATH on macOS: an app opened from Finder gets only
+// /usr/bin:/bin:/usr/sbin:/sbin, and Homebrew's ffmpeg and mpv would go unseen.
+func FinderPath() {
+	if runtime.GOOS == "darwin" {
+		os.Setenv("PATH", withPackageDirs(os.Getenv("PATH")))
+	}
+}
+
+func withPackageDirs(path string) string {
+	dirs := filepath.SplitList(path)
+	for _, dir := range []string{"/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"} {
+		if !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
+		}
+	}
+	return strings.Join(dirs, string(os.PathListSeparator))
 }
 
 func underTemp(dir string) bool {
@@ -348,9 +379,10 @@ client_secret = ""
 client_id = ""
 client_secret = ""
 
-# Torrent search sites, one block each. Yoru ships with none. type is the feed
-# format ("nyaa" or "tokyotosho"); adult = true marks a site searched only for
-# adult titles. The first listed wins ties. Restart after editing.
+# Torrent search sites. Easier in Settings > Downloads > Release sites: no
+# restart, and a list saved there replaces these blocks. Here, one block each:
+# type "nyaa" or "tokyotosho"; adult = true is searched only for adult titles.
+# The first listed wins ties. Restart after editing.
 #
 # [[indexer]]
 # type = "nyaa"

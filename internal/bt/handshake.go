@@ -12,8 +12,7 @@ import (
 	pp "yoru/internal/bt/peer_protocol"
 )
 
-// Wraps a raw connection and provides the interface we want for using the
-// connection in the message loop.
+// A raw connection as the message loop wants it.
 type deadlineReader struct {
 	nc net.Conn
 	r  io.Reader

@@ -18,12 +18,6 @@ import (
 type testHandler struct{}
 
 func TestLazyLogValuer(t *testing.T) {
-	// This is a test to ensure that the lazyLogValuer type implements the slog.LogValuer interface.
-	// The test is intentionally left empty because the implementation is already verified by the
-	// compiler.
-
-	//h := testHandler{}
-	//l := slog.New(h)
 	var buf bytes.Buffer
 	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{
 		Level: slog.Level(math.MinInt),

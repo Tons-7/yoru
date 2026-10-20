@@ -85,7 +85,7 @@ for (const { id, episodes } of cases) {
     const s = play.json
     note(true, `play started in ${((Date.now() - t1) / 1000).toFixed(1)}s`, `${s.title} [file ${s.fileIndex}]`)
 
-    // SEEKS=n: n far reads of the raw file while it downloads, each timed, as a seek or an MKV Cues lookup asks.
+    // SEEKS=n: n far reads of the raw file while it downloads, each timed, as a seek or MKV Cues lookup asks.
     const seeks = Number(process.env.SEEKS ?? 0)
     if (seeks > 0) {
       const url = s.streamUrl.startsWith('http') ? s.streamUrl : BASE + s.streamUrl

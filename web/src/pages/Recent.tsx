@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useStoredFlag } from '../lib/hooks'
 import { useAired, useNow } from '../lib/queries'
 import { groupByDay } from '../lib/format'
 import { ReleasedCard } from '../components/ReleasedCard'
@@ -21,13 +22,15 @@ const WINDOWS = [
 /** What just came out, newest first: episodes ready now, where the schedule says when things air. */
 export function RecentPage() {
   const [hours, setHours] = useState<string>('72')
-  const [mine, setMine] = useState(false)
+  const [mine, setMine] = useStoredFlag('yoru.recent.mine')
 
   const now = useNow() / 1000
   const { data, isPending, isError, error, refetch } = useAired(Number(hours))
 
+  // The window's own start too: the last window's answer is shown while the new one loads.
+  const since = now - Number(hours) * 3600
   const items = (data?.items ?? [])
-    .filter((item) => item.airingAt <= now && (!mine || item.onList))
+    .filter((item) => item.airingAt <= now && item.airingAt >= since && (!mine || item.onList))
     .sort((a, b) => b.airingAt - a.airingAt)
 
   return (

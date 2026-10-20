@@ -46,7 +46,6 @@ type Session struct {
 	encoder    string
 	ffmpeg     string
 	onSeek     SeekHook
-	onIdle     func(id string)
 	onFallback func(codec string)
 	log        *slog.Logger
 
@@ -75,6 +74,8 @@ type Session struct {
 	fellBack bool
 	// A process beside each pass writes subtitle lines as they are read.
 	liveSubs bool
+	// burned: each pass draws burn.ass (with fonts/) into the picture.
+	burned bool
 	// The last pass to end on its own: its subtitle process may still be finishing.
 	finished *run
 	// ended: the last pass to finish, its cut tail dropped if it stopped short, so every file it left is whole.
@@ -91,6 +92,9 @@ type Session struct {
 // passes numbers launches across sessions, so no pass reuses the name of a part still held open from another
 // (on Windows a removed file being read keeps its name until let go).
 var passes atomic.Int64
+
+// sessionDirs numbers sessions' folders, hls/<episode>-<n>.
+var sessionDirs atomic.Int64
 
 // Three: a pass cut by a read error still writes something, so only an encoder failing alike gets this far.
 const failedPasses = 3
@@ -241,6 +245,22 @@ func (m *Manager) Open(ctx context.Context, id, source string) (*Session, error)
 
 // OpenProbing probes a torrent from disk but encodes through the engine, whose reads move the window.
 func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource string) (*Session, error) {
+	return m.open(ctx, id, source, probeSource, nil)
+}
+
+// Burn is subtitles drawn into the picture: an ASS or SRT file and the fonts it names.
+type Burn struct {
+	Subtitles string
+	Fonts     string // a folder, or "" for the system's
+}
+
+// OpenBurned is a session whose video always re-encodes with the subtitles drawn in, for a TV that can't draw
+// styled ones itself. Its own id: the browser's session of the episode stays as it is.
+func (m *Manager) OpenBurned(ctx context.Context, id, source, probeSource string, burn Burn) (*Session, error) {
+	return m.open(ctx, id, source, probeSource, &burn)
+}
+
+func (m *Manager) open(ctx context.Context, id, source, probeSource string, burn *Burn) (*Session, error) {
 	m.mu.Lock()
 	if s, ok := m.sessions[id]; ok && s.Source == source {
 		s.touch()
@@ -275,12 +295,14 @@ func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource strin
 		return nil, err
 	}
 
-	dir := filepath.Join(m.root, "hls", id)
+	// A folder of its own: a reopen of the same episode (another release, another track) overlapping this
+	// one's close must neither inherit nor delete its files.
+	dir := filepath.Join(m.root, "hls", fmt.Sprintf("%s-%d", id, sessionDirs.Add(1)))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
 
-	// An open that finished while this one probed: its session, index and all, rather than reading the index again.
+	// An open that finished while this one probed: its session, index and all, not the index read again.
 	m.mu.Lock()
 	if existing, ok := m.sessions[id]; ok && existing.Source == source {
 		existing.mu.Lock()
@@ -294,6 +316,16 @@ func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource strin
 
 	encoder := m.currentEncoder()
 	plan := PlanFor(info, encoder)
+	if burn != nil {
+		// Drawn in, the picture changes, so it is encoded even where it could be copied.
+		if err := burn.into(dir); err != nil {
+			os.RemoveAll(dir)
+			return nil, err
+		}
+		plan.VideoCopy = false
+		plan.VideoCodec = orDefault(encoder, "libx264")
+		plan.Reason = strings.TrimPrefix(plan.Reason+"; subtitles drawn in", "; ")
+	}
 	// From disk when the file is there: through the engine, the index's pieces would be fetched first.
 	starts := m.indexKeyframes(ctx, id, probeSource, info, plan)
 	segments := segmentCount(info.Duration)
@@ -311,7 +343,8 @@ func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource strin
 		headFrom:   -1,
 		touched:    time.Now(),
 		refs:       1,
-		liveSubs:   liveSubtitlesWanted(source),
+		liveSubs:   burn == nil && liveSubtitlesWanted(source),
+		burned:     burn != nil,
 	}
 
 	m.mu.Lock()
@@ -326,7 +359,7 @@ func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource strin
 			return existing, nil
 		}
 		// Raced by an open on yet another source; the newest wins.
-		defer m.discardSession(id, existing)
+		defer m.discardSession(existing)
 	}
 	m.sessions[id] = s
 	m.mu.Unlock()
@@ -416,17 +449,14 @@ func (m *Manager) Close(id string) bool {
 	return m.teardown(id, s)
 }
 
-// teardown stops an unlinked session; true, and its shared directory gone, when no replacement opened.
+// teardown stops an unlinked session and removes its folder; true when no replacement opened meanwhile.
 func (m *Manager) teardown(id string, s *Session) bool {
 	s.stop()
+	os.RemoveAll(s.dir)
 	m.mu.Lock()
 	owner := m.sessions[id]
 	m.mu.Unlock()
-	if owner != nil && owner != s {
-		return false
-	}
-	os.RemoveAll(s.dir)
-	return true
+	return owner == nil || owner == s
 }
 
 // discard drops a session outright, however many holders it has: the reaper,
@@ -438,23 +468,17 @@ func (m *Manager) discard(id string) {
 	m.mu.Unlock()
 
 	if ok {
-		m.discardSession(id, s)
+		m.discardSession(s)
 	}
 }
 
-// discardSession tears down an unlinked session, its shared directory only if unowned.
-func (m *Manager) discardSession(id string, s *Session) {
+// discardSession tears down an unlinked session and its folder.
+func (m *Manager) discardSession(s *Session) {
 	s.mu.Lock()
 	s.closed = true
 	s.mu.Unlock()
 	s.stop()
-
-	m.mu.Lock()
-	owner := m.sessions[id]
-	m.mu.Unlock()
-	if owner == nil || owner == s {
-		os.RemoveAll(s.dir)
-	}
+	os.RemoveAll(s.dir)
 }
 
 // Sources lists what open sessions read, since a pack's torrent may serve another episode still.
@@ -469,8 +493,11 @@ func (m *Manager) Sources() []string {
 	return out
 }
 
-// liveSubtitlesWanted: only a torrent still arriving gets lines written beside the picture.
-func liveSubtitlesWanted(source string) bool { return strings.Contains(source, "/torrents/") }
+// liveSubtitlesWanted: only a torrent still arriving gets lines written beside the picture; a library
+// file's path can say /torrents/ too, but it is on disk, whole.
+func liveSubtitlesWanted(source string) bool {
+	return remote(source) && strings.Contains(source, "/torrents/")
+}
 
 // Reap discards sessions nobody is watching. Each one holds an ffmpeg process and a directory of segments.
 func (m *Manager) Reap(ctx context.Context) {
@@ -563,6 +590,12 @@ func (s *Session) SegmentPath(n int) string {
 
 func (s *Session) InitPath() string { return filepath.Join(s.dir, "init.mp4") }
 
+// Dir is the session's own folder, where its subtitles and fonts go too.
+func (s *Session) Dir() string { return s.dir }
+
+// DirPrefix starts the folder of every session of an episode, past and present.
+func (m *Manager) DirPrefix(id string) string { return filepath.Join(m.root, "hls", id+"-") }
+
 // Prestart launches the encoder at a segment not on disk if nothing runs, and
 // returns at once. It never moves a running pass; only the player's requests do.
 func (s *Session) Prestart(from int) error {
@@ -654,7 +687,7 @@ func (s *Session) awaitFile(ctx context.Context, path string, deadline <-chan ti
 	return nil
 }
 
-// WaitSegment returns once segment n can be served, starting or moving the encoder if needed; OpenSegment reads it.
+// WaitSegment returns once segment n can be served, starting or moving the encoder; OpenSegment reads it.
 func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration) error {
 	if s.segmentDone(n) {
 		s.touch()
@@ -681,7 +714,7 @@ func (s *Session) WaitSegment(ctx context.Context, n int, timeout time.Duration)
 			return nil
 		}
 
-		// The pass ended short (copy cuts on keyframes, or a read failed); one pass aimed at the segment writes it.
+		// The pass ended short (copy cuts on keyframes, a read failed); a pass aimed at the segment writes it.
 		if !s.running() {
 			if restarted {
 				return fmt.Errorf("segment %d was not produced", n)
@@ -927,9 +960,11 @@ func (s *Session) startLocked(from int) error {
 
 	s.mu.Lock()
 	if s.closed {
+		r.discarded.Store(true)
 		s.mu.Unlock()
 		r.cmd.Process.Kill()
-		r.stopSubtitles()
+		// Reaped as any pass is, so its process handle is released and its gather sees it end.
+		go s.await(r)
 		return errSessionClosed
 	}
 	s.run, s.headFrom, s.headTo, s.touched = r, from, from-1, time.Now()

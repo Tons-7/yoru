@@ -29,7 +29,10 @@ Yoru and keeps your history, library and settings.
 - **Plays anywhere.** In the browser by default, so a phone or TV on the same
   network works the same as the laptop. mpv and VLC are available as external
   players, with Anime4K upscaling. On a phone, **Open in app** hands the
-  original file to VLC, mpv or Infuse, subtitles and all.
+  original file to VLC, mpv or Infuse, subtitles and all. In Chrome, **Cast**
+  sends the episode to a Chromecast or Google TV, the player becoming its remote
+  (subtitles go as plain text; the TV must reach Yoru, so turn on access from
+  other devices).
 - **Sub or dub**, chosen per show, with subtitle delay and size controls.
 - **Knows 34,000+ anime**, including the ~11,700 that exist on MyAnimeList but
   not AniList.
@@ -37,6 +40,8 @@ Yoru and keeps your history, library and settings.
 - **Skips openings and endings**, if you ask it to. Nothing is automatic by
   default.
 - **Follows airing shows:** notifies you of new episodes and can download them.
+  Alerts reach a phone even with Yoru closed (over its HTTPS address; on an
+  iPhone, once Yoru is added to the Home Screen).
 - **Up next list.** Line up episodes from any shows and they play one after
   another; watched ones leave the list by themselves. One button adds the next
   episode of everything you're watching.
@@ -77,7 +82,18 @@ your shortcuts and taskbar pins open Yoru too. Windows sees `yoru.exe` as a new
 program, so it may ask once whether torrent peers can connect: allow it, or
 later under Settings → Downloads.
 
-macOS and Linux builds are on the same page, as `yoru-<version>-<os>-<arch>.zip`.
+**On a Mac**, one line in Terminal installs `Yoru.app` and opens it, with no
+security prompt to get past (fetched by `curl`, the app is not quarantined):
+
+```sh
+curl -fsSL https://github.com/Tons-7/yoru/releases/latest/download/install-mac.sh | sh
+```
+
+It checks the download against the release's checksums, stops a running Yoru,
+and keeps its files in `~/Library/Application Support/Yoru`. ffmpeg comes from
+Homebrew (`brew install ffmpeg`), found there even when Yoru is opened from
+Finder. Linux builds, and the plain Mac program, are on the same page as
+`yoru-<version>-<os>-<arch>.zip`.
 
 ## Building from source
 
@@ -107,11 +123,15 @@ The torrent engine is built in. It takes peers on port 4240 (TCP and UDP;
 `[torrent] listen_port` changes it) and asks the router to forward it over
 UPnP. Downloads from an older kuro that used rqbit carry over on first run.
 
-`config.toml` is written beside the binary on first run. Yoru ships with no
-torrent sites; add one block per site and restart. `type` is the feed format
-the site serves, `nyaa` or `tokyotosho`; `adult = true` marks a site searched
-only for titles the catalogue marks adult. The first site listed decides the
-record kept for a torrent several carry.
+Yoru ships with no torrent sites. Add them on the setup screen or under
+Settings → Downloads → Release sites: the feed type the site serves (`nyaa` or
+`tokyotosho`), its address, and whether it is searched only for titles the
+catalogue marks adult. Test runs one search first; a saved list is searched at
+once, no restart. The first site listed decides the record kept for a torrent
+several carry.
+
+`config.toml`, written beside the binary on first run, takes the same as
+blocks, read until a list is saved in the app (then restart after editing):
 
 ```toml
 [[indexer]]

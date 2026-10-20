@@ -15,7 +15,7 @@ const RANKINGS = [
 
 export function Popularity() {
   const [sort, setSort] = useState<string>('trending')
-  const { data, isPending } = useDiscover(sort, 10)
+  const { data, isPending, isError, refetch } = useDiscover(sort, 10)
 
   return (
     <Panel title="Popular">
@@ -23,6 +23,7 @@ export function Popularity() {
         {RANKINGS.map((rank) => (
           <button
             key={rank.key}
+            aria-pressed={sort === rank.key}
             onClick={() => setSort(rank.key)}
             className={cx(
               'flex-1 rounded px-1.5 py-1 text-xs font-medium transition-colors',
@@ -42,6 +43,8 @@ export function Popularity() {
             <Skeleton key={i} className="h-14 w-full" />
           ))}
         </div>
+      ) : isError && !data ? (
+        <PanelFailed retry={() => void refetch()} />
       ) : (
         <ol className="space-y-1">
           {data?.items?.slice(0, 10).map((anime, i) => (
@@ -50,6 +53,18 @@ export function Popularity() {
         </ol>
       )}
     </Panel>
+  )
+}
+
+// One line and a way back, as a failed Home rail says it; tabs over an empty list said nothing.
+function PanelFailed({ retry }: { retry: () => void }) {
+  return (
+    <p className="flex flex-wrap items-center gap-2 text-sm text-base-400">
+      <span>Couldn't load this.</span>
+      <button onClick={retry} className="text-accent-300 underline-offset-2 hover:underline">
+        Try again
+      </button>
+    </p>
   )
 }
 
@@ -97,16 +112,21 @@ function RankRow({ rank, anime }: { rank: number; anime: DiscoverItem }) {
 }
 
 export function ScheduleWidget() {
-  const { data, isPending } = useSchedule(7)
+  const { data, isPending, isError, refetch } = useSchedule(7)
   const days = data?.days ?? []
   const todayIndex = Math.max(0, days.findIndex((d) => d.today))
-  const [selected, setSelected] = useState<number | null>(null)
-  const active = days[selected ?? todayIndex]
+  // By date, not position: past midnight the days shift one along and an index lands on the next one.
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const picked = days.findIndex((d) => d.date === selectedDate)
+  const shownIndex = picked >= 0 ? picked : todayIndex
+  const active = days[shownIndex]
 
   return (
     <Panel title="Schedule" action={<Link to="/schedule" className="text-xs text-base-400 hover:text-accent-400">Full week</Link>}>
       {isPending ? (
         <Skeleton className="h-56 w-full" />
+      ) : isError && !data ? (
+        <PanelFailed retry={() => void refetch()} />
       ) : (
         <>
           {/* A fixed grid, or seven tabs overflow the narrow column. */}
@@ -115,10 +135,11 @@ export function ScheduleWidget() {
               <button
                 key={day.date}
                 title={day.weekday}
-                onClick={() => setSelected(i)}
+                aria-pressed={i === shownIndex}
+                onClick={() => setSelectedDate(day.date)}
                 className={cx(
                   'rounded-md px-0.5 py-1.5 text-center text-[11px] font-medium transition-colors',
-                  i === (selected ?? todayIndex)
+                  i === shownIndex
                     ? 'bg-accent-500/20 text-accent-400'
                     : 'text-base-400 hover:bg-base-850 hover:text-base-200',
                 )}

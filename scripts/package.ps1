@@ -8,6 +8,8 @@ Installing and updating want different things:
   yoru-<version>.zip             yoru.exe and a README. First install.
   yoru-<version>-update.zip      yoru.exe alone. What the in-app updater fetches.
   yoru-<version>-<os>-<arch>.zip The macOS and Linux binaries, which their updaters fetch.
+  Yoru-<version>-mac-<arch>.zip  The macOS program as Yoru.app, and install-mac.sh, which installs it
+                                 (`curl … | sh`: fetched by curl it carries no quarantine flag).
   kuro-<version>-update.zip      The same program as kuro.exe, and kuro-<version>-<os>-<arch>.zip as kuro:
                                  versions from before the rename ask for these by name. Once running, the
                                  program renames itself to yoru.exe and moves the data folder over.
@@ -104,8 +106,8 @@ yoru.exe opens its own window and, on first run, asks to download ffmpeg, about
 420 MB (the torrent engine is built in; an ffmpeg already on PATH is used as is).
 Nothing is installed anywhere else: everything lives beside yoru.exe.
 
-Yoru ships with no torrent sites. The setup screen shows the block to add to
-config.toml (written beside yoru.exe on first run); add your sites and restart.
+Yoru ships with no torrent sites. Add yours on the setup screen, or later
+under Settings -> Downloads -> Release sites.
 
 Windows will warn that the app is unsigned. More info -> Run anyway.
 
@@ -130,8 +132,13 @@ config.toml, written on first run, says how.
 $unixReadme = @"
 Yoru $Version
 
-Extract this zip to a folder of its own and run yoru from there:
-    chmod +x yoru    (once, if unzipping dropped the permission)
+On a Mac the easier way is one line in Terminal, which installs Yoru.app and
+opens it (no security prompts, no chmod):
+    curl -fsSL https://github.com/Tons-7/yoru/releases/latest/download/install-mac.sh | sh
+Yoru.app keeps its files in ~/Library/Application Support/Yoru. Moving from
+this zip: copy config.toml, and cache/ for the episodes, from this folder there.
+
+Otherwise extract this zip to a folder of its own and run yoru from there:
     ./yoru
 
 Yoru opens in its own window when Chrome, Edge, Brave or Chromium is installed,
@@ -145,8 +152,8 @@ macOS blocks programs from unidentified developers. Run this once in the folder:
     xattr -d com.apple.quarantine yoru
 or allow Yoru under System Settings -> Privacy & Security after the first try.
 
-Yoru ships with no torrent sites. The setup screen shows the block to add to
-config.toml (written beside yoru on first run); add your sites and restart.
+Yoru ships with no torrent sites. Add yours on the setup screen, or later
+under Settings -> Downloads -> Release sites.
 
 Your watch history, library and settings are kept in ~/.yoru. To keep
 everything in this folder instead, pick a folder under Setup -> Where things go.
@@ -182,7 +189,13 @@ try {
     $bridgeZips = @(Join-Path $OutDir "kuro-$Version-update.zip")
     New-Zip $bridgeZips[0] @{ 'kuro.exe' = $exe }
 
+    # Compress-Archive drops the executable bit, so unzipped on a Mac or Linux the program needed chmod.
+    $unixzip = Join-Path $staging 'unixzip.exe'
+    go -C $root build -o $unixzip ./scripts/unixzip
+    if ($LASTEXITCODE -ne 0) { throw 'building unixzip failed' }
+
     $platformZips = @()
+    $appZips = @()
     foreach ($platform in $platforms) {
         $goos, $goarch = $platform -split '/'
         Write-Step "$goos/$goarch"
@@ -190,16 +203,33 @@ try {
         & (Join-Path $PSScriptRoot 'build.ps1') -SkipWeb -Target $platform -Version $Version -Out $bin
         if ($LASTEXITCODE -ne 0) { throw "build for $platform failed" }
         $zip = Join-Path $OutDir "yoru-$Version-$goos-$goarch.zip"
-        New-Zip $zip @{ 'yoru' = $bin; 'README.txt' = $unixReadmeFile; 'LICENSE.md' = $license }
+        & $unixzip -out $zip -exec yoru "yoru=$bin" "README.txt=$unixReadmeFile" "LICENSE.md=$license"
+        if ($LASTEXITCODE -ne 0) { throw "zip for $platform failed" }
+        Write-Note ("{0} ({1:N1} MB)" -f (Split-Path $zip -Leaf), ((Get-Item $zip).Length / 1MB))
         $platformZips += $zip
+        if ($goos -eq 'darwin') {
+            # What install-mac.sh fetches: the same program as Yoru.app.
+            $appZip = Join-Path $OutDir "Yoru-$Version-mac-$goarch.zip"
+            & $unixzip -app -out $appZip -icon (Join-Path $root 'web\public\icon-512.png') "yoru=$bin" "LICENSE.md=$license"
+            if ($LASTEXITCODE -ne 0) { throw "app zip for $platform failed" }
+            Write-Note ("{0} ({1:N1} MB)" -f (Split-Path $appZip -Leaf), ((Get-Item $appZip).Length / 1MB))
+            $appZips += $appZip
+        }
         $bridge = Join-Path $OutDir "kuro-$Version-$goos-$goarch.zip"
         New-Zip $bridge @{ 'kuro' = $bin }
         $bridgeZips += $bridge
     }
 
+    Write-Step 'mac install script'
+    # LF, as sh reads it, whatever checkout turned the template into; the version pins what it fetches.
+    $installer = Join-Path $OutDir 'install-mac.sh'
+    $script = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'install-mac.sh')) -replace "`r`n", "`n" -replace '__VERSION__', $Version
+    [IO.File]::WriteAllText($installer, $script)
+    Write-Note (Split-Path $installer -Leaf)
+
     Write-Step 'checksums'
     $sums = Join-Path $OutDir 'SHA256SUMS.txt'
-    $lines = foreach ($zip in @($fullZip, $updateZip) + $platformZips + $bridgeZips) {
+    $lines = foreach ($zip in @($fullZip, $updateZip) + $platformZips + $appZips + $bridgeZips + @($installer)) {
         "{0}  {1}" -f (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower(), (Split-Path $zip -Leaf)
     }
     # LF and no BOM: the updater reads it byte for byte.
@@ -208,7 +238,11 @@ try {
 
     Write-Step 'sign'
     $sig = "$sums.sig"
-    go -C $root run ./scripts/signsums -key $SigningKey -sums $sums -out $sig
+    # Installs trust only the key in update.go; signing with another would publish a release none accepts.
+    $updateGo = Get-Content (Join-Path $root 'internal\update\update.go') -Raw
+    $trusted = [regex]::Match($updateGo, 'signingKeyHex = "([0-9a-f]{64})"').Groups[1].Value
+    if (-not $trusted) { throw 'signingKeyHex not found in internal/update/update.go' }
+    go -C $root run ./scripts/signsums -key $SigningKey -sums $sums -out $sig -trust $trusted
     if ($LASTEXITCODE -ne 0) { throw 'signing failed' }
 } finally {
     Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
@@ -217,8 +251,10 @@ try {
 # A secret shipped by accident can't be unshipped: stop on any zip entry but the program, README, license.
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Write-Host ''
-$allowed = @('yoru.exe', 'yoru', 'kuro.exe', 'kuro', 'README.txt', 'LICENSE.md')
-foreach ($zip in @($fullZip, $updateZip) + $platformZips + $bridgeZips) {
+$allowed = @('yoru.exe', 'yoru', 'kuro.exe', 'kuro', 'README.txt', 'LICENSE.md',
+    'Yoru.app/Contents/MacOS/yoru', 'Yoru.app/Contents/Info.plist', 'Yoru.app/Contents/Resources/yoru.icns',
+    'Yoru.app/Contents/Resources/LICENSE.md')
+foreach ($zip in @($fullZip, $updateZip) + $platformZips + $appZips + $bridgeZips) {
     Write-Host "  $(Split-Path $zip -Leaf)" -ForegroundColor Green
     $archive = [IO.Compression.ZipFile]::OpenRead($zip)
     try {
@@ -238,7 +274,7 @@ if ($Publish) {
     Write-Step "publish v$Version"
     if (-not $Notes) { $Notes = "Yoru $Version" }
     $notesArgs = if ($NotesFile) { @('--notes-file', (Resolve-Path $NotesFile).Path) } else { @('--notes', $Notes) }
-    gh release create "v$Version" $fullZip $updateZip @platformZips @bridgeZips $sums $sig `
+    gh release create "v$Version" $fullZip $updateZip @platformZips @appZips @bridgeZips $installer $sums $sig `
         --repo Tons-7/yoru --title "Yoru $Version" @notesArgs
     if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
     Write-Host "published https://github.com/Tons-7/yoru/releases/tag/v$Version" -ForegroundColor Green

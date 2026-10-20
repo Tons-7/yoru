@@ -1,5 +1,5 @@
 // Audits every picture the main pages show: broken, stretched, or drawn larger than the file it came from.
-// Reads live catalogue data, so it is run by hand: PAGES=/a,/b overrides the pages, DPR sets the screen density.
+// Reads live catalogue data, so it runs by hand: PAGES=/a,/b overrides the pages, DPR sets the screen density.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'

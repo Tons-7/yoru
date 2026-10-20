@@ -285,7 +285,8 @@ func TestExtractFontsKeepsHostileNamesInside(t *testing.T) {
 		t.Fatal(err)
 	}
 	font := filepath.Join(root, "font.ttf")
-	if err := os.WriteFile(font, []byte("not really a font"), 0o644); err != nil {
+	// A TrueType header and little else: extraction keeps only what looks whole.
+	if err := os.WriteFile(font, []byte("\x00\x01\x00\x00not really a font"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

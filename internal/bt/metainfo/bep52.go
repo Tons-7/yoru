@@ -24,11 +24,8 @@ func ValidatePieceLayers(
 		}
 		filePieceLayers, ok := pieceLayers[string(piecesRoot.Value[:])]
 		if !ok {
-			// BEP 52: "For each file in the file tree that is larger than the piece size it
-			// contains one string value.". The reference torrent creator in
-			// https://blog.libtorrent.org/2020/09/bittorrent-v2/ also has this. If a file is equal
-			// to or smaller than the piece length, we can just use the pieces root instead of the
-			// piece layer hash.
+			// BEP 52: piece layers only for files larger than a piece; a smaller one's pieces root
+			// stands in for the layer hash.
 			if ft.File.Length > pieceLength {
 				err = fmt.Errorf("no piece layers for file %q", path)
 			}

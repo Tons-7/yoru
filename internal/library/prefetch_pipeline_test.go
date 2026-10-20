@@ -106,7 +106,7 @@ func TestPlayTakesOverTheEpisodeBeingFetchedAhead(t *testing.T) {
 		t.Errorf("added %d torrents, want the one", n)
 	}
 	// The stream opens and pins what is playing.
-	if err := play.store.PinOnly(ctx, ep2Hash, 0); err != nil {
+	if err := play.store.PinCache(ctx, ep2Hash, 0, true); err != nil {
 		t.Fatal(err)
 	}
 

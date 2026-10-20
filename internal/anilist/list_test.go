@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-//go:fix inline
-func ptr[T any](v T) *T { return new(v) }
-
 func TestFuzzyDateString(t *testing.T) {
 	tests := []struct {
 		name string

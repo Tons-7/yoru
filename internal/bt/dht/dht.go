@@ -30,8 +30,7 @@ type transactionKey = transactions.Key
 
 type StartingNodesGetter func() ([]Addr, error)
 
-// ServerConfig allows setting up a  configuration of the `Server` instance to be created with
-// NewServer.
+// ServerConfig is a Server's configuration, for NewServer.
 type ServerConfig struct {
 	// Set NodeId Manually. Caller must ensure that if NodeId does not conform
 	// to DHT Security Extensions, that NoSecurity is also set.
@@ -42,15 +41,12 @@ type ServerConfig struct {
 	// Whether to wait for rate limiting to allow us to reply.
 	WaitToReply bool
 
-	// Called when there are no good nodes to use in the routing table. This might be called any
-	// time when there are no nodes, including during bootstrap if one is performed. Typically it
-	// returns the resolve addresses of bootstrap or "router" nodes that are designed to kick-start
-	// a routing table.
+	// Called whenever the table has no good nodes (bootstrap included), usually giving the resolved
+	// addresses of the "router" nodes that start a table.
 	StartingNodes StartingNodesGetter
 	// Disable the DHT security extension: http://www.libtorrent.org/dht_sec.html.
 	NoSecurity bool
-	// Initial IP blocklist to use. Applied before serving and bootstrapping
-	// begins.
+	// The IP blocklist to start with, applied before serving and bootstrapping.
 	IPBlocklist iplist.Ranger
 	// Used to secure the server's ID. Defaults to the Conn's LocalAddr(). Set to the IP that remote
 	// nodes will see, as that IP is what they'll use to validate our ID.
@@ -71,9 +67,7 @@ type ServerConfig struct {
 	// BEP-44: expiration time with non-announced items. Two hours by default
 	Exp time.Duration
 
-	// If no Logger is provided, log.Default is used and log.Debug messages are filtered out. Note
-	// that all messages without a log.Level, have log.Debug added to them before being passed to
-	// this Logger.
+	// log.Default without Debug when unset; a message with no level is given log.Debug.
 	Logger log.Logger
 
 	DefaultWant []krpc.Want
@@ -83,8 +77,7 @@ type ServerConfig struct {
 
 // ServerStats instance is returned by Server.Stats() and stores Server metrics
 type ServerStats struct {
-	// Count of nodes in the node table that responded to our last query or
-	// haven't yet been queried.
+	// Nodes that answered our last query or haven't been queried yet.
 	GoodNodes int
 	// Count of nodes in the node table.
 	Nodes int
@@ -122,12 +115,23 @@ func GlobalBootstrapAddrs(network string) ([]Addr, error) {
 // ServerConfig.BootstrapAddrs.
 func ResolveHostPorts(hostPorts []string) (addrs []Addr, err error) {
 	initDnsResolver()
+	return resolveHostPorts(context.Background(), dnsResolver.LookupHost, hostPorts)
+}
+
+// ResolveHostPortsVia is ResolveHostPorts through r, uncached; nil r is the system resolver.
+func ResolveHostPortsVia(ctx context.Context, r *net.Resolver, hostPorts []string) ([]Addr, error) {
+	return resolveHostPorts(ctx, r.LookupHost, hostPorts)
+}
+
+func resolveHostPorts(
+	ctx context.Context, lookup func(context.Context, string) ([]string, error), hostPorts []string,
+) (addrs []Addr, err error) {
 	for _, s := range hostPorts {
 		host, port, err := net.SplitHostPort(s)
 		if err != nil {
 			panic(err)
 		}
-		hostAddrs, err := dnsResolver.LookupHost(context.Background(), host)
+		hostAddrs, err := lookup(ctx, host)
 		if err != nil {
 			// log.Default.WithDefaultLevel(log.Debug).Printf("error looking up %q: %v", s, err)
 			continue

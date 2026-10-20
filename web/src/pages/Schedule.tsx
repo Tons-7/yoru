@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { airTime, cx, relativeTime } from '../lib/format'
+import { useStoredFlag } from '../lib/hooks'
 import { useNow, useSchedule } from '../lib/queries'
 import { Badge, Empty, ErrorState, FilterToggle, PageHeader, RefreshFailed, Skeleton } from '../components/ui'
 
@@ -9,13 +10,16 @@ function dayLabel(date: string) {
 }
 
 export function SchedulePage() {
-  const [mine, setMine] = useState(false)
+  const [mine, setMine] = useStoredFlag('yoru.schedule.mine')
   const { data, isPending, isError, error, refetch } = useSchedule(7, mine)
 
   const days = data?.days ?? []
   const todayIndex = Math.max(0, days.findIndex((d) => d.today))
-  const [selected, setSelected] = useState<number | null>(null)
-  const active = days[selected ?? todayIndex]
+  // By date, not position: past midnight the days shift one along and an index lands on the next one.
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const picked = days.findIndex((d) => d.date === selectedDate)
+  const shownIndex = picked >= 0 ? picked : todayIndex
+  const active = days[shownIndex]
 
   const now = useNow() / 1000
   const nextUp = active?.items.find((item) => item.airingAt > now)
@@ -54,11 +58,12 @@ export function SchedulePage() {
         <>
           <div className="no-scrollbar flex gap-1.5 overflow-x-auto pb-1">
             {days.map((day, i) => {
-              const isActive = i === (selected ?? todayIndex)
+              const isActive = i === shownIndex
               return (
                 <button
                   key={day.date}
-                  onClick={() => setSelected(i)}
+                  aria-pressed={isActive}
+                  onClick={() => setSelectedDate(day.date)}
                   className={cx(
                     'shrink-0 rounded-lg px-4 py-2 text-left ring-1 transition-colors',
                     isActive
@@ -121,7 +126,8 @@ export function SchedulePage() {
                       to={`/anime/${item.animeId}`}
                       className={cx(
                         'flex items-center gap-3 border-l-2 px-3 py-2.5 transition-colors hover:bg-base-850/70',
-                        aired ? 'border-transparent opacity-60 hover:opacity-100' : 'border-transparent',
+                        // Aired rows dim only their art (below): faded text fell below readable contrast.
+                        'border-transparent',
                         isNext && 'border-accent-500 bg-accent-500/10',
                         aired && !item.watched && 'pr-14',
                       )}
@@ -146,14 +152,16 @@ export function SchedulePage() {
                           src={item.thumb ?? item.cover}
                           alt=""
                           loading="lazy"
-                          className="h-14 w-10 shrink-0 rounded object-cover shadow-card"
+                          className={cx('h-14 w-10 shrink-0 rounded object-cover shadow-card', aired && 'brightness-75')}
                         />
                       ) : (
                         <div className="h-14 w-10 shrink-0 rounded bg-base-850" />
                       )}
 
                       <div className="min-w-0 flex-1">
-                        <p className="line-clamp-1 text-sm font-medium text-base-100">{item.title}</p>
+                        <p className={cx('line-clamp-1 text-sm font-medium', aired ? 'text-base-300' : 'text-base-100')}>
+                          {item.title}
+                        </p>
                         <p className="mt-0.5 text-xs text-base-500">
                           Episode {item.episode}
                           {/* Late-night broadcasts are a different weekday in Japan, as groups label them. */}

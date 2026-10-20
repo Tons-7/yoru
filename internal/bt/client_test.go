@@ -251,8 +251,7 @@ func TestResponsive(t *testing.T) {
 	assert.EqualValues(t, "d\n", string(b))
 }
 
-// TestResponsive was the first test to fail if uTP is disabled and TCP sockets dial from the
-// listening port.
+// TestResponsive is the first to fail with uTP off and TCP dialling from the listen port.
 func TestResponsiveTcpOnly(t *testing.T) {
 	seederDataDir, mi := testutil.GreetingTestTorrent()
 	defer os.RemoveAll(seederDataDir)
@@ -354,8 +353,7 @@ func TestDhtInheritBlocklist(t *testing.T) {
 	qt.Assert(t, qt.Not(qt.Equals(numServers, 0)))
 }
 
-// Check that stuff is merged in subsequent AddTorrentSpec for the same
-// infohash.
+// A later AddTorrentSpec for the same infohash merges into the torrent.
 func TestAddTorrentSpecMerging(t *testing.T) {
 	cl, err := NewClient(TestingConfig(t))
 	require.NoError(t, err)
@@ -410,8 +408,6 @@ func testAddTorrentPriorPieceCompletion(t *testing.T, alreadyCompleted bool, csf
 	greetingData, err := storage.NewClient(filePieceStore).OpenTorrent(context.Background(), &info, ih)
 	require.NoError(t, err)
 	writeTorrentData(greetingData, info, []byte(testutil.GreetingFileContents))
-	// require.Equal(t, len(testutil.GreetingFileContents), written)
-	// require.NoError(t, err)
 	for i := 0; i < info.NumPieces(); i++ {
 		p := info.Piece(i)
 		if alreadyCompleted {
@@ -451,9 +447,6 @@ func TestAddMetainfoWithNodes(t *testing.T) {
 	cfg.ListenHost = func(string) string { return "" }
 	cfg.NoDHT = false
 	cfg.DhtStartingNodes = func(string) dht.StartingNodesGetter { return func() ([]dht.Addr, error) { return nil, nil } }
-	// For now, we want to just jam the nodes into the table, without verifying them first. Also the
-	// DHT code doesn't support mixing secure and insecure nodes if security is enabled (yet).
-	// cfg.DHTConfig.NoSecurity = true
 	cl, err := NewClient(cfg)
 	require.NoError(t, err)
 	defer cl.Close()
@@ -597,8 +590,7 @@ func TestPieceCompletedInStorageButNotClient(t *testing.T) {
 	qt.Check(t, qt.IsTrue(new))
 }
 
-// Check that when the listen port is 0, all the protocols listened on have
-// the same port, and it isn't zero.
+// With listen port 0, every protocol listens on one port, and not zero.
 func TestClientDynamicListenPortAllProtocols(t *testing.T) {
 	cl, err := NewClient(TestingConfig(t))
 	require.NoError(t, err)
@@ -866,8 +858,19 @@ func TestBadPeerIpPort(t *testing.T) {
 			func(cl *Client) {
 				ipAddr, ok := netip.AddrFromSlice(net.ParseIP("10.0.0.1"))
 				require.True(t, ok)
-				cl.badPeerIPs = map[netip.Addr]struct{}{}
-				cl.badPeerIPs[ipAddr] = struct{}{}
+				cl.badPeerIPs = map[netip.Addr]time.Time{}
+				cl.badPeerIPs[ipAddr] = time.Now().Add(time.Hour)
+			},
+		},
+		{
+			"ban expired",
+			net.ParseIP("10.0.0.1"),
+			2322,
+			false,
+			func(cl *Client) {
+				ipAddr, ok := netip.AddrFromSlice(net.ParseIP("10.0.0.1"))
+				require.True(t, ok)
+				cl.badPeerIPs = map[netip.Addr]time.Time{ipAddr: time.Now().Add(-time.Second)}
 			},
 		},
 		{

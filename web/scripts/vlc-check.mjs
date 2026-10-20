@@ -69,6 +69,8 @@ for (const [key, value] of [['playback.voice', 'medium'], ['playback.night', 'tr
   await post('/api/prefs', { key, value })
 }
 await post('/api/prefs', { key: 'playback.autonext', value: 'true' })
+// VLC skips only what Settings ask for, as the browser player does.
+await post('/api/prefs', { key: 'playback.autoskip_op', value: 'true' })
 
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })

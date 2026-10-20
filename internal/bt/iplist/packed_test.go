@@ -8,14 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The active ingredients in the sample P2P blocklist file contents `sample`,
-// for reference:
-//
-// a:1.2.4.0-1.2.4.255
-// b:1.2.8.0-1.2.8.255
-// eff:1.2.8.2-1.2.8.2
-// something:more detail:86.59.95.195-86.59.95.195
-// eff:127.0.0.0-127.0.0.1`
+// `sample`'s ranges: a 1.2.4.0-255, b 1.2.8.0-255, eff 1.2.8.2, "something:more detail" 86.59.95.195,
+// eff 127.0.0.0-1.
 
 func TestWritePacked(t *testing.T) {
 	l, err := NewFromReader(strings.NewReader(sample))

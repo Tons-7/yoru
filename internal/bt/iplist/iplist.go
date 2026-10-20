@@ -33,9 +33,7 @@ func (r Range) String() string {
 	return fmt.Sprintf("%s-%s: %s", r.First, r.Last, r.Description)
 }
 
-// Create a new IP list. The given ranges must already sorted by the lower
-// bound IP in each range. Behaviour is undefined for lists of overlapping
-// ranges.
+// New makes a list from ranges already sorted by their lower bound; overlapping ranges are undefined.
 func New(initSorted []Range) *IPList {
 	return &IPList{
 		ranges: initSorted,
@@ -54,9 +52,7 @@ func (ipl *IPList) Lookup(ip net.IP) (r Range, ok bool) {
 	if ipl == nil {
 		return
 	}
-	// TODO: Perhaps all addresses should be converted to IPv6, if the future
-	// of IP is to always be backwards compatible. But this will cost 4x the
-	// memory for IPv4 addresses?
+	// TODO: everything as IPv6, at four times the memory for IPv4?
 	v4 := ip.To4()
 	if v4 != nil {
 		r, ok = ipl.lookup(v4)
@@ -86,8 +82,7 @@ func lookup(
 ) (
 	r Range, ok bool,
 ) {
-	// Find the index of the first range for which the following range exceeds
-	// it.
+	// The first range whose next range is past it.
 	i := sort.Search(n, func(i int) bool {
 		if i+1 >= n {
 			return true
@@ -118,9 +113,7 @@ func minifyIP(ip *net.IP) {
 	}
 }
 
-// Parse a line of the PeerGuardian Text Lists (P2P) Format. Returns !ok but
-// no error if a line doesn't contain a range but isn't erroneous, such as
-// comment and blank lines.
+// Parses a PeerGuardian Text Lists (P2P) line; a comment or blank line is !ok with no error.
 func ParseBlocklistP2PLine(l []byte) (r Range, ok bool, err error) {
 	l = bytes.TrimSpace(l)
 	if len(l) == 0 || bytes.HasPrefix(l, []byte("#")) {
@@ -154,8 +147,7 @@ func ParseBlocklistP2PLine(l []byte) (r Range, ok bool, err error) {
 // Creates an IPList from a line-delimited P2P Plaintext file.
 func NewFromReader(f io.Reader) (ret *IPList, err error) {
 	var ranges []Range
-	// There's a lot of similar descriptions, so we maintain a pool and reuse
-	// them to reduce memory overhead.
+	// Descriptions repeat a lot, so one copy of each is kept.
 	uniqStrs := make(map[string]string)
 	scanner := bufio.NewScanner(f)
 	lineNum := 1

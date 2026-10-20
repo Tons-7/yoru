@@ -3,12 +3,18 @@ package deps
 import (
 	"archive/zip"
 	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The binary is moved aside, never truncated, and a copy that fails leaves the old one in place.
@@ -253,16 +259,53 @@ func TestRemoveObsoleteSweepsInterruptedInstalls(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "mpv.exe.new"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(dir, "ffmpeg.exe"), []byte("x"), 0o755)
 	os.MkdirAll(filepath.Join(dir, "shaders"), 0o755)
+	os.WriteFile(filepath.Join(dir, "shaders", "Anime4K_Clamp.glsl.old"), []byte("x"), 0o644)
+	// bin_dir may be the user's own tools folder: what Yoru didn't make stays.
+	os.WriteFile(filepath.Join(dir, "backup.old"), []byte("x"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "notes.new"), 0o755)
+	os.WriteFile(filepath.Join(dir, "rqbit.exe"), []byte("x"), 0o755)
+	// bin_dir = '.': the copy an update's rollback needs.
+	os.WriteFile(filepath.Join(dir, "yoru.exe.old"), []byte("x"), 0o755)
 
 	m.RemoveObsolete()
-	for _, gone := range []string{".install-123", "mpv.exe.new"} {
+	for _, gone := range []string{".install-123", "mpv.exe.new", filepath.Join("shaders", "Anime4K_Clamp.glsl.old")} {
 		if _, err := os.Stat(filepath.Join(dir, gone)); err == nil {
 			t.Errorf("%s was left behind", gone)
 		}
 	}
-	for _, kept := range []string{"ffmpeg.exe", "shaders"} {
+	for _, kept := range []string{"ffmpeg.exe", "shaders", "backup.old", "notes.new", "rqbit.exe", "yoru.exe.old"} {
 		if _, err := os.Stat(filepath.Join(dir, kept)); err != nil {
 			t.Errorf("%s was removed", kept)
 		}
+	}
+}
+
+// A slow line that keeps delivering finishes however long it takes; one gone silent fails, named as a stall.
+func TestDownloadEndsOnlyOnSilence(t *testing.T) {
+	old := stallAfter
+	stallAfter = 150 * time.Millisecond
+	t.Cleanup(func() { stallAfter = old })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for i := range 6 {
+			w.Write([]byte("chunk"))
+			w.(http.Flusher).Flush()
+			if r.URL.Path == "/silent" && i == 1 {
+				<-r.Context().Done()
+				return
+			}
+			time.Sleep(80 * time.Millisecond)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	m := New(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	m.http.Timeout = 200 * time.Millisecond // the old whole-response deadline, shorter than the slow download
+	dest := filepath.Join(t.TempDir(), "file")
+	if err := m.download(context.Background(), "ffmpeg", srv.URL+"/slow", dest, ""); err != nil {
+		t.Fatalf("a slow but steady download failed: %v", err)
+	}
+	if err := m.download(context.Background(), "ffmpeg", srv.URL+"/silent", dest, ""); !errors.Is(err, errStalled) {
+		t.Fatalf("a silent download: %v, want the stall named", err)
 	}
 }

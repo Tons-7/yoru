@@ -14,7 +14,7 @@ type tokenServer struct {
 	secret []byte
 	// How long between token changes.
 	interval time.Duration
-	// How many intervals may pass between the current interval, and one used to generate a token before it is invalid.
+	// How many intervals a token's may lag the current one and still be valid.
 	maxIntervalDelta int
 	timeNow          func() time.Time
 }

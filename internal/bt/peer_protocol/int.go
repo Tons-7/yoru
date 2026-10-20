@@ -2,10 +2,9 @@ package peer_protocol
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
 	"math"
-
-	"github.com/pkg/errors"
 )
 
 type (

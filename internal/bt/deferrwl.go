@@ -3,15 +3,14 @@ package bt
 import (
 	"fmt"
 	"reflect"
+	"sync"
 
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/missinggo/v2/panicif"
-	"github.com/anacrolix/sync"
 )
 
-// Runs deferred actions on Unlock. Note that actions are assumed to be the results of changes that
-// would only occur with a write lock at present. The race detector should catch instances of defers
-// without the write lock being held.
+// Runs deferred actions on Unlock; they follow write-locked changes, and the race detector catches a
+// defer without the write lock.
 type lockWithDeferreds struct {
 	internal      sync.RWMutex
 	unlockActions []func()

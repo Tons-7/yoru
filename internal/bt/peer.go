@@ -58,8 +58,7 @@ type (
 
 		outgoing bool
 		Network  string
-		// The local address as observed by the remote peer. WebRTC seems to get this right without needing hints from the
-		// config.
+		// Our address as the remote peer sees it (WebRTC gets it right without config hints).
 		localPublicAddr peerLocalPublicAddr
 		bannableAddr    Option[bannableAddr]
 		// True if the connection is operating over MSE obfuscation.
@@ -84,9 +83,7 @@ type (
 		peerInterested        bool
 		peerChoking           bool
 		PeerPrefersEncryption bool // as indicated by 'e' field in extension handshake
-		// The highest possible number of pieces the torrent could have based on
-		// communication with the peer. Generally only useful until we have the
-		// torrent info.
+		// The fewest pieces the torrent can have going by this peer; useful until the info arrives.
 		peerMinPieces pieceIndex
 
 		peerAllowedFast typedRoaring.Bitmap[pieceIndex]
@@ -114,18 +111,13 @@ const (
 	PeerSourceDirect = "M"
 )
 
-// These are grouped because we might vary update request behaviour depending on the reason. I'm not
-// sure about the fact that multiple reasons can be triggered before an update runs, and only the
-// first will count. Possibly we should be signalling what behaviours are appropriate in the next
-// update instead.
+// Named reasons, as updates may act on them; only the first before an update runs counts.
 const (
 	peerUpdateRequestsPeerCancelReason   updateRequestReason = "Peer.cancel"
 	peerUpdateRequestsRemoteRejectReason updateRequestReason = "Peer.remoteRejectedRequest"
 )
 
-// Returns the Torrent a Peer belongs to. Shouldn't change for the lifetime of the Peer. May be nil
-// if we are the receiving end of a connection and the handshake hasn't been received or accepted
-// yet.
+// Torrent is the Peer's for its life; nil on an incoming connection before the handshake is accepted.
 func (p *Peer) Torrent() *Torrent {
 	return p.t
 }
@@ -251,8 +243,7 @@ func (cn *Peer) peerHasPiece(piece pieceIndex) bool {
 	return cn.peerPieces().ContainsInt(piece)
 }
 
-// 64KiB, but temporarily less to work around an issue with WebRTC. TODO: Update when
-// https://github.com/pion/datachannel/issues/59 is fixed.
+// Per-conn write buffer; requests refill it once it drains below the low water mark.
 const (
 	writeBufferHighWaterLen = 1 << 15
 	writeBufferLowWaterLen  = writeBufferHighWaterLen / 2
@@ -274,8 +265,7 @@ func (cn *Peer) totalExpectingTime() (ret time.Duration) {
 	return
 }
 
-// The function takes a message to be sent, and returns true if more messages
-// are okay.
+// Sends a message and says whether more may follow.
 type messageWriter func(pp.Message) bool
 
 // All ConnStats that include this connection. Some objects are not known until the handshake is
@@ -354,9 +344,7 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 	recordBlockForSmartBan := sync.OnceFunc(func() {
 		c.recordBlockForSmartBan(req, msg.Piece)
 	})
-	// This needs to occur before we return, but we try to do it when the client is unlocked. It
-	// can't be done before checking if chunks are valid because they won't be deallocated from the
-	// smart ban cache by piece hashing if they're out of bounds.
+	// Before returning, ideally unlocked, and only for valid chunks: hashing frees just in-bounds ones.
 	defer recordBlockForSmartBan()
 
 	if c.peerChoking {
@@ -372,7 +360,6 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 
 	// Do we actually want this chunk?
 	if t.haveChunk(ppReq) {
-		// panic(fmt.Sprintf("%+v", ppReq))
 		ChunksReceived.Add("redundant", 1)
 		c.modifyRelevantConnStats(add(1, func(cs *ConnStats) *Count { return &cs.ChunksReadWasted }))
 		return nil
@@ -391,11 +378,9 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 	c.lastUsefulChunkReceived = time.Now()
 	c.sampleRate()
 
-	// Need to record that it hasn't been written yet, before we attempt to do
-	// anything with it.
+	// Marked unwritten before anything else touches it.
 	piece.incrementPendingWrites()
-	// Record that we have the chunk, so we aren't trying to download it while
-	// waiting for it to be written to storage.
+	// Ours now, so it isn't fetched again while it waits for storage.
 	piece.unpendChunkIndex(chunkIndexFromChunkSpec(ppReq.ChunkSpec, t.chunkSize))
 
 	// Cancel pending requests for this chunk from *other* peers.
@@ -414,11 +399,8 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 		recordBlockForSmartBan()
 		concurrentChunkWrites.Add(1)
 		defer concurrentChunkWrites.Add(-1)
-		// Write the chunk out. Note that the upper bound on chunk writing concurrency will be the
-		// number of connections. We write inline with receiving the chunk (with this lock dance),
-		// because we want to handle errors synchronously and I haven't thought of a nice way to
-		// defer any concurrency to the storage and have that notify the client of errors. TODO: Do
-		// that instead.
+		// Written inline (one at a time per connection) so errors are handled here. TODO: let storage
+		// write concurrently and report errors back.
 		return t.writeChunk(int(msg.Index), int64(msg.Begin), msg.Piece)
 	}()
 
@@ -427,9 +409,7 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 	if err != nil {
 		c.logger.WithDefaultLevel(log.Error).Printf("writing received chunk %v: %v", req, err)
 		t.pendRequest(req)
-		// Necessary to pass TestReceiveChunkStorageFailureSeederFastExtensionDisabled. I think a
-		// request update runs while we're writing the chunk that just failed. Then we never do a
-		// fresh update after pending the failed request.
+		// An update may have run during the failed write, so one is due after pending it again.
 		c.onNeedUpdateRequests("Peer.receiveChunk error writing chunk")
 		t.onWriteChunkErr(err)
 		return nil
@@ -439,11 +419,9 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 
 	// We need to ensure the piece is only queued once, so only the last chunk writer gets this job.
 	if t.pieceAllDirty(pieceIndex(ppReq.Index)) && piece.pendingWrites == 0 {
+		// Chunks aren't pended here, so dirty-chunk checks like haveChunk needn't know hashing
+		// states; they must be pended later.
 		t.queuePieceCheck(pieceIndex(ppReq.Index))
-		// We don't pend all chunks here anymore because we don't want code dependent on the dirty
-		// chunk status (such as the haveChunk call above) to have to check all the various other
-		// piece states like queued for hash, hashing etc. This does mean that we need to be sure
-		// that chunk pieces are pended at an appropriate time later however.
 	}
 
 	cl.event.Broadcast()
@@ -528,12 +506,7 @@ func (p *Peer) TryAsPeerConn() (*PeerConn, bool) {
 type peerLocalPublicAddr = IpPort
 
 func (p *Peer) decPeakRequests() {
-	// // This can occur when peak requests are altered by the update request timer to be lower than
-	// // the actual number of outstanding requests. Let's let it go negative and see what happens. I
-	// // wonder what happens if maxRequests is not signed.
-	// if p.peakRequests < 1 {
-	// 	panic(p.peakRequests)
-	// }
+	// May go negative when the update timer lowers peak below the outstanding requests.
 	p.peakRequests--
 }
 

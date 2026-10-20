@@ -41,7 +41,7 @@ func TestAFilmIsItsOwnEpisode(t *testing.T) {
 	}
 }
 
-// The cover stands in when there is no banner, and a one-part OVA is described the same way but keeps its number.
+// The cover stands in without a banner, and a one-part OVA is described the same way but keeps its number.
 func TestAOnePartOVAIsDescribedByItsEntry(t *testing.T) {
 	s := newTestStore(t)
 	film(t, s, 1, "OVA", 1, "An extra.", nil, "cover.jpg")

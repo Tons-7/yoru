@@ -110,6 +110,119 @@ function chain(lib: Lib, device: GPUDevice, input: GPUTexture, native: Size, tar
   return out
 }
 
+// A full-canvas quad sampling the last network's output, as the library presents it.
+const PRESENT = /* wgsl */ `
+struct Out { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
+@vertex fn vert_main(@builtin(vertex_index) i: u32) -> Out {
+  var quad = array<vec2f, 6>(vec2f(-1, -1), vec2f(1, -1), vec2f(-1, 1), vec2f(-1, 1), vec2f(1, -1), vec2f(1, 1));
+  var o: Out;
+  o.pos = vec4f(quad[i], 0, 1);
+  o.uv = vec2f((quad[i].x + 1) / 2, (1 - quad[i].y) / 2);
+  return o;
+}
+@group(0) @binding(1) var samp: sampler;
+@group(0) @binding(2) var tex: texture_2d<f32>;
+@fragment fn main(@location(0) uv: vec2f) -> @location(0) vec4f { return textureSample(tex, samp, uv); }
+`
+
+/**
+ * The library's render(), with a stop: its frame loop re-queues for the element's life, and it waits on a
+ * loadeddata that never fires again for a source already playing (a restart mid-buffering hung in "starting").
+ */
+async function present(
+  video: HTMLVideoElement,
+  canvas: HTMLCanvasElement,
+  build: (device: GPUDevice, input: GPUTexture) => Anime4KPipeline[],
+) {
+  const adapter = await navigator.gpu.requestAdapter()
+  if (!adapter) throw new Error('WebGPU not supported')
+  const device = await adapter.requestDevice()
+  try {
+    return presentOn(device, video, canvas, build)
+  } catch (err) {
+    device.destroy()
+    throw err
+  }
+}
+
+function presentOn(
+  device: GPUDevice,
+  video: HTMLVideoElement,
+  canvas: HTMLCanvasElement,
+  build: (device: GPUDevice, input: GPUTexture) => Anime4KPipeline[],
+) {
+  const context = canvas.getContext('webgpu')
+  if (!context) throw new Error('no WebGPU canvas context')
+  const format = navigator.gpu.getPreferredCanvasFormat()
+  context.configure({ device, format, alphaMode: 'premultiplied' })
+
+  const { videoWidth: width, videoHeight: height } = video
+  const input = device.createTexture({
+    size: [width, height, 1],
+    format: 'rgba16float',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+  })
+  const pipelines = build(device, input)
+  const layout = device.createBindGroupLayout({
+    entries: [
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+      { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+    ],
+  })
+  const shader = device.createShaderModule({ code: PRESENT })
+  const pipeline = device.createRenderPipeline({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+    vertex: { module: shader, entryPoint: 'vert_main' },
+    fragment: { module: shader, entryPoint: 'main', targets: [{ format }] },
+    primitive: { topology: 'triangle-list' },
+  })
+  const group = device.createBindGroup({
+    layout,
+    entries: [
+      { binding: 1, resource: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }) },
+      { binding: 2, resource: pipelines[pipelines.length - 1].getOutputTexture().createView() },
+    ],
+  })
+
+  let stopped = false
+  let handle = 0
+  const frame = () => {
+    if (stopped) return
+    // Paused too: a callback then means a seek showed a new frame, which must replace the old picture.
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      device.queue.copyExternalImageToTexture({ source: video }, { texture: input }, [width, height])
+    }
+    const encoder = device.createCommandEncoder()
+    for (const p of pipelines) p.pass(encoder)
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: context.getCurrentTexture().createView(),
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        },
+      ],
+    })
+    pass.setPipeline(pipeline)
+    pass.setBindGroup(0, group)
+    pass.draw(6)
+    pass.end()
+    device.queue.submit([encoder.finish()])
+    handle = video.requestVideoFrameCallback(frame)
+  }
+  handle = video.requestVideoFrameCallback(frame)
+
+  return {
+    device,
+    stop: () => {
+      stopped = true
+      video.cancelVideoFrameCallback(handle)
+      device.destroy()
+    },
+  }
+}
+
 // A 24 fps frame lasts 42 ms; a GPU that needs more than this each frame shows them late.
 const SLOW_FRAME_MS = 36
 const SLOW_WINDOW = 72
@@ -154,7 +267,7 @@ export function useAnime4K({
     if (!enabled || !webgpuAvailable() || !video || !canvas) return
 
     let cancelled = false
-    let device: GPUDevice | undefined
+    let stop: (() => void) | undefined
     const run = [video, canvas, enabled, mode, tier, generation, source]
     const setState = (state: 'on' | 'failed') => setOutcome({ run, state })
 
@@ -184,27 +297,19 @@ export function useAnime4K({
       const key = mode?.toUpperCase() as Mode
       const picked: Mode = ['A', 'B', 'C', 'A+A', 'B+B', 'C+A'].includes(key) ? key : 'A'
 
-      await lib.render({
-        video,
-        canvas,
-        // No handle stops the renderer's frame loop, so the device is captured and destroyed.
-        pipelineBuilder: (gpu: GPUDevice, inputTexture: GPUTexture) => {
-          device = gpu
-
-          // A device lost on its own (driver reset, long backgrounding) brings the plain video back.
-          void gpu.lost.then(() => {
-            if (!cancelled) setState('failed')
-          })
-
-          const pipelines = chain(lib, gpu, inputTexture, native, target, picked, tier)
-          timeFrames(gpu, pipelines[pipelines.length - 1], () => !cancelled && slow())
-          return pipelines as [...Anime4KPipeline[], Anime4KPipeline]
-        },
+      const shown = await present(video, canvas, (gpu, inputTexture) => {
+        // A device lost on its own (driver reset, long backgrounding) brings the plain video back.
+        void gpu.lost.then(() => {
+          if (!cancelled) setState('failed')
+        })
+        const pipelines = chain(lib, gpu, inputTexture, native, target, picked, tier)
+        timeFrames(gpu, pipelines[pipelines.length - 1], () => !cancelled && slow())
+        return pipelines
       })
-
+      stop = shown.stop
       if (cancelled) {
         // Started while tearing down: stop it rather than leaving it running.
-        device?.destroy()
+        shown.stop()
         return
       }
       setState('on')
@@ -219,8 +324,10 @@ export function useAnime4K({
     return () => {
       cancelled = true
       // Otherwise the frame loop and its device leak on every restart until the GPU gives up.
-      device?.destroy()
-      device = undefined
+      stop?.()
+      stop = undefined
+      // Another release comes back under the same playlist URL: its run starts unknown, not "on".
+      setOutcome(undefined)
     }
   }, [video, canvas, enabled, mode, tier, generation, source])
 

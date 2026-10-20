@@ -1,18 +1,12 @@
 package bt
 
 import (
+	"fmt"
 	"io"
-
-	"github.com/davecgh/go-spew/spew"
 )
 
-var spewConfig = spew.NewDefaultConfig()
-
-func init() {
-	//spewConfig.DisablePointerAddresses = true
-	//spewConfig.DisablePointerMethods = true
-}
-
 func dumpStats(w io.Writer, a ...any) {
-	spewConfig.Fdump(w, a...)
+	for _, v := range a {
+		fmt.Fprintf(w, "%+v\n", v)
+	}
 }

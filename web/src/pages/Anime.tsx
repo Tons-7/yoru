@@ -31,6 +31,7 @@ import { TrailerOverlay } from '../components/TrailerOverlay'
 import {
   Badge,
   Button,
+  ConfirmInline,
   ErrorState,
   inputClass,
   LinkButton,
@@ -38,7 +39,7 @@ import {
   Skeleton,
   TextInput,
 } from '../components/ui'
-import { useAnchorBox, useDismiss, useDocumentTitle } from '../lib/hooks'
+import { useAnchorBox, useDismiss, useDocumentTitle, useModalFocus } from '../lib/hooks'
 
 /** AniList and Jikan describe an anime differently; only the overlap is used. */
 interface AnimeDetail {
@@ -244,7 +245,7 @@ function Synopsis({ text }: { text: string }) {
       {(clamped || open) && (
         <button
           onClick={() => setOpen((v) => !v)}
-          className="mt-1 text-xs font-medium text-accent-400 transition-colors hover:text-accent-300"
+          className="mt-1 text-xs font-medium text-accent-400 transition-colors hover:text-accent-300 pointer-coarse:min-h-11"
         >
           {open ? 'Show less' : 'Show more'}
         </button>
@@ -252,6 +253,9 @@ function Synopsis({ text }: { text: string }) {
     </div>
   )
 }
+
+// A status in the action row reads as text: drawn like the buttons beside it, it was tapped and did nothing.
+const STATUS_TEXT = 'flex items-center gap-2 py-2 text-sm text-base-300'
 
 export function Anime() {
   const { animeId } = useParams()
@@ -295,6 +299,7 @@ export function Anime() {
     mutationFn: () => api.del(`/api/download/all/${id}`),
     onSuccess: refreshQueue,
   })
+  const [confirmStop, setConfirmStop] = useState(false)
 
   const list = episodes.data?.items ?? []
   const progress = detail.data?.progress ?? 0
@@ -448,10 +453,20 @@ export function Anime() {
                   <PlayIcon />
                   {action.label}
                 </LinkButton>
+              ) : action.kind === 'rewatch' && confirmRewatch ? (
+                // A Cancel that takes focus: a second click on the same spot used to reset everything.
+                <ConfirmInline
+                  label={rewatch.isPending ? 'Starting…' : 'Restart from episode 1'}
+                  note="Progress and ticks reset"
+                  tone="accent"
+                  size="lg"
+                  pending={rewatch.isPending}
+                  onConfirm={startRewatch}
+                  onCancel={() => setConfirmRewatch(false)}
+                />
               ) : action.kind === 'rewatch' ? (
                 <Button
                   onClick={startRewatch}
-                  disabled={rewatch.isPending}
                   title="Marks the show as rewatching, which counts progress from the start again"
                   variant="primary"
                   size="lg"
@@ -459,12 +474,12 @@ export function Anime() {
                   style={colour ? { boxShadow: `0 0 24px ${tint(colour, 0.35)}` } : undefined}
                 >
                   <RewatchIcon />
-                  {rewatch.isPending ? 'Starting…' : confirmRewatch ? 'Restart from ep 1? Ticks reset' : 'Rewatch from episode 1'}
+                  Rewatch from episode 1
                 </Button>
               ) : (
                 <span
                   title="You are caught up. The next episode has not aired yet."
-                  className="flex items-center gap-2 rounded-lg bg-base-800/90 px-4 py-2 text-sm font-medium text-base-200 ring-1 ring-white/[0.07] backdrop-blur-sm"
+                  className={cx(STATUS_TEXT, 'font-medium text-base-200')}
                 >
                   <ClockIcon />
                   {action.label}
@@ -478,24 +493,32 @@ export function Anime() {
               )}
 
               {(detail.data?.repeat ?? 0) > 0 && (
-                <span
-                  title="Completed rewatches, as counted on your list"
-                  className="rounded-lg bg-base-800/90 px-4 py-2 text-sm text-base-300 ring-1 ring-white/[0.07] backdrop-blur-sm"
-                >
+                <span title="Completed rewatches, as counted on your list" className={STATUS_TEXT}>
                   Rewatched ×{detail.data!.repeat}
                 </span>
               )}
 
               {waiting > 0 ? (
-                <Button
-                  onClick={() => cancelAll.mutate()}
-                  disabled={cancelAll.isPending}
-                  title="Stops this show's downloads, the one in progress included"
-                  className="gap-2"
-                >
-                  <span className="size-2 animate-pulse rounded-full bg-accent-400" />
-                  {waiting} queued · stop
-                </Button>
+                // Count as a status, Stop as its own step that asks: one tap on the pill emptied the queue.
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className={STATUS_TEXT}>
+                    <span className="size-2 animate-pulse rounded-full bg-accent-400" />
+                    {waiting} queued
+                  </span>
+                  {confirmStop ? (
+                    <ConfirmInline
+                      label={cancelAll.isPending ? 'Stopping…' : `Stop ${waiting === 1 ? 'the download' : `${waiting} downloads`}`}
+                      note="The one in progress too"
+                      pending={cancelAll.isPending}
+                      onConfirm={() => cancelAll.mutate(undefined, { onSettled: () => setConfirmStop(false) })}
+                      onCancel={() => setConfirmStop(false)}
+                    />
+                  ) : (
+                    <Button onClick={() => setConfirmStop(true)} title="Stops this show's downloads, the one in progress included">
+                      Stop
+                    </Button>
+                  )}
+                </span>
               ) : toDownload.length > 0 ? (
                 <Button
                   onClick={() => downloadAll.mutate()}
@@ -628,7 +651,7 @@ function AutoDownload({ animeId }: { animeId: number }) {
         setPref.mutate({ animeId, key: 'autodownload.enabled', value: String(!on) })
       }
       disabled={setPref.isPending}
-      className="mt-3 flex items-center gap-2 text-xs text-base-400 transition-colors hover:text-base-200"
+      className="mt-3 flex items-center gap-2 text-xs text-base-400 transition-colors hover:text-base-200 pointer-coarse:min-h-11"
     >
       <span
         className={cx(
@@ -691,7 +714,7 @@ function ShowGroups({ animeId }: { animeId: number }) {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="mt-2 block text-xs text-base-500 transition-colors hover:text-base-200"
+        className="mt-2 block text-xs text-base-500 transition-colors hover:text-base-200 pointer-coarse:min-h-11"
       >
         Prefer a release group for this show…
       </button>
@@ -730,7 +753,8 @@ function ShowGroups({ animeId }: { animeId: number }) {
 function ExternalLinks({ anilist, mal, trailer }: { anilist?: number; mal?: number; trailer?: string }) {
   const [showing, setShowing] = useState(false)
   if (!anilist && !mal && !trailer) return null
-  const link = 'rounded-md bg-base-850/80 px-2.5 py-1 text-xs text-base-300 transition-colors hover:bg-base-750 hover:text-white'
+  const link =
+    'inline-flex items-center rounded-md bg-base-850/80 px-2.5 py-1 text-xs text-base-300 transition-colors hover:bg-base-750 hover:text-white pointer-coarse:min-h-11'
 
   return (
     <div className="mt-3 flex flex-wrap items-center gap-1.5">
@@ -772,6 +796,9 @@ function ScoreSelect({ animeId, score }: { animeId: number; score: number }) {
   const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
   const box = useAnchorBox(trigger, open)
+  // Portalled to the end of the page: without this, Tab went on through the page, never into the menu.
+  const menuRef = useRef<HTMLDivElement>(null)
+  useModalFocus(menuRef, open)
 
   return (
     <div className="relative" ref={ref}>
@@ -783,7 +810,7 @@ function ScoreSelect({ animeId, score }: { animeId: number; score: number }) {
         aria-label="Your score"
         onClick={() => setOpen((v) => !v)}
         className={cx(
-          'flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium backdrop-blur-sm transition-colors',
+          'flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium backdrop-blur-sm transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400 pointer-coarse:min-h-11',
           tens > 0
             ? 'bg-accent-500/20 text-accent-400 hover:bg-accent-500/30'
             : 'bg-base-800/90 text-base-200 hover:bg-base-700',
@@ -796,6 +823,7 @@ function ScoreSelect({ animeId, score }: { animeId: number; score: number }) {
       {open && box &&
         createPortal(
           <div
+            ref={menuRef}
             role="menu"
             data-portal-menu
             style={{
@@ -809,6 +837,7 @@ function ScoreSelect({ animeId, score }: { animeId: number; score: number }) {
                 key={n}
                 role="menuitemradio"
                 aria-checked={n === tens}
+                autoFocus={n === tens}
                 disabled={set.isPending}
                 onClick={() => {
                   set.mutate(n * 10)
@@ -853,7 +882,7 @@ function FavouriteButton({ animeId, bookmark }: { animeId: number; bookmark?: Bo
       aria-pressed={on}
       title={on ? 'Remove from favourites' : 'Add to favourites'}
       className={cx(
-        'rounded-lg px-4 py-2 text-sm font-medium backdrop-blur-sm transition-colors',
+        'rounded-lg px-4 py-2 text-sm font-medium backdrop-blur-sm transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400 pointer-coarse:min-h-11',
         on ? 'bg-accent-500/20 text-accent-300' : 'bg-base-800/90 text-base-200 hover:bg-base-700',
       )}
     >
@@ -879,7 +908,7 @@ function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="mt-2 text-xs text-base-500 transition-colors hover:text-base-200"
+        className="mt-2 text-xs text-base-500 transition-colors hover:text-base-200 pointer-coarse:min-h-11"
       >
         Add a note
       </button>

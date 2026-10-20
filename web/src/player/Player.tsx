@@ -21,9 +21,10 @@ import { refreshDownloads, useSpeedUnit } from '../lib/queries'
 import { SHOW_SHORTCUTS } from '../components/keys'
 import { PlayIcon } from '../components/PosterCard'
 import { Spinner } from '../components/ui'
-import { useDismiss } from '../lib/hooks'
+import { useDismiss, useRoomAbove } from '../lib/hooks'
 import { buttonClass } from '../lib/ui'
 import { useAnime4K, type UpscaleTier } from './anime4k'
+import { useCast } from './cast'
 import {
   skipKind,
   untilWatching,
@@ -98,6 +99,24 @@ function chooseTrack(tracks: SubtitleTrack[], languages: string[] = ['en']): Sub
   )
 }
 
+/** With a dub the viewer understands, dialogue subtitles repeat it: signs and songs only, or none. */
+function chooseWithDub(
+  tracks: SubtitleTrack[],
+  languages: string[],
+  audioLanguage: string,
+  withDub: 'signs' | 'off' | 'same',
+): SubtitleTrack | null {
+  const understood = languages.some((code) => (LANGUAGE_TAGS[code] ?? [code]).includes(audioLanguage.toLowerCase()))
+  if (!understood || withDub === 'same') return chooseTrack(tracks, languages)
+  if (withDub === 'off') return null
+  for (const code of languages) {
+    const tags = LANGUAGE_TAGS[code] ?? [code]
+    const signs = tracks.find((t) => tags.includes((t.language ?? '').toLowerCase()) && SIGNS.test(t.title ?? ''))
+    if (signs) return signs
+  }
+  return null
+}
+
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2]
 
 // Volume, mute, speed and subtitle size carry over; the element alone starts at full volume.
@@ -141,6 +160,12 @@ export interface PlayerProps {
   autoPlay: boolean
   /** Subtitle languages in preference order, from settings. */
   subLanguages?: string[]
+  /** What shows with a dub in one of those languages: signs and songs only, nothing, or as with sub. */
+  withDub?: 'signs' | 'off' | 'same'
+  /** A subtitle delay kept for this show's releases from the playing one's group. */
+  keptDelay?: number
+  /** Keeps a delay for the rest of the show; absent when the release names no group. */
+  onKeepDelay?: (delay: number) => void
   /** onSlow is set only under Auto: a tier picked by hand is left alone. */
   upscale?: { enabled: boolean; mode: string; tier?: UpscaleTier; onSlow?: () => void }
   /** The sound settings, and where a change made here is remembered. */
@@ -155,6 +180,8 @@ export interface PlayerProps {
   onEnded: () => void
   /** by: which control asked, for the log. */
   onNext?: (by: 'button' | 'key' | 'media') => void
+  /** The episode before, absent on the first. */
+  onPrevious?: () => void
   /** Playing or seeking again, which after the end means the viewer went back. */
   onResume?: (by: 'play' | 'seek') => void
   /** Sat at the very end without ending, so no countdown comes; told once per stream. */
@@ -165,6 +192,8 @@ export interface PlayerProps {
   onPickRelease?: () => void
   /** Drawn inside the player, so it survives fullscreen and picture in picture. */
   overlay?: ReactNode
+  /** Casting draws the chosen subtitles into the picture instead of sending them as text. */
+  castBurn?: boolean
 }
 
 export function Player({
@@ -175,6 +204,9 @@ export function Player({
   autoSkip,
   autoPlay,
   subLanguages,
+  withDub = 'signs',
+  keptDelay,
+  onKeepDelay,
   upscale,
   sound,
   title,
@@ -183,11 +215,13 @@ export function Player({
   onProgress,
   onEnded,
   onNext,
+  onPrevious,
   onResume,
   onEndStuck,
   onSessionLost,
   onPickRelease,
   overlay,
+  castBurn = false,
 }: PlayerProps) {
   const [video, setVideo] = useState<HTMLVideoElement | null>(null)
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null)
@@ -214,10 +248,10 @@ export function Player({
   const [notice, setNotice] = useState<string | null>(null)
   const noticeTimer = useRef<number | undefined>(undefined)
   useEffect(() => () => window.clearTimeout(noticeTimer.current), [])
-  const showNotice = useCallback((what: string) => {
+  const showNotice = useCallback((what: string, ms = 900) => {
     setNotice(what)
     window.clearTimeout(noticeTimer.current)
-    noticeTimer.current = window.setTimeout(() => setNotice(null), 900)
+    noticeTimer.current = window.setTimeout(() => setNotice(null), ms)
   }, [])
   const showVolume = useCallback(() => showNotice(VOLUME_NOTICE), [showNotice])
   const [track, setTrack] = useState<number | null>(null)
@@ -227,9 +261,17 @@ export function Player({
     setSubScale(s)
     savePersisted({ subScale: s })
   }, [])
-  // Per episode: a delay fixes one file's timing.
+  // Per episode: a delay fixes one file's timing, unless one was kept for the show's releases from this group.
   const [subDelay, setSubDelay] = useState(0)
-  useEffect(() => setSubDelay(0), [stream?.id])
+  useEffect(() => {
+    setSubDelay(keptDelay ?? 0)
+    if (keptDelay) showNotice(`Subtitle delay ${delayLabel(keptDelay)} (kept for this show)`, 2500)
+  }, [stream?.id, keptDelay, showNotice])
+  // Said, not left to look like a release with none: the browser can't draw subtitles that are pictures.
+  const imageSubtitles = !!stream?.imageSubtitles
+  useEffect(() => {
+    if (imageSubtitles) showNotice('Subtitles here are images; mpv or VLC shows them', 8000)
+  }, [stream?.id, imageSubtitles, showNotice])
   const subDelayRef = useRef(subDelay)
   subDelayRef.current = subDelay
   const shiftSubDelay = useCallback(
@@ -290,6 +332,9 @@ export function Player({
     ? `${stream.playlist}${epoch ? `?a=${epoch}` : ''}`
     : undefined
 
+  // A switch's answer arriving after the episode changed belongs to the old one.
+  const liveId = useRef(stream?.id)
+  liveId.current = stream?.id
   // Set on any pick, even track 0, or a rebuilt session's sub/dub pick undoes it.
   const audioChosen = useRef(false)
   const switchAudio = useCallback(
@@ -297,15 +342,27 @@ export function Player({
       const id = stream?.id
       if (!id || index === audioTrack) return
       audioChosen.current = true
-      // Loading the new source leaves the element paused without a pause event.
-      resumeAfterRebuild(video, !!video && !video.paused && !video.ended)
-      setResumeAt(video?.currentTime ?? startAt)
+      const before = audioTrack
+      const playing = !!video && !video.paused && !video.ended
       setAudioTrack(index)
-      setWaiting(true)
-      setEpoch((e) => e + 1)
-      void api.post(`/api/stream/${id}/audio?track=${index}`).catch(() => {})
+      // Rebuilt on the server's yes: a refused switch keeps the old track, and the menu says so.
+      void api.post(`/api/stream/${id}/audio?track=${index}`).then(
+        () => {
+          if (liveId.current !== id) return
+          // Loading the new source leaves the element paused without a pause event.
+          resumeAfterRebuild(video, playing)
+          setResumeAt(video?.currentTime ?? startAt)
+          setWaiting(true)
+          setEpoch((e) => e + 1)
+        },
+        () => {
+          if (liveId.current !== id) return
+          setAudioTrack(before)
+          showNotice("Couldn't switch the audio track", 3000)
+        },
+      )
     },
-    [stream?.id, audioTrack, video, startAt],
+    [stream?.id, audioTrack, video, startAt, showNotice],
   )
   useEffect(() => {
     audioChosen.current = false
@@ -317,15 +374,27 @@ export function Player({
       const id = stream?.id
       const next = { ...soundState, ...patch }
       if (!id || sameSound(next, soundState)) return
-      resumeAfterRebuild(video, !!video && !video.paused && !video.ended)
-      setResumeAt(video?.currentTime ?? startAt)
+      const before = soundState
+      const playing = !!video && !video.paused && !video.ended
       setSoundState(next)
-      setWaiting(true)
-      setEpoch((e) => e + 1)
-      void api.post(`/api/stream/${id}/sound${soundQuery(patch)}`).catch(() => {})
-      sound?.onChange(next)
+      // Rebuilt and remembered on the server's yes, as a track switch is.
+      void api.post(`/api/stream/${id}/sound${soundQuery(patch)}`).then(
+        () => {
+          if (liveId.current !== id) return
+          resumeAfterRebuild(video, playing)
+          setResumeAt(video?.currentTime ?? startAt)
+          setWaiting(true)
+          setEpoch((e) => e + 1)
+          sound?.onChange(next)
+        },
+        () => {
+          if (liveId.current !== id) return
+          setSoundState(before)
+          showNotice("Couldn't change the sound", 3000)
+        },
+      )
     },
-    [stream?.id, soundState, video, startAt, sound],
+    [stream?.id, soundState, video, startAt, sound, showNotice],
   )
   const cycleVoice = useCallback(() => {
     switchSound({ voice: VOICE_LEVELS[(VOICE_LEVELS.indexOf(soundState.voice) + 1) % VOICE_LEVELS.length] })
@@ -396,10 +465,13 @@ export function Player({
   const trackList = (stream?.subtitles ?? [])
     .map((s) => `${s.index}:${s.language ?? ''}:${s.title ?? ''}`)
     .join('|')
+  // Chosen again when the audio changes language: a switch to the dub takes the dialogue subtitles away.
+  const audioLanguage = stream?.audio?.[audioTrack]?.language ?? ''
   useEffect(() => {
-    setTrack(stream?.subtitles?.length ? chooseTrack(stream.subtitles, subLanguages).index : null)
+    const tracks = stream?.subtitles ?? []
+    setTrack(tracks.length ? (chooseWithDub(tracks, subLanguages ?? ['en'], audioLanguage, withDub)?.index ?? null) : null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trackList])
+  }, [trackList, audioLanguage, withDub])
 
   // The reused element's autoplay fires once; a ref, so flipping it mid-episode can't undo a pause.
   const autoPlayRef = useRef(autoPlay)
@@ -476,6 +548,69 @@ export function Player({
     }
   }, [video, stream?.id])
 
+  // Casting: the TV plays from Yoru itself through a link signed for this session; the video here waits, and
+  // carries on where the TV was when casting stops.
+  const { phase: castPhase, device: castDevice, remote, playing: castPlaying, start: startCast, stop: stopCast,
+    playPause: castPlayPause, seek: castSeek } = useCast()
+  // This stream on the TV, not just a session: another episode, or another page's, leaves this one alone.
+  const casting = castPhase === 'connected' && !!stream?.id && castPlaying === stream.id
+  const castTo = useCallback(async () => {
+    if (!stream?.id || !video) return
+    // A failed try's words must not sit over the cast that works.
+    setNotice(null)
+    try {
+      // Drawn in, the TV gets the track shown here, with this episode's delay.
+      const burn = castBurn && track != null ? `?burn=${track}&delay=${subDelay}` : ''
+      const link = await api.post<{
+        url: string
+        subtitles: Array<{ index: number; language?: string; title?: string; url: string }>
+        note?: string
+      }>(`/api/stream/${stream.id}/cast${burn}`)
+      if (link.note) showNotice(link.note, 6000)
+      const shown = track == null ? -1 : link.subtitles.findIndex((s) => s.index === track)
+      video.pause()
+      await startCast({
+        key: stream.id, url: link.url, title: title ?? '', subtitle, artwork, startAt: video.currentTime,
+        subtitles: link.subtitles, subtitleTrack: shown >= 0 ? shown : undefined,
+      })
+    } catch (e) {
+      // Closing Chrome's device list rejects with "cancel": nothing went wrong.
+      const message = e instanceof Error ? e.message : String(e)
+      if (!/cancel/i.test(message)) showNotice(`Couldn't cast: ${message}`, 6000)
+    }
+  }, [stream?.id, video, track, title, subtitle, artwork, startCast, showNotice, castBurn, subDelay])
+  useEffect(() => {
+    if (casting) video?.pause()
+  }, [casting, video])
+  // The TV's position goes to the list as the video's would, the time really played counted the same way.
+  // Only while it plays this stream: what it shows after moving on is another episode's.
+  const remoteRef = useRef(remote)
+  if (casting) remoteRef.current = remote
+  useEffect(() => {
+    if (!casting || !stream?.id) return
+    const reporter = reportRef.current
+    const sid = stream.id
+    let played = 0
+    let last = remoteRef.current.time
+    const id = window.setInterval(() => {
+      const r = remoteRef.current
+      const step = r.time - last
+      if (step > 0 && step < 15) played += step
+      last = r.time
+      if (r.duration > 0 && !r.paused) {
+        reporter(r.time, r.duration, played, false, false)
+        played = 0
+      }
+    }, 10_000)
+    return () => {
+      window.clearInterval(id)
+      const r = remoteRef.current
+      // Carried on here where the TV was, unless this player has moved to another episode meanwhile.
+      if (video && r.time > 0 && liveId.current === sid) video.currentTime = r.time
+      if (r.duration > 0) reporter(r.time, r.duration, played, false, true)
+    }
+  }, [casting, stream?.id, video])
+
   // Still for 5 s in the last segment (6 s, 7 with a sliver; a seek that never lands counts), not ended: no
   // countdown will come, so the log is told, and a stall at the very end is ended here as a real end would be.
   const stuckRef = useRef(onEndStuck)
@@ -499,8 +634,8 @@ export function Player({
       told = true
       let bufferedEnd = 0
       for (let i = 0; i < video.buffered.length; i++) bufferedEnd = Math.max(bufferedEnd, video.buffered.end(i))
-      // The last segment in and played, under 2 s left: a browser that never ends it (a shorter picture track) is
-      // ended here; a last segment still on its way is waited for.
+      // The last segment in and played, under 2 s left: a browser that never ends it (a shorter picture
+      // track) is ended here; a last segment still on its way is waited for.
       const assumed = streamEnded.current && d - t < 2 && bufferedEnd - t < 0.5
       // planned is the server's length: a player duration far past it means hls.js shifted its timeline.
       stuckRef.current?.({
@@ -543,6 +678,10 @@ export function Player({
   const hasNext = !!onNext
   // Steady, so the keyboard's listener isn't rebuilt each render; N presses the same button.
   const goNext = useCallback(() => onNextRef.current?.('key'), [])
+  const onPreviousRef = useRef(onPrevious)
+  onPreviousRef.current = onPrevious
+  const hasPrevious = !!onPrevious
+  const goPrevious = useCallback(() => onPreviousRef.current?.(), [])
   useEffect(() => {
     if (!video || !('mediaSession' in navigator)) return
     const session = navigator.mediaSession
@@ -558,6 +697,7 @@ export function Player({
       ['seekforward', (d) => seekBy(d.seekOffset ?? 10)],
       ['seekto', (d) => d.seekTime !== undefined && (video.currentTime = d.seekTime)],
       ['nexttrack', hasNext ? () => onNextRef.current?.('media') : null],
+      ['previoustrack', hasPrevious ? () => onPreviousRef.current?.() : null],
     ]
     for (const [action, handler] of handlers) {
       try {
@@ -576,7 +716,7 @@ export function Player({
       }
       session.metadata = null
     }
-  }, [video, title, subtitle, artwork, seekBy, hasNext])
+  }, [video, title, subtitle, artwork, seekBy, hasNext, hasPrevious])
 
   // The lock screen's scrubber follows the episode; it can't place itself on a stream it never saw load.
   useEffect(() => {
@@ -641,6 +781,10 @@ export function Player({
   // that way; a single tap still toggles play. Mouse clicks are unchanged.
   const lastTap = useRef<{ at: number; x: number }>({ at: 0, x: 0 })
   const touchedAt = useRef(0)
+  // Read as the finger lands, before the touch shows the controls.
+  const controlsShown = useRef(controlsVisible)
+  controlsShown.current = controlsVisible
+  const hiddenAtTouch = useRef(false)
   const [flash, setFlash] = useState<'back' | 'forward' | null>(null)
   // A tap on a side third waits for a second, or every double-tap seek pauses.
   const pendingTap = useRef<number | undefined>(undefined)
@@ -664,6 +808,8 @@ export function Player({
         lastTap.current = { at: 0, x }
         return
       }
+      // A tap on a bare picture brings the controls up without pausing, as phone players do.
+      if (hiddenAtTouch.current) return
       if (!side) {
         togglePlay()
         return
@@ -704,6 +850,7 @@ export function Player({
     // Only where the control shows: a file with no audio has nothing to lift.
     cycleVoice: (stream?.audio?.length ?? 0) > 0 ? cycleVoice : undefined,
     next: hasNext ? goNext : undefined,
+    previous: hasPrevious ? goPrevious : undefined,
   })
 
   // How long the picture has been stuck, so a slow swarm can say so rather than looking like a hang.
@@ -771,6 +918,9 @@ export function Player({
     <div
       ref={shell}
       onMouseMove={nudge}
+      onPointerDownCapture={(e) => {
+        if (e.pointerType === 'touch') hiddenAtTouch.current = !controlsShown.current
+      }}
       onTouchStart={nudge}
       // Tabbing onto a hidden control shows the bar, as a mouse would.
       onFocusCapture={nudge}
@@ -860,7 +1010,7 @@ export function Player({
             {/* A spinner looks the same buffering a second or with a dead swarm, so this says which. */}
             {stream && stalledFor > 12 && (
               <p className="mt-3 max-w-xs text-xs text-base-400">
-                {/* What is arriving, never whether it is enough: a slow line buffers and plays on, as on any site. */}
+                {/* What is arriving, never if it's enough: a slow line buffers and plays on, as anywhere. */}
                 {!health || health.complete
                   ? 'Buffering…'
                   : health.peers > 0
@@ -978,6 +1128,15 @@ export function Player({
           </IconButton>
           </span>
 
+          {onPrevious && (
+            <span className={cx('contents', !pip.active && 'max-sm:hidden')}>
+              <IconButton label="Previous episode" hint="Shift+P" onClick={onPrevious}>
+                <span className="contents [&>svg]:rotate-180">
+                  <NextIcon />
+                </span>
+              </IconButton>
+            </span>
+          )}
           {onNext && (
             <IconButton label="Next episode" hint="N" onClick={() => onNext('button')}>
               <NextIcon />
@@ -1031,6 +1190,8 @@ export function Player({
                 onScale={changeSubScale}
                 delay={subDelay}
                 onDelay={setSubDelay}
+                keptDelay={keptDelay}
+                onKeepDelay={onKeepDelay}
               />
             )}
 
@@ -1054,6 +1215,14 @@ export function Player({
                     <KeyboardIcon />
                   </IconButton>
                 </span>
+                {castPhase !== 'none' && (
+                  <IconButton
+                    label={casting ? `Stop casting to ${castDevice || 'the TV'}` : 'Cast to a TV'}
+                    onClick={() => (casting ? stopCast() : void castTo())}
+                  >
+                    <CastIcon on={casting} />
+                  </IconButton>
+                )}
                 {pip.supported && (
                   <IconButton label="Picture in picture" onClick={() => void pip.toggle()}>
                     <PiPIcon />
@@ -1100,6 +1269,18 @@ export function Player({
           </p>
         )}
       </div>
+
+      {casting && (
+        <CastingPanel
+          device={castDevice}
+          time={remote.time}
+          duration={remote.duration || duration}
+          paused={remote.paused}
+          onPlayPause={castPlayPause}
+          onSeek={castSeek}
+          onStop={stopCast}
+        />
+      )}
 
       {overlay}
     </div>
@@ -1153,8 +1334,26 @@ function Scrubber({
 
   return (
     <div
+      // A slider for the keyboard and screen readers: the arrows seek through the player's own keys; Home, End
+      // and the page keys jump from here.
+      role="slider"
+      tabIndex={0}
+      aria-label="Seek"
+      aria-valuemin={0}
+      aria-valuemax={Math.round(duration)}
+      aria-valuenow={Math.round(shown)}
+      aria-valuetext={`${clockTime(shown)} of ${clockTime(duration)}`}
+      onKeyDown={(e) => {
+        if (duration <= 0) return
+        const to =
+          e.key === 'Home' ? 0 : e.key === 'End' ? duration - 1
+            : e.key === 'PageUp' ? time + 60 : e.key === 'PageDown' ? time - 60 : null
+        if (to === null) return
+        e.preventDefault()
+        onSeek(Math.min(duration, Math.max(0, to)))
+      }}
       // touch-none, or the page scrolls instead of scrubbing; taller than the bar, for fingers.
-      className="group/scrub relative -my-1 h-6 cursor-pointer touch-none"
+      className="group/scrub relative -my-1 h-6 cursor-pointer touch-none rounded focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:outline-hidden"
       onPointerDown={(e) => {
         if (e.button !== 0) return
         e.currentTarget.setPointerCapture(e.pointerId)
@@ -1247,7 +1446,7 @@ function useLoadedRanges(streamId: string | undefined, video: HTMLVideoElement |
   return loaded.stream === streamId ? loaded.ranges : []
 }
 
-/** The frame under the pointer, cut from one sprite sheet (no requests), with its time; the time alone until then. */
+/** The frame under the pointer, cut from one sprite sheet (no requests), with its time; until then the time. */
 function ScrubPreview({
   at,
   time,
@@ -1317,7 +1516,8 @@ function Volume({
         value={muted ? 0 : volume}
         onChange={(e) => onChange(Number(e.target.value))}
         aria-label="Volume"
-        className="w-0 accent-[var(--color-accent-500)] opacity-0 transition-all duration-200 group-hover/vol:w-20 group-hover/vol:opacity-100 group-focus-within/vol:w-20 group-focus-within/vol:opacity-100"
+        // Always out on touch: a tablet has no hover to reveal it, and a tap on the speaker only mutes.
+        className="w-0 accent-[var(--color-accent-500)] opacity-0 transition-all duration-200 group-hover/vol:w-20 group-hover/vol:opacity-100 group-focus-within/vol:w-20 group-focus-within/vol:opacity-100 pointer-coarse:w-20 pointer-coarse:opacity-100"
       />
     </div>
   )
@@ -1332,6 +1532,8 @@ function SubtitlePicker({
   onScale,
   delay,
   onDelay,
+  keptDelay,
+  onKeepDelay,
 }: {
   tracks: StreamInfo['subtitles']
   value: number | null
@@ -1340,10 +1542,15 @@ function SubtitlePicker({
   onScale: (scale: number) => void
   delay: number
   onDelay: (delay: number) => void
+  /** The delay remembered for this show's releases from this group, if any. */
+  keptDelay?: number
+  /** Keeps the delay for the rest of the show, from the same group; absent when nothing can say the group. */
+  onKeepDelay?: (delay: number) => void
 }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close, open)
+  const room = useRoomAbove(ref, open)
 
   // Language first; the release's track name only when it tells two apart (Erai-raws calls all "CR").
   const label = (t: StreamInfo['subtitles'][number]) => {
@@ -1372,9 +1579,10 @@ function SubtitlePicker({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 bottom-full z-50 mb-2 w-52 origin-bottom-right animate-rise rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60"
+          style={{ maxHeight: room }}
+          className="absolute right-0 bottom-full z-50 mb-2 w-52 origin-bottom-right animate-rise overflow-y-auto rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60 scrollbar-thin"
         >
-          {/* Only the tracks scroll, so size and delay stay in view. */}
+          {/* Only the tracks scroll, so size and delay stay in view (unless the screen is too short). */}
           <div className="max-h-52 overflow-y-auto scrollbar-thin">
             <MenuRow selected={value === null} onClick={() => { onChange(null); close() }}>
               Off
@@ -1405,6 +1613,20 @@ function SubtitlePicker({
                 onMore={() => onDelay(Math.round((delay + DELAY_STEP) * 10) / 10)}
                 onReset={() => onDelay(0)}
               />
+              {/* A batch off by the same amount every episode: fixed once, not on each. */}
+              {onKeepDelay && delay !== (keptDelay ?? 0) && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => onKeepDelay(delay)}
+                  className="w-full px-3 py-1.5 text-left text-xs text-accent-300 hover:bg-base-750 pointer-coarse:py-3"
+                >
+                  {delay === 0 ? 'Stop keeping a delay for this show' : 'Keep this delay for this show'}
+                </button>
+              )}
+              {onKeepDelay && delay !== 0 && delay === keptDelay && (
+                <p className="px-3 py-1.5 text-xs text-base-500">Kept for this show and group</p>
+              )}
             </div>
           )}
         </div>
@@ -1529,6 +1751,7 @@ function SoundPicker({ value, onChange }: { value: SoundOptions; onChange: (patc
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close, open)
+  const room = useRoomAbove(ref, open)
   const summary = soundSummary(value)
   const heading = 'px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wider text-base-500 uppercase'
 
@@ -1553,7 +1776,8 @@ function SoundPicker({ value, onChange }: { value: SoundOptions; onChange: (patc
       {open && (
         <div
           role="menu"
-          className="absolute right-0 bottom-full z-50 mb-2 w-52 origin-bottom-right animate-rise rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60"
+          style={{ maxHeight: room }}
+          className="absolute right-0 bottom-full z-50 mb-2 w-52 origin-bottom-right animate-rise overflow-y-auto rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60 scrollbar-thin"
         >
           <p className={heading}>Voice boost</p>
           {VOICE_LEVELS.map((level) => (
@@ -1669,6 +1893,8 @@ function CaptionIcon() {
   )
 }
 
+const REPEATING_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'j', 'l', 'z', 'x'])
+
 function useKeyboard({
   video,
   togglePlay,
@@ -1681,6 +1907,7 @@ function useKeyboard({
   skipTo,
   cycleVoice,
   next,
+  previous,
 }: {
   video: HTMLVideoElement | null
   togglePlay: () => void
@@ -1698,6 +1925,8 @@ function useKeyboard({
   cycleVoice?: () => void
   /** n: the Next episode button's, absent while it doesn't show. */
   next?: () => void
+  /** Shift+P, as on YouTube: the episode before. */
+  previous?: () => void
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1711,6 +1940,11 @@ function useKeyboard({
       if (e.ctrlKey || e.metaKey || e.altKey) return
       // The page must not scroll while the arrows seek or change volume.
       if (e.key.startsWith('Arrow')) e.preventDefault()
+      // Held, a toggle flipped 30 times a second and N skipped episodes; only seeks, volume and delay repeat.
+      if (e.repeat && !REPEATING_KEYS.has(e.key)) {
+        if (e.key === ' ') e.preventDefault()
+        return
+      }
 
       switch (e.key) {
         case ' ':
@@ -1765,6 +1999,11 @@ function useKeyboard({
           if (!next) return
           next()
           break
+        // Shift only: a plain p is nothing here.
+        case 'P':
+          if (!previous) return
+          previous()
+          break
         default:
           return
       }
@@ -1777,7 +2016,7 @@ function useKeyboard({
       window.removeEventListener('keydown', onKey)
       extra?.removeEventListener('keydown', onKey)
     }
-  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skipTo, cycleVoice, next])
+  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skipTo, cycleVoice, next, previous])
 }
 
 function IconButton({
@@ -1880,5 +2119,68 @@ function FullscreenIcon() {
     <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
       <path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4" {...stroke} />
     </svg>
+  )
+}
+
+function CastIcon({ on }: { on: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
+      <path d="M3 9V7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-6" {...stroke} />
+      <path d="M3 13a6 6 0 0 1 6 6M3 16.5A2.5 2.5 0 0 1 5.5 19" {...stroke} strokeLinecap="round" />
+      <circle cx="3.5" cy="19" r="0.5" fill="currentColor" />
+      {on && <rect x="7" y="8" width="11" height="8" rx="1" fill="currentColor" opacity="0.6" />}
+    </svg>
+  )
+}
+
+// While the TV plays, the video area becomes its remote: where it plays, play or pause, a seek bar, stop.
+function CastingPanel({
+  device,
+  time,
+  duration,
+  paused,
+  onPlayPause,
+  onSeek,
+  onStop,
+}: {
+  device: string
+  time: number
+  duration: number
+  paused: boolean
+  onPlayPause: () => void
+  onSeek: (to: number) => void
+  onStop: () => void
+}) {
+  return (
+    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-black/85 p-6 text-center">
+      <CastIcon on />
+      <p className="text-sm text-white/80">
+        Playing on <span className="font-semibold text-white">{device || 'your TV'}</span>
+      </p>
+      <button
+        onClick={onPlayPause}
+        aria-label={paused ? 'Play on the TV' : 'Pause on the TV'}
+        className="grid size-14 place-items-center rounded-full bg-white/15 text-white ring-1 ring-white/25 hover:bg-white/25"
+      >
+        {paused ? <PlayIcon /> : <span className="text-xl font-bold">❚❚</span>}
+      </button>
+      <div className="flex w-full max-w-md items-center gap-3 text-xs tabular-nums text-white/80">
+        <span>{clockTime(time)}</span>
+        <input
+          type="range"
+          min={0}
+          max={Math.max(duration, 1)}
+          step={1}
+          value={Math.min(time, duration)}
+          onChange={(e) => onSeek(Number(e.target.value))}
+          aria-label="Seek on the TV"
+          className="h-11 flex-1 accent-accent-500"
+        />
+        <span>{clockTime(duration)}</span>
+      </div>
+      <button onClick={onStop} className={buttonClass('secondary', 'md')}>
+        Stop casting
+      </button>
+    </div>
   )
 }

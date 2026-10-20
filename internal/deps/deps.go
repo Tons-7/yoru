@@ -5,17 +5,19 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -288,15 +290,23 @@ func (m *Manager) install(ctx context.Context, spec *component) error {
 }
 
 func (m *Manager) download(ctx context.Context, name, url, dest, digest string) error {
+	// No overall deadline, which a slow line would always miss: only silence ends it, besides ctx.
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	quiet := time.AfterFunc(stallAfter, func() { cancel(errStalled) })
+	defer quiet.Stop()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("User-Agent", userAgent)
 
-	res, err := m.http.Do(req)
+	client := *m.http
+	client.Timeout = 0
+	res, err := client.Do(req)
 	if err != nil {
-		return err
+		return stallOr(ctx, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
@@ -311,15 +321,20 @@ func (m *Manager) download(ctx context.Context, name, url, dest, digest string) 
 	}
 
 	started := time.Now()
-	sum := sha256.New()
+	var sum hash.Hash = sha256.New()
+	// "md5:" where a source publishes nothing better: it catches a broken transfer, not a swapped file.
+	if h, ok := strings.CutPrefix(digest, "md5:"); ok {
+		sum, digest = md5.New(), h
+	}
 	n, err := io.Copy(io.MultiWriter(f, sum), &counter{
 		reader: res.Body,
 		report: func(n int64) { m.set(name, func(p *Progress) { p.Bytes = n }) },
+		alive:  func() { quiet.Reset(stallAfter) },
 	})
 	// Closed before the verdict: Windows will not remove a file still open.
 	f.Close()
 	if err != nil {
-		return err
+		return stallOr(ctx, err)
 	}
 
 	if digest == "" {
@@ -338,16 +353,33 @@ func (m *Manager) download(ctx context.Context, name, url, dest, digest string) 
 	return nil
 }
 
-// Reports every few megabytes; per read would spend more time locking than copying.
+// stallAfter without data ends a download; a var so tests need not wait.
+var stallAfter = time.Minute
+
+var errStalled = errors.New("the download stopped: no data for a minute")
+
+// stallOr names a stall for what it is rather than "context canceled".
+func stallOr(ctx context.Context, err error) error {
+	if errors.Is(context.Cause(ctx), errStalled) {
+		return errStalled
+	}
+	return err
+}
+
+// counter reports every few megabytes; per read would spend more time locking than copying.
 type counter struct {
 	reader   io.Reader
 	report   func(int64)
+	alive    func() // on every read that brought bytes
 	total    int64
 	reported int64
 }
 
 func (c *counter) Read(p []byte) (int, error) {
 	n, err := c.reader.Read(p)
+	if n > 0 && c.alive != nil {
+		c.alive()
+	}
 	c.total += int64(n)
 	if c.total-c.reported > 4<<20 {
 		c.reported = c.total
@@ -558,12 +590,26 @@ func findAll(root, pattern string) ([]string, error) {
 // obsolete are components Yoru no longer uses: rqbit, replaced by the built-in engine.
 var obsolete = []string{"rqbit"}
 
-// RemoveObsolete deletes dropped components and what a killed install left behind, returning what went.
+// RemoveObsolete deletes dropped components and what a killed install left behind, returning what went. Only
+// names Yoru makes: bin_dir may be a folder the user keeps their own files in.
 func (m *Manager) RemoveObsolete() []string {
-	for _, pattern := range []string{".install-*", "*.new", "*.old"} {
-		stale, _ := filepath.Glob(filepath.Join(m.binDir, pattern))
-		for _, p := range stale {
-			os.RemoveAll(p)
+	staging, _ := filepath.Glob(filepath.Join(m.binDir, ".install-*"))
+	for _, p := range staging {
+		os.RemoveAll(p)
+	}
+	for _, c := range components {
+		var leftovers []string
+		for _, f := range c.files {
+			leftovers = append(leftovers, filepath.Join(m.binDir, f+".new"), filepath.Join(m.binDir, f+".old"))
+		}
+		if c.into != "" {
+			for _, ext := range []string{".new", ".old"} {
+				found, _ := filepath.Glob(filepath.Join(m.binDir, c.into, c.glob+ext))
+				leftovers = append(leftovers, found...)
+			}
+		}
+		for _, p := range leftovers {
+			os.Remove(p)
 		}
 	}
 	path := filepath.Join(m.binDir, "versions.json")
@@ -575,15 +621,17 @@ func (m *Manager) RemoveObsolete() []string {
 	var removed []string
 	listed := false
 	for _, name := range obsolete {
+		// Listed means Yoru installed it; an rqbit of the user's own stays.
+		if _, ok := versions[name]; !ok {
+			continue
+		}
 		for _, file := range []string{name, name + ".exe"} {
 			if err := os.Remove(filepath.Join(m.binDir, file)); err == nil {
 				removed = append(removed, file)
 			}
 		}
-		if _, ok := versions[name]; ok {
-			delete(versions, name)
-			listed = true
-		}
+		delete(versions, name)
+		listed = true
 	}
 	if listed {
 		if raw, err := json.MarshalIndent(versions, "", "    "); err == nil {
@@ -612,5 +660,3 @@ func (m *Manager) record(name, version string) error {
 	}
 	return os.WriteFile(path, raw, 0o644)
 }
-
-var semverTag = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)

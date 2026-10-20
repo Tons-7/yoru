@@ -41,7 +41,12 @@ func (s *Store) AddNotification(ctx context.Context, n Notification) (int64, err
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err == nil && s.onNotify != nil {
+		n.ID = id
+		go s.onNotify(n)
+	}
+	return id, err
 }
 
 func (s *Store) Notifications(ctx context.Context, unreadOnly bool, limit int) ([]Notification, error) {
@@ -129,16 +134,32 @@ func (s *Store) AlreadyNotified(ctx context.Context, infoHash string, animeID, e
 	}
 
 	err = s.r.QueryRowContext(ctx,
-		`SELECT 1 FROM notified_release WHERE anime_id = ? AND episode = ?`,
+		`SELECT 1 FROM notified_release WHERE anime_id = ? AND episode = ? AND announced = 1`,
 		animeID, episode).Scan(&one)
 	return err == nil, nil
 }
 
 func (s *Store) RecordNotified(ctx context.Context, infoHash string, animeID, episode int) error {
+	return s.recordRelease(ctx, infoHash, animeID, episode, true)
+}
+
+// RecordFetched notes a release taken for auto-download without telling anyone: the episode stays news.
+func (s *Store) RecordFetched(ctx context.Context, infoHash string, animeID, episode int) error {
+	return s.recordRelease(ctx, infoHash, animeID, episode, false)
+}
+
+// EpisodeFetched: some release of the episode was already taken, announced or not.
+func (s *Store) EpisodeFetched(ctx context.Context, animeID, episode int) bool {
+	var one int
+	return s.r.QueryRowContext(ctx,
+		`SELECT 1 FROM notified_release WHERE anime_id = ? AND episode = ?`, animeID, episode).Scan(&one) == nil
+}
+
+func (s *Store) recordRelease(ctx context.Context, infoHash string, animeID, episode int, announced bool) error {
 	_, err := s.w.ExecContext(ctx, `
-		INSERT INTO notified_release (info_hash, anime_id, episode, created_at)
-		VALUES (?,?,?,?) ON CONFLICT DO NOTHING`,
-		infoHash, nullableInt(animeID), nullableInt(episode), time.Now().Unix())
+		INSERT INTO notified_release (info_hash, anime_id, episode, created_at, announced)
+		VALUES (?,?,?,?,?) ON CONFLICT DO UPDATE SET announced = max(announced, excluded.announced)`,
+		infoHash, nullableInt(animeID), nullableInt(episode), time.Now().Unix(), boolInt(announced))
 	return err
 }
 

@@ -4,18 +4,16 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/anacrolix/chansync/events"
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/missinggo/v2/pubsub"
-	"github.com/anacrolix/sync"
 
 	"yoru/internal/bt/metainfo"
 )
 
-// The Torrent's infohash. This is fixed and cannot change. It uniquely
-// identifies a torrent. TODO: If this doesn't change, should we stick to
-// referring to a Torrent by the original infohash given to us?
+// InfoHash identifies the Torrent and never changes.
 func (t *Torrent) InfoHash() metainfo.Hash {
 	return *t.canonicalShortInfohash()
 }
@@ -83,8 +81,7 @@ func (t *Torrent) PieceState(piece pieceIndex) (ps PieceState) {
 	return
 }
 
-// The number of pieces in the torrent. This requires that the info has been
-// obtained first.
+// NumPieces is the torrent's piece count; the info must be in.
 func (t *Torrent) NumPieces() pieceIndex {
 	return t.numPieces()
 }
@@ -113,10 +110,8 @@ func (t *Torrent) Drop() {
 	wg.Wait()
 }
 
-// Number of bytes of the entire torrent we have completed. This is the sum of
-// completed pieces, and dirtied chunks of incomplete pieces. Do not use this
-// for download rate, as it can go down when pieces are lost or fail checks.
-// Sample Torrent.Stats.DataBytesRead for actual file data download rate.
+// BytesCompleted counts complete pieces and the dirty chunks of the rest. It falls when pieces are lost or
+// fail, so a download rate comes from Torrent.Stats.DataBytesRead instead.
 func (t *Torrent) BytesCompleted() int64 {
 	t.cl.rLock()
 	defer t.cl.rUnlock()
@@ -183,9 +178,7 @@ func (t *Torrent) deleteReader(r *reader) {
 	t.readersChanged()
 }
 
-// Raise the priorities of pieces in the range [begin, end) to at least Normal
-// priority. Piece indexes are not the same as bytes. Requires that the info
-// has been obtained, see Torrent.Info and Torrent.GotInfo.
+// DownloadPieces raises pieces (not bytes) [begin, end) to at least Normal; the info must be in (GotInfo).
 func (t *Torrent) DownloadPieces(begin, end pieceIndex) {
 	t.cl.lock()
 	t.downloadPiecesLocked(begin, end)
@@ -240,8 +233,7 @@ func (t *Torrent) initFiles() {
 	}
 }
 
-// Returns handles to the files in the torrent. This requires that the Info is
-// available first.
+// Files are the torrent's files; the info must be in.
 func (t *Torrent) Files() []*File {
 	return *t.files
 }

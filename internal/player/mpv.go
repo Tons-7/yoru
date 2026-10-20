@@ -200,6 +200,11 @@ func (m *MPV) Play(ctx context.Context, opts Options) error {
 
 	conn, err := m.dial(ctx, 15*time.Second)
 	if err != nil {
+		// Reaped before Stop waits on it, or Stop sits out its whole wait and the process is never collected.
+		go func() {
+			cmd.Wait()
+			close(exited)
+		}()
 		m.Stop()
 		return err
 	}
@@ -270,7 +275,7 @@ func (m *MPV) readLoop(conn net.Conn, events chan Event) {
 				emit(events, Event{Kind: EventPause, Paused: paused, Duration: duration})
 			}
 		case "end-file":
-			emit(events, Event{Kind: EventEnd, Duration: duration, Reason: msg.Rsn})
+			deliver(events, Event{Kind: EventEnd, Duration: duration, Reason: msg.Rsn})
 		}
 	}
 }
@@ -343,7 +348,7 @@ func (m *MPV) reap(cmd *exec.Cmd, events chan Event, exited chan struct{}) {
 	if conn != nil {
 		conn.Close()
 	}
-	emit(events, Event{Kind: EventExit})
+	deliver(events, Event{Kind: EventExit})
 }
 
 func (m *MPV) Running() bool {
@@ -387,6 +392,15 @@ func emit(events chan Event, e Event) {
 	select {
 	case events <- e:
 	default:
+	}
+}
+
+// deliver is emit for an end or an exit, which the tracker must see to save, unpin and move on: it waits
+// for room (the tracker may be in a database write), but not for a tracker that has gone.
+func deliver(events chan Event, e Event) {
+	select {
+	case events <- e:
+	case <-time.After(30 * time.Second):
 	}
 }
 

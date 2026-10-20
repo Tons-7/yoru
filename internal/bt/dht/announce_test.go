@@ -44,9 +44,7 @@ func TestAnnounceStopsNoPending(t *testing.T) {
 	<-a.Peers
 }
 
-// Assert that rate.Limiter won't wake-up waiters once they have determined a
-// delay. This means we can't use it to cancel reservations for queries that
-// are successful.
+// rate.Limiter doesn't wake a waiter once its delay is set, so can't cancel a done query's reservation.
 func TestRateLimiterInadequate(t *testing.T) {
 	rl := rate.NewLimiter(rate.Every(time.Hour), 1)
 	assert.NoError(t, rl.Wait(context.Background()))

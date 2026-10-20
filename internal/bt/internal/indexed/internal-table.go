@@ -231,12 +231,8 @@ func (me *table[R]) Len() int {
 	return me.set.Len()
 }
 
-// Returns the minimal record of type R, which may not be the same as the zero value for the record.
-// Convenient to avoid having to look up complex types for small expressions. Could be a global
-// function. Should definitely be if this is invoked through an interface. Panics if the min record
-// wasn't set. The concept of MinRecord might be flawed if there are conditions in the ordering of
-// values in a record. In that case the user may have to modify "intermediate" fields in order to
-// set a GTE record that's appropriate midway in the table.
+// MinRecord is the least R (not always its zero value), panicking if unset; a start midway may need its
+// middle fields set by hand.
 func (me *table[R]) MinRecord() (_ R) {
 	return me.minRecord.Unwrap()
 }

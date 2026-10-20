@@ -73,9 +73,7 @@ func (me Announce) Do() (res AnnounceResponse, err error) {
 	}
 	defer cl.Close()
 	if me.Context == nil {
-		// This is just to maintain the old behaviour that should be a timeout of 15s. Users can
-		// override it by providing their own Context. See comments elsewhere about longer timeouts
-		// acting as rate limiting overloaded trackers.
+		// The old 15 s timeout unless a Context is given; longer ones rate limit overloaded trackers.
 		ctx, cancel := context.WithTimeout(context.Background(), DefaultTrackerAnnounceTimeout)
 		defer cancel()
 		me.Context = ctx

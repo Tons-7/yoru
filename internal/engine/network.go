@@ -10,16 +10,19 @@ import (
 	"time"
 
 	"yoru/internal/bt"
+	"yoru/internal/bt/dht"
 	"yoru/internal/torrent"
 )
 
 // Torrents can keep to one adapter, a VPN's: listening, peer dials, trackers, DHT and web seeds all take its
 // address, and with the adapter gone (the VPN dropped) the client stays down rather than use the open line.
 
-// bindAddrs are the adapter's addresses torrents use; none is no binding. all is every address it has.
+// bindAddrs are the adapter's addresses torrents use; none is no binding. all is every address it has, dns
+// the DNS servers it was given.
 type bindAddrs struct {
 	v4, v6 net.IP
 	all    []net.IP
+	dns    []net.IP
 }
 
 func (b bindAddrs) none() bool { return b.v4 == nil && b.v6 == nil }
@@ -98,13 +101,59 @@ func (b bindAddrs) local(addr string) net.IP {
 	return b.v6
 }
 
-// dialContext dials from the adapter's address, so trackers and web seeds see only it.
-func (b bindAddrs) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	ip := b.local(addr)
-	if ip == nil {
-		return nil, fmt.Errorf("%s: the chosen network has no address of that kind", addr)
+// dialer dials from the adapter's address, so trackers and web seeds see only it; res looks the name up.
+func (b bindAddrs) dialer(res *net.Resolver) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		ip := b.local(addr)
+		if ip == nil {
+			return nil, fmt.Errorf("%s: the chosen network has no address of that kind", addr)
+		}
+		d := net.Dialer{LocalAddr: &net.TCPAddr{IP: ip}, Timeout: 30 * time.Second, Resolver: res}
+		return d.DialContext(ctx, network, addr)
 	}
-	return (&net.Dialer{LocalAddr: &net.TCPAddr{IP: ip}, Timeout: 30 * time.Second}).DialContext(ctx, network, addr)
+}
+
+// Var so tests can answer on another port.
+var dnsPort = "53"
+
+// resolver asks the adapter's own DNS servers, from its address, so lookups don't leave by another network
+// (Windows asks every adapter's). An adapter given none leaves names to the system; nil is that resolver.
+func (b bindAddrs) resolver() *net.Resolver {
+	if len(b.dns) == 0 {
+		return nil
+	}
+	return &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var errs []error
+		for _, server := range b.dns {
+			local := b.local(server.String())
+			if local == nil {
+				continue
+			}
+			var from net.Addr = &net.UDPAddr{IP: local}
+			if strings.HasPrefix(network, "tcp") {
+				from = &net.TCPAddr{IP: local}
+			}
+			d := net.Dialer{LocalAddr: from, Timeout: 5 * time.Second}
+			conn, err := d.DialContext(ctx, network, net.JoinHostPort(server.String(), dnsPort))
+			if err == nil {
+				return conn, nil
+			}
+			errs = append(errs, err)
+		}
+		if len(errs) == 0 {
+			return nil, errors.New("the chosen network's DNS servers are of another address family")
+		}
+		return nil, errors.Join(errs...)
+	}}
+}
+
+// bootstrapVia looks the DHT's starting routers up through res.
+func bootstrapVia(res *net.Resolver) dht.StartingNodesGetter {
+	return func() ([]dht.Addr, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return dht.ResolveHostPortsVia(ctx, res, dht.DefaultGlobalBootstrapHostPorts)
+	}
 }
 
 // listenPacket gives a UDP tracker a socket on the adapter's address.
@@ -132,9 +181,14 @@ func applyBinding(cfg *bt.ClientConfig, b bindAddrs) {
 		return b.v4.String()
 	}
 	cfg.DisableIPv4, cfg.DisableIPv6 = b.v4 == nil, b.v6 == nil
-	cfg.HTTPDialContext = b.dialContext
-	cfg.TrackerDialContext = b.dialContext
+	res := b.resolver()
+	cfg.HTTPDialContext = b.dialer(res)
+	cfg.TrackerDialContext = b.dialer(res)
 	cfg.TrackerListenPacket = b.listenPacket
+	if res != nil {
+		cfg.TrackerResolver = res
+		cfg.DhtStartingNodes = func(string) dht.StartingNodesGetter { return bootstrapVia(res) }
+	}
 	cfg.NoDefaultPortForwarding = true
 }
 
@@ -151,6 +205,7 @@ func (e *Engine) binding() (bindAddrs, error) {
 	if err != nil {
 		return bindAddrs{}, fmt.Errorf("waiting for %s to connect; torrents use only that network", adapter)
 	}
+	b.dns = adapterDNS(adapter)
 	return b, nil
 }
 
@@ -352,6 +407,9 @@ func (e *Engine) rebind(why string) {
 		// Offline first, so no add lands on a client about to close.
 		e.mu.Lock()
 		e.offline = true
+		// The next client restores this, not session.json, which a failed save (a full disk) could leave stale.
+		carry, _ := e.sessionLocked()
+		e.carry = &carry
 		e.mu.Unlock()
 		e.writeSession(true)
 		cl.Close()

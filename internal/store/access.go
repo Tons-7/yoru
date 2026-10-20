@@ -51,6 +51,14 @@ func (s *Store) RequestAccess(ctx context.Context, id, name, addr string) error 
 	return err
 }
 
+// PendingFrom: a device at this address with this name already waits; a cookieless browser asks again on
+// every reload, and each ask must not take another of the few waiting places.
+func (s *Store) PendingFrom(ctx context.Context, addr, name string) bool {
+	var one int
+	return s.r.QueryRowContext(ctx,
+		`SELECT 1 FROM access_device WHERE status = 'pending' AND addr = ? AND name = ?`, addr, name).Scan(&one) == nil
+}
+
 func (s *Store) DecideDevice(ctx context.Context, id, status string) error {
 	_, err := s.w.ExecContext(ctx,
 		`UPDATE access_device SET status = ?, decided_at = ? WHERE id = ?`, status, time.Now().Unix(), id)

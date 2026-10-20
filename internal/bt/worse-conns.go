@@ -3,11 +3,11 @@ package bt
 import (
 	"container/heap"
 	"fmt"
+	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/anacrolix/multiless"
-	"github.com/anacrolix/sync"
 )
 
 type worseConnInput struct {

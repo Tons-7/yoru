@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -51,6 +52,8 @@ func NewAccessToken() string {
 var installAssets = map[string]bool{
 	"/manifest.webmanifest": true, "/icon.svg": true,
 	"/icon-192.png": true, "/icon-512.png": true, "/icon-maskable-512.png": true,
+	// The alerts worker, which a browser re-fetches to check for updates whatever cookies it sends.
+	"/sw.js": true,
 }
 
 func isLoopback(remoteAddr string) bool {
@@ -123,12 +126,21 @@ func onlyLegacy(r *http.Request, name, legacy string) bool {
 // requires the token from everything else, failing closed when it is missing.
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Never inside another site's frame, where a click on top could hit host-only buttons.
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 		// Any open page can POST here, and loopback needs no token.
 		if !safeMethod(r.Method) && !sameOrigin(r) {
 			send(w, http.StatusForbidden, map[string]any{"error": "cross-site request refused"})
 			return
 		}
 		if isLoopback(r.RemoteAddr) && loopbackHost(r.Host) {
+			// Another site's page can't read the answers, but it could still make Yoru search, spawn
+			// processes or spend the AniList budget on its say-so; opening a link to Yoru is fine.
+			if !sameOrigin(r) && !topLevelNavigation(r) {
+				send(w, http.StatusForbidden, map[string]any{"error": "cross-site request refused"})
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -142,8 +154,8 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// A player app's link carries its own signed, expiring grant, checked by its handler.
-		if safeMethod(r.Method) && strings.HasPrefix(r.URL.Path, "/x/") {
+		// A player app's or a TV's link carries its own signed, expiring grant, checked by its handler.
+		if safeMethod(r.Method) && (strings.HasPrefix(r.URL.Path, "/x/") || strings.HasPrefix(r.URL.Path, "/c/")) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -198,6 +210,12 @@ func sameOrigin(r *http.Request) bool {
 	return err == nil && strings.EqualFold(u.Host, r.Host)
 }
 
+// topLevelNavigation: the browser opening a page (a link, a sign-in redirect), not a page's subrequest.
+func topLevelNavigation(r *http.Request) bool {
+	dest := r.Header.Get("Sec-Fetch-Dest")
+	return safeMethod(r.Method) && r.Header.Get("Sec-Fetch-Mode") == "navigate" && (dest == "document" || dest == "")
+}
+
 // lanAddrs lists the addresses a phone on the same network can actually reach.
 func lanAddrs() []string {
 	ifaces, err := net.Interfaces()
@@ -205,7 +223,8 @@ func lanAddrs() []string {
 		return nil
 	}
 
-	var out []string
+	var real, virtual []string
+	vpn := map[string]bool{}
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
@@ -223,16 +242,43 @@ func lanAddrs() []string {
 			if ip == nil || !ip.IsPrivate() {
 				continue
 			}
-			out = append(out, ip.String())
+			switch {
+			case vpnName.MatchString(iface.Name):
+				vpn[ip.String()] = true
+				virtual = append(virtual, ip.String())
+			case virtualName.MatchString(iface.Name):
+				virtual = append(virtual, ip.String())
+			default:
+				real = append(real, ip.String())
+			}
 		}
 	}
-	// First is what the QR code encodes: the network in use, not a virtual adapter (WSL, VPN) no phone can reach.
-	if main := OutboundIP(); main != "" {
-		if i := slices.Index(out, main); i > 0 {
-			out = slices.Insert(slices.Delete(out, i, i+1), 0, main)
+	return orderAddrs(real, virtual, vpn, OutboundIP())
+}
+
+// orderAddrs puts first what the QR code and DuckDNS name use: the default route's address, even on a virtual
+// switch (Hyper-V's external one carries the LAN), never a full-tunnel VPN's, which no phone can reach.
+func orderAddrs(real, virtual []string, vpn map[string]bool, main string) []string {
+	if main != "" && !vpn[main] {
+		if i := slices.Index(virtual, main); i >= 0 {
+			virtual = slices.Delete(slices.Clone(virtual), i, i+1)
+			real = slices.Insert(slices.Clone(real), 0, main)
+		} else if i := slices.Index(real, main); i > 0 {
+			real = slices.Insert(slices.Delete(slices.Clone(real), i, i+1), 0, main)
 		}
 	}
-	return out
+	return append(real, virtual...)
+}
+
+// Hyper-V, WSL, VirtualBox and VMware adapters: private addresses on this machine, unreachable from a phone.
+var virtualName = regexp.MustCompile(`(?i)vethernet|hyper-v|wsl|virtualbox|vmware|vboxnet|docker|vmnet`)
+
+// PairingIP is the address the pairing link and the DuckDNS name point at.
+func PairingIP() string {
+	if addrs := lanAddrs(); len(addrs) > 0 {
+		return addrs[0]
+	}
+	return OutboundIP()
 }
 
 // OutboundIP is the address the default route leaves from. UDP "dial" sends nothing.
@@ -371,7 +417,13 @@ func (s *Server) firewallStatus(ctx context.Context) (firewall.Status, error) {
 	exe, _ := os.Executable()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	return firewall.Check(ctx, port, exe)
+	st, err := firewall.Check(ctx, port, exe)
+	return st.Keep(phoneNetwork), err
+}
+
+// phoneNetwork: a network a phone could be on, not a VPN's or a virtual machine's (often Public, by design).
+func phoneNetwork(n firewall.Network) bool {
+	return !vpnName.MatchString(n.Interface) && !virtualName.MatchString(n.Interface)
 }
 
 // LogFirewall logs why a phone would or wouldn't get in, the first thing to check.
@@ -516,6 +568,10 @@ func (s *Server) rotateAccess(w http.ResponseWriter, r *http.Request) {
 	s.tokenMu.Lock()
 	s.token = token
 	s.tokenMu.Unlock()
+	// Unpaired devices get no more alerts either; they subscribe again once paired.
+	if err := s.store.DeletePairedPush(r.Context()); err != nil {
+		s.log.Warn("stop unpaired devices' alerts", "err", err)
+	}
 
 	send(w, http.StatusOK, map[string]any{"token": token, "urls": s.accessURLs()})
 }

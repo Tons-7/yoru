@@ -88,8 +88,7 @@ type testClientTransferParams struct {
 	LeecherStartsWithoutMetadata bool
 }
 
-// Creates a seeder and a leecher, and ensures the data transfers when a read
-// is attempted on the leecher.
+// A seeder and a leecher: reading on the leecher brings the data across.
 func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	prevGOMAXPROCS := runtime.GOMAXPROCS(ps.GOMAXPROCS)
 	newGOMAXPROCS := prevGOMAXPROCS
@@ -177,9 +176,6 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	assert.False(t, leecherTorrent.Complete().Bool())
 	assert.True(t, new)
 
-	//// This was used when observing coalescing of piece state changes.
-	//logPieceStateChanges(leecherTorrent)
-
 	// Now do some things with leecher and seeder.
 	added := leecherTorrent.AddClientPeer(seeder)
 	assert.False(t, leecherTorrent.Seeding())
@@ -242,8 +238,7 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	assert.True(t, 13 <= leecherStats.BytesReadData.Int64())
 	assert.True(t, 8 <= leecherStats.ChunksRead.Int64())
 
-	// Try reading through again for the cases where the torrent data size
-	// exceeds the size of the cache.
+	// Again, for torrents bigger than the cache.
 	assertReadAllGreeting(t, r)
 }
 

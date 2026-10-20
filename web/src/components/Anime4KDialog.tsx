@@ -65,7 +65,7 @@ export function Anime4KDialog({
           <button
             onClick={close}
             aria-label="Close"
-            className="rounded-md px-2 py-1 text-base-400 hover:bg-base-800 hover:text-base-100"
+            className="tap relative grid size-9 shrink-0 place-items-center rounded-md text-base-400 hover:bg-base-800 hover:text-base-100"
           >
             ✕
           </button>

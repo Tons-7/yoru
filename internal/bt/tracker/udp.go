@@ -35,10 +35,8 @@ func (c *udpClient) Announce(
 	opts trHttp.AnnounceOpt,
 ) (res AnnounceResponse, err error) {
 	if req.IPAddress == 0 && opts.ClientIp4 != nil {
-		// I think we're taking bytes in big-endian order (all IPs), and writing it to a natively
-		// ordered uint32. This will be correctly ordered when written back out by the UDP client
-		// later. I'm ignoring the fact that IPv6 announces shouldn't have an IP address, we have a
-		// perfectly good IPv4 address.
+		// Big-endian bytes into a native uint32, put right when the UDP client writes it; sent on IPv6
+		// announces too.
 		req.IPAddress = binary.BigEndian.Uint32(opts.ClientIp4.To4())
 	}
 	h, nas, err := c.cl.Announce(ctx, req, udp.Options{RequestUri: c.requestUri})

@@ -85,11 +85,11 @@ func TestSwitchToSoftwareDropsWhatTheHardwareEncoderWrote(t *testing.T) {
 	}
 }
 
-// Closing a replaced session leaves the replacement's directory, the id still owned.
+// Closing a replaced session leaves the replacement's directory, the id still owned; the old one's goes.
 func TestCloseLeavesAReplacementSessionAlone(t *testing.T) {
 	m := &Manager{sessions: map[string]*Session{}}
-	dir := t.TempDir()
-	old := &Session{ID: "1-1", dir: dir, refs: 1}
+	oldDir, dir := t.TempDir(), t.TempDir()
+	old := &Session{ID: "1-1", dir: oldDir, refs: 1}
 	m.sessions["1-1"] = old
 
 	// What Close does under its lock, then a reopen lands before the teardown.
@@ -104,6 +104,9 @@ func TestCloseLeavesAReplacementSessionAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatal("the replacement's directory was removed")
+	}
+	if _, err := os.Stat(oldDir); err == nil {
+		t.Error("the closed session's own directory was left behind")
 	}
 
 	delete(m.sessions, "1-1")

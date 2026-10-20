@@ -44,6 +44,13 @@ export function Library() {
     if (next.toString() !== params.toString()) setParams(next, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q])
+  // Back, or a menu link, rewrites the URL without remounting the page; the box follows it.
+  const fromURL = params.get('q') ?? ''
+  useEffect(() => {
+    // Not our own debounced write, which would land mid-word.
+    if (fromURL !== q) setText(fromURL)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromURL])
 
   const list = useLibrary({ status: favourites ? '' : status, q, sort }, page, !favourites)
   const favs = useFavourites(page, favourites)

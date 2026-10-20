@@ -207,7 +207,7 @@
   border-radius: 0;
 }
 
-/* A 44px touch hit area around a small control, its look and place unchanged; the control must be positioned. */
+/* A 44px touch area around a small control, its look and place unchanged; the control must be positioned. */
 @utility tap {
   @media (pointer: coarse) {
     &::after {

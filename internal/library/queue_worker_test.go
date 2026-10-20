@@ -53,7 +53,8 @@ func workerQueueWith(t *testing.T, releases ...indexer.Torrent) (*Downloader, *s
 	return NewDownloader(st, NewPrefetcher(st, finder, torrent.NewClient(srv.URL), discard()), prefs, discard()), st, engine
 }
 
-// A release chosen by hand replaces the copy held under another: that one is fetched, the old one goes.
+// A release chosen by hand replaces the copy held under another: that one is fetched, and the old
+// finished copy goes once the new one is whole, not before (a dead swarm would cost both).
 func TestWorkerDownloadsTheReleaseChosenOverTheHeldOne(t *testing.T) {
 	d, st, engine := workerQueueWith(t,
 		release(goodHash, "[Group] Show - 01 [1080p].mkv", 500),
@@ -73,8 +74,15 @@ func TestWorkerDownloadsTheReleaseChosenOverTheHeldOne(t *testing.T) {
 	if rec, ok, _ := st.TorrentForEpisode(ctx, 1, "1"); !ok || rec.InfoHash != otherHash {
 		t.Fatalf("episode 1 is %+v, want the chosen release", rec)
 	}
+	if engine.wasDeleted(goodHash) {
+		t.Fatal("the finished copy went before its replacement was whole")
+	}
+	if err := st.SetCacheBytes(ctx, otherHash, 0, 100, true); err != nil {
+		t.Fatal(err)
+	}
+	dropSuperseded(ctx, st, d.prefetch.torrent, discard(), 1, "1")
 	if !engine.wasDeleted(goodHash) {
-		t.Error("the copy held before is still in the engine")
+		t.Error("the copy held before is still in the engine once the new one finished")
 	}
 	entries, _ := st.CacheEntries(ctx)
 	if len(entries) != 1 || entries[0].InfoHash != otherHash || !entries[0].Kept {
@@ -160,6 +168,18 @@ func TestWorkerTakesAFinishedEpisodeOffTheQueue(t *testing.T) {
 	if len(entries) != 1 || !entries[0].Kept {
 		t.Errorf("entries = %+v, want the downloaded episode kept", entries)
 	}
+}
+
+// Download anyway while an episode plays downloads; it once requeued at once, in a tight loop, forever.
+func TestDownloadAnywayDownloadsWhileWatching(t *testing.T) {
+	d, st := workerQueue(t)
+	ctx := context.Background()
+	d.Hold("9-1")
+	d.Proceed()
+	if _, err := st.Enqueue(ctx, 1, 1, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	runUntil(t, d, func() bool { return len(queued(t, st)) == 0 })
 }
 
 // A release that cannot be found leaves a failed row saying why, and the worker moves on.

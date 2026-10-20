@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,7 +57,11 @@ func (s *Subtitles) lockFor(path string) *sync.Mutex {
 // Forget drops what is remembered about a closed session's folder, or both maps
 // grow by every track of every episode for the life of the process.
 func (s *Subtitles) Forget(dir string) {
-	prefix := filepath.Clean(dir) + string(filepath.Separator)
+	s.ForgetPrefix(filepath.Clean(dir) + string(filepath.Separator))
+}
+
+// ForgetPrefix is Forget for every path starting with prefix, such as all of one episode's session folders.
+func (s *Subtitles) ForgetPrefix(prefix string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for path := range s.done {
@@ -276,9 +281,14 @@ func (s *Subtitles) ExtractFonts(ctx context.Context, source, dir string, attach
 	if len(attachments) == 0 {
 		return nil, nil
 	}
-	if err := os.MkdirAll(fontDir, 0o755); err != nil {
+	// Dumped beside, kept only whole: a timeout or a file still arriving (holes read as zeros) leaves
+	// nothing, and the next ask tries again.
+	partDir := fontDir + ".part"
+	os.RemoveAll(partDir)
+	if err := os.MkdirAll(partDir, 0o755); err != nil {
 		return nil, err
 	}
+	defer os.RemoveAll(partDir)
 
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
@@ -292,15 +302,60 @@ func (s *Subtitles) ExtractFonts(ctx context.Context, source, dir string, attach
 			name = fmt.Sprintf("%d-%s", i, name)
 		}
 		used[strings.ToLower(name)] = true
-		args = append(args, fmt.Sprintf("-dump_attachment:%d", a.Index), filepath.Join(fontDir, name))
+		args = append(args, fmt.Sprintf("-dump_attachment:%d", a.Index), filepath.Join(partDir, name))
 	}
 	// -t 0 stops after the header; without it ffmpeg decodes the whole file.
 	args = append(args, "-i", source, "-t", "0", "-f", "null", "-")
 
 	// Non-zero is normal here: there is no output stream to write.
 	_ = exec.CommandContext(ctx, s.ffmpeg, args...).Run()
-
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("fonts: %w", err)
+	}
+	for _, f := range listFonts(partDir) {
+		path := filepath.Join(partDir, f.Name)
+		switch fontHeader(path) {
+		case fontArriving:
+			return nil, fmt.Errorf("font %s is not whole yet", f.Name)
+		case fontBroken:
+			// Empty or not a font: arriving won't fix it, so it goes and the rest are served.
+			os.Remove(path)
+		}
+	}
+	if err := os.Rename(partDir, fontDir); err != nil {
+		return nil, err
+	}
 	return listFonts(fontDir), nil
+}
+
+type fontState int
+
+const (
+	fontWhole    fontState = iota
+	fontArriving           // zeros: its bytes haven't downloaded yet
+	fontBroken             // empty, or some other file under a font's name
+)
+
+// fontHeader reads a TrueType, OpenType or collection header.
+func fontHeader(path string) fontState {
+	f, err := os.Open(path)
+	if err != nil {
+		return fontBroken
+	}
+	defer f.Close()
+	var head [4]byte
+	n, _ := io.ReadFull(f, head[:])
+	switch {
+	case n == 0:
+		return fontBroken
+	case head == [4]byte{}:
+		return fontArriving
+	}
+	switch string(head[:n]) {
+	case "\x00\x01\x00\x00", "OTTO", "true", "ttcf", "wOFF", "wOF2", "typ1":
+		return fontWhole
+	}
+	return fontBroken
 }
 
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._ -]+`)
@@ -355,6 +410,9 @@ func isBitmapSubtitle(codec string) bool {
 func isTextSubtitle(codec string) bool {
 	return codec != "" && !isBitmapSubtitle(codec)
 }
+
+// TextSubtitle: a track that converts to text (for a TV's WebVTT); pictures don't.
+func TextSubtitle(codec string) bool { return isTextSubtitle(codec) }
 
 func isASS(codec string) bool { return codec == "ass" || codec == "ssa" }
 

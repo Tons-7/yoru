@@ -28,6 +28,12 @@ func (cl *Client) addPortMapping(d upnp.Device, proto upnp.Protocol, internalPor
 		return
 	}
 	cl.lock()
+	// Discovery is slow; a client closed meanwhile has already cleared its list, so undo this one now.
+	if cl.closed.IsSet() {
+		cl.unlock()
+		cl.deletePortMapping(d, proto, externalPort)
+		return
+	}
 	cl.upnpMappings = append(cl.upnpMappings, &upnpMapping{d, proto, externalPort})
 	cl.unlock()
 	level := log.Info
@@ -62,19 +68,26 @@ func (cl *Client) deletePortMapping(d upnp.Device, proto upnp.Protocol, external
 	}
 }
 
-func (cl *Client) clearPortMappings() {
-	mLen := len(cl.upnpMappings)
-	if mLen == 0 {
-		return
-	}
-
+// clearPortMappings starts removing the router mappings; the caller waits on the result outside the
+// client lock, or an exit straight after Close cuts the requests off and the mappings stay.
+func (cl *Client) clearPortMappings() *sync.WaitGroup {
 	var wg sync.WaitGroup
-	wg.Add(mLen)
 	for _, m := range cl.upnpMappings {
-		go func(m *upnpMapping) {
-			defer wg.Done()
-			cl.deletePortMapping(m.d, m.proto, m.externalPort)
-		}(m)
+		wg.Go(func() { cl.deletePortMapping(m.d, m.proto, m.externalPort) })
 	}
 	cl.upnpMappings = nil
+	return &wg
+}
+
+// waitBriefly waits for wg, but no longer than d: a router that doesn't answer mustn't hold up exit.
+func waitBriefly(wg *sync.WaitGroup, d time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+	}
 }

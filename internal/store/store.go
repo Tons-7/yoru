@@ -17,7 +17,13 @@ type Store struct {
 	w *sql.DB
 
 	answers atomic.Int64 // saved since start, to prune now and then
+
+	// onNotify hears each notification added, wherever it came from; set once at startup.
+	onNotify func(Notification)
 }
+
+// OnNotification has f hear every notification added from now on, in its own goroutine.
+func (s *Store) OnNotification(f func(Notification)) { s.onNotify = f }
 
 func New(d *db.DB) *Store { return &Store{r: d.R, w: d.W} }
 

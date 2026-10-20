@@ -57,11 +57,17 @@ Dialogue: 0,0:00:06.00,0:00:19.00,Default,the second line
 // episode (two audio tracks, one subtitle track); it returns the episode's source route.
 func streamHarness(t *testing.T) (*harness, string) {
 	t.Helper()
+	return streamHarnessWith(t, streamASS)
+}
+
+// streamHarnessWith is streamHarness with the subtitle track's own text.
+func streamHarnessWith(t *testing.T, ass string) (*harness, string) {
+	t.Helper()
 	ffmpeg, ffprobe := ffmpegBinaries(t)
 	dir := t.TempDir()
 
 	subs := filepath.Join(dir, "subs.ass")
-	if err := os.WriteFile(subs, []byte(streamASS), 0o644); err != nil {
+	if err := os.WriteFile(subs, []byte(ass), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	episode := filepath.Join(dir, "Show - 01.mkv")

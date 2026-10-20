@@ -10,13 +10,13 @@ import (
 	"runtime/pprof"
 	"slices"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
 	"github.com/anacrolix/generics"
 	"github.com/anacrolix/log"
 	"github.com/anacrolix/missinggo"
-	"github.com/anacrolix/sync"
 	"golang.org/x/time/rate"
 	"yoru/internal/bt/bencode"
 	"yoru/internal/bt/iplist"
@@ -31,13 +31,8 @@ import (
 	"yoru/internal/bt/dht/types"
 )
 
-// A Server defines parameters for a DHT node server that is able to send
-// queries, and respond to the ones from the network. Each node has a globally
-// unique identifier known as the "node ID." Node IDs are chosen at random
-// from the same 160-bit space as BitTorrent infohashes and define the
-// behaviour of the node. Zero valued Server does not have a valid ID and thus
-// is unable to function properly. Use `NewServer(nil)` to initialize a
-// default node.
+// Server is a DHT node: it queries the network and answers it, under a random 160-bit node ID from the
+// infohash space. The zero value has no ID and won't work; NewServer(nil) makes a default node.
 type Server struct {
 	id          int160.T
 	socket      net.PacketConn
@@ -286,7 +281,6 @@ func (s *Server) processPacket(b []byte, addr Addr) {
 	var d krpc.Msg
 	err := bencode.Unmarshal(b, &d)
 	if _, ok := err.(bencode.ErrUnusedTrailingBytes); ok {
-		// log.Printf("%s: received message packet with %d trailing bytes: %q", s, _err.NumUnusedBytes, b[len(b)-_err.NumUnusedBytes:])
 		expvars.Add("processed packets with trailing bytes", 1)
 	} else if err != nil {
 		readUnmarshalError.Add(1)
@@ -442,8 +436,7 @@ func filterPeers(querySourceIp net.IP, queryWants []krpc.Want, allPeers []krpc.N
 			case retain6 && len(ip) == net.IPv6len:
 				return ip, true
 			case retain4 && as4 != nil:
-				// Is it possible that we're converting to an IPv4 address when the transport in use
-				// is IPv6?
+				// May turn an address IPv4 on an IPv6 transport.
 				return as4, true
 			case retain6 && as16 != nil:
 				// Couldn't any IPv4 address be converted to IPv6, but isn't listening over IPv6?
@@ -474,7 +467,14 @@ func (s *Server) setReturnNodes(r *krpc.Return, queryMsg krpc.Msg, querySource A
 
 func (s *Server) handleQuery(source Addr, m krpc.Msg) {
 	go func() {
-		expvars.Add(fmt.Sprintf("received query %q", m.Q), 1)
+		// Anyone on the DHT names the query; unknown names share one key rather than each adding one.
+		q := m.Q
+		switch q {
+		case "ping", "find_node", "get_peers", "announce_peer", "put", "get", "sample_infohashes":
+		default:
+			q = "other"
+		}
+		expvars.Add(fmt.Sprintf("received query %q", q), 1)
 		if a := m.A; a != nil {
 			if a.NoSeed != 0 {
 				expvars.Add("received argument noseed", 1)
@@ -500,6 +500,11 @@ func (s *Server) handleQuery(source Addr, m krpc.Msg) {
 	}
 	// TODO: Should we disallow replying to ourself?
 	args := m.A
+	// Every query but ping reads its arguments; one packet without them must not take Yoru down.
+	if args == nil && m.Q != "ping" {
+		s.sendError(source, m.T, krpcErrMissingArguments)
+		return
+	}
 	switch m.Q {
 	case "ping":
 		s.reply(source, m.T, krpc.Return{})
@@ -643,10 +648,7 @@ func (s *Server) handleQuery(source Addr, m krpc.Msg) {
 		r.Sig = item.Sig
 
 		s.reply(source, m.T, r)
-	// case "sample_infohashes":
-	// // Nodes supporting this extension should always include the samples field in the response,
-	// // even when it is zero-length. This lets indexing nodes to distinguish nodes supporting this
-	// // extension from those that respond to unknown query types which contain a target field [2].
+	// sample_infohashes (BEP 51) isn't answered: its reply must always carry a samples field.
 	default:
 		// TODO: http://libtorrent.org/dht_extensions.html#forward-compatibility
 		s.sendError(source, m.T, krpc.ErrorMethodUnknown)
@@ -778,8 +780,7 @@ func (s *Server) nodeErr(n *node) error {
 
 func (s *Server) writeToNode(ctx context.Context, b []byte, node Addr, wait, rate bool) (wrote bool, err error) {
 	func() {
-		// This is a pain. It would be better if the blocklist returned an error if it was closed
-		// instead.
+		// The blocklist can't say it's closed, so the server is asked.
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 		if s.closed.IsSet() {
@@ -848,8 +849,7 @@ func (s *Server) addTransaction(k transactionKey, t *transaction) {
 	s.transactions.Add(k, t)
 }
 
-// ID returns the 20-byte server ID. This is the ID used to communicate with the
-// DHT network.
+// ID returns the 20-byte node ID the server goes by on the DHT.
 func (s *Server) ID() [20]byte {
 	return s.id.AsByteArray()
 }
@@ -872,8 +872,7 @@ func (s *Server) makeQueryBytes(q string, a krpc.MsgArgs, t string) []byte {
 		Q: q,
 		A: &a,
 	}
-	// BEP 43. Outgoing queries from passive nodes should contain "ro":1 in the top level
-	// dictionary.
+	// BEP 43: a passive node's queries carry "ro":1 at the top level.
 	if s.config.Passive {
 		m.ReadOnly = true
 	}
@@ -919,10 +918,8 @@ func (me QueryResult) TraversalQueryResult(addr krpc.NodeAddr) (ret traversal.Qu
 	return
 }
 
-// Rate-limiting to be applied to writes for a given query. Queries occur inside transactions that
-// will attempt to send several times. If the STM rate-limiting helpers are used, the first send is
-// often already accounted for in the rate-limiting machinery before the query method that does the
-// IO is invoked.
+// Rate limiting for a query's sends, which a transaction may repeat; with the STM helpers the first is
+// often counted before the query's IO runs.
 type QueryRateLimiting struct {
 	// Don't rate-limit the first send for a query.
 	NotFirst bool
@@ -939,10 +936,8 @@ type QueryInput struct {
 	NumTries     int
 }
 
-// Performs an arbitrary query. `q` is the query value, defined by the DHT BEP. `a` should contain
-// the appropriate argument values, if any. `a.ID` is clobbered by the Server. Responses to queries
-// made this way are not interpreted by the Server. More specific methods like FindNode and GetPeers
-// may make use of the response internally before passing it back to the caller.
+// Query sends any query q (as the DHT BEP names it) with input's arguments, whose ID the Server sets; the
+// reply comes back uninterpreted, unlike FindNode's or GetPeers'.
 func (s *Server) Query(ctx context.Context, addr Addr, q string, input QueryInput) (ret QueryResult) {
 	if input.NumTries == 0 {
 		input.NumTries = defaultMaxQuerySends
@@ -1014,8 +1009,7 @@ func (s *Server) transactionQuerySender(
 		sendCtx,
 		func() error {
 			wrote, err := s.writeToNode(sendCtx, b, addr,
-				// We only wait for the first write by default if rate-limiting is enabled for this
-				// query.
+				// The first write waits only when this query is rate limited.
 				func() bool {
 					if *writes == 0 {
 						return !rateLimiting.NoWaitFirst
@@ -1214,9 +1208,8 @@ func (s *Server) GetPeers(
 	return
 }
 
-// Get gets item information from a specific target ID. If seq is set to a specific value,
-// only items with seq bigger than the one provided will return a V, K and Sig, if any.
-// Get must be used to get a Put write token, when you want to write an item instead of read it.
+// Get reads the item at target (V, K and Sig only past seq, when set); it is also how a Put gets its
+// write token.
 func (s *Server) Get(ctx context.Context, addr Addr, target bep44.Target, seq *int64, rl QueryRateLimiting) QueryResult {
 	return s.Query(ctx, addr, "get", QueryInput{
 		MsgArgs: krpc.MsgArgs{
@@ -1261,10 +1254,8 @@ func (s *Server) TraversalStartingNodes() (nodes []addrMaybeId, err error) {
 		return
 	}
 	if s.config.StartingNodes != nil {
-		// There seems to be floods on this call on occasion, which may cause a barrage of DNS
-		// resolution attempts. This would require that we're unable to get replies because we can't
-		// resolve, transmit or receive on the network. Nodes currently don't get expired from the
-		// table, so once we have some entries, we should never have to fallback.
+		// Floods of this mean DNS lookups with the network unusable; nodes never expire from the table, so
+		// once it has entries this shouldn't be reached.
 		s.logger().Levelf(log.Debug, "falling back on starting nodes")
 		addrs, err := s.config.StartingNodes()
 		if err != nil {
@@ -1331,10 +1322,8 @@ func (s *Server) refreshBucket(bucketIndex int) *traversal.Stats {
 	op := traversal.Start(traversal.OperationInput{
 		Target: id.AsByteArray(),
 		Alpha:  3,
-		// Running this to completion with K matching the full-bucket size should result in a good,
-		// full bucket, since the Server will add nodes that respond to its table to replace the bad
-		// ones we're presumably refreshing. It might be possible to terminate the traversal early
-		// as soon as the bucket is good.
+		// K as a full bucket: run to the end, responders refill it in place of the bad nodes (it could end
+		// as soon as the bucket is good).
 		K: s.table.K(),
 		DoQuery: func(ctx context.Context, addr krpc.NodeAddr) traversal.QueryResult {
 			res := s.FindNode(NewAddr(addr.UDP()), id, QueryRateLimiting{})
@@ -1402,10 +1391,8 @@ func (s *Server) pingQuestionableNodesInBucket(bucketIndex int) {
 	s.mu.RLock()
 }
 
-// A routine that maintains the Server's routing table, by pinging questionable nodes, and
-// refreshing buckets. This should be invoked on a running Server when the caller is satisfied with
-// having set it up. It is not necessary to explicitly Bootstrap the Server once this routine has
-// started.
+// TableMaintainer keeps the routing table, pinging questionable nodes and refreshing buckets; run it on a
+// set-up Server, which then needs no Bootstrap.
 func (s *Server) TableMaintainer() {
 	logger := s.logger()
 	for {
@@ -1419,9 +1406,6 @@ func (s *Server) TableMaintainer() {
 		s.mu.RLock()
 		for i := range s.table.buckets {
 			s.pingQuestionableNodesInBucket(i)
-			// if time.Since(b.lastChanged) < 15*time.Minute {
-			//	continue
-			// }
 			if s.shouldStopRefreshingBucket(i) {
 				continue
 			}
@@ -1486,12 +1470,7 @@ func validNodeAddr(addr net.Addr) bool {
 		return false
 	}
 	if ip4 := ua.IP.To4(); ip4 != nil && ip4[0] == 0 {
-		// Why?
 		return false
 	}
 	return true
 }
-
-// func (s *Server) refreshBucket(bucketIndex int) {
-//	targetId := s.table.randomIdForBucket(bucketIndex)
-// }

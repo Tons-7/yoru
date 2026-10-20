@@ -20,8 +20,7 @@ type PeerRequests interface {
 	// See roaring.Bitmap.GetCardinality.
 	GetCardinality() uint64
 	Contains(RequestIndex) bool
-	// Should not adjust iteration order if item already exists, although I don't think that usage
-	// exists.
+	// An item already in keeps its place.
 	Add(RequestIndex)
 	// See roaring.Bitmap.Rank.
 	Rank(RequestIndex) uint64
@@ -33,4 +32,6 @@ type PeerRequests interface {
 	CheckedRemove(RequestIndex) bool
 	// Iterate a snapshot of the values. It is safe to mutate the underlying data structure.
 	IterateSnapshot(func(RequestIndex) bool)
+	// IterateSnapshot from the highest index down.
+	IterateSnapshotDescending(func(RequestIndex) bool)
 }

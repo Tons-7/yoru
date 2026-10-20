@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// pictureStart agrees with ffprobe on where each sliced fragment's picture starts, B-frames and a seek included.
+// pictureStart agrees with ffprobe on where each sliced fragment's picture starts, B-frames and seek included.
 func TestPictureStartMatchesFFprobe(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	ffmpeg = absolute(ffmpeg)

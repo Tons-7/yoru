@@ -1,8 +1,10 @@
 package player
 
 import (
+	"cmp"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -35,9 +37,13 @@ func WriteChapters(path string, ranges []SkipRange, duration float64) error {
 	var b strings.Builder
 	b.WriteString(";FFMETADATA1\n")
 
+	// In time order: the file's own chapters come first, AniSkip's after, and mpv lists them by start.
+	ranges = slices.Clone(ranges)
+	slices.SortFunc(ranges, func(a, b SkipRange) int { return cmp.Compare(a.Start, b.Start) })
 	prev := 0.0
 	for _, r := range ranges {
-		if r.End <= r.Start {
+		// Empty, or overlapping the one before: two names for one span would mislabel the rest.
+		if r.End <= r.Start || r.Start < prev {
 			continue
 		}
 		if r.Start > prev {

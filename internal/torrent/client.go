@@ -1,4 +1,4 @@
-// Package torrent is the engine's loopback client; its stream waits for pieces, where a sparse file reads zeroes.
+// Package torrent is the engine's loopback client; its stream waits for pieces a sparse file reads as zeroes.
 package torrent
 
 import (
@@ -106,6 +106,13 @@ func (c *Client) WithSecret(secret string) *Client {
 	return c
 }
 
+// WithTransport sends every request through rt; a test answers in memory, which testing/synctest needs.
+func (c *Client) WithTransport(rt http.RoundTripper) *Client {
+	c.http.Transport = rt
+	c.stream.Transport = rt
+	return c
+}
+
 // Addr is the engine's host:port.
 func (c *Client) Addr() string {
 	if u, err := url.Parse(c.base); err == nil {
@@ -166,6 +173,7 @@ type Detail struct {
 type Stats struct {
 	State         string `json:"state"`
 	Error         string `json:"error"`
+	Warning       string `json:"warning,omitempty"` // retried by the engine itself (a failed disk write); not fatal
 	ProgressBytes int64  `json:"progress_bytes"`
 	TotalBytes    int64  `json:"total_bytes"`
 	Finished      bool   `json:"finished"`
@@ -244,7 +252,7 @@ func (c *Client) Inspect(parent context.Context, magnet string) (*Torrent, error
 // A release picked by hand has no next candidate to fall back on, so its file list is waited for.
 const pickedInspectTimeout = 3 * time.Minute
 
-// InspectPicked is Inspect for a release someone chose: a longer wait, and never refused for an earlier failure.
+// InspectPicked is Inspect for a release someone chose: a longer wait, never refused for an earlier failure.
 func (c *Client) InspectPicked(parent context.Context, magnet string) (*Torrent, error) {
 	ctx, cancel := context.WithTimeout(parent, pickedInspectTimeout)
 	defer cancel()
@@ -469,6 +477,7 @@ var AwaitPoll = 5 * time.Second
 type StallError struct {
 	Percent float64
 	Quiet   time.Duration
+	Cause   string // the engine's warning at the time (a failed disk write), when it had one
 }
 
 func (e *StallError) Error() string { return fmt.Sprintf("stalled at %.0f%%", e.Percent) }
@@ -497,7 +506,7 @@ func (c *Client) Await(ctx context.Context, id int, stall time.Duration) error {
 		} else {
 			quiet += AwaitPoll
 			if quiet >= stall {
-				return &StallError{Percent: stats.Percent(), Quiet: quiet}
+				return &StallError{Percent: stats.Percent(), Quiet: quiet, Cause: stats.Warning}
 			}
 		}
 

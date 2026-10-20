@@ -1,4 +1,4 @@
-// While an episode starts, the player says what it is waiting on; once playing, the seek bar shows what is loaded.
+// While an episode starts the player says what it waits on; once playing, the seek bar shows what is loaded.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 

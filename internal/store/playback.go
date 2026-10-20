@@ -116,7 +116,7 @@ func (s *Store) RecordTorrent(ctx context.Context, t TorrentRecord) error {
 	}
 
 	// Recording a release is not watching it, so it is not pinned here: the pin
-	// belongs to whatever actually starts streaming, which PinOnly sets.
+	// belongs to whatever actually starts streaming.
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO cache_entry (info_hash, file_index, bytes_on_disk, pinned, last_played_at)
 		VALUES (?,?,0,0,?)
@@ -390,6 +390,10 @@ func (s *Store) SavePlayback(ctx context.Context, p PlaybackState) (bool, error)
 		return false, err
 	}
 	defer tx.Rollback()
+	// A library file plays without a torrent record, so nothing else made the show's row its key points to.
+	if err := ensureAnime(ctx, tx, p.AnimeID); err != nil {
+		return false, err
+	}
 
 	var (
 		position, duration, played float64

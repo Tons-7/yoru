@@ -9,11 +9,7 @@ import (
 )
 
 func setReusePortSockOpts(fd uintptr) (err error) {
-	// I would use libp2p/go-reuseport to do this here, but no surprise it's
-	// implemented incorrectly.
-
-	// Looks like we can get away with just REUSEPORT at least on Darwin, and probably by
-	// extension BSDs and Linux.
+	// REUSEPORT alone does on Darwin, likely BSDs and Linux too (libp2p/go-reuseport gets this wrong).
 	if false {
 		err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 		if err != nil {

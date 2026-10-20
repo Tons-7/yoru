@@ -1,13 +1,17 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"yoru/internal/bt/metainfo"
+	"yoru/internal/indexer"
 	"yoru/internal/jobs"
 	"yoru/internal/library"
 	"yoru/internal/match"
@@ -338,6 +342,25 @@ func (s *Server) episodeSources(w http.ResponseWriter, r *http.Request) {
 	switch a := r.URL.Query().Get("audio"); a {
 	case "sub", "dub", "either":
 		prefs.Audio = a
+	}
+
+	// The picker's own words, or a magnet found by hand: kept for the play or download that picks from them.
+	// Only by POST, which another site's page can't send: a link opened from one could plant a release.
+	if m := strings.TrimSpace(r.URL.Query().Get("magnet")); m != "" && r.Method == http.MethodPost {
+		magnet, err := metainfo.ParseMagnetUri(m)
+		if err != nil {
+			send(w, http.StatusBadRequest, map[string]any{"error": "not a magnet link: " + err.Error()})
+			return
+		}
+		s.finder.Ask(id, episode, "", &indexer.Torrent{
+			Title:    cmp.Or(magnet.DisplayName, "Pasted magnet "+magnet.InfoHash.HexString()[:8]),
+			InfoHash: magnet.InfoHash.HexString(),
+			Trackers: magnet.Trackers,
+			Indexer:  library.Pasted,
+		})
+	}
+	if q := r.URL.Query().Get("q"); q != "" && r.Method == http.MethodPost {
+		s.finder.Ask(id, episode, q, nil)
 	}
 
 	got, err := s.finder.Find(r.Context(), library.Request{

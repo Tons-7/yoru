@@ -106,7 +106,7 @@ func TestDownloadStatusFoldsASeasonPack(t *testing.T) {
 	}
 	s.SetCacheBytes(ctx, "pack", 2, 60, true)
 	s.SetCacheBytes(ctx, "pack", 7, 60, true)
-	if err := s.PinOnly(ctx, "pack", 9); err != nil {
+	if err := s.PinCache(ctx, "pack", 9, true); err != nil {
 		t.Fatal(err)
 	}
 	s.KeepDownload(ctx, "pack", true)

@@ -49,12 +49,29 @@ func (c *Cached) Search(ctx context.Context, q Query) ([]Torrent, error) {
 		return entry.results, nil
 	}
 
-	shared, err, _ := c.inflight.Do(key, func() (any, error) { return c.source.Search(ctx, q) })
-	results, _ := shared.([]Torrent)
-	if err != nil {
+	// Detached: the first asker leaving (a closed sources list) must not fail the others waiting on its answer.
+	ch := c.inflight.DoChan(key, func() (any, error) {
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sharedSearchTimeout)
+		defer cancel()
+		results, err := c.source.Search(sctx, q)
+		if err == nil {
+			c.store(key, results)
+		}
 		return results, err
+	})
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-ch:
+		results, _ := r.Val.([]Torrent)
+		return results, r.Err
 	}
+}
 
+// Bounds a shared search nobody may still be waiting for.
+const sharedSearchTimeout = 45 * time.Second
+
+func (c *Cached) store(key string, results []Torrent) {
 	c.mu.Lock()
 	// A long session browsing many shows would otherwise grow this forever.
 	if len(c.entries) > 500 {
@@ -67,6 +84,4 @@ func (c *Cached) Search(ctx context.Context, q Query) ([]Torrent, error) {
 	}
 	c.entries[key] = cachedSearch{results: results, expires: time.Now().Add(searchTTL)}
 	c.mu.Unlock()
-
-	return results, nil
 }

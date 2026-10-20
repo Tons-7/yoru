@@ -107,6 +107,11 @@ var (
 	dubbed   = regexp.MustCompile(`(?i)\b(dub|dubbed|english[\s._-]?dub|eng[\s._-]?dub)\b`)
 	subbed   = regexp.MustCompile(`(?i)\b(sub|subbed|softsub|hardsub|multi[\s._-]?subs?|eng[\s._-]?subs?)\b`)
 	dualAudi = regexp.MustCompile(`(?i)\bdual[\s._-]?audio\b`)
+	// A dub in another language isn't the English dub asked for, unless that's named too.
+	otherDub = regexp.MustCompile(`(?i)\b(hindi|tamil|telugu|spanish|latino|castellano|portuguese|brazilian|` +
+		`german|french|italian|mandarin|chinese|cantonese|korean|tagalog|arabic|russian|indonesian|polish|` +
+		`turkish|thai|vietnamese)[\s._-]*dub(bed|s)?\b|中配|國語|国语|粵語|粤语`)
+	englishDub = regexp.MustCompile(`(?i)\b(english|eng)[\s._-]?dub(bed|s)?\b`)
 )
 
 // A dual-audio release satisfies either preference; the track is chosen at
@@ -122,7 +127,7 @@ func audioMismatch(rel parse.Release, want string) bool {
 
 	switch want {
 	case "dub":
-		return !dubbed.MatchString(raw)
+		return !dubbed.MatchString(raw) || otherDub.MatchString(raw) && !englishDub.MatchString(raw)
 	case "sub":
 		return dubbed.MatchString(raw) && !subbed.MatchString(raw)
 	}
@@ -158,6 +163,9 @@ type Candidate struct {
 	Film *film.Key `json:"-"`
 	// The release names another film of the same series.
 	WrongFilm bool
+
+	// Pasted in the picker: offered there, played only when picked, never chosen on its own.
+	ByHand bool
 }
 
 // The limit is set for an episode of this length; longer runtimes scale it.
@@ -316,10 +324,15 @@ func evaluate(c Candidate, prefs Preferences) Result {
 		r.Blocked = r.Rejections[0].Reason
 		r.AutoPick = false
 	}
+	if c.ByHand {
+		r.AutoPick = false
+		r.add("pasted magnet: plays only when picked")
+	}
 
 	if !r.applyLadder(rel, prefs) {
-		// Unlabelled source or codec matches no tier, but its known resolution beats a lower one.
-		if rank := resolutionRank(rel.Resolution, prefs); rank > 0 {
+		// Unlabelled source or codec matches no tier, but its known resolution beats a lower one; it sits under
+		// every tier of its resolution.
+		if rank := ladderPlace(rel.Resolution, prefs, false); rank > 0 {
 			r.Score += rank * tierStep * partialTier
 			r.addf("%s, unlabelled source", rel.Resolution)
 		}
@@ -414,8 +427,12 @@ func (r *Result) applyLadder(rel parse.Release, prefs Preferences) bool {
 	return false
 }
 
-// Ranks by the user's ladder, not pixels, so an unasked 2160p can't win; unlabelled sits under labelled.
-func resolutionRank(res string, prefs Preferences) float64 {
+// Ranks by the user's ladder, not pixels, so an unasked 2160p can't win. A resolution takes its best place,
+// so an interleaved ladder can't put 720p over 1080p.
+func resolutionRank(res string, prefs Preferences) float64 { return ladderPlace(res, prefs, true) }
+
+// ladderPlace is res's first (best) or last place on the ladder, 0.5 when it isn't listed among others.
+func ladderPlace(res string, prefs Preferences, best bool) float64 {
 	res = strings.ToLower(res)
 	if res == "" {
 		return 0
@@ -428,7 +445,7 @@ func resolutionRank(res string, prefs Preferences) float64 {
 			continue
 		}
 		seen++
-		if tier.Resolution == res {
+		if tier.Resolution == res && (rank == 0 || !best) {
 			rank = float64(len(prefs.Ladder) - i)
 		}
 	}

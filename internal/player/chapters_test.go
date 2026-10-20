@@ -40,6 +40,30 @@ func TestWriteChaptersFillsGaps(t *testing.T) {
 	}
 }
 
+// The file's ending precedes AniSkip's opening in the list; written so, the body read as the opening.
+func TestWriteChaptersInTimeOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "chapters.ini")
+	if err := WriteChapters(path, []SkipRange{
+		{Kind: "ed", Start: 1343, End: 1433},
+		{Kind: "op", Start: 128, End: 218},
+		{Kind: "recap", Start: 200, End: 260},
+	}, 1440); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := os.ReadFile(path)
+	got := string(body)
+	op, ed := strings.Index(got, "title=Opening"), strings.Index(got, "title=Ending")
+	if op < 0 || ed < 0 || op > ed {
+		t.Fatalf("opening and ending out of order:\n%s", got)
+	}
+	if strings.Contains(got, "title=Recap") {
+		t.Errorf("a range overlapping the opening was written too:\n%s", got)
+	}
+	if n := strings.Count(got, "[CHAPTER]"); n != 5 {
+		t.Errorf("%d chapters, want 5:\n%s", n, got)
+	}
+}
+
 func TestWriteChaptersEdgeCases(t *testing.T) {
 	dir := t.TempDir()
 

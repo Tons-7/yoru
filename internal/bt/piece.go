@@ -24,8 +24,7 @@ import (
 type pieceVerifyCount = int64
 
 type Piece struct {
-	// The completed piece SHA1 hash, from the metainfo "pieces" field. Nil if the info is not V1
-	// compatible.
+	// The piece's SHA1, from the metainfo "pieces" field; nil if the info isn't v1 compatible.
 	hash *metainfo.Hash
 	// Not easy to use unique.Handle because we need this as a slice sometimes.
 	hashV2 g.Option[[32]byte]
@@ -42,9 +41,8 @@ type Piece struct {
 	publicPieceState PieceState
 	// Piece-specific priority. There are other priorities like File and Reader.
 	priority PiecePriority
-	// Availability adjustment for this piece relative to len(Torrent.connsWithAllPieces). This is
-	// incremented for any piece a peer has when a peer has a piece, Torrent.haveInfo is true, and
-	// the Peer isn't recorded in Torrent.connsWithAllPieces.
+	// Availability on top of len(Torrent.connsWithAllPieces): one per peer outside that set that has it,
+	// counted once the info is known.
 	relativeAvailability int
 
 	// This can be locked when the Client lock is taken, but probably not vice versa.
@@ -182,11 +180,6 @@ func (p *Piece) chunkIndexSpec(chunk chunkIndexType) ChunkSpec {
 }
 
 func (p *Piece) numDirtyBytes() (ret pp.Integer) {
-	// defer func() {
-	// 	if ret > p.length() {
-	// 		panic("too many dirty bytes")
-	// 	}
-	// }()
 	numRegularDirtyChunks := p.numDirtyChunks()
 	if p.chunkIndexDirty(p.numChunks() - 1) {
 		numRegularDirtyChunks--
@@ -220,9 +213,7 @@ func (p *Piece) VerifyData() error {
 	return p.VerifyDataContext(context.Background())
 }
 
-// Forces the piece data to be rehashed. This might be a temporary method until
-// an event-based one is created. Possibly this blocking style is more suited to
-// external control of hashing concurrency.
+// VerifyDataContext rehashes the piece and waits, which leaves hashing concurrency to the caller.
 func (p *Piece) VerifyDataContext(ctx context.Context) error {
 	locker := p.t.cl.locker()
 	locker.Lock()
@@ -282,9 +273,6 @@ func (p *Piece) purePriority() (ret PiecePriority) {
 	if p.t.readerNowPieces().Contains(bitmap.BitIndex(p.index)) {
 		ret.Raise(PiecePriorityNow)
 	}
-	// if t._readerNowPieces.Contains(piece - 1) {
-	// 	return PiecePriorityNext
-	// }
 	if p.t.readerReadaheadPieces().Contains(bitmap.BitIndex(p.index)) {
 		ret.Raise(PiecePriorityReadahead)
 	}
@@ -321,10 +309,8 @@ func (p *Piece) effectivePriority() (ret PiecePriority) {
 	return p.purePriority()
 }
 
-// Tells the Client to refetch the completion status from storage, updating priority etc. if
-// necessary. Might be useful if you know the state of the piece data has
-// changed externally. TODO: Document why this is public, maybe change name to
-// SyncCompletion or something.
+// UpdateCompletion rereads the piece's completion from storage (and priority with it), for data changed
+// outside the Client.
 func (p *Piece) UpdateCompletion() {
 	p.t.cl.lock()
 	defer p.t.cl.unlock()
@@ -403,8 +389,7 @@ func (p *Piece) hasPieceLayer() bool {
 	return p.numFiles() == 1 && p.mustGetOnlyFile().length > p.t.info.PieceLength
 }
 
-// TODO: This looks inefficient. It will rehash everytime it is called. The hashes should be
-// generated once.
+// TODO: rehashes on every call; the hashes could be made once.
 func (p *Piece) obtainHashV2() (hash [32]byte, err error) {
 	if p.hashV2.Ok {
 		hash = p.hashV2.Value

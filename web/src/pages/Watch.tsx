@@ -107,7 +107,8 @@ export function Watch() {
         animeId: id, episode: ep, external, allowRaw, audio: audio ?? undefined, infoHash,
       }, signal),
     retry: false,
-    staleTime: Infinity,
+    // 'static', not Infinity: a refetch of everything (title language, Try now) must not start playback again.
+    staleTime: 'static',
     gcTime: 0,
   })
 
@@ -153,7 +154,7 @@ export function Watch() {
         signal,
       ),
     retry: 1,
-    staleTime: Infinity,
+    staleTime: 'static',
     // Never carried across a mount: leaving the page closes the session, so a
     // cached answer would describe a playlist that is no longer there.
     gcTime: 0,
@@ -290,6 +291,31 @@ export function Watch() {
     [nextPath, navigate, note],
   )
   const goNext = useCallback((by: 'button' | 'key' | 'media' = 'button') => advance(by), [advance])
+  // A subtitle delay kept for the show belongs to one group's timing; another group's release starts at zero.
+  const group = /^\[([^\]]+)\]/.exec(play.data?.title ?? '')?.[1]
+  const keptRaw = effective['subtitle.delay']
+  const keptDelay = useMemo(() => {
+    try {
+      const kept = JSON.parse(keptRaw || 'null') as { group?: string; delay?: number } | null
+      return kept && group && kept.group === group && typeof kept.delay === 'number' ? kept.delay : undefined
+    } catch {
+      return undefined
+    }
+  }, [keptRaw, group])
+  const setPrefMutate = setPref.mutate
+  const keepDelay = useCallback(
+    (delay: number) =>
+      setPrefMutate({ animeId: id, key: 'subtitle.delay', value: delay === 0 ? '' : JSON.stringify({ group, delay }) }),
+    [id, group, setPrefMutate],
+  )
+  // The aired episode before this one, filler or not: going back is to rewatch, not to follow the list.
+  const previous = [...list].reverse().find((e) => e.number < ep && !isUnaired(e, now))
+  const previousPath = previous ? `/watch/${id}/${previous.number}` : undefined
+  const goPrevious = useCallback(() => {
+    if (!previousPath) return
+    note('previous', { to: previousPath })
+    navigate(previousPath)
+  }, [previousPath, navigate, note])
 
   // Swapping in the searching panel would destroy the element holding
   // fullscreen, so after the first episode the player waits with its own spinner.
@@ -336,10 +362,15 @@ export function Watch() {
   )
 
   // A reaped session: /api/play revives the torrent and the reopen rebuilds it; throws so the player shows it.
+  // Refetched outright: invalidating leaves a 'static' query alone.
+  const refetchPlay = play.refetch
+  const refetchStream = stream.refetch
   const recoverSession = useCallback(async () => {
-    await qc.invalidateQueries({ queryKey: ['play', id, ep] }, { throwOnError: true })
-    await qc.invalidateQueries({ queryKey: ['stream', id, ep] }, { throwOnError: true })
-  }, [qc, id, ep])
+    const revived = await refetchPlay({ throwOnError: true })
+    // Another address for the file is a new stream query, which opens on its own.
+    if (revived.data?.streamUrl !== source) return
+    await refetchStream({ throwOnError: true })
+  }, [refetchPlay, refetchStream, source])
 
   // Releasing the transcode session frees an ffmpeg process; leaving it to the
   // idle reaper keeps a CPU busy for a minute after leaving the page.
@@ -418,6 +449,9 @@ export function Watch() {
                   autoSkip={autoSkip}
                   autoPlay={flag('playback.autoplay')}
                   subLanguages={subLanguages}
+                  withDub={(['signs', 'off', 'same'] as const).find((v) => v === effective['subtitle.with_dub']) ?? 'signs'}
+                  keptDelay={keptDelay}
+                  onKeepDelay={group ? keepDelay : undefined}
                   upscale={upscaling}
                   sound={soundProp}
                   title={showTitle}
@@ -426,11 +460,13 @@ export function Watch() {
                   onProgress={reportProgress}
                   onEnded={onEnded}
                   onNext={hasNext ? goNext : undefined}
+                  onPrevious={previousPath ? goPrevious : undefined}
                   // Back into the finished episode: the countdown must not take the viewer away mid-rewatch.
                   onResume={clearEnded}
                   onEndStuck={(detail) => note('end-stuck', detail)}
                   onSessionLost={recoverSession}
                   onPickRelease={() => setPicking(true)}
+                  castBurn={flag('cast.burn_subtitles')}
                   // Inside the player, or fullscreen hides it; failures too, unless the player can recover.
                   overlay={
                     play.isError && !stream.data ? (
@@ -604,7 +640,7 @@ export function Watch() {
                     <button
                       onClick={() => setTuning(true)}
                       className={cx(
-                        'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                        'rounded-md px-2.5 py-1 text-xs font-medium transition-colors pointer-coarse:min-h-11',
                         upscaling.enabled
                           ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
                           : 'bg-base-800 text-base-300 hover:bg-base-700',
@@ -730,7 +766,7 @@ function EpisodeAbout({
           <p className="mt-2 text-sm text-base-500">No synopsis for this episode yet.</p>
         )}
         {/* The release is worth being able to check, but it is not the title. */}
-        {file && <p className="mt-2 truncate text-xs text-base-600">{file}</p>}
+        {file && <p className="mt-2 truncate text-xs text-base-500">{file}</p>}
       </div>
     </section>
   )
@@ -983,7 +1019,7 @@ function Toggle({
       aria-checked={on}
       onClick={() => onChange(!on)}
       className={cx(
-        'flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors',
+        'flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors pointer-coarse:min-h-11 pointer-coarse:px-3',
         on ? 'bg-accent-500/20 text-accent-400' : 'bg-base-850 text-base-400 hover:text-base-200',
       )}
     >

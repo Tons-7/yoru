@@ -9,15 +9,10 @@ import (
 	pp "yoru/internal/bt/peer_protocol"
 )
 
-// Contains implementation details that differ between peer types, like WebSeeds and regular
-// BitTorrent protocol connections. These methods are embedded in the child types of Peer for legacy
-// expectations that they exist on the child type. Some methods are underlined to avoid collisions
-// with legacy PeerConn methods. New methods and calls that are fixed up should be migrated over to
-// newHotPeerImpl.
+// What differs between peer kinds (webseeds, BitTorrent connections), on Peer's child types as older code
+// expects; underscored names avoid PeerConn's. New and fixed-up methods belong in newHotPeerImpl.
 type legacyPeerImpl interface {
-	// Whether the peer should be told to update requests. Sometimes this is skipped if it's high
-	// priority adjustments to requests. This is kind of only relevant to PeerConn but hasn't been
-	// fully migrated over yet.
+	// Whether to tell the peer to update requests (skipped for urgent changes); really PeerConn's.
 	isLowOnRequests() bool
 	// Notify that the peers requests should be updated for the provided reason.
 	onNeedUpdateRequests(reason updateRequestReason)
@@ -37,10 +32,8 @@ type legacyPeerImpl interface {
 	peerImplStatusLines() []string
 	peerImplWriteStatus(w io.Writer)
 
-	// All if the peer should have everything, known if we know that for a fact. For example, we can
-	// guess at how many pieces are in a torrent, and assume they have all pieces based on them
-	// having sent haves for everything, but we don't know for sure. But if they send a have-all
-	// message, then it's clear that they do.
+	// all: the peer should have everything; known: for certain (a have-all, not haves for every piece we
+	// guess there are).
 	peerHasAllPieces() (all, known bool)
 	peerPieces() *roaring.Bitmap
 }

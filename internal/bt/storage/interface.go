@@ -19,9 +19,7 @@ type ClientImpl interface {
 	OpenTorrent(ctx context.Context, info *metainfo.Info, infoHash metainfo.Hash) (TorrentImpl, error)
 }
 
-// Returning a negative cap, can we indicate there's no specific cap? If this is not-nil we use it
-// as a key into piece request order. The capped bool also needs to be true to be truly capped
-// though.
+// TorrentCapacity, when set, keys the piece request order; only capped true limits anything.
 type TorrentCapacity *func() (cap int64, capped bool)
 
 // Data storage bound to a torrent.
@@ -32,34 +30,23 @@ type TorrentImpl struct {
 	// Preferred over PieceWithHash. Called with the piece hash if it's available.
 	PieceWithHash func(p metainfo.Piece, pieceHash g.Option[[]byte]) PieceImpl
 	Close         func() error
-	// Storages that share the same space, will provide equal pointers. The function is called once
-	// to determine the storage for torrents sharing the same function pointer, and mutated in
-	// place.
+	// Equal pointers for storages sharing one space; called once for the torrents sharing it.
 	Capacity TorrentCapacity
 
 	NewReader      func() TorrentReader
 	NewPieceReader func(p Piece) PieceReader
 }
 
-// Interacts with torrent piece data. Optional interfaces to implement include://
-//
-//		io.WriterTo, such as when a piece supports a more efficient way to write out incomplete chunks.
-//		SelfHashing, such as when a piece supports a more efficient way to hash its contents.
-//	 	PieceReaderer when it has a stateful Reader interface that is more efficient.
+// PieceImpl is a piece's data. It may also be an io.WriterTo (incomplete chunks written out better),
+// SelfHashing (hashes itself better) or PieceReaderer (a better stateful Reader).
 type PieceImpl interface {
-	// These interfaces are not as strict as normally required. They can
-	// assume that the parameters are appropriate for the dimensions of the
-	// piece.
+	// Looser than usual: the arguments always fit the piece.
 	io.ReaderAt
 	io.WriterAt
-	// Called when the client believes the piece data will pass a hash check.
-	// The storage can move or mark the piece data as read-only as it sees
-	// fit.
+	// The data should pass its hash: storage may move it or make it read-only.
 	MarkComplete() error
 	MarkNotComplete() error
-	// Returns the state of a piece. Typically, this is implemented in some kind of storage to avoid
-	// rehashing, and cheap checks are performed here. (The implementation maintains a cache in
-	// Torrent).
+	// The piece's state from a cheap check, sparing a rehash (Torrent caches it).
 	Completion() Completion
 }
 

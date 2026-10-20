@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net/http"
 	"os"
 	"slices"
 	"sync"
@@ -39,12 +38,6 @@ type sharedFileIf interface {
 type sharedFilesInterface interface {
 	Open(name string) (sharedFileIf, error)
 	CloseAll(name string) error
-}
-
-func init() {
-	http.HandleFunc("/debug/shared-files", func(w http.ResponseWriter, r *http.Request) {
-		wipSharedFilesPool.WriteDebug(w)
-	})
 }
 
 type sharedFilesType struct {

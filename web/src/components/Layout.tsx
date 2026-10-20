@@ -20,7 +20,7 @@ import { SHOW_SHORTCUTS } from './keys'
 import { NotificationPanel } from './NotificationPanel'
 import { Shortcuts } from './Shortcuts'
 import { SavedCopyNotice } from './SavedCopyNotice'
-import { useDebounced, useDismiss } from '../lib/hooks'
+import { useDebounced, useDismiss, useMediaQuery } from '../lib/hooks'
 
 const TABS = [
   { to: '/', label: 'Home', end: true },
@@ -61,6 +61,9 @@ export function Layout() {
   return (
     <div className="min-h-dvh">
       <Header />
+      {/* Outside the per-page main: Back remounted them, and the pairing overlay vanished with its state. */}
+      <Unpaired />
+      <AccessRequests />
       <main
         key={pageKey}
         className={cx(
@@ -68,8 +71,6 @@ export function Layout() {
           fullBleed ? 'pb-8' : 'max-w-[1600px] px-4 pt-4 pb-16 sm:px-6',
         )}
       >
-        <Unpaired />
-        <AccessRequests />
         {/* Keyed by page, so leaving a broken one clears it. */}
         <ErrorBoundary key={pageKey} resetKey={pathname}>
           <Outlet />
@@ -81,6 +82,8 @@ export function Layout() {
 
 function Header() {
   const [scrolled, setScrolled] = useState(false)
+  // Tailwind's sm.
+  const wide = useMediaQuery('(min-width: 40rem)')
 
   // The header sits over the hero art, so it only earns a background once the page has moved past it.
   useEffect(() => {
@@ -122,10 +125,9 @@ function Header() {
         <span className="contents max-sm:hidden">
           <TitleLanguage />
         </span>
-        {/* Not on a phone: no keyboard to glance with, and Downloads is in the profile menu. */}
-        <span className="contents max-sm:hidden">
-          <DownloadsPanel />
-        </span>
+        {/* Not on a phone: no keyboard to glance with, and Downloads is in the profile menu. Unmounted
+            there, not hidden, or it polls the downloads every few seconds for nothing. */}
+        {wide && <DownloadsPanel />}
         <NotificationPanel />
         <ProfileMenu />
         <Shortcuts />
@@ -140,11 +142,30 @@ function Header() {
   )
 }
 
+// The furthest entry Yoru's history reaches in this tab; history.length also counts pages from before Yoru.
+const FURTHEST_KEY = 'yoru.history.furthest'
+const readFurthest = () => {
+  try {
+    return Number(sessionStorage.getItem(FURTHEST_KEY)) || 0
+  } catch {
+    return 0
+  }
+}
+
 // The app window has no browser chrome, so back and forward live here.
 function BackButton() {
   const navigate = useNavigate()
   useLocation()
   const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0
+  // A new page cuts off what was ahead; going back keeps it.
+  const furthest = useNavigationType() === 'PUSH' ? idx : Math.max(readFurthest(), idx)
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(FURTHEST_KEY, String(furthest))
+    } catch {
+      // Unstorable: Forward goes by this page alone.
+    }
+  }, [furthest])
   const arrow = (d: string) => (
     <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
       <path d={d} />
@@ -160,7 +181,7 @@ function BackButton() {
       <button
         type="button"
         onClick={() => navigate(1)}
-        disabled={idx >= window.history.length - 1}
+        disabled={idx >= furthest}
         aria-label="Forward"
         title="Forward"
         className={cls}
@@ -249,6 +270,10 @@ function SearchBox() {
         if (active >= 0 && hits[active]) pick(hits[active].id)
         else browse()
       }}
+      // Tab out of the field closes the results, which otherwise sat over the page.
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false)
+      }}
     >
       <div className="relative w-full max-w-56 sm:max-w-none">
         <SearchIcon />
@@ -275,11 +300,14 @@ function SearchBox() {
           role="combobox"
           aria-expanded={showMenu}
           aria-controls="yoru-search-results"
+          aria-autocomplete="list"
+          // The highlight is announced, as focus stays in the field.
+          aria-activedescendant={showMenu && active >= 0 ? `yoru-search-opt-${active}` : undefined}
           autoComplete="off"
           placeholder="Search…"
           aria-label="Search anime"
           className={cx(
-            'w-full rounded-md border border-base-800 bg-base-900/80 py-1.5 pl-8 text-sm text-base-100 placeholder:text-base-500 focus:border-accent-500 focus:outline-none',
+            'w-full rounded-md border border-base-800 bg-base-900/80 py-1.5 pl-8 text-sm text-base-100 placeholder:text-base-500 focus:border-accent-500 focus:outline-hidden',
             // Padding only while there's something to clear, so the button never sits over the text.
             value ? 'pr-8' : 'pr-3',
           )}
@@ -320,9 +348,10 @@ function SearchBox() {
           className="absolute top-full right-0 z-50 mt-1.5 w-80 max-w-[90vw] animate-rise overflow-hidden rounded-xl border border-base-750 bg-base-850 p-1 shadow-panel max-sm:fixed max-sm:inset-x-2 max-sm:top-14 max-sm:w-auto max-sm:max-w-none"
         >
           {hits.map((hit, i) => (
-            <li key={hit.id} role="option" aria-selected={i === active}>
+            <li key={hit.id} id={`yoru-search-opt-${i}`} role="option" aria-selected={i === active}>
               <button
                 type="button"
+                tabIndex={-1}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => pick(hit.id)}
                 className={cx(
@@ -346,11 +375,13 @@ function SearchBox() {
             </li>
           ))}
           {hits.length === 0 && local.isSuccess && (
-            <li className="px-2 py-1.5 text-xs text-base-500">Nothing in your library.</li>
+            // It searches every show Yoru holds, not only the library.
+            <li className="px-2 py-1.5 text-xs text-base-500">Nothing saved matches. Press Enter to search AniList.</li>
           )}
-          <li role="option" aria-selected={active === hits.length}>
+          <li id={`yoru-search-opt-${hits.length}`} role="option" aria-selected={active === hits.length}>
             <button
               type="button"
+              tabIndex={-1}
               onMouseDown={(e) => e.preventDefault()}
               onClick={browse}
               className={cx(
@@ -492,7 +523,7 @@ function ProfileMenu() {
             role="menuitem"
             to="/settings?tab=Accounts"
             onClick={close}
-            className="group flex items-center gap-3 rounded-xl p-2 transition-colors hover:bg-base-800 focus-visible:bg-base-800 focus-visible:outline-none"
+            className="group flex items-center gap-3 rounded-xl p-2 transition-colors hover:bg-base-800 focus-visible:bg-base-800 focus-visible:outline-hidden"
           >
             <span className="grid size-10 shrink-0 place-items-center rounded-full bg-base-800 text-base-300 ring-1 ring-white/10">
               {user ? <Initial name={user} large /> : <UserIcon />}
@@ -557,7 +588,7 @@ const menuItems = (menu: HTMLElement | null) =>
   [...(menu?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])].filter((el) => el.offsetParent !== null)
 
 const menuRow =
-  'group flex items-center gap-3 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-base-800 hover:text-white focus-visible:bg-base-800 focus-visible:text-white focus-visible:outline-none pointer-coarse:py-2'
+  'group flex items-center gap-3 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-base-800 hover:text-white focus-visible:bg-base-800 focus-visible:text-white focus-visible:outline-hidden pointer-coarse:py-2'
 const iconChip =
   'grid size-7 shrink-0 place-items-center rounded-md bg-base-800 text-base-400 ring-1 ring-white/5 transition-colors group-hover:bg-base-750 group-hover:text-base-100 group-focus-visible:text-base-100'
 
@@ -572,7 +603,7 @@ function ListShortcuts({ close }: { close: () => void }) {
           role="menuitem"
           to="/library"
           onClick={close}
-          className="tap relative rounded text-xs font-medium text-accent-400 transition-colors hover:text-accent-300 focus-visible:text-accent-300 focus-visible:outline-none"
+          className="tap relative rounded text-xs font-medium text-accent-400 transition-colors hover:text-accent-300 focus-visible:text-accent-300 focus-visible:outline-hidden"
         >
           {counts?.total ? `All ${counts.total}` : 'All'}
         </Link>
@@ -586,7 +617,7 @@ function ListShortcuts({ close }: { close: () => void }) {
               role="menuitem"
               to={`/library?status=${status.value}`}
               onClick={close}
-              className="flex min-h-10 items-center justify-between gap-2 rounded-lg bg-base-800/50 px-3 text-sm text-base-200 ring-1 ring-white/[0.04] transition-colors hover:bg-base-750 hover:text-white focus-visible:bg-base-750 focus-visible:text-white focus-visible:outline-none pointer-coarse:min-h-11"
+              className="flex min-h-10 items-center justify-between gap-2 rounded-lg bg-base-800/50 px-3 text-sm text-base-200 ring-1 ring-white/[0.04] transition-colors hover:bg-base-750 hover:text-white focus-visible:bg-base-750 focus-visible:text-white focus-visible:outline-hidden pointer-coarse:min-h-11"
             >
               <span className="truncate">{status.label}</span>
               {counts && (

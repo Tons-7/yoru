@@ -117,7 +117,7 @@ func (c *Client) Anime(ctx context.Context, malID int) (AnimeDetail, error) {
 
 	hosts := []host{{"tenrai-anime", TenraiAnimeURL}, {"jikan-anime", JikanAnimeURL}}
 
-	// Retried across both: a second attempt at the same host often lands because the first one warmed its cache.
+	// Retried across both: a second try at the same host often lands, as the first warmed its cache.
 	var res jikanAnime
 	var err error
 	for attempt := range 3 {

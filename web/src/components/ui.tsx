@@ -60,7 +60,7 @@ export function FilterToggle({
       aria-pressed={on}
       onClick={() => onChange(!on)}
       className={cx(
-        'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium ring-1 transition-colors',
+        'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium ring-1 transition-colors pointer-coarse:min-h-11',
         on
           ? 'bg-accent-500/20 text-accent-300 ring-accent-500/40'
           : 'bg-base-850 text-base-300 ring-white/[0.06] hover:text-white',
@@ -107,7 +107,7 @@ export function PageHeader({
 
 /** The one text field look, for inputs that can't be a TextInput (a select's sibling, a textarea). */
 export const inputClass =
-  'rounded-lg bg-base-900 px-3 py-1.5 text-sm text-base-100 ring-1 ring-white/[0.07] transition-[box-shadow] placeholder:text-base-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 disabled:opacity-50'
+  'rounded-lg bg-base-900 px-3 py-1.5 text-sm text-base-100 ring-1 ring-white/[0.07] transition-[box-shadow] placeholder:text-base-500 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500 disabled:opacity-50'
 
 /** A text field; without a visible <label>, aria-label (or the settings row's label) names it. */
 export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
@@ -379,7 +379,8 @@ export function Segmented<T extends string>({
             ref={active ? keepInStrip : undefined}
             onClick={() => onChange(option.value)}
             className={cx(
-              'shrink-0 rounded-md font-medium whitespace-nowrap transition-colors',
+              // 44px on touch: the strip scrolls, so a tap overlay would be clipped.
+              'shrink-0 rounded-md font-medium whitespace-nowrap transition-colors pointer-coarse:min-h-11',
               size === 'sm' ? 'px-2.5 py-1 text-xs' : 'px-3.5 py-1.5 text-sm',
               active
                 ? 'bg-base-750 text-white shadow-card'
@@ -415,7 +416,7 @@ export function Badge({
   tone = 'neutral',
 }: {
   children: ReactNode
-  tone?: 'neutral' | 'filler' | 'recap' | 'accent' | 'success' | 'warning' | 'overlay'
+  tone?: 'neutral' | 'filler' | 'recap' | 'accent' | 'success' | 'warning' | 'overlay' | 'overlay-success' | 'overlay-neutral'
 }) {
   const tones = {
     neutral: 'bg-base-800 text-base-300',
@@ -426,6 +427,8 @@ export function Badge({
     warning: 'bg-amber-500/15 text-amber-400',
     // Over poster art, where a 15% tint leaves the text sitting on whatever the cover happens to be.
     overlay: 'bg-base-950/85 text-accent-200 ring-1 ring-accent-400/30 backdrop-blur-sm',
+    'overlay-success': 'bg-base-950/85 text-emerald-300 ring-1 ring-emerald-400/30 backdrop-blur-sm',
+    'overlay-neutral': 'bg-base-950/85 text-base-200 ring-1 ring-white/15 backdrop-blur-sm',
   }
   return (
     <span
@@ -460,7 +463,7 @@ export function Select({
         value={value}
         aria-label={label ?? rowLabel}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full appearance-none rounded-lg bg-base-800 py-1.5 pr-8 pl-3 text-sm text-base-100 ring-1 ring-white/[0.07] transition-colors hover:bg-base-750 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+        className="w-full appearance-none rounded-lg bg-base-800 py-1.5 pr-8 pl-3 text-sm text-base-100 ring-1 ring-white/[0.07] transition-colors hover:bg-base-750 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500"
       >
         {children}
       </select>

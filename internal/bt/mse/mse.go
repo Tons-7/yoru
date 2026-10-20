@@ -40,8 +40,7 @@ var (
 	req1 = []byte("req1")
 	req2 = []byte("req2")
 	req3 = []byte("req3")
-	// Verification constant "VC" which is all zeroes in the bittorrent
-	// implementation.
+	// Verification constant "VC", all zeroes in the BitTorrent implementation.
 	vc [8]byte
 	// Zero padding
 	zeroPad [512]byte
@@ -123,8 +122,7 @@ func (cr *cipherWriter) Write(b []byte) (n int, err error) {
 	cr.c.XORKeyStream(be, b)
 	n, err = cr.w.Write(be[:len(b)])
 	if n != len(b) {
-		// The cipher will have advanced beyond the callers stream position.
-		// We can't use the cipher anymore.
+		// The cipher has run past the caller's stream position, so it can't be used any more.
 		cr.c = nil
 	}
 	if len(be) > len(cr.b) {
@@ -327,8 +325,7 @@ func suffixMatchLen(a, b []byte) int {
 	return 0
 }
 
-// Reads from r until b has been seen. Keeps the minimum amount of data in
-// memory.
+// Reads from r until b has been seen, holding as little as it can.
 func readUntil(r io.Reader, b []byte) error {
 	b1 := make([]byte, len(b))
 	i := 0
@@ -377,9 +374,7 @@ func (h *handshake) initerSteps(ctx context.Context) (ret io.ReadWriter, selecte
 	bC := h.newEncrypt(false)
 	var eVC [8]byte
 	bC.XORKeyStream(eVC[:], vc[:])
-	// Read until the all zero VC. At this point we've only read the 96 byte
-	// public key, Y. There is potentially 512 byte padding, between us and
-	// the 8 byte verification constant.
+	// To the all-zero VC: past the 96-byte public key Y, up to 512 bytes of padding come before its 8 bytes.
 	err = readUntil(io.LimitReader(h.ctxConn, 520), eVC[:])
 	if err != nil {
 		if err == io.EOF {
@@ -462,7 +457,8 @@ func (h *handshake) receiverSteps(ctx context.Context) (ret io.ReadWriter, chose
 	if err != nil {
 		return
 	}
-	cryptoProvidesCount.Add(strconv.FormatUint(uint64(provides), 16), 1)
+	// The peer picks this uint32; only the defined bits get a key of their own.
+	cryptoProvidesCount.Add(strconv.FormatUint(uint64(provides&(CryptoMethodPlaintext|CryptoMethodRC4)), 16), 1)
 	chosen = h.chooseMethod(provides)
 	_, err = io.CopyN(io.Discard, ctxReader, int64(padLen))
 	if err != nil {
@@ -595,8 +591,7 @@ func ReceiveHandshakeEx(
 	return
 }
 
-// A function that given a function, calls it with secret keys until it
-// returns false or exhausted.
+// Calls the callback with each secret key until it returns false or the keys run out.
 type SecretKeyIter func(callback func(skey []byte) (more bool))
 
 func DefaultCryptoSelector(provided CryptoMethod) CryptoMethod {

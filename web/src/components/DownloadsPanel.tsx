@@ -7,12 +7,14 @@ import { copyText, downloadProgress, downloadsReport, retryNote, sortDownloads }
 import { cx, episodeSpan } from '../lib/format'
 import { refreshDownloads, useDownloadQueue, useDownloads, useSpeedUnit, type Download, type Queued } from '../lib/queries'
 import { ProgressBar } from './ui'
-import { useAnchorBox, useDismiss } from '../lib/hooks'
+import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 import { plainKey, usePortalHome } from './keys'
 
 /** Downloads at a glance over the episode playing (D toggles it); look-only, so a stray key removes nothing. */
 export function DownloadsPanel() {
   const [open, setOpen] = useState(false)
+  // Opened by D it is a glance: focus stays where it was, so Space still pauses the video, not every download.
+  const [glance, setGlance] = useState(false)
   const [copied, setCopied] = useState(false)
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close, open)
@@ -21,7 +23,9 @@ export function DownloadsPanel() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (plainKey(e) === 'd') setOpen((v) => !v)
+      if (plainKey(e) !== 'd') return
+      setGlance(true)
+      setOpen((v) => !v)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -58,6 +62,9 @@ export function DownloadsPanel() {
   const anchored = useAnchorBox(trigger, open)
   const measured = home === document.body ? anchored : undefined
   const box = measured && measured.width > 0 ? measured : undefined
+  // Portalled to the end of the page: without this, keyboard focus never reached its buttons.
+  const panel = useRef<HTMLDivElement>(null)
+  useModalFocus(panel, open && !glance)
 
   return (
     <div className="relative shrink-0" ref={ref}>
@@ -68,7 +75,10 @@ export function DownloadsPanel() {
         aria-expanded={open}
         aria-label={busy ? `Downloads, ${busy} in progress` : 'Downloads'}
         title="Downloads (D)"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          setGlance(false)
+          setOpen((v) => !v)
+        }}
         className="tap relative grid size-9 place-items-center rounded-md text-base-300 transition-colors hover:bg-base-800 hover:text-white"
       >
         <ArrowIcon />
@@ -80,6 +90,7 @@ export function DownloadsPanel() {
       {open &&
         createPortal(
           <div
+            ref={panel}
             role="dialog"
             aria-label="Downloads"
             data-portal-menu

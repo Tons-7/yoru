@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { DiscoverItem } from '../lib/api'
 import { cx, tint } from '../lib/format'
+import { useMediaQuery } from '../lib/hooks'
 import { PlayIcon } from './PosterCard'
 import { StatusMenu } from './StatusMenu'
 import { Skeleton } from './ui'
@@ -15,22 +16,24 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
   const slides = (items ?? []).filter((a) => a.cover).slice(0, 10)
   const [picked, setIndex] = useState(0)
   const [paused, setPaused] = useState(false)
+  // Hover and focus pause it; a touch screen has neither, so it stops by hand. Reduced motion never moves.
+  const [stopped, setStopped] = useState(false)
+  const calm = useMediaQuery('(prefers-reduced-motion: reduce)')
   const timer = useRef<number | undefined>(undefined)
   // A shorter list after a refetch would otherwise leave the index past the end.
   const index = picked < slides.length ? picked : 0
 
   useEffect(() => {
-    if (paused || slides.length < 2) return
+    if (paused || stopped || calm || slides.length < 2) return
     timer.current = window.setInterval(
       () => setIndex((i) => (i + 1) % slides.length),
       ROTATE_MS,
     )
     return () => window.clearInterval(timer.current)
-  }, [paused, slides.length])
+  }, [paused, stopped, calm, slides.length])
 
-  // Every slide is in the viewport at opacity zero, so lazy loading holds none
-  // of them back. Fetch just ahead of the rotation and keep what has arrived.
-  // Kept up during render (React's "adjusting state when a prop changes"), so no effect paints it a frame late.
+  // Every slide sits in the viewport at opacity zero, so lazy loading holds none back: fetched just ahead of
+  // the rotation, kept once arrived, and updated during render so no effect paints it a frame late.
   const [fetched, setFetched] = useState<number[]>([])
   const ahead = slides.length ? Array.from({ length: PRELOAD + 1 }, (_, step) => (index + step) % slides.length) : []
   if (ahead.some((i) => !fetched.includes(i))) setFetched([...new Set([...fetched, ...ahead])])
@@ -177,25 +180,46 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
           </div>
         </div>
 
-        <div className="mt-5 flex gap-1.5" role="tablist" aria-label="Featured anime">
+        <div className="mt-4 flex" role="tablist" aria-label="Featured anime">
           {slides.map((slide, i) => (
+            // The bar is 4px; the button around it is what a finger has to hit.
             <button
               key={slide.id}
               role="tab"
               aria-selected={i === index}
               aria-label={slide.title}
               onClick={() => setIndex(i)}
-              className={cx(
-                'h-1 rounded-full transition-all duration-300',
-                i === index ? 'w-7 bg-white' : 'w-3 bg-white/30 hover:bg-white/50',
-              )}
-            />
+              className="group px-[3px] py-2 pointer-coarse:px-1.5 pointer-coarse:py-4"
+            >
+              <span
+                className={cx(
+                  'block h-1 rounded-full transition-all duration-300',
+                  i === index ? 'w-7 bg-white' : 'w-3 bg-white/30 group-hover:bg-white/50',
+                )}
+              />
+            </button>
           ))}
         </div>
       </div>
 
       {slides.length > 1 && (
         <div className="absolute right-4 bottom-4 flex gap-2 sm:right-6 sm:bottom-6">
+          {!calm && (
+            <button
+              aria-label={stopped ? 'Play slideshow' : 'Pause slideshow'}
+              aria-pressed={stopped}
+              onClick={() => setStopped((v) => !v)}
+              className="tap relative rounded-full bg-base-950/50 p-2 text-white/70 backdrop-blur-sm transition-colors hover:bg-base-950/80 hover:text-white"
+            >
+              <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
+                {stopped ? (
+                  <path d="M8 5v14l11-7z" fill="currentColor" />
+                ) : (
+                  <path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor" />
+                )}
+              </svg>
+            </button>
+          )}
           <Arrow
             label="Previous"
             onClick={() => setIndex((i) => (i - 1 + slides.length) % slides.length)}
@@ -212,7 +236,7 @@ function Arrow({ label, next, onClick }: { label: string; next?: boolean; onClic
     <button
       aria-label={label}
       onClick={onClick}
-      className="rounded-full bg-base-950/50 p-2 text-white/70 backdrop-blur-sm transition-colors hover:bg-base-950/80 hover:text-white"
+      className="tap relative rounded-full bg-base-950/50 p-2 text-white/70 backdrop-blur-sm transition-colors hover:bg-base-950/80 hover:text-white"
     >
       <svg viewBox="0 0 24 24" fill="none" className={cx('size-5', next && 'rotate-180')}>
         <path

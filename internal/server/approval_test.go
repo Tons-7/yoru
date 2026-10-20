@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
@@ -33,12 +35,18 @@ type device struct {
 	t       *testing.T
 	cookies map[string]string
 	ua      string
+	addr    string // phone when empty
 }
 
 func (d *device) get(target string, page bool) *http.Response {
 	d.t.Helper()
-	req := httptest.NewRequest("GET", target, nil)
-	req.Host, req.RemoteAddr = "192.168.1.10:4321", phone
+	return d.do("GET", target, "", page)
+}
+
+func (d *device) do(method, target, body string, page bool) *http.Response {
+	d.t.Helper()
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Host, req.RemoteAddr = "192.168.1.10:4321", cmp.Or(d.addr, phone)
 	req.Header.Set("User-Agent", d.ua)
 	if page {
 		req.Header.Set("Accept", "text/html,application/xhtml+xml")
@@ -187,6 +195,34 @@ func TestDeclinedDeviceStaysOutAndDoesNotAskAgain(t *testing.T) {
 	}
 }
 
+// Open-in-app links end only when a device that had access loses it; turning away a stranger keeps them.
+func TestOnlyALostDeviceEndsTheLinks(t *testing.T) {
+	h := approvalHarness(t, approvalOnce)
+	friend, stranger := newDevice(t, h), newDevice(t, h)
+	stranger.addr = "192.168.1.77:5555"
+	friend.get("/?token=s3cret", true)
+	friendID := h.devices(t)[0]["id"].(string)
+	h.host(t, "POST", "/api/access/devices/"+friendID, `{"status":"approved"}`)
+	stranger.get("/?token=s3cret", true)
+	var strangerID string
+	for _, d := range h.devices(t) {
+		if d["id"] != friendID {
+			strangerID = d["id"].(string)
+		}
+	}
+
+	epoch := h.server.grantEpoch.Load()
+	h.host(t, "POST", "/api/access/devices/"+strangerID, `{"status":"denied"}`)
+	h.host(t, "DELETE", "/api/access/devices/"+strangerID, "")
+	if h.server.grantEpoch.Load() != epoch {
+		t.Error("declining and removing a device that never had access ended every link")
+	}
+	h.host(t, "POST", "/api/access/devices/"+friendID, `{"status":"denied"}`)
+	if h.server.grantEpoch.Load() == epoch {
+		t.Error("declining a device that had access left its links working")
+	}
+}
+
 func TestApprovalNeedsTheTokenFirst(t *testing.T) {
 	h := approvalHarness(t, approvalOnce)
 	if res := newDevice(t, h).get("/", true); res.StatusCode != http.StatusUnauthorized {
@@ -209,11 +245,24 @@ func TestScriptsWithoutCookiesMakeNoRequests(t *testing.T) {
 
 func TestPendingRequestsAreCapped(t *testing.T) {
 	h := approvalHarness(t, approvalOnce)
-	for range maxPending + 5 {
-		newDevice(t, h).get("/?token=s3cret", true)
+	for i := range maxPending + 5 {
+		d := newDevice(t, h)
+		d.addr = fmt.Sprintf("192.168.1.%d:5555", 100+i)
+		d.get("/?token=s3cret", true)
 	}
 	if list := h.devices(t); len(list) != maxPending {
 		t.Fatalf("%d pending, want %d", len(list), maxPending)
+	}
+}
+
+// A browser that keeps no cookies asks again on every reload; it stays one waiting device, not twenty.
+func TestCookielessBrowserWaitsOnce(t *testing.T) {
+	h := approvalHarness(t, approvalOnce)
+	for range 5 {
+		newDevice(t, h).get("/?token=s3cret", true)
+	}
+	if list := h.devices(t); len(list) != 1 {
+		t.Fatalf("%d pending, want the one device", len(list))
 	}
 }
 

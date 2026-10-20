@@ -211,9 +211,7 @@ func (s *pexState) Drop(c *PeerConn) {
 	}
 }
 
-// Generate a PEX message based on the event feed.
-// Also returns a pointer to pass to the subsequent calls
-// to produce incremental deltas.
+// Genmsg makes a PEX message from the event feed, and the point to pass next time for the next delta.
 func (s *pexState) Genmsg(start *pexEvent) (pp.PexMsg, *pexEvent) {
 	s.RLock()
 	defer s.RUnlock()

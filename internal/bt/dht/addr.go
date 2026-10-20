@@ -8,10 +8,8 @@ import (
 	"yoru/internal/bt/dht/krpc"
 )
 
-// Used internally to refer to node network addresses. String() is called a
-// lot, and so can be optimized. Network() is not exposed, so that the
-// interface does not satisfy net.Addr, as the underlying type must be passed
-// to any OS-level function that take net.Addr.
+// A node's address. String is called a lot, so it's quick; no Network, so it isn't a net.Addr: OS calls
+// need the address underneath.
 type Addr interface {
 	Raw() net.Addr
 	Port() int

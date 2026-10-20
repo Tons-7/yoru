@@ -607,7 +607,7 @@ func (s *Store) EpisodeAlias(ctx context.Context, animeID, episode int) (Episode
 	if season == nil {
 		tvdb = nil
 	}
-	// Decided per number: a stated one is the catalogue's, a missing one may still be counted through the franchise.
+	// Per number: a stated one is the catalogue's; a missing one may still be counted through the franchise.
 	out := EpisodeAlias{StatedTvdb: tvdb != nil, StatedAbsolute: absolute != nil}
 	if tvdb != nil && *tvdb != episode {
 		out.Tvdb = *tvdb

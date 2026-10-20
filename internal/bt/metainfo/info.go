@@ -33,14 +33,8 @@ type Info struct {
 	FileTree    FileTree `bencode:"file tree,omitempty"`
 }
 
-// The Info.Name field is "advisory". For multi-file torrents it's usually a suggested directory
-// name. There are situations where we don't want a directory (like using the contents of a torrent
-// as the immediate contents of a directory), or the name is invalid. Transmission will inject the
-// name of the torrent file if it doesn't like the name, resulting in a different infohash
-// (https://github.com/transmission/transmission/issues/1775). To work around these situations, we
-// will use a sentinel name for compatibility with Transmission and to signal to our own client that
-// we intended to have no directory name. By exposing it in the API we can check for references to
-// this behaviour within this implementation.
+// NoName means "no folder" for a multi-file Info.Name (only advisory), which Transmission would otherwise
+// fill in, changing the infohash (transmission/transmission#1775).
 const NoName = "-"
 
 // This is a helper that sets Files and Pieces from a root path and its children.
@@ -177,8 +171,7 @@ func (info *Info) UpvertedV1Files() iter.Seq[FileInfo] {
 		if len(info.Files) == 0 {
 			yield(FileInfo{
 				Length: info.Length,
-				// Callers should determine that Info.Name is the basename, and
-				// thus a regular file.
+				// No path: Info.Name is the file's own name.
 				Path: nil,
 			})
 			return

@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"net/netip"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -50,9 +51,8 @@ type PeerConn struct {
 	// Indexed by metadata piece, set to true if posted and pending a response.
 	metadataRequests []bool
 	sentHaves        bitmap.Bitmap
-	// Chunks that we might reasonably expect to receive from the peer. Due to latency, buffering,
-	// and implementation differences, we may receive chunks that are no longer in the set of
-	// requests actually want. This could use a roaring.BSI if the memory use becomes noticeable.
+	// Chunks we may still receive, beyond those requested now: latency and buffering lag behind cancels.
+	// (A roaring.BSI, if the memory ever shows.)
 	validReceiveChunks map[RequestIndex]int
 	PeerMaxRequests    maxRequests // Maximum pending requests the peer allows.
 
@@ -71,17 +71,14 @@ type PeerConn struct {
 	PeerExtensionBytes pp.PeerExtensionBits
 	PeerListenPort     int
 
-	// The local extended protocols to advertise in the extended handshake, and to support receiving
-	// from the peer. This will point to the Client default when the PeerConnAdded callback is
-	// invoked. Do not modify this, point it to your own instance. Do not modify the destination
-	// after returning from the callback.
+	// Extended protocols advertised and accepted: the Client's default when PeerConnAdded runs. Point it at
+	// your own instead of changing it, and change nothing after the callback returns.
 	LocalLtepProtocolMap *LocalLtepProtocolMap
 
 	// The actual Conn, used for closing, and setting socket options. Do not use methods on this
 	// while holding any mutexes.
 	conn net.Conn
-	// The Reader and Writer for this Conn, with hooks installed for stats,
-	// limiting, deadlines etc.
+	// The conn's Reader and Writer, with hooks for stats, limiting, deadlines etc.
 	w io.Writer
 	r io.Reader
 
@@ -106,9 +103,8 @@ type PeerConn struct {
 	// Hash requests sent to the peer. If there's an issue we probably don't want to reissue these,
 	// because I haven't implemented it smart enough yet.
 	sentHashRequests map[hashRequest]struct{}
-	// Hash pieces received from the peer, mapped from pieces root to piece layer hashes. This way
-	// we can verify all the pieces for a file when they're all arrived before submitting them to
-	// the torrent.
+	// Piece layer hashes received, by pieces root: a file's are verified once all arrive, then given to the
+	// torrent.
 	receivedHashPieces map[[32]byte][][32]byte
 
 	// Requests from the peer that haven't yet been read from storage for upload, by arrival.
@@ -117,6 +113,8 @@ type PeerConn struct {
 	readyPeerRequests map[Request]readyPeerRequest
 	// Counts requests in; they are read and sent oldest first, as a streaming peer asks in reading order.
 	peerRequestArrivals uint64
+	// Arrival order of the two maps above, so the oldest is found without scanning them per chunk.
+	unreadOrder, readyOrder requestFifo
 	// Total peer request data buffered has decreased, so the server can read more.
 	peerRequestDataAllocDecreased chansync.BroadcastCond
 	// A routine is handling buffering peer request data.
@@ -183,17 +181,14 @@ func (cn *PeerConn) ipv6() bool {
 	return len(ip) == net.IPv6len
 }
 
-// Returns true the if the dialer/initiator has the higher client peer ID. See
-// https://github.com/arvidn/libtorrent/blame/272828e1cc37b042dfbbafa539222d8533e99755/src/bt_peer_connection.cpp#L3536-L3557.
-// As far as I can tell, Transmission just keeps the oldest connection.
+// Whether the dialer has the higher peer ID, as libtorrent decides a duplicate (Transmission keeps the
+// oldest).
 func (cn *PeerConn) isPreferredDirection() bool {
 	// True if our client peer ID is higher than the remote's peer ID.
 	return bytes.Compare(cn.PeerID[:], cn.t.cl.peerID[:]) < 0 == cn.outgoing
 }
 
-// Returns whether the left connection should be preferred over the right one,
-// considering only their networking properties. If ok is false, we can't
-// decide.
+// Whether the left conn is preferred over the right by networking properties alone.
 func (l *PeerConn) hasPreferredNetworkOver(r *PeerConn) bool {
 	var ml multiless.Computation
 	ml = ml.Bool(r.isPreferredDirection(), l.isPreferredDirection())
@@ -273,10 +268,7 @@ func (cn *PeerConn) onClose() {
 // Writes a message into the write buffer. Returns whether it's okay to keep writing. Writing is
 // done asynchronously, so it may be that we're not able to honour backpressure from this method.
 func (cn *PeerConn) write(msg pp.Message) bool {
-	torrent.Add(fmt.Sprintf("messages written of type %s", msg.Type.String()), 1)
-	// We don't need to track bytes here because the connection's Writer has that behaviour injected
-	// (although there's some delay between us buffering the message, and the connection writer
-	// flushing it out.).
+	// Bytes aren't counted here: the conn's Writer does, once it flushes.
 	notFull := cn.messageWriter.write(msg)
 	// Last I checked only Piece messages affect stats, and we don't write those.
 	cn.wroteMsg(&msg)
@@ -301,7 +293,7 @@ func (cn *PeerConn) requestMetadataPiece(index int) {
 }
 
 func (cn *PeerConn) requestedMetadataPiece(index int) bool {
-	return index < len(cn.metadataRequests) && cn.metadataRequests[index]
+	return index >= 0 && index < len(cn.metadataRequests) && cn.metadataRequests[index]
 }
 
 func (cn *PeerConn) onPeerSentCancel(r Request) {
@@ -333,15 +325,25 @@ func (cn *PeerConn) choke(msg messageWriter) (more bool) {
 	more = msg(pp.Message{
 		Type: pp.Choke,
 	})
-	if !cn.fastEnabled() {
-		cn.deleteAllPeerRequests()
+	// With the fast extension a choke keeps requests until rejected; allowed-fast isn't served, so
+	// reject them all rather than hold their data read and unsent for the life of the connection.
+	if cn.fastEnabled() {
+		for r := range cn.unreadPeerRequests {
+			more = msg(r.ToMsg(pp.Reject)) && more
+		}
+		for r := range cn.readyPeerRequests {
+			more = msg(r.ToMsg(pp.Reject)) && more
+		}
 	}
+	cn.deleteAllPeerRequests()
 	return
 }
 
 func (cn *PeerConn) deleteAllPeerRequests() {
 	clear(cn.unreadPeerRequests)
 	clear(cn.readyPeerRequests)
+	cn.unreadOrder, cn.readyOrder = requestFifo{}, requestFifo{}
+	cn.peerRequestDataAllocDecreased.Broadcast()
 }
 
 func (cn *PeerConn) unchoke(msg func(pp.Message) bool) bool {
@@ -366,8 +368,7 @@ func (pc *PeerConn) writeInterested(interested bool) bool {
 	})
 }
 
-// The final piece to actually commit to a request. Typically, this sends or begins handling the
-// request.
+// Commits to a request: typically sends it, or starts handling it.
 func (me *PeerConn) _request(r Request) bool {
 	return me.write(pp.Message{
 		Type:   pp.Request,
@@ -393,11 +394,7 @@ func (me *PeerConn) remoteRejectsCancels() bool {
 		return false
 	}
 	if me.remoteIsTransmission() {
-		// Transmission did not send rejects for received cancels. See
-		// https://github.com/transmission/transmission/pull/2275. Fixed in 4.0.0-beta.1 onward in
-		// https://github.com/transmission/transmission/commit/76719bf34c255da4fca991c2ad3fa4b65d2154b1.
-		// Peer ID prefix scheme described
-		// https://github.com/transmission/transmission/blob/7ec7607bbcf0fa99bd4b157b9b0f0c411d59f45d/CMakeLists.txt#L128-L149.
+		// Transmission rejects cancelled requests from 4.0 on (peer ID "-TR4..."); earlier ones didn't.
 		return me.PeerID[3] >= '4'
 	}
 	return true
@@ -405,12 +402,8 @@ func (me *PeerConn) remoteRejectsCancels() bool {
 
 func (cn *PeerConn) fillWriteBuffer() {
 	if cn.messageWriter.writeBuffer.Len() > writeBufferLowWaterLen {
-		// Fully committing to our max requests requires sufficient space (see
-		// maxLocalToRemoteRequests). Flush what we have instead. We also prefer always to make
-		// requests than to do PEX or upload, so we short-circuit before handling those. Any update
-		// request reason will not be cleared, so we'll come right back here when there's space. We
-		// can't do this in maybeUpdateActualRequestState because it's a method on Peer and has no
-		// knowledge of write buffers.
+		// No room for a full set of requests: flush first, ahead of PEX and uploads. The update reason stays,
+		// bringing us back here once there's space (Peer, which knows no write buffers, can't do this).
 		return
 	}
 	cn.requestMissingHashes()
@@ -524,8 +517,7 @@ func (cn *PeerConn) peerSentBitfield(bf []bool) error {
 		}
 		return true
 	})
-	// Apply the changes. If we had everything previously, this should be empty, so xor is the same
-	// as or.
+	// Apply the changes; after HaveAll this was empty, so xor is or.
 	cn._peerPieces.Xor(&bm)
 	if shouldUpdateRequests {
 		cn.onNeedUpdateRequests("bitfield")
@@ -566,7 +558,10 @@ func (cn *PeerConn) onPeerSentHaveAll() error {
 }
 
 func (cn *PeerConn) peerSentHaveNone() error {
-	if !cn.peerSentHaveAll {
+	// A HaveAll peer's availability is the all-pieces set, not per-piece counts: leave that set.
+	if cn.peerSentHaveAll {
+		cn.t.deleteConnWithAllPieces(&cn.Peer)
+	} else {
 		cn.t.decPeerPieceAvailability(&cn.Peer)
 	}
 	cn._peerPieces.Clear()
@@ -597,15 +592,8 @@ func (c *PeerConn) requestPendingMetadata() {
 }
 
 func (cn *PeerConn) wroteMsg(msg *pp.Message) {
-	torrent.Add(fmt.Sprintf("messages written of type %s", msg.Type.String()), 1)
-	if msg.Type == pp.Extended {
-		for name, id := range cn.PeerExtensionIDs {
-			if id != msg.ExtendedID {
-				continue
-			}
-			torrent.Add(fmt.Sprintf("Extended messages written for protocol %q", name), 1)
-		}
-	}
+	// Keyed by type only: the peer names its extensions, and those names must not become keys.
+	torrent.Add("messages written of type "+msg.Type.String(), 1)
 	cn.modifyRelevantConnStats(func(cs *ConnStats) { cs.wroteMsg(msg) })
 }
 
@@ -640,7 +628,6 @@ func (me *PeerConn) numPeerRequests() int {
 
 // startFetch is for testing purposes currently.
 func (c *PeerConn) onReadRequest(r Request, startFetch bool) error {
-	requestedChunkLengths.Add(strconv.FormatUint(r.Length.Uint64(), 10), 1)
 	if c.havePeerRequest(r) {
 		torrent.Add("duplicate requests received", 1)
 		if c.fastEnabled() {
@@ -690,6 +677,7 @@ func (c *PeerConn) onReadRequest(r Request, startFetch bool) error {
 	MakeMapIfNilWithCap(&c.unreadPeerRequests, localClientReqq)
 	c.peerRequestArrivals++
 	c.unreadPeerRequests[r] = c.peerRequestArrivals
+	c.unreadOrder.push(r, c.peerRequestArrivals, len(c.unreadPeerRequests), c.unreadAlive)
 	if startFetch {
 		c.startPeerRequestServer()
 	}
@@ -707,7 +695,7 @@ func (c *PeerConn) peerRequestServer() {
 	c.locker().Lock()
 again:
 	if !c.closed.IsSet() {
-		if r, ok := oldestPeerRequest(c.unreadPeerRequests, func(arrival uint64) uint64 { return arrival }); ok {
+		if r, ok := c.oldestUnreadPeerRequest(); ok {
 			c.servePeerRequest(r)
 			goto again
 		}
@@ -788,8 +776,7 @@ func (c *PeerConn) servePeerRequest(r Request) {
 		return
 	}
 	delete(c.unreadPeerRequests, r)
-	MakeMapIfNil(&c.readyPeerRequests)
-	c.readyPeerRequests[r] = readyPeerRequest{arrival: arrival, data: b}
+	c.setReadyPeerRequest(r, readyPeerRequest{arrival: arrival, data: b})
 	c.tickleWriter()
 }
 
@@ -798,15 +785,64 @@ type readyPeerRequest struct {
 	data    []byte
 }
 
-// oldestPeerRequest is the first to arrive; a scan is cheap, as a queue holds at most localClientReqq.
-func oldestPeerRequest[V any](requests map[Request]V, arrival func(V) uint64) (oldest Request, ok bool) {
-	var first uint64
-	for r, v := range requests {
-		if a := arrival(v); !ok || a < first {
-			oldest, first, ok = r, a, true
+func (c *PeerConn) setReadyPeerRequest(r Request, v readyPeerRequest) {
+	MakeMapIfNil(&c.readyPeerRequests)
+	c.readyPeerRequests[r] = v
+	c.readyOrder.push(r, v.arrival, len(c.readyPeerRequests), c.readyAlive)
+}
+
+func (c *PeerConn) unreadAlive(r Request, arrival uint64) bool {
+	a, ok := c.unreadPeerRequests[r]
+	return ok && a == arrival
+}
+
+func (c *PeerConn) readyAlive(r Request, arrival uint64) bool {
+	v, ok := c.readyPeerRequests[r]
+	return ok && v.arrival == arrival
+}
+
+func (c *PeerConn) oldestUnreadPeerRequest() (Request, bool) {
+	return c.unreadOrder.front(c.unreadAlive)
+}
+
+func (c *PeerConn) oldestReadyPeerRequest() (Request, bool) { return c.readyOrder.front(c.readyAlive) }
+
+// requestFifo is a map's keys in arrival order. Cancels and rejects delete from the map only; their
+// entries here are dropped when they reach the front, so each request costs O(1) overall.
+type requestFifo struct {
+	q []requestArrival
+}
+
+type requestArrival struct {
+	r       Request
+	arrival uint64
+}
+
+// push adds r. The front is read only while the request server runs, so dead entries are also swept once
+// they outnumber the live ones: request-and-cancel against a stalled server can't grow it without end.
+func (f *requestFifo) push(r Request, arrival uint64, live int, alive func(Request, uint64) bool) {
+	if len(f.q) > 2*live+64 {
+		kept := f.q[:0]
+		for _, e := range f.q {
+			if alive(e.r, e.arrival) {
+				kept = append(kept, e)
+			}
 		}
+		clear(f.q[len(kept):])
+		f.q = kept
 	}
-	return
+	f.q = append(f.q, requestArrival{r, arrival})
+}
+
+func (f *requestFifo) front(live func(Request, uint64) bool) (Request, bool) {
+	for len(f.q) > 0 {
+		if e := f.q[0]; live(e.r, e.arrival) {
+			return e.r, true
+		}
+		f.q = f.q[1:]
+	}
+	f.q = nil
+	return Request{}, false
 }
 
 // If this is maintained correctly, we might be able to support optional synchronous reading for
@@ -824,17 +860,11 @@ func (c *PeerConn) peerRequestDataReadFailed(err error, r Request) {
 	}
 	i := pieceIndex(r.Index)
 	if c.t.pieceComplete(i) {
-		// There used to be more code here that just duplicated the following break. Piece
-		// completions are currently cached, so I'm not sure how helpful this update is, except to
-		// pull any completion changes pushed to the storage backend in failed reads that got us
-		// here.
+		// Completion is cached; this pulls in what the failed read told the storage backend.
 		c.t.updatePieceCompletion(i)
 	}
-	// We've probably dropped a piece from storage, but there's no way to communicate this to the
-	// peer. If they ask for it again, we kick them allowing us to send them updated piece states if
-	// we reconnect. TODO: Instead, we could just try to update them with Bitfield or HaveNone and
-	// if they kick us for breaking protocol, on reconnect we will be compliant again (at least
-	// initially).
+	// Likely a piece lost from storage, which the protocol can't tell the peer: asked again, they're kicked,
+	// so a reconnect sends true pieces. TODO: a Bitfield or HaveNone update instead.
 	c.useBestReject(r)
 }
 
@@ -844,9 +874,7 @@ func (c *PeerConn) useBestReject(r Request) {
 		c.reject(r)
 	} else {
 		if c.choking {
-			// If fast isn't enabled, I think we would have wiped all peer requests when we last
-			// choked, and requests while we're choking would be ignored. It could be possible that
-			// a peer request data read completed concurrently to it being deleted elsewhere.
+			// Without fast, choking wiped their requests; a read may have finished as one was deleted.
 			c.protocolLogger.WithDefaultLevel(log.Warning).Printf("already choking peer, requests might not be rejected correctly")
 		}
 		// Choking a non-fast peer should cause them to flush all their requests.
@@ -884,6 +912,14 @@ func (c *PeerConn) mainReadLoop() (err error) {
 			torrent.Add("connection.mainReadLoop returned with error", 1)
 		} else {
 			torrent.Add("connection.mainReadLoop returned with no error", 1)
+		}
+	}()
+	// The engine runs in Yoru's process: a handler bug a peer can reach drops that peer, not the app.
+	// Handlers run under the client lock, and the decode step re-locks as it unwinds, so it is held here.
+	defer func() {
+		if r := recover(); r != nil {
+			c.slogger.Error("peer message handler panicked; dropping the peer", "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("handling peer message: %v", r)
 		}
 	}()
 	t := c.t
@@ -934,12 +970,8 @@ func (c *PeerConn) mainReadLoop() (err error) {
 			if !c.fastEnabled() {
 				c.deleteAllRequests("choked by non-fast PeerConn")
 			} else {
-				// We don't decrement pending requests here, let's wait for the peer to either
-				// reject or satisfy the outstanding requests. Additionally, some peers may unchoke
-				// us and resume where they left off, we don't want to have piled on to those chunks
-				// in the meanwhile. I think a peer's ability to abuse this should be limited: they
-				// could let us request a lot of stuff, then choke us and never reject, but they're
-				// only a single peer, our chunk balancing should smooth over this abuse.
+				// Requests stay pending until rejected or served: a peer may unchoke and resume them, and one
+				// choking without rejecting is a single peer, which chunk balancing smooths over.
 			}
 			c.peerChoking = true
 			c.updateExpectingChunks()
@@ -977,9 +1009,7 @@ func (c *PeerConn) mainReadLoop() (err error) {
 			c.tickleWriter()
 		case pp.NotInterested:
 			c.peerInterested = false
-			// We don't clear their requests since it isn't clear in the spec.
-			// We'll probably choke them for this, which will clear them if
-			// appropriate, and is clearly specified.
+			// Their requests aren't cleared (the spec is unclear); a choke, which likely follows, does it.
 		case pp.Have:
 			err = c.peerSentHave(pieceIndex(msg.Index))
 		case pp.Bitfield:
@@ -1055,8 +1085,7 @@ func (c *PeerConn) onReadExtendedMsg(id pp.ExtensionNumber, payload []byte) (err
 	defer func() {
 		// TODO: Should we still do this?
 		if err != nil {
-			// These clients use their own extension IDs for outgoing message
-			// types, which is incorrect.
+			// These clients send with their own extension IDs, which is wrong.
 			if bytes.HasPrefix(c.PeerID[:], []byte("-SD0100-")) || strings.HasPrefix(string(c.PeerID[:]), "-XL0012-") {
 				err = nil
 			}
@@ -1096,11 +1125,13 @@ func (c *PeerConn) onReadExtendedMsg(id pp.ExtensionNumber, payload []byte) (err
 		c.PeerPrefersEncryption = d.Encryption
 		for name, id := range d.M {
 			if _, ok := c.PeerExtensionIDs[name]; !ok {
-				peersSupportingExtension.Add(
-					// expvar.Var.String must produce valid JSON. "ut_payme\xeet_address" was being
-					// entered here which caused problems later when unmarshalling.
-					strconv.Quote(string(name)),
-					1)
+				// Peers choose these names: only the ones we speak get their own key.
+				key := "other"
+				switch name {
+				case pp.ExtensionNameMetadata, pp.ExtensionNamePex, utHolepunch.ExtensionName:
+					key = strconv.Quote(string(name))
+				}
+				peersSupportingExtension.Add(key, 1)
 			}
 			c.PeerExtensionIDs[name] = id
 		}
@@ -1110,7 +1141,8 @@ func (c *PeerConn) onReadExtendedMsg(id pp.ExtensionNumber, payload []byte) (err
 			}
 		}
 		c.requestPendingMetadata()
-		if !t.cl.config.DisablePEX {
+		if !t.cl.config.DisablePEX && !c.pex.handshaken {
+			c.pex.handshaken = true
 			t.pex.Add(c) // we learnt enough now
 			// This checks the extension is supported internally.
 			c.pex.Init(c)
@@ -1142,6 +1174,10 @@ func (c *PeerConn) onReadExtendedMsg(id pp.ExtensionNumber, payload []byte) (err
 		}
 		return
 	case utHolepunch.ExtensionName:
+		// Our replies go to the peer's own id for it; without one we would have nowhere to send them.
+		if !c.supportsExtension(utHolepunch.ExtensionName) {
+			return errors.New("ut_holepunch from a peer that never advertised it")
+		}
 		var msg utHolepunch.Msg
 		err = msg.UnmarshalBinary(payload)
 		if err != nil {
@@ -1199,15 +1235,14 @@ func (c *PeerConn) setRetryUploadTimer(delay time.Duration) {
 
 // Also handles choking and unchoking of the remote peer.
 func (c *PeerConn) upload(msg func(pp.Message) bool) bool {
-	// Breaking or completing this loop means we don't want to upload to the peer anymore, and we
-	// choke them.
+	// Leaving this loop means no more uploading to the peer: they're choked.
 another:
 	for c.uploadAllowed() {
 		// We want to upload to the peer.
 		if !c.unchoke(msg) {
 			return false
 		}
-		if r, ok := oldestPeerRequest(c.readyPeerRequests, func(v readyPeerRequest) uint64 { return v.arrival }); ok {
+		if r, ok := c.oldestReadyPeerRequest(); ok {
 			res := c.t.cl.config.UploadRateLimiter.ReserveN(time.Now(), int(r.Length))
 			if !res.OK() {
 				panic(fmt.Sprintf("upload rate limiter burst size < %d", r.Length))
@@ -1445,8 +1480,7 @@ file:
 			// Minimizing to the number of pieces in a file conflicts with the BEP.
 			length := merkle.RoundUpToPowerOfTwo(uint(min(512, fileNumPieces-index)))
 			if length < 2 {
-				// This should have been filtered out by baseLayer and pieces root as piece hash
-				// checks.
+				// The base layer and pieces root checks should have caught this.
 				panic(length)
 			}
 			if length%2 != 0 {
@@ -1472,16 +1506,28 @@ file:
 }
 
 func (pc *PeerConn) onReadHashes(msg *pp.Message) (err error) {
+	// Only answers to our own requests count; anything else is a peer steering us into a panic.
+	if !pc.t.haveInfo() || !pc.t.info.HasV2() {
+		return errors.New("hashes for a torrent without v2 metadata")
+	}
+	if !generics.MapContains(pc.sentHashRequests, hashRequestFromMessage(*msg)) {
+		return errors.New("hashes we did not request")
+	}
+	if msg.ProofLayers != 0 {
+		return errors.New("proof layers not supported")
+	}
 	file := pc.t.getFileByPiecesRoot(msg.PiecesRoot)
+	if file == nil {
+		return fmt.Errorf("no file for pieces root %x", msg.PiecesRoot)
+	}
 	filePieceHashes := pc.receivedHashPieces[msg.PiecesRoot]
 	if filePieceHashes == nil {
 		filePieceHashes = make([][32]byte, file.numPieces())
 		generics.MakeMapIfNil(&pc.receivedHashPieces)
 		pc.receivedHashPieces[msg.PiecesRoot] = filePieceHashes
 	}
-	if msg.ProofLayers != 0 {
-		// This isn't handled yet.
-		panic(msg.ProofLayers)
+	if int(msg.Index) > len(filePieceHashes) {
+		return fmt.Errorf("hashes index %d past %d pieces", msg.Index, len(filePieceHashes))
 	}
 	copy(filePieceHashes[msg.Index:], msg.Hashes)
 	root := merkle.RootWithPadHash(
@@ -1510,8 +1556,9 @@ func (pc *PeerConn) getHashes(msg *pp.Message) ([][32]byte, error) {
 	if msg.ProofLayers != 0 {
 		return nil, errors.New("proof layers not supported")
 	}
-	if msg.Length > 8192 {
-		return nil, fmt.Errorf("requested too many hashes: %d", msg.Length)
+	// BEP 52 caps a request at 512; each hash is a whole piece read and hashed under the client lock.
+	if msg.Length == 0 || msg.Length > 512 {
+		return nil, fmt.Errorf("invalid hash request length: %d", msg.Length)
 	}
 	file := pc.t.getFileByPiecesRoot(msg.PiecesRoot)
 	if file == nil {
@@ -1520,7 +1567,8 @@ func (pc *PeerConn) getHashes(msg *pp.Message) ([][32]byte, error) {
 	beginPieceIndex := file.BeginPieceIndex()
 	endPieceIndex := file.EndPieceIndex()
 	length := merkle.RoundUpToPowerOfTwo(uint(endPieceIndex - beginPieceIndex))
-	if uint(msg.Index+msg.Length) > length {
+	// In 64 bits: a uint32 sum near the top wraps and would pass.
+	if uint64(msg.Index)+uint64(msg.Length) > uint64(length) {
 		return nil, errors.New("invalid hash range")
 	}
 
@@ -1543,7 +1591,7 @@ func (pc *PeerConn) getHashes(msg *pp.Message) ([][32]byte, error) {
 }
 
 func (pc *PeerConn) onHashRequest(msg *pp.Message) error {
-	if !pc.t.info.HasV2() {
+	if !pc.t.haveInfo() || !pc.t.info.HasV2() {
 		return errors.New("torrent has no v2 metadata")
 	}
 
@@ -1599,11 +1647,7 @@ func (me *PeerConn) peerPtr() *Peer {
 	return &me.Peer
 }
 
-// The actual value to use as the maximum outbound requests.
-// nominalMaxRequests is in request-queue.go.
-
-// Set the Peer loggers. This is given Client loggers, and later Torrent loggers when the Torrent is
-// set.
+// Sets the Peer's loggers: the Client's, then the Torrent's once it is set.
 func (me *PeerConn) setPeerLoggers(a log.Logger, s *slog.Logger) {
 	me.Peer.logger = a.WithDefaultLevel(log.Warning).WithContextText(fmt.Sprintf("%T %p", me, me))
 	me.Peer.slogger = s.With(fmt.Sprintf("%T", me), fmt.Sprintf("%p", me))
@@ -1856,8 +1900,7 @@ func (c *PeerConn) decExpectedChunkReceive(r RequestIndex) {
 	}
 }
 
-// Returns true if an outstanding request is removed. Cancelled requests should be handled
-// separately.
+// Removes an outstanding request, reporting whether there was one; cancels are handled apart.
 func (c *PeerConn) deleteRequest(r RequestIndex) bool {
 	if !c.requestState.Requests.CheckedRemove(r) {
 		return false
@@ -1871,11 +1914,6 @@ func (c *PeerConn) deleteRequest(r RequestIndex) bool {
 		panic("only one peer should have a given request at a time")
 	}
 	delete(c.t.requestState, r)
-	// c.t.iterPeers(func(p *Peer) {
-	// 	if p.isLowOnRequests() {
-	// 		p.onNeedUpdateRequests("Peer.deleteRequest")
-	// 	}
-	// })
 	return true
 }
 
@@ -1928,9 +1966,7 @@ func (c *PeerConn) checkReceivedChunk(req RequestIndex, msg *pp.Message, ppReq R
 	if c.peerChoking && c.peerAllowedFast.Contains(pieceIndex(ppReq.Index)) {
 		ChunksReceived.Add("due to allowed fast", 1)
 	}
-	// The request needs to be deleted immediately to prevent cancels occurring asynchronously when
-	// have actually already received the piece, while we have the Client unlocked to write the data
-	// out.
+	// Deleted at once: while the Client is unlocked to write the data, a cancel for it mustn't go out.
 	{
 		if c.requestState.Requests.Contains(req) {
 			for _, f := range c.callbacks.ReceivedRequested {
@@ -1961,8 +1997,7 @@ func (c *PeerConn) reconcileHandshakeStats() {
 	}) {
 		panic("bad stats")
 	}
-	// Add the stat data so far to relevant Torrent stats that were skipped before the handshake
-	// completed.
+	// The stats so far go to the Torrent's, skipped until the handshake completed.
 	c.relevantConnStats(&c.t.connStats)(func(cs *ConnStats) bool {
 		cs.BytesRead.Add(c._stats.BytesRead.Int64())
 		cs.BytesWritten.Add(c._stats.BytesWritten.Int64())

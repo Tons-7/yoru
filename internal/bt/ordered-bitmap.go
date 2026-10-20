@@ -20,6 +20,16 @@ func (o *orderedBitmap[T]) IterateSnapshot(f func(T) bool) {
 	o.bitmap.Clone().Iterate(f)
 }
 
+// IterateSnapshotDescending is IterateSnapshot from the highest index down.
+func (o *orderedBitmap[T]) IterateSnapshotDescending(f func(T) bool) {
+	snap := o.bitmap.Clone()
+	for it := snap.ReverseIterator(); it.HasNext(); {
+		if !f(T(it.Next())) {
+			return
+		}
+	}
+}
+
 func (o *orderedBitmap[T]) IsEmpty() bool {
 	return o.bitmap.IsEmpty()
 }

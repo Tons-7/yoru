@@ -5,19 +5,16 @@ import (
 	pp "yoru/internal/bt/peer_protocol"
 )
 
-// These are called synchronously, and do not pass ownership of arguments (do not expect to retain
-// data after returning from the callback). The Client and other locks may still be held. nil
-// functions are not called.
+// Callbacks run synchronously, maybe under the Client's and other locks; their arguments aren't theirs to
+// keep. Nil ones are skipped.
 type Callbacks struct {
-	// Called after a peer connection completes the BitTorrent handshake. The Client lock is not
-	// held.
+	// After a peer connection's BitTorrent handshake, without the Client lock.
 	CompletedHandshake func(*PeerConn, InfoHash)
 	ReadMessage        func(*PeerConn, *pp.Message)
 	// This can be folded into the general case below.
 	ReadExtendedHandshake func(*PeerConn, *pp.ExtendedHandshakeMessage)
 	PeerConnClosed        func(*PeerConn)
-	// BEP 10 message. Not sure if I should call this Ltep universally. Each handler here is called
-	// in order.
+	// A BEP 10 message, to each handler in order.
 	PeerConnReadExtensionMessage []func(PeerConnReadExtensionMessageEvent)
 
 	// Provides secret keys to be tried against incoming encrypted connections.
@@ -29,10 +26,8 @@ type Callbacks struct {
 	SentRequest        []func(PeerRequestEvent)
 	PeerClosed         []func(*Peer)
 	NewPeer            []func(*Peer)
-	// Called when a PeerConn has been added to a Torrent. It's finished all BitTorrent protocol
-	// handshakes, and is about to start sending and receiving BitTorrent messages. The extended
-	// handshake has not yet occurred. This is a good time to alter the supported extension
-	// protocols.
+	// A PeerConn joined a Torrent, handshaken but before the extended handshake: the time to change
+	// the extensions offered.
 	PeerConnAdded []func(*PeerConn)
 
 	// Sends status event updates. Useful to inform the user of specific events as they happen,

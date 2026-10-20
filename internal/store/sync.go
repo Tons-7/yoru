@@ -41,7 +41,14 @@ func (s *Store) MarkWatched(ctx context.Context, animeID, episode int) (bool, er
 	now := time.Now().Unix()
 	today := time.Now().Format("2006-01-02")
 
-	res, err := s.w.ExecContext(ctx, `
+	// One write: a push reading between the progress and the completion would push CURRENT, then clear dirty.
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `
 		INSERT INTO list_entry (id, anime_id, status, progress, started_at,
 		                        remote_updated_at, local_updated_at, dirty)
 		VALUES ((SELECT min(coalesce(min(id), 0), 0) - 1 FROM list_entry), ?, 'CURRENT', ?, ?, 0, ?, 1)
@@ -60,27 +67,29 @@ func (s *Store) MarkWatched(ctx context.Context, animeID, episode int) (bool, er
 		return false, err
 	}
 
-	// Finishing the last episode completes the entry (AniList won't) and counts a rewatch.
-	if _, err := s.w.ExecContext(ctx, `
+	// Finishing the last episode completes the entry (AniList won't) and counts a rewatch. A local change
+	// like any other: stamped, or a pull from MAL older than it could still overwrite it.
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE list_entry SET
 		    repeat_count = repeat_count + CASE WHEN status = 'REPEATING' THEN 1 ELSE 0 END,
-		    status = 'COMPLETED', completed_at = ?, dirty = 1
+		    status = 'COMPLETED', completed_at = ?, dirty = 1,
+		    local_updated_at = max(?, local_updated_at + 1)
 		WHERE anime_id = ?
 		  AND status NOT IN ('COMPLETED')
 		  AND progress > 0
 		  AND progress >= (SELECT episode_count FROM anime WHERE id = ? AND episode_count > 0)`,
-		today, animeID, animeID); err != nil {
+		today, now, animeID, animeID); err != nil {
 		return false, err
 	}
 
 	// Progress may not rise (a rewatch, a finished show), and a ticked episode still leaves Up next.
-	if _, err := s.w.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM up_next WHERE anime_id = ? AND episode = ?`, animeID, episode); err != nil {
 		return false, err
 	}
 
 	n, _ := res.RowsAffected()
-	return n > 0, nil
+	return n > 0, tx.Commit()
 }
 
 // ListStatuses is AniList's vocabulary, stored verbatim so a sync never has to
@@ -98,6 +107,9 @@ func ValidStatus(status string) bool {
 
 // DismissResume sets its own flag (dismissing is not watching); a new row's zero time keeps it out of history.
 func (s *Store) DismissResume(ctx context.Context, animeID int, epKey string) error {
+	if err := ensureAnime(ctx, s.w, animeID); err != nil {
+		return err
+	}
 	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO playback (anime_id, ep_key, last_played_at, dismissed)
 		VALUES (?, ?, 0, 1)

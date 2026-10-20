@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"yoru/internal/library"
@@ -71,6 +72,15 @@ func (s *Server) malCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Another account than before: what the old one was told says nothing about this one, and kept, the
+	// first pull would read the new account's list as edits and lists the old one had would never be sent.
+	if was, _ := s.store.Setting(ctx, "mal.user_name"); was != "" && !strings.EqualFold(was, viewer.Name) {
+		if err := s.store.ForgetPushed(ctx, "mal"); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.log.Info("myanimelist account changed", "from", was, "to", viewer.Name)
+	}
 	if err := s.saveMALToken(ctx, token, viewer.Name); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

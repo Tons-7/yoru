@@ -1,7 +1,6 @@
 package bt
 
 import (
-	"testing"
 	"time"
 
 	"github.com/anacrolix/log"
@@ -9,7 +8,12 @@ import (
 	pp "yoru/internal/bt/peer_protocol"
 )
 
-func TestingConfig(t testing.TB) *ClientConfig {
+// TestingConfig is a loopback client for a test; t is its *testing.T, by method so this file stays out of the
+// testing package (tests in other packages use it, so it can't be a _test.go file).
+func TestingConfig(t interface {
+	TempDir() string
+	Name() string
+}) *ClientConfig {
 	cfg := NewDefaultClientConfig()
 	cfg.ListenHost = LoopbackListenHost
 	cfg.NoDHT = true
@@ -21,17 +25,7 @@ func TestingConfig(t testing.TB) *ClientConfig {
 	cfg.KeepAliveTimeout = time.Millisecond
 	cfg.MinPeerExtensions.SetBit(pp.ExtensionBitFast, true)
 	cfg.Logger = log.Default.WithNames(t.Name())
-	// 2 would suffice for the greeting test, but 5 is needed for a few other tests. This should be
-	// something slightly higher than the usual chunk size, so it gets tickled in some tests.
+	// Just over the tests' chunk size, so the limit is reached (the greeting test needs 2, others 5).
 	cfg.MaxAllocPeerRequestDataPerConn = 5
-	//cfg.Debug = true
-	//cfg.Logger = cfg.Logger.WithText(func(m log.Msg) string {
-	//	t := m.Text()
-	//	m.Values(func(i interface{}) bool {
-	//		t += fmt.Sprintf("\n%[1]T: %[1]v", i)
-	//		return true
-	//	})
-	//	return t
-	//})
 	return cfg
 }

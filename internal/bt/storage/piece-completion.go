@@ -12,8 +12,7 @@ import (
 )
 
 type PieceCompletionGetSetter interface {
-	// I think the extra error parameter is vestigial. Looks like you should put your error in
-	// Completion.Err.
+	// The error result is vestigial: errors belong in Completion.Err.
 	Get(metainfo.PieceKey) (Completion, error)
 	Set(_ metainfo.PieceKey, complete bool) error
 }

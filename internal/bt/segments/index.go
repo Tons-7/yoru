@@ -76,11 +76,9 @@ type IndexAndOffset struct {
 	Offset int64
 }
 
-// Returns the Extent that contains the given extent, if it exists. Panics if Extents overlap on the
-// offset.
+// LocateOffset is the Extent holding off, if any; it panics where Extents overlap there.
 func (me Index) LocateOffset(off int64) (ret g.Option[IndexAndOffset]) {
-	// I think an Extent needs to have a non-zero to match against it? That's what this method is
-	// defining.
+	// A one-byte extent: an empty one matches nothing.
 	for i, e := range me.LocateIter(Extent{off, 1}) {
 		panicif.True(ret.Ok)
 		panicif.NotEq(e.Length, 1)

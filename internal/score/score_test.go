@@ -269,6 +269,12 @@ func TestResolutionRankFollowsTheLadder(t *testing.T) {
 	if resolutionRank("", prefs) != 0 {
 		t.Error("an unknown resolution should rank zero")
 	}
+
+	// A resolution takes its best place: 720p BD listed between two 1080p tiers stays under 1080p.
+	prefs.Ladder = []Tier{ParseTier("1080p:BD:HEVC:10"), ParseTier("720p:BD"), ParseTier("1080p")}
+	if resolutionRank("1080p", prefs) <= resolutionRank("720p", prefs) {
+		t.Error("an interleaved ladder put 720p above 1080p")
+	}
 }
 
 func TestUpscaleDoesNotBeatLadderResolution(t *testing.T) {

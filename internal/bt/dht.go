@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 
-	"github.com/davecgh/go-spew/spew"
 	"yoru/internal/bt/dht"
 	"yoru/internal/bt/dht/krpc"
 	peer_store "yoru/internal/bt/dht/peer-store"
@@ -66,5 +65,5 @@ var _ DhtServer = DhtServerWrapper{}
 func writeDhtServerStatus(w io.Writer, s DhtServer) {
 	dhtStats := s.Stats()
 	fmt.Fprintf(w, " ID: %x\n", s.ID())
-	spew.Fdump(w, dhtStats)
+	fmt.Fprintf(w, " %+v\n", dhtStats)
 }

@@ -98,7 +98,7 @@ func unchokes(next func() (pp.Message, error)) bool {
 	}
 }
 
-// Uploads follow Settings: a peer is served while the episode downloads, nobody under "never", nobody once done.
+// Uploads follow Settings: peers are served while the episode downloads, nobody under "never" or once done.
 func TestUploadChoices(t *testing.T) {
 	mi, seeds := bigFile(t, 24<<20, 256<<10, 2<<20)
 	e, id := seedEngine(t, mi, seeds, nil, func(*bt.ClientConfig) {})

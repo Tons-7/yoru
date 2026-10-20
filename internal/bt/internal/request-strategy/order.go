@@ -18,9 +18,8 @@ type (
 	ChunkSpec = types.ChunkSpec
 )
 
-// Piece request ordering factoring in storage limits, user-assigned priority, network availability.
-// Is it missing the random piece affinity assigned per torrent? Can we do that deterministically
-// per-client?
+// The piece request order: priority, partial pieces, rarity, then index. TODO: a per-torrent random
+// affinity, deterministic per client?
 func pieceOrderLess(i, j *PieceRequestOrderItem) multiless.Computation {
 	return multiless.New().Int(
 		int(j.State.Priority), int(i.State.Priority),
@@ -28,9 +27,7 @@ func pieceOrderLess(i, j *PieceRequestOrderItem) multiless.Computation {
 	).Bool(
 		j.State.Partial, i.State.Partial,
 	).Int(
-		// If this is done with relative availability, do we lose some determinism? If completeness
-		// is used, would that push this far enough down? What happens if we have a piece in the
-		// order, but it has availability 0?
+		// Open: relative availability may cost determinism, and a piece nobody has sorts first here.
 		i.State.Availability, j.State.Availability,
 	).Int(
 		i.Key.Index, j.Key.Index,
@@ -41,16 +38,14 @@ func pieceOrderLess(i, j *PieceRequestOrderItem) multiless.Computation {
 	})
 }
 
-// This did return true if the piece should be considered against the unverified bytes limit. But
-// that would cause thrashing on completion: The order should be stable. This is now a 3-tuple
-// iterator.
+// Takes each requestable piece in order and says whether to go on; it no longer says whether the piece
+// counts against the unverified limit, which made the order thrash on completion.
 type RequestPieceFunc func(ih metainfo.Hash, pieceIndex int, orderState PieceRequestOrderState) bool
 
 // Calls f with requestable pieces in order. Returns false if iteration should stop.
 func GetRequestablePieces(
 	input Input, pro *PieceRequestOrder,
-	// Pieces submitted to this callback passed Piece.Request and so are ready for immediate
-	// download.
+	// Given pieces that passed Piece.Request, ready to download now.
 	requestPiece RequestPieceFunc,
 ) bool {
 	// Storage capacity left for this run, keyed by the storage capacity pointer on the storage
@@ -78,9 +73,13 @@ func GetRequestablePieces(
 		}
 		if piece.Request() {
 			if !requestPiece(ih, item.Key.Index, item.State) {
-				// No blocks are being considered from this piece, so it won't result in unverified
-				// bytes.
+				// None of its blocks are considered, so it adds no unverified bytes.
 				return false
+			}
+			// Nobody has it, so nothing will arrive: counting it lets a swarm's missing pieces fill the
+			// window and stall the pieces peers do have.
+			if !piece.CountUnverified() && !piece.Available() {
+				continue
 			}
 		} else if !piece.CountUnverified() {
 			// The piece is pristine, and we're not considering it for requests.

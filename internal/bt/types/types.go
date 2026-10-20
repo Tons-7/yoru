@@ -49,9 +49,8 @@ const (
 	PiecePriorityNormal                         // Wanted.
 	PiecePriorityHigh                           // Wanted a lot.
 	PiecePriorityReadahead                      // May be required soon.
-	// Deprecated. Succeeds a piece where a read occurred. This used to prioritize the earlier
-	// pieces in the readahead window. The request strategy now does this, so it's no longer needed.
-	// There is downstream code that still assumes it's in use.
+	// Deprecated: The piece after a read; the request strategy orders readahead now, but some code
+	// still expects it.
 	PiecePriorityNext
 	PiecePriorityNow // A Reader is reading in this piece. Highest urgency.
 )

@@ -170,6 +170,10 @@ func (c *Client) ensureToken(ctx context.Context) error {
 		return nil // the request goes out with whatever replaced it
 	} else if err != nil {
 		c.log.Warn("mal token refresh failed", "err", err)
+		// Refreshed ahead of time: a hiccup at MAL leaves a token good for minutes yet, so the request goes.
+		if !Unauthorized(err) && time.Now().Before(c.Token().Expires) {
+			return nil
+		}
 		return err
 	}
 	c.log.Info("mal token refreshed")

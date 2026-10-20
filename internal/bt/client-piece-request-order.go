@@ -37,10 +37,7 @@ func (c clientPieceRequestOrderSharedStorageTorrentKey) getRequestStrategyInput(
 }
 
 type clientPieceRequestOrderKeySumType interface {
-	// getRequestStrategyInput returns the request strategy input for the torrent. It depends on the
-	// storage capacity arrangements which is the defining differentiator for the client piece
-	// request order keys. This code reads like that stupid second-year software design course I
-	// failed 3 times.
+	// The torrent's request strategy input, which follows its storage capacity, what keys the order.
 	getRequestStrategyInput(cl *Client) requestStrategy.Input
 }
 

@@ -4,8 +4,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
-	"github.com/anacrolix/sync"
 	"yoru/internal/bt/metainfo"
 	"yoru/internal/bt/segments"
 )
@@ -39,9 +39,7 @@ func fsync(filePath string) (err error) {
 	return f.Close()
 }
 
-// A helper to create zero-length files which won't appear for file-orientated storage since no
-// writes will ever occur to them (no torrent data is associated with a zero-length file). The
-// caller should make sure the file name provided is safe/sanitized.
+// Creates a zero-length file, which file storage never writes and so never makes; name must be safe.
 func CreateNativeZeroLengthFile(name string) error {
 	os.MkdirAll(filepath.Dir(name), dirPerm)
 	var f io.Closer

@@ -76,22 +76,6 @@ func TestMaxDistanceString(t *testing.T) {
 	require.EqualValues(t, "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff", max.Bytes())
 }
 
-// func TestClosestNodes(t *testing.T) {
-// 	cn := newKClosestNodeIDs(2, testIDs[3])
-// 	for _, i := range rand.Perm(len(testIDs)) {
-// 		cn.Push(testIDs[i])
-// 	}
-// 	ids := iter.ToSlice(cn.IDs())
-// 	assert.Len(t, ids, 2)
-// 	m := map[string]bool{}
-// 	for _, id := range ids {
-// 		m[id.(nodeID).ByteString()] = true
-// 	}
-// 	log.Printf("%q", m)
-// 	assert.True(t, m[testIDs[3].ByteString()])
-// 	assert.True(t, m[testIDs[4].ByteString()])
-// }
-
 func TestDHTDefaultConfig(t *testing.T) {
 	s, err := NewServer(nil)
 	assert.NoError(t, err)
@@ -213,8 +197,7 @@ func TestHook(t *testing.T) {
 	}
 }
 
-// Check that address resolution doesn't rat out invalid SendTo addr
-// arguments.
+// Address resolution doesn't reject SendTo addresses that are invalid.
 func TestResolveBadAddr(t *testing.T) {
 	ua, err := net.ResolveUDPAddr("udp", "0.131.255.145:33085")
 	require.NoError(t, err)

@@ -199,8 +199,7 @@ func WrapFileMapping(region mmap.MMap, file *os.File) FileMapping {
 
 type FileMapping = mmapSpan.Mmap
 
-// Handles closing the mmap's file handle (needed for Windows). Could be implemented differently by
-// OS.
+// Closes the mmap's file handle too, as Windows needs.
 type mmapWithFile struct {
 	f    *os.File
 	mmap mmap.MMap

@@ -1,4 +1,4 @@
-// The shared pieces: inline confirms, the pager's clamp, Settings tabs, folder refusals, a job that didn't start.
+// Shared pieces: inline confirms, the pager's clamp, Settings tabs, folder refusals, a job that didn't start.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'

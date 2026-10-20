@@ -50,12 +50,13 @@ export function ReleasedCard({ item, tags, addable }: { item: ScheduleItem; tags
 
             {tags && (
               <div className="absolute top-1.5 right-1.5 flex gap-1">
+                {/* Opaque tones: a bright cover under a 15% tint left the words unreadable. */}
                 {item.watched ? (
-                  <Badge tone="success">Watched</Badge>
+                  <Badge tone="overlay-success">Watched</Badge>
                 ) : item.behind > 0 ? (
-                  <Badge tone="accent">{item.behind} behind</Badge>
+                  <Badge tone="overlay">{item.behind} behind</Badge>
                 ) : item.onList ? (
-                  <Badge>On list</Badge>
+                  <Badge tone="overlay-neutral">On list</Badge>
                 ) : null}
               </div>
             )}

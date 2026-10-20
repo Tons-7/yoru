@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// spanOf: one track's first and last time in segment n, as the browser reads them, and whether a keyframe leads.
+// spanOf: one track's first and last time in segment n, as a browser reads them, and whether a keyframe leads.
 func spanOf(t *testing.T, ffprobe string, s *Session, n int, track string) (first, last float64, key, ok bool) {
 	t.Helper()
 	init, err := os.ReadFile(s.InitPath())

@@ -273,8 +273,10 @@ func (e *Enricher) flagsAsync(animeID int) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		e.flags(ctx, animeID, malID)
-		e.listing(ctx, animeID, malID)
+		// One crawl for both: flags and names come from the same listing, up to 20 pages a second apart.
+		crawl := sync.OnceValues(func() (metadata.Listing, error) { return e.meta.Listing(ctx, malID) })
+		e.flags(ctx, animeID, malID, crawl)
+		e.listingFrom(ctx, animeID, crawl)
 
 		// Outside flags: that stops once it has been run for a show, while a
 		// currently-airing series grows new unclassified episodes every week.
@@ -283,12 +285,13 @@ func (e *Enricher) flagsAsync(animeID int) {
 }
 
 // Recorded whatever the outcome, or a show with no flags restarts the crawl on every page load.
-func (e *Enricher) flags(ctx context.Context, animeID, malID int) {
+func (e *Enricher) flags(ctx context.Context, animeID, malID int, crawl func() (metadata.Listing, error)) {
 	if e.store.FlagsFetched(ctx, malID) {
 		return
 	}
 
-	found, err := e.meta.Flags(ctx, malID)
+	listed, err := crawl()
+	found := listed.Flags
 	// Not listed yet is an answer for now, not for good.
 	if errors.Is(err, metadata.ErrNotListed) {
 		if err := e.store.MarkFlagsFetched(ctx, malID, false); err != nil {
@@ -314,14 +317,14 @@ func (e *Enricher) flags(ctx context.Context, animeID, malID int) {
 	}
 }
 
-// listing names the episodes of a show the episode source has nothing for, from MyAnimeList's list.
+// listingFrom names the episodes of a show the episode source has nothing for, from MyAnimeList's list.
 // Finished shows only: that list lags an airing one, and a named row ends the count-based padding.
-func (e *Enricher) listing(ctx context.Context, animeID, malID int) {
+func (e *Enricher) listingFrom(ctx context.Context, animeID int, crawl func() (metadata.Listing, error)) {
 	if !e.store.Finished(ctx, animeID) || !e.store.EpisodesBare(ctx, animeID) || e.store.ListingTried(ctx, animeID) {
 		return
 	}
 
-	found, err := e.meta.Listing(ctx, malID)
+	found, err := crawl()
 	if err != nil && !errors.Is(err, metadata.ErrNotListed) {
 		e.log.Warn("episode listing", "anime", animeID, "err", err)
 		return

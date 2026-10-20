@@ -18,9 +18,7 @@ type MetaInfo struct {
 	Announce     string        `bencode:"announce,omitempty" mapstructure:",omitempty"`                          // BEP 3
 	AnnounceList AnnounceList  `bencode:"announce-list,omitempty"`                                               // BEP 12
 	Nodes        []Node        `bencode:"nodes,omitempty,ignore_unmarshal_type_error" mapstructure:",omitempty"` // BEP 5
-	// Where's this specified? Mentioned at
-	// https://wiki.theory.org/index.php/BitTorrentSpecification: (optional) the creation time of
-	// the torrent, in standard UNIX epoch format (integer, seconds since 1-Jan-1970 00:00:00 UTC)
+	// Optional, seconds since the UNIX epoch (wiki.theory.org's BitTorrentSpecification).
 	CreationDate int64   `bencode:"creation date,omitempty,ignore_unmarshal_type_error"`
 	Comment      string  `bencode:"comment,omitempty"`
 	CreatedBy    string  `bencode:"created by,omitempty"`

@@ -83,6 +83,37 @@ func TestEpisodeNumbersIgnoreOtherShows(t *testing.T) {
 	}
 }
 
+// A later cour's list takes only releases naming its cour; a bare number counts on from the first.
+func TestEpisodeNumbersOfALaterCourSkipContinuedNumbering(t *testing.T) {
+	st := prefetchStore(t)
+	ctx := context.Background()
+	tv, twelve := "TV", 12
+	if _, err := st.ImportList(ctx, []store.Anime{
+		{ID: 49, Romaji: "SPY x FAMILY", Format: &tv, StartDate: "2022-04-09", Episodes: &twelve, Genres: "[]"},
+		{ID: 50, Romaji: "SPY x FAMILY Season 2", Format: &tv, StartDate: "2023-10-07", Genres: "[]"},
+	}, nil, store.ImportMerge); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveRelations(ctx, nil, []store.Relation{{AnimeID: 49, RelatedID: 50, Kind: "SEQUEL"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RebuildFranchises(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f := NewFinder(st, fixedIndexer{results: []indexer.Torrent{
+		release("2222222222222222222222222222222222222222", "[SubsPlease] Spy x Family - 30 (1080p) [ABCD1234].mkv", 800),
+		release("3333333333333333333333333333333333333333", "[SubsPlease] Spy x Family Season 2 - 05 (1080p).mkv", 400),
+	}}, discard())
+
+	got, err := f.EpisodeNumbers(context.Background(), 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != 5 {
+		t.Fatalf("numbers = %v, want only the cour's own 5", got)
+	}
+}
+
 // Rejected releases stay in the list so the manual picker can show what was found, with the reason.
 func TestOtherShowsAreKeptButBlocked(t *testing.T) {
 	got := findMonster(t, []indexer.Torrent{

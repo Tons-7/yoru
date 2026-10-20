@@ -21,19 +21,16 @@ import (
 	trHttp "yoru/internal/bt/tracker/http"
 )
 
-// Designed in a way to allow switching to an event model if required. If multiple slots are allowed
-// per tracker it would be handled here. Currently, handles only regular trackers but let's see if
-// we can get websocket trackers to use this too.
+// Announces to regular (not websocket) trackers; built to move to events, and where slots per tracker
+// would go.
 type regularTrackerAnnounceDispatcher struct {
 	torrentClient *Client
 	logger        *slog.Logger
 
 	trackerClients map[trackerAnnouncerKey]*trackerClientsValue
 	announceStates map[torrentTrackerAnnouncerKey]*announceState
-	// Save torrents so we can fetch announce request fields even when the torrent Client has
-	// dropped it. We should just prefer to remember the fields we need. Ideally this would map all
-	// short infohash forms to the same value. We're using weak.Pointer because we need to clean it
-	// up at some point, if this crashes I know to fix it.
+	// Torrents for announce fields after the Client drops them (the fields alone would do); weak, so
+	// they can go.
 	torrentForAnnounceRequests map[shortInfohash]weak.Pointer[Torrent]
 
 	// Raw announce data keyed by announcer and short infohash.
@@ -60,8 +57,7 @@ type trackerClientsValue struct {
 	//active int
 }
 
-// According to compareNextAnnounce, which is universal, and we only need to handle the non-zero
-// value fields.
+// The least record for compareNextAnnounce; only its non-zero fields need setting.
 func nextAnnounceMinRecord() (ret nextAnnounceRecord) {
 	ret.nextAnnounceInput = nextAnnounceInputMin()
 	return
@@ -81,17 +77,13 @@ func (me *regularTrackerAnnounceDispatcher) init(client *Client) {
 	me.logger = client.slogger
 	me.announceData.Init(torrentTrackerAnnouncerKey.Compare)
 	me.announceData.SetMinRecord(torrentTrackerAnnouncerKey{})
-	// This is super pedantic, we're checking distinct root tables are synced with each other. In
-	// this case there's a trigger in infohashAnnouncing to update all the corresponding infohashes
-	// in announceData. Anytime announceData is changed, we check it's still up to date with
-	// infohashAnnouncing.
+	// Checks announceData stays in step with infohashAnnouncing, whose trigger updates its infohashes.
 	me.announceData.OnChange(func(old, new g.Option[indexed.Pair[torrentTrackerAnnouncerKey, nextAnnounceInput]]) {
 		if !new.Ok {
 			return
 		}
-		// Due to trigger chains that result in announceData being updated *for unrelated fields*,
-		// the check occurred prematurely while updating announceData. The fix is to update all
-		// indexes, then to do triggers. This is massive overkill for this project right now.
+		// Trigger chains update announceData for unrelated fields, so this can run early (all indexes
+		// before triggers would fix it).
 		actual := new.Value.Right.infohashActive
 		key := new.Value.Left
 		expected := g.OptionFromTuple(me.infohashAnnouncing.Get(key.ShortInfohash)).Value.count
@@ -137,8 +129,7 @@ func (me *regularTrackerAnnounceDispatcher) init(client *Client) {
 			return
 		}(),
 	)
-	// After announce index changes (we need the ordering), update the next announce for each
-	// tracker url.
+	// After the announce index changes (for its order), each tracker URL's next announce.
 	me.announceData.OnChange(func(old, new g.Option[indexed.Pair[torrentTrackerAnnouncerKey, nextAnnounceInput]]) {
 		if old.Ok {
 			me.updateTrackerAnnounceHead(old.Value.Left.url)
@@ -190,6 +181,16 @@ func (me *regularTrackerAnnounceDispatcher) init(client *Client) {
 		}
 	})
 	me.timer.Init(time.Now(), me.timerFunc)
+}
+
+// close stops announcing and frees each tracker's socket and reader goroutine; the engine makes a
+// new Client on every network rebind, and the old one's would otherwise live until exit.
+func (me *regularTrackerAnnounceDispatcher) close() {
+	me.timer.Stop()
+	for _, v := range me.trackerClients {
+		v.client.Close()
+	}
+	clear(me.trackerClients)
 }
 
 // Updates the derived tracker announce head table.
@@ -330,9 +331,7 @@ func (me *regularTrackerAnnounceDispatcher) writeStatus(w io.Writer) {
 	}
 }
 
-// This moves values that have When that have passed, so we compete on other parts of the priority
-// if there is more than one pending. This can be done with another index, and have values move back
-// the other way to simplify things.
+// Marks entries whose When has passed, so several pending ones compete on the rest of the priority.
 func (me *regularTrackerAnnounceDispatcher) updateOverdue() {
 	now := time.Now()
 	start := me.overdueIndex.MinRecord()
@@ -347,14 +346,13 @@ func (me *regularTrackerAnnounceDispatcher) updateOverdue() {
 		updateKeys = append(updateKeys, r.torrentTrackerAnnouncerKey)
 	}
 	for _, key := range updateKeys {
-		// There's no guarantee we actually change anything, the overdue might remain the same due
-		// to timing.
+		// May change nothing: with timing, overdue can stay the same.
 		panicif.False(me.announceData.Update(
 			key,
 			func(value nextAnnounceInput) nextAnnounceInput {
 				// For recursive updates, we make sure to monotonically progress state. (Now always
 				// forward, so we are always agreeing with other instances of updateOverdue).
-				value.overdue = value.When.Compare(time.Now()) <= 0
+				value.overdue = !value.When.IsZero() && value.When.Compare(time.Now()) <= 0
 				return value
 			},
 		).Exists)
@@ -415,9 +413,7 @@ func (me *regularTrackerAnnounceDispatcher) dispatchAnnounces() {
 			break
 		}
 		t := me.torrentFromShortInfohash(next.Value.ShortInfohash)
-		// Check that torrent input synchronization is working. At this point, running in the
-		// dispatcher role, everything should be synced. Other state in the announce data index is
-		// now the original.
+		// As dispatcher everything should be in sync: the torrent input is checked against the index.
 		{
 			actual := next.Value.torrent
 			expected := me.makeTorrentInput(t)
@@ -552,11 +548,19 @@ func (me *regularTrackerAnnounceDispatcher) singleAnnounce(
 	// A logger that includes the nice torrent group so we know what the announce is for.
 	logger = logger.With(t.slogGroup())
 	req := t.announceRequest(event, key.ShortInfohash)
+	// Read under the lock: new trackers write this map while the announce below runs unlocked. Gone once
+	// close() has run, as it can between this attempt's dispatch and its turn at the lock.
+	v, ok := me.trackerClients[key.url]
+	if !ok {
+		return
+	}
+	tc := v.client
+	opts := me.getAnnounceOpts()
 	me.torrentClient.unlock()
 	ctx, cancel := context.WithTimeout(context.TODO(), tracker.DefaultTrackerAnnounceTimeout)
 	defer cancel()
 	logger.Debug("announcing", "req", req)
-	resp, err := me.trackerClients[key.url].client.Announce(ctx, req, me.getAnnounceOpts())
+	resp, err := tc.Announce(ctx, req, opts)
 	now := time.Now()
 	{
 		level := slog.LevelDebug
@@ -602,9 +606,7 @@ func (me *regularTrackerAnnounceDispatcher) updateAnnounceState(
 func (me *regularTrackerAnnounceDispatcher) getAnnounceOpts() trHttp.AnnounceOpt {
 	cfg := me.torrentClient.config
 	return trHttp.AnnounceOpt{
-		UserAgent: cfg.HTTPUserAgent,
-		// TODO: Bring this back.
-		//HostHeader:          me.urlHost,
+		UserAgent:           cfg.HTTPUserAgent,
 		ClientIp4:           cfg.PublicIp4,
 		ClientIp6:           cfg.PublicIp6,
 		HttpRequestDirector: cfg.HttpRequestDirector,
@@ -631,9 +633,7 @@ func (me *regularTrackerAnnounceDispatcher) makeAnnounceStateInput(key torrentTr
 }
 
 func (me *regularTrackerAnnounceDispatcher) makeTorrentInput(t *Torrent) (_ g.Option[nextAnnounceTorrentInput]) {
-	// No torrent means the client has lost interest and the dispatcher just does followup actions.
-	// If we drop a torrent, we still end up here but with a torrent that should result in None, so
-	// check for that.
+	// No torrent, or a dropped one: the client lost interest and only follow-ups remain.
 	if t == nil || t.isDropped() {
 		return
 	}
@@ -648,9 +648,7 @@ func (me *regularTrackerAnnounceDispatcher) makeTorrentInput(t *Torrent) (_ g.Op
 var eventOrdering = map[tracker.AnnounceEvent]int{
 	tracker.Started: -4, // Get peers ASAP
 	tracker.Stopped: -3, // Stop unwanted peers ASAP
-	// Maybe prevent seeders from connecting to us. We want to send this before Stopped, but also we
-	// don't want people connecting to us if we are stopped and can only get out a single message.
-	// Really we should send this before Stopped...
+	// May keep seeders off us; it belongs before Stopped, but a stopped torrent may get one message out.
 	tracker.Completed: -2,
 	tracker.None:      -1, // Regular maintenance
 }
@@ -670,8 +668,7 @@ func compareOverdue(a, b nextAnnounceInput) int {
 }
 
 func compareNextAnnounce(ar, br nextAnnounceInput) (ret int) {
-	// What about pushing back based on last announce failure? Some infohashes aren't liked by
-	// trackers.
+	// TODO: push back after a failed announce; trackers dislike some infohashes.
 
 	ret = cmp.Or(
 		extracmp.CompareBool(ar.active, br.active),
@@ -684,6 +681,11 @@ func compareNextAnnounce(ar, br nextAnnounceInput) (ret int) {
 	overdue := ar.overdue
 	whenCmp := ar.When.Compare(br.When)
 	if !overdue {
+		// A zero When (nothing to do) at the head disarms the timer and stalls every other announce.
+		// Only past the overdue check: the minimum record every lookup starts from must stay the least.
+		if az, bz := ar.When.IsZero(), br.When.IsZero(); az != bz {
+			return extracmp.CompareBool(az, bz)
+		}
 		ret = whenCmp
 		if ret != 0 {
 			return
@@ -833,9 +835,7 @@ func (me *regularTrackerAnnounceDispatcher) initTrackerClient(
 		}
 		defer cl.Close()
 		if me.Context == nil {
-			// This is just to maintain the old behaviour that should be a timeout of 15s. Users can
-			// override it by providing their own Context. See comments elsewhere about longer timeouts
-			// acting as rate limiting overloaded trackers.
+			// The old 15 s timeout unless a Context is given; longer ones rate limit overloaded trackers.
 			ctx, cancel := context.WithTimeout(context.Background(), DefaultTrackerAnnounceTimeout)
 			defer cancel()
 			me.Context = ctx
@@ -857,17 +857,11 @@ func (me *regularTrackerAnnounceDispatcher) initTrackerClient(
 		UdpNetwork:   u.Scheme,
 		Logger:       logger.WithContextValue(fmt.Sprintf("tracker client for %q", urlStr)),
 		ListenPacket: config.TrackerListenPacket,
+		Resolver:     config.TrackerResolver,
 	})
 	panicif.Err(err)
 	// Need deep copy
 	panicif.NotNil(u.User)
-	//ta := &regularTrackerAnnounceDispatcher{
-	//	trackerClient: tc,
-	//	torrentClient: cl,
-	//	urlStr:        urlStr,
-	//	urlHost:       u.Host,
-	//	logger:        cl.slogger.With("tracker", u.String()),
-	//}
 	value := trackerClientsValue{
 		client: tc,
 	}

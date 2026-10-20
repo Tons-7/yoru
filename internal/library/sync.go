@@ -74,6 +74,8 @@ func (s *Sync) run(ctx context.Context) (SyncReport, error) {
 	if !s.al.Authenticated() {
 		return rep, nil
 	}
+	// Behind people in AniList's line: pages someone is waiting for go first.
+	ctx = anilist.Background(ctx)
 
 	// Rows AniList refused come last, so they cannot take every slot of every run.
 	dirty, err := s.store.DirtyEntries(ctx, pushBatch)
@@ -93,6 +95,10 @@ func (s *Sync) run(ctx context.Context) (SyncReport, error) {
 			}
 			if err := s.store.PushFailed(ctx, "anilist", d.AnimeID); err != nil {
 				return rep, err
+			}
+			// AniList is down: the rest stay dirty for the next run instead of spending the budget pages share.
+			if anilist.Unreachable(ctx, err) {
+				break
 			}
 			continue
 		}
@@ -147,6 +153,13 @@ func (s *Sync) favourites(ctx context.Context, userID int) (int, error) {
 	}
 
 	for _, change := range dirty {
+		// A MAL-only title AniList can't hold: settled here, or it would be refused every sync forever.
+		if change.AnimeID <= 0 {
+			if err := s.store.MarkFavouriteSynced(ctx, change.AnimeID, change.Favourite); err != nil {
+				return 0, err
+			}
+			continue
+		}
 		if on[change.AnimeID] != change.Favourite {
 			if err := s.al.ToggleFavourite(ctx, change.AnimeID); err != nil {
 				s.log.Warn("push favourite", "anime", change.AnimeID, "err", err)

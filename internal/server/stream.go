@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -71,14 +72,26 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 	session, err := s.streams.OpenProbing(r.Context(), id, source,
 		s.readablePath(r.Context(), animeID, episode, source))
 	if err != nil {
+		// Nothing plays, so the downloads Start paused for it go on; no close will come to resume them.
+		if s.playback != nil {
+			s.playback.ResumeYielded(context.WithoutCancel(r.Context()))
+		}
 		s.fail(w, "open stream", err)
 		return
 	}
+	// The player gave up on this open (another episode or track replaced it): no pin, no hold on the queue
+	// and no encoder for it. The session stays for a reopen of the same episode, or the reaper.
+	if r.Context().Err() != nil {
+		if s.playback != nil {
+			s.playback.ResumeYielded(context.WithoutCancel(r.Context()))
+		}
+		return
+	}
 
-	// This is the episode being watched, so it is the one the cache must not
-	// evict — and the only one the downloads list should call playing.
+	// This is the episode being watched, so it is the one the cache must not evict. Pinned beside any other
+	// device's: each session's close unpins its own.
 	if rec, found, err := s.store.TorrentForEpisode(r.Context(), animeID, strconv.Itoa(episode)); err == nil && found {
-		if err := s.store.PinOnly(r.Context(), rec.InfoHash, rec.FileIndex); err != nil {
+		if err := s.store.PinPlaying(r.Context(), animeID, strconv.Itoa(episode), rec.InfoHash, rec.FileIndex); err != nil {
 			s.log.Warn("pin playing episode", "anime", animeID, "episode", episode, "err", err)
 		}
 	}
@@ -125,6 +138,10 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		body["fontsUrl"] = base + "/fonts"
 		s.extractFontsAsync(session, base)
 	}
+	// Subtitles only as pictures (PGS, VobSub), which the browser can't draw: the player says so, not nothing.
+	if len(tracks) == 0 && len(session.Info.Subtitles) > 0 {
+		body["imageSubtitles"] = true
+	}
 
 	send(w, http.StatusOK, body)
 }
@@ -165,7 +182,60 @@ func (s *Server) subtitleTracks(session *transcode.Session, base string) []trans
 			URL:      fmt.Sprintf("%s/subtitle/%d", base, sub.Index),
 		})
 	}
+	for i, side := range sidecars(session.Source) {
+		tracks = append(tracks, transcode.Track{
+			Index:    sidecarOffset + i,
+			Language: side.language,
+			Title:    side.title,
+			Codec:    side.codec,
+			URL:      fmt.Sprintf("%s/subtitle/%d", base, sidecarOffset+i),
+		})
+	}
 	return tracks
+}
+
+// sidecarOffset numbers the subtitle files beside a video after any track the file itself can hold.
+const sidecarOffset = 1000
+
+// sidecar is a subtitle file named after the video beside it ("Show - 01.en.ass"), as fansubs and BD batches
+// ship them; mpv and VLC pick them up, so the browser player does too.
+type sidecar struct{ path, language, title, codec string }
+
+var sidecarCodecs = map[string]string{".ass": "ass", ".ssa": "ssa", ".srt": "subrip", ".vtt": "webvtt"}
+
+// sidecars lists them in name order, for a file on disk only: a torrent's stream has nothing beside it.
+func sidecars(video string) []sidecar {
+	if video == "" || strings.Contains(video, "://") {
+		return nil
+	}
+	dir, file := filepath.Split(video)
+	stem := strings.ToLower(strings.TrimSuffix(file, filepath.Ext(file)))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []sidecar
+	for _, e := range entries {
+		codec := sidecarCodecs[strings.ToLower(filepath.Ext(e.Name()))]
+		if codec == "" || e.IsDir() {
+			continue
+		}
+		rest, ok := strings.CutPrefix(strings.ToLower(strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))), stem)
+		if !ok || (rest != "" && rest[0] != '.') {
+			continue
+		}
+		// "en", "eng" or "english" is a language; anything else ("en.forced", "signs") names the track.
+		side := sidecar{path: filepath.Join(dir, e.Name()), codec: codec}
+		label := strings.TrimPrefix(rest, ".")
+		if lang, _, _ := strings.Cut(label, "."); len(lang) >= 2 && len(lang) <= 3 || lang == "english" {
+			side.language = lang
+		}
+		if side.language == "" || label != side.language {
+			side.title = label
+		}
+		out = append(out, side)
+	}
+	return out
 }
 
 // Extracting fonts blocked playback, so it runs in the background; the client
@@ -174,18 +244,18 @@ func (s *Server) extractFontsAsync(session *transcode.Session, base string) {
 	if s.subtitles == nil {
 		return
 	}
-	id := session.ID
+	id, key := session.ID, session.Dir()
 
 	s.fontsMu.Lock()
-	if _, known := s.fonts[id]; known {
+	if _, known := s.fonts[key]; known {
 		s.fontsMu.Unlock()
 		return
 	}
-	if _, running := s.fontJobs[id]; running {
+	if _, running := s.fontJobs[key]; running {
 		s.fontsMu.Unlock()
 		return
 	}
-	s.fontJobs[id] = struct{}{}
+	s.fontJobs[key] = struct{}{}
 	s.fontsMu.Unlock()
 
 	go func() {
@@ -193,9 +263,14 @@ func (s *Server) extractFontsAsync(session *transcode.Session, base string) {
 		defer cancel()
 
 		// As with subtitles: demuxing attachments over the stream endpoint downloads the whole file.
-		found, err := s.subtitles.ExtractFonts(ctx, s.readable(ctx, session), s.streamDir(id), session.Info.Attachments)
+		found, err := s.subtitles.ExtractFonts(ctx, s.readable(ctx, session), session.Dir(), session.Info.Attachments)
 		if err != nil {
-			s.log.Warn("extract fonts", "session", id, "err", err)
+			// Not recorded: the next poll tries again, once more of the file has arrived.
+			s.log.Info("fonts not ready", "session", id, "err", err)
+			s.fontsMu.Lock()
+			delete(s.fontJobs, key)
+			s.fontsMu.Unlock()
+			return
 		}
 
 		fonts := []transcode.FontFile{}
@@ -206,9 +281,9 @@ func (s *Server) extractFontsAsync(session *transcode.Session, base string) {
 
 		s.fontsMu.Lock()
 		// The session closed meanwhile, taking these files; recording them would serve 404s.
-		if _, live := s.fontJobs[id]; live {
-			s.fonts[id] = fonts
-			delete(s.fontJobs, id)
+		if _, live := s.fontJobs[key]; live {
+			s.fonts[key] = fonts
+			delete(s.fontJobs, key)
 		}
 		s.fontsMu.Unlock()
 
@@ -219,12 +294,23 @@ func (s *Server) extractFontsAsync(session *transcode.Session, base string) {
 // Still extracting is a normal answer, not an error: the episode is playing.
 func (s *Server) streamFonts(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// By the session's folder: another release reopening this episode gets a folder, and fonts, of its own.
+	session, ok := s.streams.Get(id)
+	if !ok {
+		send(w, http.StatusOK, map[string]any{"ready": false, "extracting": false, "fonts": []any{}})
+		return
+	}
 
 	s.fontsMu.Lock()
-	fonts, done := s.fonts[id]
-	_, running := s.fontJobs[id]
+	fonts, done := s.fonts[session.Dir()]
+	_, running := s.fontJobs[session.Dir()]
 	s.fontsMu.Unlock()
 
+	// A try that came out partial left no result: this poll starts the next one.
+	if !done && !running {
+		s.extractFontsAsync(session, "/api/stream/"+id)
+		running = true
+	}
 	if !done {
 		send(w, http.StatusOK, map[string]any{
 			"ready": false, "extracting": running, "fonts": []any{},
@@ -260,10 +346,6 @@ func (s *Server) localSource(ctx context.Context, source string) (string, bool) 
 	return f.Path, true
 }
 
-func (s *Server) streamDir(id string) string {
-	return filepath.Join(s.cfg.CacheDir, "hls", id)
-}
-
 // readable prefers the on-disk file the engine is writing to over its HTTP
 // stream, so reading a whole-file subtitle track needn't refetch every byte.
 func (s *Server) readable(ctx context.Context, session *transcode.Session) string {
@@ -285,13 +367,21 @@ func (s *Server) readablePath(ctx context.Context, animeID, episode int, fallbac
 		return fallback
 	}
 
-	// A pack's files sit in a folder named after it, a single file in the cache.
-	// The folder first: a lone release may share a pack file's name.
+	// A pack's files sit in a folder named after it, a single file in the cache, under the engine's names
+	// (see DiskNames). The folder first: a lone release may share a pack file's name.
+	var inPack []string
+	for part := range strings.SplitSeq(rec.FilePath, "/") {
+		inPack = append(inPack, torrent.SafeName(part))
+	}
+	var candidates []string
+	for _, folder := range torrent.DiskNames(rec.Name, rec.InfoHash) {
+		candidates = append(candidates, filepath.Join(append([]string{s.cfg.CacheDir, folder}, inPack...)...))
+	}
+	for _, file := range torrent.DiskNames(rec.FilePath, rec.InfoHash) {
+		candidates = append(candidates, filepath.Join(s.cfg.CacheDir, file))
+	}
 	path := ""
-	for _, p := range []string{
-		filepath.Join(s.cfg.CacheDir, rec.Name, filepath.FromSlash(rec.FilePath)),
-		filepath.Join(s.cfg.CacheDir, filepath.FromSlash(rec.FilePath)),
-	} {
+	for _, p := range candidates {
 		if !torrent.Within(s.cfg.CacheDir, p) {
 			continue
 		}
@@ -401,6 +491,31 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "invalid track"})
 		return
 	}
+	// A file beside the video: whole already, converted once into a folder of its own.
+	if index >= sidecarOffset {
+		sides := sidecars(session.Source)
+		if index-sidecarOffset >= len(sides) {
+			http.NotFound(w, r)
+			return
+		}
+		side := sides[index-sidecarOffset]
+		dir := filepath.Join(session.Dir(), fmt.Sprintf("side-%d", index-sidecarOffset))
+		path, err := s.subtitles.Extract(r.Context(), side.path, dir, 0, side.codec, true)
+		if err != nil {
+			s.fail(w, "subtitle file", err)
+			return
+		}
+		track, err := os.ReadFile(path)
+		if err != nil {
+			s.fail(w, "subtitle file", err)
+			return
+		}
+		w.Header().Set("X-Yoru-Complete", "true")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write(track)
+		return
+	}
 
 	var codec string
 	for _, sub := range session.Info.Subtitles {
@@ -413,13 +528,13 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dir := s.streamDir(session.ID)
+	dir := session.Dir()
 	local := s.readable(r.Context(), session)
 	complete := s.sourceComplete(r.Context(), session)
 
 	at, _ := strconv.ParseFloat(r.URL.Query().Get("at"), 64)
 
-	// While downloading, the encoder writes the lines beside the picture; the slow reads below fill what it cannot.
+	// While downloading the encoder writes the lines beside the picture; the slow reads below fill the rest.
 	liveStart, live := session.LiveSubtitles()
 	live = live && !complete
 	var path string
@@ -427,7 +542,7 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 	if live {
 		path, err = s.subtitles.MergeLive(dir, index, codec)
 		have = err == nil && s.subtitles.Cues(dir, index, codec) > 0
-		// No line yet, but they are being written: served empty now, and the player asks again as video arrives.
+		// No line yet, but they're being written: served empty now; the player asks again as video arrives.
 		if !have {
 			if p, ok := s.subtitles.AwaitLive(r.Context(), dir, index, codec); ok {
 				path, err, have = p, nil, true
@@ -682,7 +797,7 @@ func (s *Server) streamFont(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	serveFile(w, r, filepath.Join(s.streamDir(session.ID), "fonts", name), "font/ttf")
+	serveFile(w, r, filepath.Join(session.Dir(), "fonts", name), "font/ttf")
 }
 
 // SessionIdle releases a session the reaper took, suspending the episode only if nothing else needs it.
@@ -702,12 +817,16 @@ func (s *Server) SessionIdle(id string) {
 
 // SessionGone forgets a removed session's extractions, so a rebuild extracts again instead of serving 404s.
 func (s *Server) SessionGone(id string) {
+	if s.streams == nil {
+		return
+	}
+	prefix := s.streams.DirPrefix(id)
 	s.fontsMu.Lock()
-	delete(s.fonts, id)
-	delete(s.fontJobs, id)
+	maps.DeleteFunc(s.fontJobs, func(dir string, _ struct{}) bool { return strings.HasPrefix(dir, prefix) })
+	maps.DeleteFunc(s.fonts, func(dir string, _ []transcode.FontFile) bool { return strings.HasPrefix(dir, prefix) })
 	s.fontsMu.Unlock()
 	if s.subtitles != nil {
-		s.subtitles.Forget(s.streamDir(id))
+		s.subtitles.ForgetPrefix(prefix)
 	}
 }
 
@@ -817,6 +936,10 @@ func isTorrentSource(src string) bool {
 }
 
 func parseSessionID(id string) (animeID, episode int, ok bool) {
+	// A cast's drawn-in copy, "<anime>-<episode>-burn<track>-<delay>", is the same episode.
+	if i := strings.Index(id, "-burn"); i > 0 {
+		id = id[:i]
+	}
 	dash := strings.LastIndexByte(id, '-')
 	if dash <= 0 {
 		return 0, 0, false

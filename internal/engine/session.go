@@ -1,11 +1,12 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,7 +38,7 @@ type sessionDoc struct {
 // saveSession writes the torrents and missing metainfo, so a restart needs nothing from the swarm.
 func (e *Engine) saveSession() { e.writeSession(false) }
 
-// writeSession is saveSession; last is a client's final save (Stop's, a rebind's), and saves after it are dropped.
+// writeSession: last is a client's final save (Stop's, a rebind's), and saves after it are dropped.
 func (e *Engine) writeSession(last bool) {
 	e.saveMu.Lock()
 	defer e.saveMu.Unlock()
@@ -46,28 +47,8 @@ func (e *Engine) writeSession(last bool) {
 		e.mu.Unlock()
 		return
 	}
-	var doc sessionDoc
-	var withInfo []*bt.Torrent
-	for _, en := range e.byID {
-		r := record{InfoHash: en.t.InfoHash().HexString(), Trackers: en.trackers, Paused: en.paused, Verify: en.verifying}
-		if info := en.t.Info(); info != nil {
-			if top := e.names.top(info.BestName(), en.t.InfoHash()); top != info.BestName() {
-				r.Top = top
-			}
-		}
-		for i, on := range en.selected {
-			if on {
-				r.OnlyFiles = append(r.OnlyFiles, i)
-			}
-		}
-		slices.Sort(r.OnlyFiles)
-		doc.Torrents = append(doc.Torrents, r)
-		if en.t.Info() != nil {
-			withInfo = append(withInfo, en.t)
-		}
-	}
+	doc, withInfo := e.sessionLocked()
 	e.mu.Unlock()
-	slices.SortFunc(doc.Torrents, func(a, b record) int { return strings.Compare(a.InfoHash, b.InfoHash) })
 
 	for _, t := range withInfo {
 		path := filepath.Join(e.opts.SessionDir, t.InfoHash().HexString()+".torrent")
@@ -88,19 +69,41 @@ func (e *Engine) writeSession(last bool) {
 	}
 }
 
+// sessionLocked is the in-memory session and the torrents whose metainfo can be saved. Caller holds e.mu.
+func (e *Engine) sessionLocked() (sessionDoc, []*bt.Torrent) {
+	var doc sessionDoc
+	var withInfo []*bt.Torrent
+	for _, en := range e.byID {
+		r := record{InfoHash: en.t.InfoHash().HexString(), Trackers: en.trackers, Paused: en.paused, Verify: en.verifying}
+		if info := en.t.Info(); info != nil {
+			if top := e.names.top(info.BestName(), en.t.InfoHash()); top != info.BestName() {
+				r.Top = top
+			}
+		} else if top, ok := e.names.claimed(en.t.InfoHash()); ok {
+			// Restored from a magnet, its info not back yet: the name it holds must survive this save.
+			r.Top = top
+		}
+		for i, on := range en.selected {
+			if on {
+				r.OnlyFiles = append(r.OnlyFiles, i)
+			}
+		}
+		slices.Sort(r.OnlyFiles)
+		doc.Torrents = append(doc.Torrents, r)
+		if en.t.Info() != nil {
+			withInfo = append(withInfo, en.t)
+		}
+	}
+	slices.SortFunc(doc.Torrents, func(a, b record) int { return strings.Compare(a.InfoHash, b.InfoHash) })
+	return doc, withInfo
+}
+
 func writeMetainfo(path string, mi metainfo.MetaInfo) error {
-	f, err := os.Create(path + ".tmp")
-	if err != nil {
+	var body bytes.Buffer
+	if err := mi.Write(&body); err != nil {
 		return err
 	}
-	if err := mi.Write(f); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(path+".tmp", path)
+	return writeAtomic(path, body.Bytes())
 }
 
 // writeAtomic lands the whole file or none: synced before the rename, so a crash cannot truncate the session.
@@ -126,8 +129,14 @@ func writeAtomic(path string, body []byte) error {
 // restore re-adds the saved torrents; on first run it imports rqbit's.
 func (e *Engine) restore() error {
 	var imported string
+	e.mu.Lock()
+	carry := e.carry
+	e.carry = nil
+	e.mu.Unlock()
 	doc, err := readSession(e.opts.SessionDir)
-	var broken *json.SyntaxError
+	if carry != nil {
+		doc, err = *carry, nil
+	}
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		doc, imported, err = e.importLegacy()
@@ -137,12 +146,17 @@ func (e *Engine) restore() error {
 		if imported != "" {
 			e.log.Info("carried over downloads from rqbit", "torrents", len(doc.Torrents), "from", imported)
 		}
-	case errors.As(err, &broken) || errors.Is(err, io.ErrUnexpectedEOF):
-		// A damaged list: every torrent whose metainfo is here comes back paused, nothing is dropped.
+	case err != nil:
+		// Held or refused by the OS (an antivirus, a backup tool): the file is likely fine, and a rebuild
+		// would lose every torrent's trackers, names and selection. Not starting now, the next try reads it.
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			return err
+		}
+		// Damaged or mistyped: starting empty would let the next save forget every download, so every
+		// torrent whose metainfo is here comes back paused instead.
 		doc = e.rebuildSession()
 		e.log.Warn("torrent session unreadable; rebuilt from the saved torrents", "err", err, "torrents", len(doc.Torrents))
-	case err != nil:
-		return err
 	}
 
 	for _, r := range doc.Torrents {
@@ -164,6 +178,12 @@ func (e *Engine) restore() error {
 				continue
 			}
 		} else {
+			// A damaged file blocks the next save's rewrite, leaving the swarm to supply the info each start.
+			// One the OS only refused (held, denied) is kept: deleted, a dead swarm could never give it back.
+			var pathErr *fs.PathError
+			if !errors.As(err, &pathErr) {
+				os.Remove(path)
+			}
 			magnet := (&metainfo.Magnet{InfoHash: hash, Trackers: r.Trackers}).String()
 			if t, err = e.cl.AddMagnet(magnet); err != nil {
 				e.log.Warn("restore torrent", "hash", r.InfoHash, "err", err)
@@ -204,8 +224,16 @@ func (e *Engine) resume(en *entry) {
 	case <-en.t.Closed():
 		return
 	}
+	// Before forgetMissing, which would read a file under its old name as lost.
+	e.migrateLegacyNames(en.t)
 	e.forgetMissing(en.t)
 	e.mu.Lock()
+	unclean, selected := e.firstSinceCrashLocked(en.t.InfoHash()), maps.Clone(en.selected)
+	e.mu.Unlock()
+	// After a crash an unfinished download's newest pieces may be marked complete with their data lost.
+	recheck := unclean && !verified(en.t, selected)
+	e.mu.Lock()
+	en.verifying = en.verifying || recheck
 	verify := en.verifying
 	e.mu.Unlock()
 	if verify {
@@ -220,6 +248,19 @@ func (e *Engine) resume(en *entry) {
 		e.saveSession()
 	}
 	e.apply(en)
+}
+
+// firstSinceCrashLocked: the last run stopped uncleanly and this torrent is not yet rechecked for it; true once
+// per torrent, as every rebind restores the session again. Caller holds e.mu.
+func (e *Engine) firstSinceCrashLocked(hash metainfo.Hash) bool {
+	if !e.unclean || e.crashChecked[hash] {
+		return false
+	}
+	if e.crashChecked == nil {
+		e.crashChecked = map[metainfo.Hash]bool{}
+	}
+	e.crashChecked[hash] = true
+	return true
 }
 
 // rebuildSession lists the torrents whose metainfo is on disk, all paused, and moves the unreadable list aside.
@@ -241,9 +282,32 @@ func (e *Engine) rebuildSession() sessionDoc {
 		if err != nil {
 			continue
 		}
-		r := record{InfoHash: mi.HashInfoBytes().HexString(), Paused: true}
-		for i := range info.UpvertedFiles() {
-			r.OnlyFiles = append(r.OnlyFiles, i)
+		hash := mi.HashInfoBytes()
+		r := record{InfoHash: hash.HexString(), Paused: true}
+		// Only what is on disk: selecting a whole pack would make the next play fetch every episode. Under its
+		// own name, tagged with its hash after a clash, or as named before safe names (moved on restore).
+		own, tagged := safeName(info.BestName()), suffixed(safeName(info.BestName()), hash)
+		for _, at := range []struct {
+			dir, top string
+			safe     bool
+		}{{own, own, true}, {tagged, tagged, true}, {info.BestName(), own, false}} {
+			for i, fi := range info.UpvertedFiles() {
+				path := filepath.Join(e.opts.CacheDir, at.dir)
+				if parts := fi.BestPath(); info.IsDir() && at.safe {
+					path = filepath.Join(append([]string{path}, safePath(parts)...)...)
+				} else if info.IsDir() {
+					path = filepath.Join(append([]string{path}, parts...)...)
+				}
+				if st, err := os.Stat(path); err == nil && st.Size() > 0 {
+					r.OnlyFiles = append(r.OnlyFiles, i)
+				}
+			}
+			if len(r.OnlyFiles) > 0 {
+				if at.top != info.BestName() {
+					r.Top = at.top
+				}
+				break
+			}
 		}
 		doc.Torrents = append(doc.Torrents, r)
 	}
@@ -271,14 +335,16 @@ func (e *Engine) importLegacy() (sessionDoc, string, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		if err != nil {
-			return out, "", err
-		}
 		var legacy struct {
 			Torrents map[string]record `json:"torrents"`
 		}
-		if err := json.Unmarshal(body, &legacy); err != nil {
-			return out, "", err
+		if err == nil {
+			err = json.Unmarshal(body, &legacy)
+		}
+		// One unreadable old session must not leave the engine starting empty; the next one may do.
+		if err != nil {
+			e.log.Warn("skipping an unreadable rqbit session", "dir", dir, "err", err)
+			continue
 		}
 		for _, r := range legacy.Torrents {
 			if r.InfoHash == "" || !torrent.Within(e.opts.CacheDir, r.OutputFolder) {

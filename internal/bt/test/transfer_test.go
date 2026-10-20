@@ -70,9 +70,7 @@ func TestClientTransferDefaultNoMetadata(t *testing.T) {
 func TestClientTransferRateLimitedUpload(t *testing.T) {
 	started := time.Now()
 	testClientTransfer(t, testClientTransferParams{
-		// We are uploading 13 bytes (the length of the greeting torrent). The
-		// chunks are 2 bytes in length. Then the smallest burst we can run
-		// with is 2. Time taken is (13-burst)/rate.
+		// 13 bytes (the greeting torrent) in 2-byte chunks, so the burst is at least 2: (13-burst)/rate.
 		SeederUploadRateLimiter: rate.NewLimiter(11, 2),
 	})
 	require.True(t, time.Since(started) > time.Second)
@@ -95,22 +93,18 @@ func testClientTransferSmallCache(t *testing.T, setReadahead bool, readahead int
 	testClientTransfer(t, testClientTransferParams{
 		LeecherStorage: newFileCacheClientStorageFactory(fileCacheClientStorageFactoryParams{
 			SetCapacity: true,
-			// Going below the piece length means it can't complete a piece so
-			// that it can be hashed.
+			// Under the piece length, no piece could complete to be hashed.
 			Capacity: 5,
 		}),
 		LeecherStorageCapacity: 5,
 		SetReadahead:           setReadahead,
-		// Can't readahead too far or the cache will thrash and drop data we
-		// thought we had.
+		// Not far, or the cache thrashes and drops data we thought we had.
 		Readahead: readahead,
 
 		// These tests don't work well with more than 1 connection to the seeder.
 		ConfigureLeecher: ConfigureClient{
 			Config: func(cfg *bt.ClientConfig) {
 				cfg.DropDuplicatePeerIds = true
-				// cfg.DisableIPv6 = true
-				// cfg.DisableUTP = true
 			},
 		},
 	})
@@ -158,12 +152,8 @@ func testSeedAfterDownloading(t *testing.T, disableUtp bool) {
 	cfg.Seed = true
 	cfg.DataDir = t.TempDir()
 	cfg.DisableUTP = disableUtp
-	// Make sure the leecher-leecher doesn't connect directly to the seeder. This is because I
-	// wanted to see if having the higher chunk-sized leecher-leecher would cause the leecher to
-	// error decoding. However it shouldn't because a client should only be receiving pieces sized
-	// to the chunk size it expects.
+	// The leecher-leecher, with bigger chunks, mustn't reach the seeder directly: the leecher must decode them.
 	cfg.DisablePEX = true
-	//cfg.Debug = true
 	cfg.Logger = log.Default.WithContextText("leecher")
 	leecher, err := bt.NewClient(cfg)
 	require.NoError(t, err)
@@ -195,9 +185,7 @@ func testSeedAfterDownloading(t *testing.T, disableUtp bool) {
 	}())
 	require.NoError(t, err)
 	assert.True(t, ok)
-	// Simultaneously DownloadAll in Leecher, and read the contents
-	// consecutively in LeecherLeecher. This non-deterministically triggered a
-	// case where the leecher wouldn't unchoke the LeecherLeecher.
+	// DownloadAll in Leecher while LeecherLeecher reads in order, which can leave LeecherLeecher choked.
 	var wg sync.WaitGroup
 	{
 		// Prioritize a region, and ensure it's been hashed, so we want connections.

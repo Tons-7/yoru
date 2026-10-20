@@ -248,6 +248,41 @@ func TestDiscardSparesADownloadOnRecord(t *testing.T) {
 	}
 }
 
+// A record the engine lost is deleted by name; a torrent may name itself the cache root or a Yoru folder.
+func TestRemoveByNameNeverDeletesTheCacheOrYorusFolders(t *testing.T) {
+	c, st, _ := ownedFixture(t)
+	ctx := context.Background()
+	for _, dir := range []string{EngineSessionDirName, "hls"} {
+		os.MkdirAll(filepath.Join(c.dir, dir), 0o755)
+		os.WriteFile(filepath.Join(c.dir, dir, "keep"), []byte("x"), 0o644)
+	}
+	os.WriteFile(filepath.Join(c.dir, "someone-else.mkv"), []byte("x"), 0o644)
+	for i, name := range []string{".", "x/..", EngineSessionDirName, "HLS", "../outside"} {
+		hash := string(rune('a'+i)) + "bc"
+		record(t, st, hash, name, 0)
+		c.evict(ctx, store.CacheEntry{InfoHash: hash})
+	}
+	for _, path := range []string{c.dir, filepath.Join(c.dir, EngineSessionDirName, "keep"), filepath.Join(c.dir, "hls", "keep"), filepath.Join(c.dir, "someone-else.mkv")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("%s was deleted", path)
+		}
+	}
+}
+
+// A torrent the engine holds but nobody recorded is deleted only from Yoru's own cache folder.
+func TestRemoveRefusesAnUntrackedDownloadOutsideTheCache(t *testing.T) {
+	c, _, engine := ownedFixture(t)
+	engine.ids[1] = "foreign"
+	engine.folder = t.TempDir()
+	if _, err := c.Remove(context.Background(), "foreign"); err == nil || engine.wasDeleted("foreign") {
+		t.Fatalf("removed another program's download: err=%v", err)
+	}
+	engine.folder = c.dir
+	if _, err := c.Remove(context.Background(), "foreign"); err != nil || !engine.wasDeleted("foreign") {
+		t.Fatalf("our own untracked download stayed: err=%v", err)
+	}
+}
+
 // Yoru's own folders inside the cache folder are never orphans.
 func TestOrphansLeaveYorusOwnFoldersAlone(t *testing.T) {
 	c, _, _ := ownedFixture(t)
@@ -299,5 +334,62 @@ func TestRemoveOrphansDeletesOnlyTheReviewedNames(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(c.dir, name)); (err == nil) != want {
 			t.Errorf("%s present = %v, want %v", name, err == nil, want)
 		}
+	}
+}
+
+// Records hold a torrent's own name; on disk the engine may have made it safe for Windows or tagged it with the
+// hash, and the sweep and the delete must both find it there.
+func TestCacheFindsTheEnginesNamesOnDisk(t *testing.T) {
+	c, st, _ := ownedFixture(t)
+	ctx := context.Background()
+	was := orphanSettle
+	orphanSettle = 0
+	t.Cleanup(func() { orphanSettle = was })
+	const colon, clash, old = "aaaaaaaa11", "bbbbbbbb22", "cccccccc33"
+	record(t, st, colon, "Show: Part 1.mkv", 0)
+	record(t, st, clash, "Other.mkv", 0)
+	record(t, st, old, "Old.mkv", 0)
+	// The tag after the extension is how a clash was named before safe names.
+	safe, tagged, oldTagged := torrent.SafeName("Show: Part 1.mkv"), torrent.Tagged("Other.mkv", clash), "Old.mkv [cccccccc]"
+	for _, name := range []string{safe, tagged, oldTagged, "stray.mkv"} {
+		if err := os.WriteFile(filepath.Join(c.dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// On Windows the older versions wrote "Show: Part 1.mkv" into a stream of "Show", listed as an empty file.
+	keeps := map[string]bool{safe: true, tagged: true, oldTagged: true, "stray.mkv": false}
+	if host, ok := torrent.StreamHost("Show: Part 1.mkv"); ok {
+		record(t, st, "dddddddd44", "Show: Part 1.mkv", 0)
+		if err := os.WriteFile(filepath.Join(c.dir, "Show: Part 1.mkv"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		keeps[host] = true
+	}
+
+	if _, err := c.Orphans(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range keeps {
+		if _, err := os.Stat(filepath.Join(c.dir, name)); (err == nil) != want {
+			t.Errorf("after the sweep %s present = %v, want %v", name, err == nil, want)
+		}
+	}
+
+	// Evicting the old clash takes its own tagged file, not the plain name another torrent may hold.
+	if err := os.WriteFile(filepath.Join(c.dir, "Old.mkv"), []byte("another torrent's"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, hash := range []string{colon, clash, old} {
+		if err := c.evict(ctx, store.CacheEntry{InfoHash: hash}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{safe, tagged, oldTagged} {
+		if _, err := os.Stat(filepath.Join(c.dir, name)); err == nil {
+			t.Errorf("%s stayed after its record was evicted", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(c.dir, "Old.mkv")); err != nil {
+		t.Error("evicting the tagged copy deleted the plain name's file")
 	}
 }

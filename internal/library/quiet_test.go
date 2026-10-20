@@ -17,8 +17,8 @@ import (
 	"yoru/internal/torrent"
 )
 
-// A torrent whose data is being hashed is neither paused nor downloading. The startup pass must not pause it (that froze finished
-// episodes at a tenth done) and must come back for it once the check ends.
+// A torrent being hashed is neither paused nor downloading: the startup pass mustn't pause it (finished
+// episodes froze at a tenth done) but come back for it once the check ends.
 func TestQuietRevisitsTorrentsStillChecking(t *testing.T) {
 	var mu sync.Mutex
 	polls := 0

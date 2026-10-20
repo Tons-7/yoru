@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { api, query, type DiscoverItem } from '../lib/api'
+import { api, ApiError, query, type DiscoverItem } from '../lib/api'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useFilters } from '../lib/queries'
 import { FilterMenu } from '../components/FilterMenu'
@@ -88,7 +88,8 @@ export function Browse() {
       ),
     enabled: settled && !!results.data?.hasMore && !active.studio,
     staleTime: 30 * 60_000,
-    retry: 12,
+    // Only "ask again" (503: budget spent or AniList slow) earns a minute of retries; a refusal would waste it.
+    retry: (n, err) => err instanceof ApiError && err.status === 503 && n < 12,
     retryDelay: 5000,
   })
   // A studio's total is exact: the server holds its whole list and narrows it.
@@ -108,14 +109,17 @@ export function Browse() {
   const navigate = useNavigate()
   const random = useMutation({
     meta: { inline: true },
-    mutationFn: () =>
-      api.get<{ id: number }>(
+    mutationFn: () => {
+      // The server takes one format; any of those chosen, so TV and Movie can both come up.
+      const formats = csv(active.formats)
+      return api.get<{ id: number }>(
         `/api/random${query({
           genres: active.genres,
-          format: csv(active.formats)[0],
+          format: formats.length ? formats[Math.floor(Math.random() * formats.length)] : undefined,
           year: active.year,
         })}`,
-      ),
+      )
+    },
     onSuccess: (r) => navigate(`/anime/${r.id}`),
   })
 
@@ -131,6 +135,13 @@ export function Browse() {
   const goToPage = (n: number) => {
     const next = new URLSearchParams(params)
     next.set('page', String(n))
+    setParams(next)
+  }
+  // Every filter off; the search and the order stay.
+  const clearFilters = () => {
+    const next = new URLSearchParams()
+    if (active.q) next.set('q', active.q)
+    if (active.sort) next.set('sort', active.sort)
     setParams(next)
   }
 
@@ -251,7 +262,7 @@ export function Browse() {
       </div>
 
       {/* What is narrowing the results now, each removable on its own. */}
-      <div className="flex min-h-7 flex-wrap items-center gap-1.5 border-t border-white/[0.05] pt-3">
+      <div className="flex min-h-7 flex-wrap items-center gap-1.5 border-t border-white/[0.05] pt-3 pointer-coarse:gap-2">
         {chips.length === 0 ? (
           <span className="text-xs text-base-500">No filters: showing everything.</span>
         ) : (
@@ -259,7 +270,7 @@ export function Browse() {
             <button
               key={`${c.key}-${c.value}`}
               onClick={c.remove}
-              className="group flex items-center gap-1.5 rounded-full bg-accent-500/15 py-1 pr-2 pl-3 text-xs font-medium text-accent-200 ring-1 ring-accent-500/30 transition-colors hover:bg-accent-500/25"
+              className="group flex items-center gap-1.5 rounded-full bg-accent-500/15 py-1 pr-2 pl-3 text-xs font-medium text-accent-200 ring-1 ring-accent-500/30 transition-colors hover:bg-accent-500/25 pointer-coarse:min-h-11 pointer-coarse:pr-3"
               aria-label={`Remove ${c.label}`}
             >
               {c.label}
@@ -269,13 +280,8 @@ export function Browse() {
         )}
         {chips.length > 1 && (
           <button
-            onClick={() => {
-              const next = new URLSearchParams()
-              if (active.q) next.set('q', active.q)
-              if (active.sort) next.set('sort', active.sort)
-              setParams(next)
-            }}
-            className="px-2 py-1 text-xs font-medium text-base-400 transition-colors hover:text-white"
+            onClick={clearFilters}
+            className="px-2 py-1 text-xs font-medium text-base-400 transition-colors hover:text-white pointer-coarse:min-h-11"
           >
             Clear all
           </button>
@@ -305,7 +311,12 @@ export function Browse() {
           ))}
         </PosterGrid>
       ) : results.data.items.length === 0 ? (
-        <Empty title="Nothing matched" hint="Try removing a filter." />
+        // The advice follows what is set: with no filter on, removing one can't help.
+        <Empty
+          title="Nothing matched"
+          hint={chips.length > 0 ? 'Try removing a filter.' : 'Try another spelling, or the English or romaji title.'}
+          action={chips.length > 0 ? <Button onClick={clearFilters}>Clear filters</Button> : undefined}
+        />
       ) : (
         <>
           <PosterGrid>

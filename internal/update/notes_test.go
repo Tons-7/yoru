@@ -12,7 +12,7 @@ import (
 	"yoru/internal/store"
 )
 
-// releaseList serves /releases/latest (newest, no assets needed) and the list, drafts and pre-releases included.
+// releaseList serves /releases/latest (newest, no assets needed) and the list, drafts and pre-releases too.
 func releaseList(t *testing.T, tags ...string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()

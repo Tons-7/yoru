@@ -12,12 +12,8 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
-// The packed format is an 8 byte integer of the number of ranges. Then 20
-// bytes per range, consisting of 4 byte packed IP being the lower bound IP of
-// the range, then 4 bytes of the upper, inclusive bound, 8 bytes for the
-// offset of the description from the end of the packed ranges, and 4 bytes
-// for the length of the description. After these packed ranges, are the
-// concatenated descriptions.
+// Packed: 8 bytes of range count, then 20 per range (4 low IP, 4 high IP inclusive, 8 description offset
+// past the ranges, 4 description length), then the descriptions end to end.
 
 const (
 	packedRangesOffset = 8

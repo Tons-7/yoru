@@ -26,6 +26,8 @@ type NewClientOpts struct {
 	UdpNetwork   string
 	Logger       log.Logger
 	ListenPacket func(network, addr string) (net.PacketConn, error)
+	// Looks UDP trackers up; nil is the system resolver.
+	Resolver *net.Resolver
 }
 
 func NewClient(urlStr string, opts NewClientOpts) (Client, error) {
@@ -46,6 +48,7 @@ func NewClient(urlStr string, opts NewClientOpts) (Client, error) {
 			Host:         _url.Host,
 			Logger:       opts.Logger.Slogger(),
 			ListenPacket: opts.ListenPacket,
+			Resolver:     opts.Resolver,
 		})
 		if err != nil {
 			return nil, err

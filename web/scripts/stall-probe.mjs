@@ -1,4 +1,4 @@
-// Diagnosis, not a release check: plays a real episode (STALL_FILE), noting where it stops and what is buffered.
+// Diagnosis, not a release check: plays a real episode (STALL_FILE), noting where it stops and what's buffered.
 import { copyFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { chromium } from 'playwright'

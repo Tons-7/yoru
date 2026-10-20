@@ -223,10 +223,8 @@ var testcases = []struct {
 	},
 }
 
-// Represents the contents of a PexMsg in a way that supports equivalence checking in tests. This is
-// necessary because pexMsgFactory uses maps and so ordering of the resultant PexMsg isn't
-// deterministic. Because the flags are in a different array, we can't just use testify's
-// ElementsMatch because the ordering *does* still matter between an added addr and its flags.
+// A PexMsg's contents, comparable whatever order pexMsgFactory's maps gave (ElementsMatch can't keep an
+// added addr paired with its flags).
 type comparablePexMsg struct {
 	added, added6           []krpc.NodeAddr
 	addedFlags, added6Flags []pp.PexPeerFlags

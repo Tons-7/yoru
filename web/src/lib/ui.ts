@@ -24,7 +24,8 @@ const SIZES: Record<ButtonSize, string> = {
 /** Class list for something that should look like a button but is a link. */
 export function buttonClass(variant: ButtonVariant = 'secondary', size: ButtonSize = 'md') {
   return cx(
-    'inline-flex shrink-0 items-center justify-center gap-1.5 font-medium whitespace-nowrap transition-[background-color,color,transform,filter] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 disabled:pointer-events-none disabled:opacity-50',
+    // 44px on touch, whatever the size: a confirm step was smaller than the button that opened it.
+    'inline-flex shrink-0 items-center justify-center gap-1.5 font-medium whitespace-nowrap transition-[background-color,color,transform,filter] focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400 disabled:pointer-events-none disabled:opacity-50 pointer-coarse:min-h-11',
     VARIANTS[variant],
     SIZES[size],
   )

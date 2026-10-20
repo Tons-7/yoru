@@ -1,4 +1,4 @@
-// Real episodes downloaded through nyaa as a viewer's Yoru would, each one's end played: the countdown must come.
+// Real episodes downloaded through nyaa as a viewer's Yoru would, each end played: the countdown must come.
 //   YORU_EXTRA_CONFIG='[[indexer]] ...' ANILIST_LIVE=1 YORU_SHOW_ID=<id> EPISODES=1,2 [HEADED=1 CHANNEL=chrome ANIME4K=1] node scripts/run-player-check.mjs end-probe.mjs
 import { readFileSync } from 'node:fs'
 import { chromium } from 'playwright'
@@ -90,7 +90,7 @@ for (const ep of EPISODES) {
     const lengths = await video.evaluate((v) => v.duration)
     const planned = opened?.duration ?? opened?.info?.duration
     check(planned > 0 && Math.abs(lengths - planned) < 2, `${label}: the player's length is the file's`, `${lengths.toFixed(1)} vs ${planned}`)
-    // Skipping the ending by hand: a click on the bar 10 s before the end, as the mouse does it (the late case).
+    // Skipping the ending by hand: a click on the bar 10 s before the end, as a mouse does (the late case).
     if (late) {
       await page.mouse.move(640, 300)
       const bar = page.locator('.group\\/scrub')

@@ -51,8 +51,7 @@ func testReceiveChunkStorageFailure(t *testing.T, seederFast bool) {
 	defer testutil.ExportStatusWriter(seederClient, "s", t)()
 	leecherClientConfig := bt.TestingConfig(t)
 	leecherClientConfig.Debug = true
-	// Don't require fast extension, whether the seeder will provide it or not (so we can test mixed
-	// cases).
+	// Fast isn't required, so seeders with and without it are both tried.
 	leecherClientConfig.MinPeerExtensions.SetBit(pp.ExtensionBitFast, false)
 	justOneNetwork(leecherClientConfig)
 	leecherClient, err := bt.NewClient(leecherClientConfig)
@@ -97,7 +96,6 @@ func testReceiveChunkStorageFailure(t *testing.T, seederFast bool) {
 		}
 	}
 	// TODO: Check that PeerConns fastEnabled matches seederFast?
-	// select {}
 }
 
 type pieceState struct {

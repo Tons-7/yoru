@@ -29,7 +29,20 @@ type Decoder struct {
 	// Sum of bytes used to Decode values.
 	Offset int64
 	buf    bytes.Buffer
+	depth  int
 }
+
+// Deep enough for any real torrent, tracker or DHT message; a few bytes of "llll…" can't recurse past it.
+const maxDecodeDepth = 512
+
+func (d *Decoder) enter() {
+	d.depth++
+	if d.depth > maxDecodeDepth {
+		panic(&SyntaxError{Offset: d.Offset, What: fmt.Errorf("nested deeper than %d", maxDecodeDepth)})
+	}
+}
+
+func (d *Decoder) leave() { d.depth-- }
 
 func (d *Decoder) Decode(v any) (err error) {
 	defer func() {
@@ -69,8 +82,7 @@ func (d *Decoder) Decode(v any) (err error) {
 	return
 }
 
-// Check for EOF in the decoder input stream. Used to assert the input ends on a clean message
-// boundary.
+// ReadEOF checks the input ends here, on a clean message boundary.
 func (d *Decoder) ReadEOF() error {
 	_, err := d.r.ReadByte()
 	if err == nil {
@@ -136,18 +148,8 @@ func (d *Decoder) throwSyntaxError(offset int64, err error) {
 
 // Assume the 'i' is already consumed. Read and validate the rest of an int into the buffer.
 func (d *Decoder) readInt() error {
-	// start := d.Offset - 1
 	d.readUntil('e')
-	if err := d.checkBufferedInt(); err != nil {
-		return err
-	}
-	// if d.buf.Len() == 0 {
-	// 	panic(&SyntaxError{
-	// 		Offset: start,
-	// 		What:   errors.New("empty integer value"),
-	// 	})
-	// }
-	return nil
+	return d.checkBufferedInt()
 }
 
 // called when 'i' was consumed, for the integer type in v.
@@ -215,9 +217,7 @@ func (d *Decoder) parseStringLength() (int, error) {
 	if err := d.checkBufferedInt(); err != nil {
 		return 0, err
 	}
-	// Really the limit should be the uint size for the platform. But we can't pass in an allocator,
-	// or limit total memory use in Go, the best we might hope to do is limit the size of a single
-	// decoded value (by reading it in in-place and then operating on a view).
+	// Bounded by an int, not memory: Go can't cap allocation, short of decoding in place behind a view.
 	length, err := strconv.ParseInt(bytesAsString(d.buf.Bytes()), 10, 0)
 	checkForIntParseError(err, start)
 	if int64(length) > d.getMaxStrLen() {
@@ -316,19 +316,10 @@ func getDictField(dict reflect.Type, key reflect.Value) (_ dictField, err error)
 		}, nil
 	case reflect.Struct:
 		if key.Kind() != reflect.String {
-			// This doesn't make sense for structs. They have to use strings. If they didn't they
-			// should at least have things that convert to strings trivially and somehow much the
-			// bencode tag.
+			// A struct's fields are found by their string bencode tags.
 			panic(key)
 		}
 		return getStructFieldForKey(dict, key.String()), nil
-		// if sf.r.PkgPath != "" {
-		//	panic(&UnmarshalFieldError{
-		//		First:   key,
-		//		Type:  dict.Type(),
-		//		Field: sf.r,
-		//	})
-		// }
 	default:
 		err = fmt.Errorf("can't assign bencode dict items into a %v", k)
 		return
@@ -419,6 +410,8 @@ func keyType(v reflect.Value) reflect.Type {
 
 func (d *Decoder) parseDict(v reflect.Value) error {
 	// At this point 'd' byte was consumed, now read key/value pairs.
+	d.enter()
+	defer d.leave()
 
 	// The key type does not need to be a string for maps.
 	keyType := keyType(v)
@@ -470,6 +463,8 @@ func (d *Decoder) parseDict(v reflect.Value) error {
 }
 
 func (d *Decoder) parseList(v reflect.Value) error {
+	d.enter()
+	defer d.leave()
 	switch v.Kind() {
 	default:
 		// If the list is a singleton of the expected type, use that value.
@@ -543,6 +538,9 @@ func (d *Decoder) readOneValue() bool {
 
 	switch b {
 	case 'd', 'l':
+		// Bounded as parseDict and parseList are: a field with its own UnmarshalBencode is read here.
+		d.enter()
+		defer d.leave()
 		// read until there is nothing to read
 		for d.readOneValue() {
 		}
@@ -603,8 +601,7 @@ func (d *Decoder) parseUnmarshaler(v reflect.Value) bool {
 func (d *Decoder) parseValue(v reflect.Value) (bool, error) {
 	// we support one level of indirection at the moment
 	if v.Kind() == reflect.Pointer {
-		// if the pointer is nil, allocate a new element of the type it
-		// points to
+		// A nil pointer gets a new element of the type it points to.
 		if v.IsNil() {
 			v.Set(reflect.New(v.Type().Elem()))
 		}
@@ -677,8 +674,7 @@ func (d *Decoder) parseValueInterface() (any, bool) {
 		return d.parseIntInterface(), true
 	default:
 		if b >= '0' && b <= '9' {
-			// string
-			// append first digit of the length to the buffer
+			// A string: the length's first digit goes in the buffer.
 			d.buf.WriteByte(b)
 			return d.parseStringInterface(), true
 		}
@@ -740,6 +736,8 @@ func (d *Decoder) parseStringInterface() string {
 }
 
 func (d *Decoder) parseDictInterface() any {
+	d.enter()
+	defer d.leave()
 	dict := make(map[string]any)
 	var lastKey string
 	lastKeyOk := false
@@ -774,6 +772,8 @@ func (d *Decoder) parseDictInterface() any {
 }
 
 func (d *Decoder) parseListInterface() (list []any) {
+	d.enter()
+	defer d.leave()
 	list = []any{}
 	valuei, ok := d.parseValueInterface()
 	for ok {

@@ -38,8 +38,7 @@ func TestExtentCompleteRequiredLengthsV2InfoWithGaps(t *testing.T) {
 				"b": {
 					File: metainfo.FileTreeFile{Length: 3},
 				},
-				// Here there's a gap where v2 torrents piece align, so the next file offset starts
-				// at 6.
+				// v2 piece-aligns files, so a gap: this one starts at 6.
 				"c": {
 					File: metainfo.FileTreeFile{Length: 4},
 				},

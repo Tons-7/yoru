@@ -20,6 +20,11 @@ func TestAudioPreferenceFiltersDubOnlyReleases(t *testing.T) {
 		{"[SubsPlease] Show - 01 (1080p).mkv", "dub", true},
 		{"[Group] Show - 01 [English Dub].mkv", "dub", false},
 		{"[Group] Show - 01 [Dual Audio].mkv", "dub", false},
+		{"[Group] Sousou no Frieren - 05 [1080p] [Hindi Dub].mkv", "dub", true},
+		{"[Group] Show - 05 [1080p][Latino][Spanish Dub].mkv", "dub", true},
+		{"[Group] Show - 05 [Mandarin Chinese Dub].mkv", "dub", true},
+		{"[Group] Show - 05 [English Dub + Hindi Dub].mkv", "dub", false},
+		{"[Group] Show - 05 [Dub].mkv", "dub", false},
 
 		{"[Group] Show - 01 [1080p][English Dub].mkv", "either", false},
 	}

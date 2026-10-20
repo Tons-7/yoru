@@ -13,9 +13,8 @@ import (
 	"github.com/anacrolix/missinggo/v2/panicif"
 )
 
-// Accesses Torrent data via a Client. Reads block until the data is available. Seeks and readahead
-// also drive Client behaviour. Not safe for concurrent use. There are Torrent, File and Piece
-// constructors for this.
+// Reader reads Torrent data through a Client, blocking until it arrives; its seeks and readahead steer
+// the Client. Not safe for concurrent use; Torrent, File and Piece make them.
 type Reader interface {
 	// Set the context for reads. When done, reads should get cancelled so they don't get stuck
 	// waiting for data.
@@ -29,13 +28,9 @@ type Reader interface {
 	// Configure the number of bytes ahead of a read that should also be prioritized in preparation
 	// for further reads. Overridden by non-nil readahead func, see SetReadaheadFunc.
 	SetReadahead(int64)
-	// If non-nil, the provided function is called when the implementation needs to know the
-	// readahead for the current reader. Calls occur during Reads and Seeks, and while the Client is
-	// locked.
+	// The function, if any, gives the readahead; called in Reads and Seeks with the Client locked.
 	SetReadaheadFunc(ReadaheadFunc)
-	// Don't wait for pieces to complete and be verified. Read calls return as soon as they can when
-	// the underlying chunks become available. May be deprecated, although BitTorrent v2 will mean
-	// we can support this without piece hashing.
+	// Reads return as chunks arrive, without waiting for pieces to verify.
 	SetResponsive()
 }
 
@@ -72,9 +67,7 @@ type reader struct {
 	readahead, pos int64
 	// Position that reads have continued contiguously from.
 	contiguousReadStartPos int64
-	// The cached piece range this reader wants downloaded. The zero value corresponds to nothing.
-	// We cache this so that changes can be detected, and bubbled up to the Torrent only as
-	// required.
+	// The pieces this reader wants (zero is none), cached so only changes reach the Torrent.
 	pieces pieceRange
 
 	// Reads have been initiated since the last seek. This is used to prevent readaheads occurring
@@ -151,8 +144,7 @@ func (r *reader) piecesUncached() (ret pieceRange) {
 		})
 	}
 	if ra < 1 {
-		// Needs to be at least 1, because [x, x) means we don't want
-		// anything.
+		// At least 1, as [x, x) wants nothing.
 		ra = 1
 	}
 	if !r.reading {
@@ -173,9 +165,7 @@ func (r *reader) read(b []byte) (n int, err error) {
 	return r.readContext(r.ctx, b)
 }
 
-// Deprecated: Use SetContext and Read. TODO: I've realised this breaks the ability to pass through
-// optional interfaces like io.WriterTo and io.ReaderFrom. Go sux. Context should be provided
-// somewhere else.
+// Deprecated: Use SetContext and Read (a wrapper here would hide io.WriterTo and io.ReaderFrom).
 func (r *reader) ReadContext(ctx context.Context, b []byte) (n int, err error) {
 	r.ctx = ctx
 	return r.Read(b)
@@ -218,9 +208,8 @@ func init() {
 	close(closedChan)
 }
 
-// Wait until some data should be available to read. Tickles the client if it isn't. Returns how
-// much should be readable without blocking. `block` is whether to block if nothing is available,
-// for successive reads for example.
+// Waits (if block, as for later reads) until data should be readable, tickling the client meanwhile,
+// and returns how much reads without blocking.
 func (r *reader) waitAvailable(
 	ctx context.Context,
 	pos, wanted int64,
@@ -262,19 +251,26 @@ func (r *reader) torrentOffset(readerPos int64) int64 {
 	return r.offset + readerPos
 }
 
+// waitError marks an error from waiting for data, not from reading it.
+type waitError struct{ error }
+
+func (e waitError) Unwrap() error { return e.error }
+
 // Performs at most one successful read to torrent storage.
 func (r *reader) readOnceAt(ctx context.Context, b []byte, pos int64) (n int, err error) {
 	var avail int64
 	avail, err = r.waitAvailable(ctx, pos, int64(len(b)), n == 0)
-	if avail == 0 || err != nil {
+	if err != nil {
+		err = waitError{err}
+		return
+	}
+	if avail == 0 {
 		return
 	}
 	firstPieceIndex := pieceIndex(r.torrentOffset(pos) / r.t.info.PieceLength)
 	firstPieceOffset := r.torrentOffset(pos) % r.t.info.PieceLength
 	b1 := b[:min(int64(len(b)), avail)]
-	// I think we can get EOF here due to the ReadAt contract. Previously we were forgetting to
-	// return an error so it wasn't noticed. We now try again if there's a storage cap otherwise
-	// convert it to io.UnexpectedEOF.
+	// ReadAt may give EOF here: retried under a storage cap, otherwise io.UnexpectedEOF.
 	r.initStorageReader()
 	n, err = r.storageReader.ReadAt(b1, r.torrentOffset(pos))
 	//n, err = r.t.readAt(b1, r.torrentOffset(pos))
@@ -301,18 +297,25 @@ func (r *reader) readOnceAt(ctx context.Context, b []byte, pos int64) (n int, er
 	return
 }
 
-// Performs at most one successful read to torrent storage. Try reading, first with the storage
-// reader we already have, then after resetting it (in case data moved for
-// completed/incomplete/promoted etc.). Then try resetting the piece completions. Then after all
-// that if the storage is supposed to be flaky, try all over again. TODO: Filter errors and set log
-// levels appropriately.
+// At most one good storage read: with the current reader, a fresh one (data may have moved), then
+// after resetting completions, and all again for flaky storage. TODO: filter errors, set log levels.
 func (r *reader) readAt(ctx context.Context, b []byte, pos int64) (n int, err error) {
 	if pos >= r.length {
 		err = io.EOF
 		return
 	}
+	// Callers see the wait's own error, as before the marker existed.
+	defer func() {
+		if we, ok := errors.AsType[waitError](err); ok {
+			err = we.error
+		}
+	}()
 	n, err = r.readOnceAt(ctx, b, pos)
 	if err == nil {
+		return
+	}
+	// Stopped while waiting for data (a seek, a pause, a close): nothing wrong with storage to retry.
+	if _, ok := errors.AsType[waitError](err); ok {
 		return
 	}
 	r.slogger().Error("initial read failed", "err", err)
@@ -339,9 +342,7 @@ func (r *reader) readAt(ctx context.Context, b []byte, pos int64) (n int, err er
 	r.slogger().Error("read failed after completion resync", "err", err)
 
 	if r.t.hasStorageCap() {
-		// Ensure params weren't modified (Go sux). Recurse to detect infinite loops. TODO: I expect
-		// only some errors should pass through here, this might cause us to get stuck if we retry
-		// for any error.
+		// Recursion keeps the params as they were and shows loops. TODO: retrying any error can stick.
 		return r.readAt(ctx, b, pos)
 	}
 
@@ -356,9 +357,7 @@ func (r *reader) readAt(ctx context.Context, b []byte, pos int64) (n int, err er
 func (r *reader) updatePieceCompletion(pos int64) {
 	firstPieceIndex := pieceIndex(r.torrentOffset(pos) / r.t.info.PieceLength)
 	r.t.cl.lock()
-	// I think there's a panic here caused by the Client being closed before obtaining this
-	// lock. TestDropTorrentWithMmapStorageWhileHashing seems to tickle occasionally in CI.
-	// Just add exceptions already.
+	// May panic when the Client closes before this lock (TestDropTorrentWithMmapStorageWhileHashing).
 	defer r.t.cl.unlock()
 	if r.t.closed.IsSet() {
 		// Can't update because Torrent's piece order is removed from Client.
@@ -369,9 +368,7 @@ func (r *reader) updatePieceCompletion(pos int64) {
 	if !r.t.updatePieceCompletion(firstPieceIndex) {
 		r.logger().Levelf(log.Debug, "piece %d completion unchanged", firstPieceIndex)
 	}
-	// Update the rest of the piece completions in the readahead window, without alerting to
-	// changes (since only the first piece, the one above, could have generated the read error
-	// we're currently handling).
+	// The rest of the readahead window quietly: only the first piece could have caused this error.
 	if r.pieces.begin != firstPieceIndex {
 		panic(fmt.Sprint(r.pieces.begin, firstPieceIndex))
 	}

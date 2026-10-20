@@ -110,7 +110,7 @@ func sized(hash, title string, seeders int, gigabytes float64) indexer.Torrent {
 	return t
 }
 
-// What the user's two sites listed for "Kara no Kyoukai" on 2026-10-08.
+// What two real sites list for "Kara no Kyoukai".
 func gardenReleases() []indexer.Torrent {
 	return []indexer.Torrent{
 		sized("jsu6", "[JacobSwaggedUp] Kara no Kyoukai 6: Boukyaku Rokuon | The Garden of Sinners Chapter 6: Oblivion Recording (BD 1280x720) [MP4 Movie]", 1, 0.9),

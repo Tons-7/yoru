@@ -165,7 +165,7 @@ func TestFillUpNext(t *testing.T) {
 	}
 }
 
-// After an episode the list plays top to bottom, past its end the last show's next, and when empty the show's own.
+// After an episode the list plays in order, past its end the last show's next, and when empty the show's own.
 func TestPlayOrder(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

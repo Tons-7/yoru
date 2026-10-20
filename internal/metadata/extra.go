@@ -140,7 +140,7 @@ func (c *Client) Extra(ctx context.Context, malID int) (Extra, error) {
 		out.Endings = append(out.Endings, parseTheme(line))
 	}
 
-	// Staff is the second request and the less important half: a show with no credits is still worth its themes.
+	// Staff is the second request and the lesser half: a show without credits is still worth its themes.
 	var staff staffResponse
 	_, err = c.fromHosts(ctx, []host{{"tenrai-staff", TenraiStaffURL}, {"jikan-staff", JikanStaffURL}}, malID,
 		func(body []byte) bool {

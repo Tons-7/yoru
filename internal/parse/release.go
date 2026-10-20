@@ -1,4 +1,4 @@
-// Package parse reads release filenames by fansub convention: "[SubsPlease] Frieren - 10 (1080p) [7D35515E].mkv".
+// Package parse reads release filenames by fansub convention: "[Group] Show - 10 (1080p) [7D35515E].mkv".
 package parse
 
 import (
@@ -43,7 +43,8 @@ var (
 	crc32Re    = regexp.MustCompile(`(?i)^[0-9A-F]{8}$`)
 	// Also glued to the source: "BD1080p", "WEB_1080p".
 	resolution = regexp.MustCompile(`(?i)(?:\b|_|BD|WEB|DVD|HDTV|Rip)(\d{3,4})[pi]\b|\b(\d{3,4})x(\d{3,4})\b`)
-	seasonEp   = regexp.MustCompile(`(?i)\bS(\d{1,2})\s*E(\d{1,4})\b`)
+	// "S01E06v2": a version glued on, as a fixed release says.
+	seasonEp = regexp.MustCompile(`(?i)\bS(\d{1,2})\s*E(\d{1,4})(?:v(\d))?\b`)
 	// "S01E01-E12", "S01E01-12": a pack spelled as a span of the marked form.
 	seasonEpSpan = regexp.MustCompile(`(?i)\bS(\d{1,2})\s*E(\d{1,4})\s*[-~]\s*(?:S\d{1,2})?E?(\d{1,4})\b`)
 	// "[05]", "[05v2]": a number alone in its own bracket, as Chinese groups write the episode.
@@ -54,18 +55,24 @@ var (
 	markedEp = regexp.MustCompile(`(?i)(?:^|[\s._\-\[(])E(?:P|PISODE)?\.?\s*(\d{1,4})(?:v(\d))?\b`)
 	// The same form listed rather than ranged: "[E41 E42 E43]".
 	listedEp = regexp.MustCompile(`(?i)\bE(\d{1,4})(?:[\s,]+E(\d{1,4}))+\b`)
+	// Or ranged without a season: "[EP01-EP12]", "E01-E24", "Ep 01-12".
+	markedSpan = regexp.MustCompile(`(?i)(?:^|[\s._\[(])EP?\.?\s*(\d{1,4})\s*[-~]\s*(?:EP?\.?\s*)?(\d{1,4})\b`)
+	// "Season 01v3": a pack's version glued to its season, which then reads as no season.
+	seasonVersion = regexp.MustCompile(`(?i)\b(season\s*\d{1,2})v(\d)\b`)
 	// "S02SP01-02" has no boundary after the season, so specials get their own form.
 	seasonOnly = regexp.MustCompile(`(?i)\b(?:S(\d{1,2})|Season\s*(\d{1,2}))\b|\b(\d)(?:nd|rd|th)\s*Season\b|\bS(\d{1,2})SP\d{1,4}(?:\s*-\s*\d{1,4})?\b`)
 	partOnly   = regexp.MustCompile(`(?i)\b(?:part|cour)\s*(\d{1,2}|IV|I{1,3})\b`)
-	bitDepthRe = regexp.MustCompile(`(?i)\b(8|10)\s*-?\s*bits?\b|\bhi(10)p\b`)
+	// "Hi10P", or "Hi10" with the P left off.
+	bitDepthRe = regexp.MustCompile(`(?i)\b(8|10)\s*-?\s*bits?\b|\bhi(10)p?\b`)
 	extRe      = regexp.MustCompile(`(?i)\.(mkv|mp4|avi|ts|m2ts|webm)$`)
 
 	// Where the title stops and quality metadata begins, for scene-style names with no brackets to strip.
 	metaTokens = `\d{3,4}[pi]|BD|BDRip|BDMV|Blu-?ray|Remux|WEB-?DL|WEB-?Rip|WEB|HDTV|TVRip|DVD|DVDRip|CR|HIDIVE|AMZN|NF|Baha|Funi|x26[45]|H\.?26[45]|HEVC|AVC|AV1|VP9|MPEG-?2|AAC|FLAC|Opus|E?-?AC-?3|DDP?|DTS|TrueHD|Dual|Multi|10-?bits?|8-?bits?|Hi10P|Complete|Batch`
 	metaStart  = regexp.MustCompile(`(?i)[\s._]+\b(` + metaTokens + `)\b`)
 
-	// A bare number counts before the quality run, after a word, and before a bracket only with two digits.
-	bareEp = regexp.MustCompile(`(?i)(?:^|[\s._])(?:(\d{2,3})(?:v(\d))?[\s._]+|(\d{2})(?:v(\d))?[\s._]*\[)(` + metaTokens + `)\b`)
+	// A bare number after a word, before the quality run. Before a bracket 2 or 4 digits ("One Piece 1170 ("):
+	// 3 are "Mob Psycho 100", a leading 0 "Gundam 0083". Years are skipped where they are read.
+	bareEp = regexp.MustCompile(`(?i)(?:^|[\s._])(?:(\d{2,3}|[1-9]\d{3})(?:v(\d))?[\s._]+|(\d{2}|[1-9]\d{3})(?:v(\d))?[\s._]*[\[(])(` + metaTokens + `)\b`)
 
 	dotSeparated = regexp.MustCompile(`[._]`)
 
@@ -130,6 +137,7 @@ func Parse(name string) Release {
 	}
 
 	r.Group = detectGroup(work)
+	work = seasonVersion.ReplaceAllString(work, "$1 v$2")
 
 	for _, tok := range bracketed.FindAllStringSubmatch(work, -1) {
 		field := strings.TrimSpace(tok[1])
@@ -175,7 +183,8 @@ func Parse(name string) Release {
 	}
 
 	// The part is removed before numbering: "Part 2 - 17" otherwise reads as an episode range of 2 to 17.
-	r.Part = partNumber(work)
+	// Only one before the episode counts: "- 05 - The Final Battle (Part 1)" names the episode's own half.
+	r.Part = partNumber(beforeMarker(work))
 	numbered := work
 	if r.Part > 0 {
 		numbered = partOnly.ReplaceAllString(work, " ")
@@ -308,7 +317,8 @@ func numbering(work string, batch bool) (season, episode, end, version int) {
 	if m := seasonEp.FindStringSubmatch(work); m != nil {
 		season, _ = strconv.Atoi(m[1])
 		episode, _ = strconv.Atoi(m[2])
-		return season, episode, 0, 0
+		version, _ = strconv.Atoi(m[3])
+		return season, episode, 0, version
 	}
 
 	if m := seasonOnly.FindStringSubmatch(work); m != nil {
@@ -329,15 +339,18 @@ func numbering(work string, batch bool) (season, episode, end, version int) {
 		// A spaced range opens after a separator or bracket, never a word: "Season 2 - 05".
 		lead := strings.TrimRight(work[:m[2]], " ")
 		opens := lead == "" || strings.ContainsAny(lead[len(lead)-1:], "-~([")
-		if hi > lo && (batch || !separated || opens) {
+		// "(2009-2019)" is the years a series ran, not episodes 2009 to 2019.
+		if hi > lo && (batch || !separated || opens) && !(isYear(lo) && isYear(hi)) {
 			return season, lo, hi, 0
 		}
 	}
-	if m := listedEp.FindStringSubmatch(work); m != nil {
-		lo, _ := strconv.Atoi(m[1])
-		hi, _ := strconv.Atoi(m[2])
-		if hi > lo {
-			return season, lo, hi, 0
+	for _, re := range []*regexp.Regexp{markedSpan, listedEp} {
+		if m := re.FindStringSubmatch(work); m != nil {
+			lo, _ := strconv.Atoi(m[1])
+			hi, _ := strconv.Atoi(m[2])
+			if hi > lo {
+				return season, lo, hi, 0
+			}
 		}
 	}
 
@@ -365,6 +378,8 @@ func numbering(work string, batch bool) (season, episode, end, version int) {
 	return season, episode, end, version
 }
 
+func isYear(n int) bool { return n >= 1900 && n <= 2100 }
+
 // bareEpisode locates the number in "Show 08 1080p", or nil. The separator must
 // not belong to a number of its own, or "Evangelion.3.33.1080p" is episode 33.
 func bareEpisode(work string) []int {
@@ -376,6 +391,10 @@ func bareEpisode(work string) []int {
 			m = m[:6]
 		}
 		if !hasWordBefore(work, m[2]) {
+			continue
+		}
+		// "your name. 2016 (1080p)" is the year.
+		if n, _ := strconv.Atoi(work[m[2]:m[3]]); m[3]-m[2] == 4 && n >= 1900 && n <= 2100 {
 			continue
 		}
 		if m[0] > 0 && work[m[0]-1] >= '0' && work[m[0]-1] <= '9' {
@@ -438,6 +457,7 @@ func title(work string, r Release) string {
 		s = seasonEp.ReplaceAllString(s, " ")
 		// Only a span the numbering accepted, or "Steins;Gate 0" loses its 0.
 		if r.EpisodeEnd > 0 {
+			s = markedSpan.ReplaceAllString(s, " ")
 			s = rangeEp.ReplaceAllString(s, " ")
 			s = listedEp.ReplaceAllString(s, " ")
 		}
@@ -454,11 +474,43 @@ func title(work string, r Release) string {
 		s = s[:loc[0]]
 	}
 
-	out := strings.Trim(strings.Join(strings.Fields(s), " "), " -_~,")
+	out := strings.Trim(strings.Join(dropLeftovers(strings.Fields(s)), " "), " -_~,+")
 	if out == "" {
 		out = bracketedTitle(work, r)
 	}
 	return out
+}
+
+// Left behind once the numbering is cut: a version ("v3", "{v2}"), the "+ OVA" of a pack, a lone "Ep".
+var leftover = regexp.MustCompile(`(?i)^(?:\{?v\d\}?|\+|ep\.?)$`)
+
+func dropLeftovers(words []string) []string {
+	out := words[:0:0]
+	for i := 0; i < len(words); i++ {
+		w := words[i]
+		// "+ OVA", "+ Specials": what the pack adds, not part of the show's name.
+		if w == "+" && i+1 < len(words) && packExtra.MatchString(words[i+1]) {
+			i++
+			continue
+		}
+		if leftover.MatchString(w) {
+			continue
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
+var packExtra = regexp.MustCompile(`(?i)^(?:ova|ovas|oad|specials?|sp|movies?|extras?)$`)
+
+// beforeMarker is the name up to its first episode marker, when a name comes before it.
+func beforeMarker(s string) string {
+	for _, re := range []*regexp.Regexp{seasonEp, dashEp, markedEp} {
+		if loc := re.FindStringIndex(s); loc != nil && strings.ContainsFunc(s[:loc[0]], unicode.IsLetter) {
+			return s[:loc[0]]
+		}
+	}
+	return s
 }
 
 // altName separates two names for the same show: "English … | Romaji".

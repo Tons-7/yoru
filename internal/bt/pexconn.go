@@ -14,6 +14,9 @@ import (
 const (
 	pexRetryDelay = 10 * time.Second
 	pexInterval   = 1 * time.Minute
+	// BEP 11 senders stay near 50 added per message; a full 64 KiB one carries ~10k, kept forever.
+	pexMaxAddedPerMsg     = 100
+	pexMaxRemoteLiveConns = 1000
 )
 
 // per-connection PEX state
@@ -30,6 +33,8 @@ type pexConnState struct {
 	// Running record of live connections the remote end of the connection purports to have.
 	remoteLiveConns map[netip.AddrPort]g.Option[pp.PexPeerFlags]
 	lastRecv        time.Time
+	// Set by the first extended handshake; a peer may send more, and each must not re-add it.
+	handshaken bool
 }
 
 func (s *pexConnState) IsEnabled() bool {
@@ -48,8 +53,12 @@ func (s *pexConnState) Init(c *PeerConn) {
 	s.logger = c.logger.WithDefaultLevel(log.Debug).WithNames("pex")
 	s.readyfn = c.tickleWriter
 	s.gate = make(chan struct{}, 1)
+	gate := s.gate
 	s.timer = time.AfterFunc(0, func() {
-		s.gate <- struct{}{}
+		select {
+		case gate <- struct{}{}:
+		default: // already open
+		}
 		s.readyfn() // wake up the writer
 	})
 	s.enabled = true
@@ -106,17 +115,37 @@ func (s *pexConnState) updateRemoteLiveConns(rx pp.PexMsg) (errs []error) {
 		delete(s.remoteLiveConns, addrPort)
 	}
 	g.MakeMapIfNil(&s.remoteLiveConns)
+	note := func(addrPort netip.AddrPort, flags g.Option[pp.PexPeerFlags]) {
+		if _, ok := s.remoteLiveConns[addrPort]; ok || len(s.remoteLiveConns) < pexMaxRemoteLiveConns {
+			s.remoteLiveConns[addrPort] = flags
+		}
+	}
 	for i, added := range rx.Added {
-		addr := netip.AddrFrom4(*(*[4]byte)(added.IP.To4()))
-		addrPort := netip.AddrPortFrom(addr, uint16(added.Port))
-		s.remoteLiveConns[addrPort] = g.SliceGet(rx.AddedFlags, i)
+		ip4 := added.IP.To4()
+		if ip4 == nil {
+			continue
+		}
+		note(netip.AddrPortFrom(netip.AddrFrom4([4]byte(ip4)), uint16(added.Port)), g.SliceGet(rx.AddedFlags, i))
 	}
 	for i, added := range rx.Added6 {
-		addr := netip.AddrFrom16(*(*[16]byte)(added.IP.To16()))
-		addrPort := netip.AddrPortFrom(addr, uint16(added.Port))
-		s.remoteLiveConns[addrPort] = g.SliceGet(rx.Added6Flags, i)
+		ip16 := added.IP.To16()
+		if ip16 == nil {
+			continue
+		}
+		note(netip.AddrPortFrom(netip.AddrFrom16([16]byte(ip16)), uint16(added.Port)), g.SliceGet(rx.Added6Flags, i))
 	}
 	return
+}
+
+// capPexAdded keeps the first n of a PEX list and its flags.
+func capPexAdded[T any](added []T, flags []pp.PexPeerFlags, n int) ([]T, []pp.PexPeerFlags) {
+	if len(added) > n {
+		added = added[:n]
+	}
+	if len(flags) > n {
+		flags = flags[:n]
+	}
+	return added, flags
 }
 
 // Recv is called from the reader goroutine
@@ -135,6 +164,8 @@ func (s *pexConnState) Recv(payload []byte) error {
 		return fmt.Errorf("last received only %v ago", timeSinceLastRecv)
 	}
 	s.lastRecv = time.Now()
+	rx.Added, rx.AddedFlags = capPexAdded(rx.Added, rx.AddedFlags, pexMaxAddedPerMsg)
+	rx.Added6, rx.Added6Flags = capPexAdded(rx.Added6, rx.Added6Flags, pexMaxAddedPerMsg)
 	s.updateRemoteLiveConns(rx)
 
 	var peers peerInfos
@@ -151,9 +182,7 @@ func (s *pexConnState) Recv(payload []byte) error {
 		s.torrent.pex.rest = time.Now().Add(pexInterval)
 	}
 
-	// one day we may also want to:
-	// - handle drops somehow
-	// - detect malicious peers
+	// TODO: handle drops, detect malicious peers.
 
 	return nil
 }

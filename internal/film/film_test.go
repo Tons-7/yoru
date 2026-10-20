@@ -37,7 +37,7 @@ func files(pairs ...any) []File {
 	return out
 }
 
-// File lists read from the swarm on 2026-10-08, sizes in GB.
+// File lists as real releases carry them, sizes in GB.
 var batches = map[string][]File{
 	"AnimeTime": files(
 		0.15, "09.5 Kara No Kyoukai - Mirai Fukuin - Extra Chorus-11.mkv",

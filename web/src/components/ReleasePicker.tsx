@@ -1,9 +1,10 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, query, type ReleaseCandidate } from '../lib/api'
 import { bytes, cx } from '../lib/format'
-import { Badge, Skeleton } from './ui'
+import { Badge, Button, Skeleton, TextInput } from './ui'
 import { useDismiss, useModalFocus } from '../lib/hooks'
 
 /** Every release the finder saw, best first; ineligible ones greyed with the reason. */
@@ -31,14 +32,20 @@ export function ReleasePicker({
   const panel = useDismiss<HTMLDivElement>(close)
   useModalFocus(panel)
 
+  // Words of the person's own, searched before the show's titles, or a magnet found elsewhere.
+  const [typed, setTyped] = useState('')
+  const [asked, setAsked] = useState('')
+  const magnet = asked.startsWith('magnet:') ? asked : undefined
   const sources = useQuery({
-    queryKey: ['sources', animeId, episode, audio],
-    queryFn: ({ signal }) =>
-      api.get<{ results: ReleaseCandidate[]; queries: string[] }>(
-        `/api/episode/sources${query({ id: animeId, episode, audio })}`,
-        signal,
-      ),
-    staleTime: 5 * 60_000,
+    queryKey: ['sources', animeId, episode, audio, asked],
+    // Asking is a POST: the server keeps the words or magnet for the next searches, so another site mustn't.
+    queryFn: ({ signal }) => {
+      const path = `/api/episode/sources${query({ id: animeId, episode, audio, q: magnet ? undefined : asked || undefined, magnet })}`
+      type Found = { results: ReleaseCandidate[]; queries: string[] }
+      return asked ? api.post<Found>(path, undefined, signal) : api.get<Found>(path, signal)
+    },
+    // Kept while the picker is open, even through a refetch of everything: each search is seconds per site.
+    staleTime: 'static',
     // The search already tries every title; retrying it tripled the wait before saying a site is down.
     retry: false,
   })
@@ -70,21 +77,47 @@ export function ReleasePicker({
           <button
             onClick={close}
             aria-label="Close"
-            className="rounded-md px-2 py-1 text-base-400 hover:bg-base-800 hover:text-base-100"
+            className="tap relative grid size-9 shrink-0 place-items-center rounded-md text-base-400 hover:bg-base-800 hover:text-base-100"
           >
             ✕
           </button>
         </div>
 
+        {/* The titles find nothing when a group spells the show its own way; a pasted magnet skips search. */}
+        <form
+          className="flex gap-2 border-b border-base-850 px-4 py-2.5"
+          onSubmit={(e) => {
+            e.preventDefault()
+            setAsked(typed.trim())
+          }}
+        >
+          <TextInput
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder="Search the sites for…, or paste a magnet link"
+            aria-label="Search the sites, or paste a magnet link"
+            className="min-w-0 flex-1"
+          />
+          <Button type="submit" size="sm" disabled={!typed.trim() || sources.isFetching}>
+            {typed.trim().startsWith('magnet:') ? 'Add' : 'Search'}
+          </Button>
+        </form>
+
         <div className="min-h-0 flex-1 overflow-y-auto p-2 scrollbar-thin">
-          {sources.isPending ? (
+          {sources.isPending || (sources.isError && sources.isFetching) ? (
             <div className="space-y-2 p-2">
               {Array.from({ length: 5 }, (_, i) => (
                 <Skeleton key={i} className="h-16 w-full" />
               ))}
             </div>
           ) : sources.isError ? (
-            <p className="p-4 text-sm text-recap">{(sources.error as Error).message}</p>
+            // A way to ask again without closing the dialog mid-episode.
+            <div className="flex flex-wrap items-center gap-3 p-4">
+              <p className="text-sm text-recap">{(sources.error as Error).message}</p>
+              <Button size="sm" onClick={() => void sources.refetch()}>
+                Try again
+              </Button>
+            </div>
           ) : results.length === 0 ? (
             <p className="p-6 text-center text-sm text-base-500">
               No release found under any of the show's titles.
@@ -102,6 +135,16 @@ export function ReleasePicker({
                 />
               ))}
             </ul>
+          )}
+          {/* Picked here by hand they still play; the limit itself is a setting. */}
+          {results.some((r) => r.blocked === 'larger than the automatic size limit') && (
+            <p className="px-2 pt-2 text-xs text-base-500">
+              Some are over the automatic size limit; pick one here, or{' '}
+              <Link to="/settings?tab=Downloads&q=largest" onClick={close} className="text-accent-300 hover:underline">
+                change the limit
+              </Link>
+              .
+            </p>
           )}
         </div>
       </div>

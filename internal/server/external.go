@@ -27,10 +27,12 @@ type grant struct {
 	Expires int64  `json:"e"`
 }
 
-// grantKey changes with the access token, so resetting pairing ends every link; grantSecret, with a restart.
+// grantKey changes with the access token, so resetting pairing ends every link; grantSecret, with a restart;
+// grantEpoch, when a device is denied or removed (a link doesn't say which device made it).
 func (s *Server) grantKey() []byte {
 	m := hmac.New(sha256.New, s.grantSecret)
 	m.Write([]byte(s.accessToken()))
+	m.Write([]byte(strconv.FormatInt(s.grantEpoch.Load(), 10)))
 	return m.Sum(nil)
 }
 

@@ -2,21 +2,31 @@ package mytimer
 
 import (
 	"math"
+	"sync"
 	"time"
 
 	"github.com/anacrolix/missinggo/v2/panicif"
-	"github.com/anacrolix/sync"
 )
 
-// Very common pattern I have in my code, a timer that coordinates resets from the callback
-// function, externally, and tracks when it's due. Only one instance of the timer callback can be
-// running at a time, and that callback is responsible for also returning the next delay.
+// A timer reset from its callback or outside, knowing when it's due; one callback runs at a time and
+// returns the next delay.
 type Timer struct {
-	mu     sync.RWMutex
-	when   time.Time
-	f      Func
-	t      *time.Timer
-	inited bool
+	mu      sync.RWMutex
+	when    time.Time
+	f       Func
+	t       *time.Timer
+	inited  bool
+	stopped bool
+}
+
+// Stop ends the timer for good; later updates and a callback already due do nothing.
+func (me *Timer) Stop() {
+	me.mu.Lock()
+	defer me.mu.Unlock()
+	me.stopped = true
+	if me.t != nil {
+		me.t.Stop()
+	}
 }
 
 func (me *Timer) Init(first TimeValue, f Func) {
@@ -36,6 +46,9 @@ func (me *Timer) Init(first TimeValue, f Func) {
 func (me *Timer) update(when time.Time) {
 	me.mu.Lock()
 	defer me.mu.Unlock()
+	if me.stopped {
+		return
+	}
 	// Avoid hammering the scheduler with changes. I think this will work, and is probably cheaper
 	// than avoiding our object's lock.
 	if when.Equal(me.when) {
@@ -62,13 +75,20 @@ func (me *Timer) When() time.Time {
 }
 
 func (me *Timer) innerCallback() {
+	me.mu.RLock()
+	stopped := me.stopped
+	me.mu.RUnlock()
+	if stopped {
+		return
+	}
 	panicif.True(me.when.IsZero())
 	panicif.True(time.Now().Before(me.when))
-	// Nobody else can set it while we're running (when is non-zero and the timer has fired
-	// already).
+	// Nobody else sets it while this runs (when is non-zero and the timer has fired).
 	when := me.f()
 	me.mu.Lock()
-	me.reset(when)
+	if !me.stopped {
+		me.reset(when)
+	}
 	me.mu.Unlock()
 }
 

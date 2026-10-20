@@ -23,7 +23,7 @@ type MALSync struct {
 	store *store.Store
 	mal   *mal.Client
 	log   *slog.Logger
-	// One of Run, PushOne and Pull at a time: a pull judging a site edit against a push in flight rolls it back.
+	// One of Run, PushOne and Pull at a time: a pull weighing a site edit against a push in flight undoes it.
 	mu sync.Mutex
 }
 
@@ -65,6 +65,11 @@ func (m *MALSync) Run(ctx context.Context) (MALReport, error) {
 			}
 			if err := m.store.PushFailed(ctx, malTracker, e.AnimeID); err != nil {
 				return rep, err
+			}
+			// MAL is down: the rest wait for the next run, rather than holding the lock an episode finishing
+			// needs through minutes of retries each.
+			if mal.Unreachable(err) {
+				break
 			}
 			continue
 		}
@@ -226,7 +231,7 @@ func pulled(remote store.TrackerEntry, local store.DirtyEntry, last store.Tracke
 		return &site, true
 	}
 
-	// First sight of an entry both sides hold: the side edited last keeps progress and status, a lone score stays.
+	// First sight of an entry on both sides: the last edited keeps progress and status; a lone score stays.
 	merged := store.RemoteEntry{AnimeID: local.AnimeID, Status: local.Status, Progress: local.Progress,
 		Score: local.Score, Repeat: max(local.Repeat, remote.Repeat)}
 	if !e.Updated.IsZero() && e.Updated.Unix() > local.Changed {

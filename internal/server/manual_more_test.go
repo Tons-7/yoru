@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -129,6 +130,36 @@ func TestEpisodeSourcesListsRankedReleases(t *testing.T) {
 	res, _ = h.do(t, "GET", "/api/episode/sources?episode=1")
 	if res.StatusCode != 400 {
 		t.Fatalf("missing id: HTTP %d", res.StatusCode)
+	}
+}
+
+// A pasted magnet is kept only from a POST: a link to the GET, opened from another site, plants nothing.
+func TestEpisodeSourcesKeepsAPastedMagnetOnlyFromAPost(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil, func(d *Deps) {
+		d.Finder = library.NewFinder(d.Store, d.Indexer, d.Log)
+	})
+	seedShow(t, h, 1, 12)
+	const hash = "dddddddddddddddddddddddddddddddddddddddd"
+	path := "/api/episode/sources?id=1&episode=1&magnet=" + url.QueryEscape("magnet:?xt=urn:btih:"+hash+"&dn=Pasted")
+	listed := func(method string) bool {
+		t.Helper()
+		res, body := h.do(t, method, path)
+		if res.StatusCode != 200 {
+			t.Fatalf("%s: HTTP %d %v", method, res.StatusCode, body)
+		}
+		results, _ := body["results"].([]any)
+		for _, r := range results {
+			if r.(map[string]any)["Torrent"].(map[string]any)["infoHash"] == hash {
+				return true
+			}
+		}
+		return false
+	}
+	if listed("GET") {
+		t.Fatal("a GET kept the pasted magnet")
+	}
+	if !listed("POST") {
+		t.Fatal("the picker's POST did not list the pasted magnet")
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"yoru/internal/library"
+	"yoru/internal/match"
 	"yoru/internal/store"
 	"yoru/internal/torrent"
 )
@@ -61,26 +62,51 @@ func (s *Server) localScan(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if !s.scanning.CompareAndSwap(false, true) {
-		send(w, http.StatusConflict, map[string]any{"error": "a scan is already running"})
-		return
+	status := "started"
+	if s.scanning.Load() {
+		status = "queued"
 	}
-
 	go func() {
-		defer s.scanning.Store(false)
-
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
-
-		if _, err := s.scanner.Scan(ctx, s.index.get()); err != nil {
+		if err := s.scan(ctx, s.index.get()); err != nil {
 			s.log.Error("library scan", "err", err)
 		}
 	}()
 
-	send(w, http.StatusAccepted, map[string]any{"status": "started", "roots": roots})
+	send(w, http.StatusAccepted, map[string]any{"status": status, "roots": roots})
 }
 
-// setLibraryPaths checks the folders before storing them, so a typo shows now, not as an empty scan.
+// ScanLibrary scans the library folders once the match index is built: run on a timer, files another program
+// adds are found without anyone pressing Scan, not downloaded again.
+func (s *Server) ScanLibrary(ctx context.Context) error {
+	ix := s.index.get()
+	if ix == nil {
+		return nil
+	}
+	return s.scan(ctx, ix)
+}
+
+// scan reads the library folders, or, with a scan under way (it may have listed them before this change),
+// has that one go round once more.
+func (s *Server) scan(ctx context.Context, ix *match.Index) error {
+	for !s.scanning.CompareAndSwap(false, true) {
+		s.rescan.Store(true)
+		// Still running, it will see the flag; finished meanwhile, this takes the next turn itself.
+		if s.scanning.Load() {
+			return nil
+		}
+	}
+	for {
+		s.rescan.Store(false)
+		_, err := s.scanner.Scan(ctx, ix)
+		s.scanning.Store(false)
+		if err != nil || !s.rescan.Load() || !s.scanning.CompareAndSwap(false, true) {
+			return err
+		}
+	}
+}
+
 func (s *Server) lastScan() *library.ScanReport {
 	if s.scanner == nil {
 		return nil
@@ -88,6 +114,7 @@ func (s *Server) lastScan() *library.ScanReport {
 	return s.scanner.LastReport()
 }
 
+// setLibraryPaths checks the folders before storing them, so a typo shows now, not as an empty scan.
 func (s *Server) setLibraryPaths(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Paths []string `json:"paths"`
@@ -146,6 +173,16 @@ func (s *Server) setLibraryPaths(w http.ResponseWriter, r *http.Request) {
 	// A folder taken out takes its files with it: they must not keep playing or standing in for downloads.
 	if _, err := s.store.SweepOutside(r.Context(), clean); err != nil {
 		s.log.Warn("retire files outside the library", "err", err)
+	}
+	// A folder just added is read now, not at the next timed scan.
+	if len(clean) > 0 {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+			defer cancel()
+			if err := s.ScanLibrary(ctx); err != nil {
+				s.log.Warn("library scan", "err", err)
+			}
+		}()
 	}
 	send(w, http.StatusOK, map[string]any{"paths": clean})
 }

@@ -39,7 +39,7 @@ check(await until(() => visible('Auto next episode')), 'Playback opens first, wi
 check(!(await visible('Download ahead while watching')), 'download ahead is no longer under Playback')
 
 // A stacked row (the control under its words) keeps the control right under them.
-const stacked = page.locator('[data-row]', { hasText: 'Subtitle languages' })
+const stacked = page.locator('[data-row]', { has: page.getByText('Subtitle languages', { exact: true }) })
 const gap = await stacked.evaluate((row) =>
   Math.round(row.lastElementChild.getBoundingClientRect().top - row.firstElementChild.lastElementChild.getBoundingClientRect().bottom))
 check(gap >= 0 && gap <= 16, 'a stacked row keeps its control under its words', `${gap}px apart`)

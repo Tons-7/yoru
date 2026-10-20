@@ -32,6 +32,35 @@ func TestAnonymousQueryHonoursThePause(t *testing.T) {
 	}
 }
 
+// A refused login costs one wasted request, not one per public read: later reads go without it straight away.
+func TestRefusedLoginIsSkippedForPublicReads(t *testing.T) {
+	var withToken, without atomic.Int32
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			withToken.Add(1)
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"errors":[{"status":401,"message":"Invalid token"}]}`)
+			return
+		}
+		without.Add(1)
+		io.WriteString(w, `{"data":{}}`)
+	})
+	c.SetToken("expired")
+	for i := range 3 {
+		if err := c.Query(t.Context(), `query { Page(page: `+string(rune('1'+i))+`) { media { id } } }`, nil, nil); err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+	}
+	if withToken.Load() != 1 || without.Load() != 3 {
+		t.Errorf("%d requests with the refused login, %d without; want 1 and 3", withToken.Load(), without.Load())
+	}
+	c.SetToken("fresh")
+	c.Query(t.Context(), `query { Page(page: 9) { media { id } } }`, nil, nil)
+	if withToken.Load() != 2 {
+		t.Error("a new login was skipped as the refused one")
+	}
+}
+
 // The anonymous request carries no token, and its answer is cached apart from the account's.
 func TestAnonymousQueryWithholdsTheToken(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {

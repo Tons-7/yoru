@@ -159,9 +159,7 @@ func (msg *Message) getPayloadLength() (length Integer, err error) {
 }
 
 func (msg Message) MarshalBinary() (data []byte, err error) {
-	// It might look like you could have a pool of buffers and preallocate the message length
-	// prefix, but because we have to return []byte, it becomes non-trivial to make this fast. You
-	// will need a benchmark.
+	// A pool with the length prefix preset isn't simply faster when a []byte goes out; benchmark first.
 	var buf bytes.Buffer
 	err = msg.WriteTo(&buf)
 	data = buf.Bytes()

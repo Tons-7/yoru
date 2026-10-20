@@ -3,6 +3,7 @@ package library
 import (
 	"encoding/json"
 	"slices"
+	"strconv"
 
 	"yoru/internal/score"
 	"yoru/internal/store"
@@ -60,8 +61,11 @@ func prefsFromSettings(p store.Prefs) scorePrefs {
 	if limit := p.String("quality.prefer"); limit == "720p" || limit == "480p" {
 		prefs.Ladder = upTo(limit, prefs.Ladder)
 	}
-	if n := p.Int64("quality.max_auto_bytes"); n > 0 {
-		prefs.MaxAutoBytes = n
+	// 0 is no limit, chosen in Settings; unset keeps the default.
+	if s := p.String("quality.max_auto_bytes"); s != "" {
+		if n, err := strconv.ParseInt(s, 10, 64); err == nil && n >= 0 {
+			prefs.MaxAutoBytes = n
+		}
 	}
 	prefs.AllowHi10P = p.Bool("quality.allow_hi10p")
 

@@ -165,8 +165,7 @@ func BenchmarkConnectionMainReadLoop(b *testing.B) {
 	wg.Go(func() {
 		for i := 0; i < b.N; i += 1 {
 			cl.lock()
-			// The chunk must be written to storage everytime, to ensure the
-			// writeSem is unlocked.
+			// Written to storage every time, so writeSem is released.
 			t.pendAllChunkSpecs(0)
 			g.MakeMapIfNil(&cn.validReceiveChunks)
 			eachRequestIndex(func(ri RequestIndex) {
@@ -179,8 +178,7 @@ func BenchmarkConnectionMainReadLoop(b *testing.B) {
 				require.NoError(b, err)
 				require.EqualValues(b, len(wb), n)
 			}
-			// This is unlocked by a successful write to storage. So this unblocks when that is
-			// done.
+			// Released by a successful write to storage.
 			ts.allChunksWritten.Wait()
 		}
 		if err := w.Close(); err != nil {
@@ -301,8 +299,7 @@ func TestHaveAllThenBitfield(t *testing.T) {
 	})))
 	qt.Check(t, qt.Equals(tt.numPieces(), 7))
 	qt.Check(t, qt.DeepEquals(tt.pieceAvailabilityRuns(), []pieceAvailabilityRun{
-		// The last element of the bitfield is irrelevant, as the Torrent actually only has 7
-		// pieces.
+		// The bitfield's last element doesn't count: the Torrent has 7 pieces.
 		{2, 0}, {1, 1}, {1, 0}, {2, 1}, {1, 0},
 	}))
 }
@@ -414,16 +411,15 @@ func TestPeerRequestsServedInArrivalOrder(t *testing.T) {
 	// Half are read before the rest, as the server keeps ahead of the writer.
 	var read []Request
 	for range 4 {
-		r, _ := oldestPeerRequest(pc.unreadPeerRequests, func(arrival uint64) uint64 { return arrival })
-		g.MakeMapIfNil(&pc.readyPeerRequests)
-		pc.readyPeerRequests[r] = readyPeerRequest{arrival: pc.unreadPeerRequests[r]}
+		r, _ := pc.oldestUnreadPeerRequest()
+		pc.setReadyPeerRequest(r, readyPeerRequest{arrival: pc.unreadPeerRequests[r]})
 		delete(pc.unreadPeerRequests, r)
 		read = append(read, r)
 	}
 	qt.Check(t, qt.DeepEquals(read, want[:4]))
 	var sent []Request
 	for {
-		r, ok := oldestPeerRequest(pc.readyPeerRequests, func(v readyPeerRequest) uint64 { return v.arrival })
+		r, ok := pc.oldestReadyPeerRequest()
 		if !ok {
 			break
 		}

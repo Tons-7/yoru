@@ -9,17 +9,15 @@ import (
 	infohash_v2 "yoru/internal/bt/types/infohash-v2"
 )
 
-// Specifies a new torrent for adding to a client, or additions to an existing Torrent. There are
-// constructor functions for magnet URIs and torrent metainfo files. TODO: This type should be
-// dismantled into a new Torrent option type, and separate Torrent mutate method(s).
+// TorrentSpec is a torrent to add, or additions to one held, made from a magnet or metainfo. TODO: split
+// into options for a new Torrent and methods changing one.
 type TorrentSpec struct {
 	AddTorrentOpts
 	// The tiered tracker URIs.
 	Trackers [][]string
 	// The name to use if the Name field from the Info isn't available.
 	DisplayName string
-	// WebSeed URLs. For additional options add the URLs separately with Torrent.AddWebSeeds
-	// instead.
+	// WebSeed URLs; Torrent.AddWebSeeds takes them with options.
 	Webseeds  []string
 	DhtNodes  []string
 	PeerAddrs []string

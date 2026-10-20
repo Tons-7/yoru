@@ -28,8 +28,10 @@ import {
 import { ANIME4K_MODES, ANIME4K_SIZES } from '../lib/anime4k'
 import { ComponentState } from '../components/ComponentState'
 import { ReleaseNotesList, type Notes } from '../components/ReleaseNotes'
+import { SitesEditor } from '../components/SitesEditor'
 import { WhereThingsGo } from '../components/WhereThingsGo'
 import { DESKTOP_NOTIFY_KEY, desktopNotifyWanted } from '../lib/notifications'
+import { disablePush, enablePush, pushState, testPush, type PushState } from '../lib/push'
 import {
   Button,
   ConfirmInline,
@@ -46,6 +48,8 @@ import {
   TextInput,
 } from '../components/ui'
 import { buttonClass, ControlLabel } from '../lib/ui'
+import { useDebounced } from '../lib/hooks'
+import { copyText } from '../lib/downloads'
 
 // The id is what ?tab= says; the label is what a person reads.
 const TABS = [
@@ -72,26 +76,37 @@ export function Settings() {
   const renamed = wanted ? RENAMED[wanted] : undefined
   // The URL holds the tab: a reload keeps it, and a link to another one always switches.
   const tab: Tab = isTab(wanted) ? wanted : (renamed ?? (connected ? 'Accounts' : 'Playback'))
-  // So does the search (?q=), so a link from elsewhere can open on the setting it is about.
-  const query = (params.get('q') ?? '').trim().toLowerCase()
+  // So does the search (?q=), so a link can open on the setting it is about. The field keeps its own text:
+  // a router update lands in a transition, a keystroke behind, which moved the caret and dropped letters.
+  const [text, setText] = useState(params.get('q') ?? '')
+  const typed = useDebounced(text, 300)
+  useEffect(() => {
+    const next = new URLSearchParams(params)
+    if (typed) next.set('q', typed)
+    else next.delete('q')
+    if (next.toString() !== params.toString()) setParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typed])
+  const fromURL = params.get('q') ?? ''
+  useEffect(() => {
+    // A link or a tab change rewrote it; not our own write, which would land mid-word.
+    if (fromURL !== typed) setText(fromURL)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromURL])
+  const query = text.trim().toLowerCase()
   // Every tab renders under a search; deferred, typing stays quick while the results catch up.
   const shownQuery = useDeferredValue(query)
-  const setParam = (key: string, value: string | null) => {
-    const next = new URLSearchParams(params)
-    if (value) next.set(key, value)
-    else next.delete(key)
-    setParams(next, { replace: true })
-  }
   const setTab = (t: Tab) => {
     const next = new URLSearchParams(params)
     next.set('tab', t)
     next.delete('q')
+    setText('')
     setParams(next, { replace: true })
   }
   // The latest handlers behind steady ones, or the memoised results would redraw on every keystroke anyway.
-  const handlers = useRef({ setTab, clear: () => setParam('q', null) })
+  const handlers = useRef({ setTab, clear: () => setText('') })
   useLayoutEffect(() => {
-    handlers.current = { setTab, clear: () => setParam('q', null) }
+    handlers.current = { setTab, clear: () => setText('') }
   })
   const openTab = useCallback((t: Tab) => handlers.current.setTab(t), [])
   const clearSearch = useCallback(() => handlers.current.clear(), [])
@@ -102,9 +117,9 @@ export function Settings() {
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
         <PageHeader title="Settings" />
         <SearchInput
-          value={params.get('q') ?? ''}
-          onChange={(e) => setParam('q', e.target.value)}
-          onKeyDown={(e) => e.key === 'Escape' && setParam('q', null)}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === 'Escape' && setText('')}
           placeholder="Search settings"
           aria-label="Search settings"
           className="w-full sm:w-72"
@@ -394,6 +409,8 @@ function useFlag() {
   const values = prefs.data?.effective ?? {}
   return {
     loading: prefs.isPending,
+    // Unloaded settings would show as all off, and a click would write over the real ones.
+    failed: prefs.isError && !prefs.data ? <ErrorState error={prefs.error} retry={() => void prefs.refetch()} /> : null,
     get: (key: string) => values[key] === 'true',
     value: (key: string) => values[key] ?? '',
     set: (key: string, value: string) => setPref.mutate({ key, value }),
@@ -416,6 +433,7 @@ function VLCNote() {
 function PlaybackTab() {
   const f = useFlag()
   if (f.loading) return <Skeleton className="h-64 w-full" />
+  if (f.failed) return f.failed
 
   return (
     <div className="space-y-4">
@@ -434,6 +452,18 @@ function PlaybackTab() {
         </Row>
         <Row label="Skip filler and recaps" hint="Next and download ahead step over them; the list still shows them.">
           <Switch on={f.get('playback.skip_filler')} onChange={(v) => f.set('playback.skip_filler', String(v))} />
+        </Row>
+        <Row
+          label="Counts as watched at"
+          hint="How far into an episode it is ticked and sent to your tracker. Lower if you stop at the credits."
+          keywords="watched threshold progress percent credits"
+        >
+          <Select value={f.value('sync.progress_at') || '0.9'} onChange={(v) => f.set('sync.progress_at', v)}>
+            <option value="0.8">80%</option>
+            <option value="0.85">85%</option>
+            <option value="0.9">90%</option>
+            <option value="0.95">95%</option>
+          </Select>
         </Row>
       </Section>
 
@@ -469,6 +499,18 @@ function PlaybackTab() {
           </Select>
         </Row>
         <SubtitleLanguages f={f} />
+        <SubtitlesWithDub f={f} />
+        <Row
+          label="Casting: draw subtitles into the picture"
+          hint={
+            f.get('cast.burn_subtitles')
+              ? 'The TV shows them as they look here, signs included; this PC re-encodes the video while casting. The episode must be downloaded.'
+              : 'Off, the TV draws plain text it can turn off, without the fonts and signs.'
+          }
+          keywords="chromecast google tv cast burn burned subtitles signs"
+        >
+          <Switch on={f.get('cast.burn_subtitles')} onChange={(v) => f.set('cast.burn_subtitles', String(v))} />
+        </Row>
         <Row label="Show titles as" keywords="english romaji names">
           <Select
             value={f.value('display.titles')}
@@ -486,6 +528,7 @@ function PlaybackTab() {
 function SoundTab() {
   const f = useFlag()
   if (f.loading) return <Skeleton className="h-64 w-full" />
+  if (f.failed) return f.failed
 
   return (
     <div className="space-y-4">
@@ -651,6 +694,23 @@ function SubtitleLanguages({ f }: { f: ReturnType<typeof useFlag> }) {
   )
 }
 
+/** With a dub the viewer understands, full subtitles repeat it; signs and songs still translate the screen. */
+function SubtitlesWithDub({ f }: { f: ReturnType<typeof useFlag> }) {
+  return (
+    <Row
+      label="Subtitles with a dub"
+      hint="When the audio is in one of your subtitle languages. Any track can still be picked in the player."
+      keywords="dub signs songs forced captions"
+    >
+      <Select value={f.value('subtitle.with_dub') || 'signs'} onChange={(v) => f.set('subtitle.with_dub', v)}>
+        <option value="signs">Signs and songs only</option>
+        <option value="off">Off</option>
+        <option value="same">Same as with sub</option>
+      </Select>
+    </Row>
+  )
+}
+
 interface OrphanResult {
   files: { name: string; bytes: number }[]
   removed: number
@@ -662,6 +722,8 @@ interface OrphanResult {
 function StorageTab() {
   const f = useFlag()
   const qc = useQueryClient()
+  // Turning on the deletion of kept downloads asks: those files go for good.
+  const [confirmPurge, setConfirmPurge] = useState(false)
   const cache = useQuery({ queryKey: ['cache'], queryFn: () => api.get<Record<string, number>>('/api/cache') })
   const sweep = useMutation({
     mutationFn: () => api.post('/api/cache/sweep'),
@@ -684,6 +746,7 @@ function StorageTab() {
   const found = preview.data
 
   if (f.loading) return <Skeleton className="h-48 w-full" />
+  if (f.failed) return f.failed
 
   return (
     <div className="space-y-4">
@@ -716,12 +779,26 @@ function StorageTab() {
         {(f.value('cache.autodelete') || 'off') !== 'off' && (
           <Row
             label="Also delete downloaded episodes"
-            hint="Downloads are never evicted, so this is their only automatic cleanup."
+            hint="Episodes you chose to keep are deleted from disk too, once watched. Nothing else ever removes a download."
           >
-            <Switch
-              on={f.get('cache.autodelete_downloads')}
-              onChange={(v) => f.set('cache.autodelete_downloads', String(v))}
-            />
+            {confirmPurge ? (
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <ConfirmInline
+                  label="Delete them too"
+                  note="Kept episodes go for good once watched"
+                  onConfirm={() => {
+                    f.set('cache.autodelete_downloads', 'true')
+                    setConfirmPurge(false)
+                  }}
+                  onCancel={() => setConfirmPurge(false)}
+                />
+              </div>
+            ) : (
+              <Switch
+                on={f.get('cache.autodelete_downloads')}
+                onChange={(v) => (v ? setConfirmPurge(true) : f.set('cache.autodelete_downloads', 'false'))}
+              />
+            )}
           </Row>
         )}
         <Row
@@ -800,9 +877,17 @@ function StorageTab() {
 function DownloadsTab() {
   const f = useFlag()
   if (f.loading) return <Skeleton className="h-64 w-full" />
+  if (f.failed) return f.failed
 
   return (
     <div className="space-y-4">
+      <Section
+        title="Release sites"
+        hint="Where Yoru looks for episodes. Saved at once, no restart."
+        keywords="indexer nyaa tokyotosho torrent sites sources search"
+      >
+        <SitesEditor />
+      </Section>
       <Section title="While you watch">
         <Row
           label="Find the next episode ahead of time"
@@ -864,6 +949,23 @@ function DownloadsTab() {
           </Select>
         </Row>
         <PreferGroups f={f} />
+        {/* Was fixed at 3 GB, silently passing over remuxes on a line that could take them. */}
+        <Row
+          label="Largest automatic episode"
+          hint="Bigger releases are left for you to choose by hand. Films scale by their runtime."
+          keywords="size limit remux 4k gb"
+        >
+          <Select
+            value={f.value('quality.max_auto_bytes') || '3221225472'}
+            onChange={(v) => f.set('quality.max_auto_bytes', v)}
+          >
+            <option value="2147483648">2 GB</option>
+            <option value="3221225472">3 GB</option>
+            <option value="5368709120">5 GB</option>
+            <option value="10737418240">10 GB</option>
+            <option value="0">No limit</option>
+          </Select>
+        </Row>
         <Row label="Allow 10-bit H.264 (Hi10P)" hint="No hardware decodes it; expect high CPU." keywords="hi10p codec">
           <Switch on={f.get('quality.allow_hi10p')} onChange={(v) => f.set('quality.allow_hi10p', String(v))} />
         </Row>
@@ -1111,7 +1213,7 @@ function AccountsTab() {
           <TrackerCard key={tracker.provider} tracker={tracker} host={host} />
         ))
       )}
-      {!f.loading && <DiscordSection f={f} />}
+      {f.failed ?? (!f.loading && <DiscordSection f={f} />)}
     </div>
   )
 }
@@ -1120,7 +1222,8 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
   const qc = useQueryClient()
   const [clientId, setClientId] = useState(tracker.clientId)
   const [secret, setSecret] = useState('')
-  const [editing, setEditing] = useState(!tracker.configured)
+  // Keys are the host's to add: a paired device got the form open and a Save that always failed.
+  const [editing, setEditing] = useState(!tracker.configured && host)
 
   const save = useMutation({
     meta: { inline: true },
@@ -1319,8 +1422,18 @@ function Field({
   )
 }
 
+/** Copy, then what happened: plain-http LAN pages have no clipboard API, so copyText falls back or says no. */
+function useCopy() {
+  const [result, setResult] = useState<'Copied' | "Couldn't copy" | null>(null)
+  const copy = async (text: string) => {
+    setResult((await copyText(text)) ? 'Copied' : "Couldn't copy")
+    window.setTimeout(() => setResult(null), 1500)
+  }
+  return { label: result ?? 'Copy', copy }
+}
+
 function CopyField({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false)
+  const { label, copy } = useCopy()
 
   return (
     <div className="flex items-center gap-2">
@@ -1328,14 +1441,10 @@ function CopyField({ value }: { value: string }) {
         {value}
       </code>
       <button
-        onClick={() => {
-          navigator.clipboard.writeText(value)
-          setCopied(true)
-          window.setTimeout(() => setCopied(false), 1500)
-        }}
+        onClick={() => void copy(value)}
         className="shrink-0 rounded-md bg-base-800 px-2.5 py-1.5 text-xs text-base-100 hover:bg-base-700"
       >
-        {copied ? 'Copied' : 'Copy'}
+        {label}
       </button>
     </div>
   )
@@ -1431,6 +1540,15 @@ function LibraryTab() {
     mutationFn: () => api.post('/api/local/scan'),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['local'] }),
   })
+  // A finished scan changes which episodes show as on disk.
+  const scanning = !!local.data?.scanning
+  const wasScanning = useRef(scanning)
+  useEffect(() => {
+    if (wasScanning.current && !scanning) {
+      for (const key of ['episodes', 'anime']) void qc.invalidateQueries({ queryKey: [key] })
+    }
+    wasScanning.current = scanning
+  }, [scanning, qc])
 
   const roots = local.data?.roots ?? []
   // Which paths the server refused, and why, said beside the list instead of one vague line.
@@ -1594,36 +1712,67 @@ function BackupSection() {
 }
 
 // Desktop alerts are a browser permission plus a switch, belonging to this browser.
-function DesktopNotifyRow() {
-  const supported = typeof Notification !== 'undefined'
-  const [on, setOn] = useState(desktopNotifyWanted())
-  const [permission, setPermission] = useState(supported ? Notification.permission : 'denied')
+const ALERT_HINT: Record<PushState, string> = {
+  on: 'A new episode shows on this device, even with Yoru closed.',
+  off: 'A new episode shows on this device, even with Yoru closed.',
+  denied: 'Blocked by the browser: allow notifications for this site, then turn this on.',
+  insecure:
+    'Shows while Yoru is open. With Yoru closed, alerts need its HTTPS address (Settings, Devices, Install as an app).',
+  install: 'On an iPhone, add Yoru to the Home Screen first (Share, Add to Home Screen), then turn this on there.',
+  unsupported: 'Shows while Yoru is open; this browser cannot get alerts with Yoru closed.',
+}
+
+// One switch for both: alerts while a Yoru tab is open, and, where the browser can, pushed with Yoru closed.
+function AlertsRow() {
+  const [wanted, setWanted] = useState(desktopNotifyWanted())
+  const state = useQuery({ queryKey: ['push-state'], queryFn: pushState, staleTime: Infinity })
+  const qc = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const test = useMutation({ meta: { inline: true }, mutationFn: testPush })
 
   const toggle = async (next: boolean) => {
-    if (next && permission !== 'granted') {
-      const got = await Notification.requestPermission()
-      setPermission(got)
-      if (got !== 'granted') return
-    }
+    setBusy(true)
+    setError('')
     try {
-      localStorage.setItem(DESKTOP_NOTIFY_KEY, next ? '1' : '0')
-    } catch {
-      // Storage unavailable; the switch just will not stick.
+      if (next && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+        if ((await Notification.requestPermission()) !== 'granted') return
+      }
+      // Alerts in an open tab first: a push service that refuses must not take those away too.
+      try {
+        localStorage.setItem(DESKTOP_NOTIFY_KEY, next ? '1' : '0')
+      } catch {
+        // Storage unavailable; the switch just will not stick.
+      }
+      setWanted(next)
+      const can = state.data === 'on' || state.data === 'off'
+      if (next && can) await enablePush()
+      if (!next && can) await disablePush()
+    } catch (e) {
+      setError(next ? `Alerts show while Yoru is open, not with it closed: ${(e as Error).message}` : (e as Error).message)
+    } finally {
+      setBusy(false)
+      void qc.invalidateQueries({ queryKey: ['push-state'] })
     }
-    setOn(next)
   }
 
-  if (!supported) return null
+  if (!state.data) return null
+  const pushed = state.data === 'on'
+  const on = wanted && state.data !== 'denied' && state.data !== 'install'
   return (
-    <Row
-      label="Desktop alerts"
-      hint={
-        permission === 'denied'
-          ? 'Blocked by the browser; allow notifications for this site to use it.'
-          : 'Pop up on this device when a new episode appears, even with Yoru in another tab.'
-      }
-    >
-      <Switch label="Desktop alerts" on={on && permission === 'granted'} onChange={(v) => void toggle(v)} />
+    <Row label="Alerts on this device" hint={ALERT_HINT[state.data]} keywords="desktop push phone notifications closed">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {on && pushed && (
+          <Button size="sm" onClick={() => test.mutate()} disabled={test.isPending}>
+            {test.isPending ? 'Sending…' : test.isSuccess ? 'Sent' : 'Send a test'}
+          </Button>
+        )}
+        <Switch label="Alerts on this device" on={on} onChange={(v) => void toggle(v)} />
+        {(error || test.isError) && (
+          <p className="basis-full text-right text-xs text-recap">{error || (test.error as Error).message}</p>
+        )}
+        {busy && <span className="sr-only">Working…</span>}
+      </div>
     </Row>
   )
 }
@@ -1631,13 +1780,14 @@ function DesktopNotifyRow() {
 function NotificationsTab() {
   const f = useFlag()
   if (f.loading) return <Skeleton className="h-40 w-full" />
+  if (f.failed) return f.failed
 
   return (
     <Section title="Release notifications" hint="Checks for new episodes of anime you follow." keywords="alerts new episodes">
       <Row label="Enabled">
         <Switch on={f.get('notify.enabled')} onChange={(v) => f.set('notify.enabled', String(v))} />
       </Row>
-      <DesktopNotifyRow />
+      <AlertsRow />
       <Row label="Notify for">
         <Select
           value={f.value('notify.releases')}
@@ -1711,7 +1861,8 @@ function DevicesTab() {
       ) : (
         <div className="flex flex-wrap items-center gap-5">
           <img
-            src="/api/access/qr.svg"
+            // The link in the src: a new token or HTTPS coming up changes it, and the image with it.
+            src={`/api/access/qr.svg?url=${encodeURIComponent(access.data.urls[0])}`}
             alt="Pairing QR code"
             className="size-40 rounded-lg bg-white p-2"
           />
@@ -1754,6 +1905,7 @@ function InstallAsApp() {
     refetchInterval: (q) => (q.state.data?.state === 'working' ? 3000 : q.state.data?.state === 'error' ? 10_000 : false),
   })
   const [editing, setEditing] = useState(false)
+  const [turningOff, setTurningOff] = useState(false)
   const [domain, setDomain] = useState('')
   const [token, setToken] = useState('')
   const save = useMutation({
@@ -1762,6 +1914,7 @@ function InstallAsApp() {
     onSuccess: (status) => {
       qc.setQueryData(['access-https'], status)
       setEditing(false)
+      setTurningOff(false)
       setToken('')
     },
     // The pairing links switch to https once the certificate is in.
@@ -1787,7 +1940,18 @@ function InstallAsApp() {
   return (
     <>
       <Row label="Install as an app on a phone" hint={hint}>
-        {state === 'off' || editing ? null : (
+        {state === 'off' || editing ? null : turningOff ? (
+          // It forgets the name and token, and every phone that installed the app stops: asked first.
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <ConfirmInline
+              label={save.isPending ? 'Turning off…' : 'Turn off HTTPS'}
+              note="Phones that installed Yoru as an app stop working until it is set up again"
+              pending={save.isPending}
+              onConfirm={() => save.mutate({ domain: '', token: '' })}
+              onCancel={() => setTurningOff(false)}
+            />
+          </div>
+        ) : (
           <div className="flex gap-2">
             <button
               onClick={() => {
@@ -1798,7 +1962,7 @@ function InstallAsApp() {
             >
               Change
             </button>
-            <button onClick={() => save.mutate({ domain: '', token: '' })} className={buttonClass()}>
+            <button onClick={() => setTurningOff(true)} className={buttonClass()}>
               Turn off
             </button>
           </div>
@@ -1876,23 +2040,37 @@ function DeviceApproval() {
         <Row
           key={d.id}
           label={d.name}
-          hint={`${d.addr} · ${DEVICE_STATUS[d.status]} · asked ${relativeTime(d.requestedAt)}`}
+          hint={
+            // The answer is inline-only, so a failed one says so on its own row.
+            decide.isError && decide.variables?.id === d.id
+              ? (decide.error as Error).message
+              : `${d.addr} · ${DEVICE_STATUS[d.status]} · asked ${relativeTime(d.requestedAt)}`
+          }
         >
           <div className="flex flex-wrap justify-end gap-2">
             {d.status !== 'approved' && d.status !== 'lapsed' && (
               <button
                 onClick={() => decide.mutate({ id: d.id, status: 'approved' })}
+                disabled={decide.isPending}
                 className={buttonClass(d.status === 'pending' ? 'primary' : undefined)}
               >
                 Accept
               </button>
             )}
             {d.status === 'pending' && (
-              <button onClick={() => decide.mutate({ id: d.id, status: 'denied' })} className={buttonClass()}>
+              <button
+                onClick={() => decide.mutate({ id: d.id, status: 'denied' })}
+                disabled={decide.isPending}
+                className={buttonClass()}
+              >
                 Decline
               </button>
             )}
-            <button onClick={() => decide.mutate({ id: d.id, status: 'removed' })} className={buttonClass()}>
+            <button
+              onClick={() => decide.mutate({ id: d.id, status: 'removed' })}
+              disabled={decide.isPending}
+              className={buttonClass()}
+            >
               Remove
             </button>
           </div>
@@ -1910,18 +2088,13 @@ const DEVICE_STATUS: Record<AccessDevice['status'], string> = {
 }
 
 function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
+  const { label, copy } = useCopy()
   return (
     <button
-      onClick={() =>
-        void navigator.clipboard?.writeText(text).then(() => {
-          setCopied(true)
-          window.setTimeout(() => setCopied(false), 1500)
-        })
-      }
+      onClick={() => void copy(text)}
       className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-base-400 hover:bg-base-800 hover:text-white"
     >
-      {copied ? 'Copied' : 'Copy'}
+      {label}
     </button>
   )
 }

@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// Diagnostic: a source still arriving, served like the engine's stream (reads block on a hole). ARRIVE=1 to run.
+// Diagnostic: a source still arriving, served as the engine's stream (reads block on a hole). ARRIVE=1 runs it.
 
 // hole is the stretch [from, to) not yet downloaded; fail makes reads in it error (a paused torrent), not wait.
 type hole struct {
@@ -257,7 +257,7 @@ func newArriveRig(t *testing.T, seconds int, holeAt float64, encode bool) *arriv
 	if encode {
 		s.Plan.VideoCopy, s.Plan.VideoCodec = false, "libx264"
 	}
-	// The hole opens once probing is done, from holeAt of the file to 2 MB before its end (the Cues stay readable).
+	// The hole opens once probing is done, from holeAt to 2 MB before the end (the Cues stay readable).
 	from := int64(float64(info.Size()) * holeAt)
 	h.set(from, info.Size()-2<<20, false)
 	t.Logf("clip %d bytes, plan %+v, segments %d, hole [%d, %d) ~ %.0fs..", info.Size(), s.Plan, s.Segments, from, info.Size()-2<<20, holeAt*float64(seconds))
@@ -480,7 +480,7 @@ func TestArrivingRealtimePlayer(t *testing.T) {
 	}
 }
 
-// Reads fail mid-segment (a pause while the pass waits), then work again: what is served for it, then and later?
+// Reads fail mid-segment (a pause while the pass waits), then work again: what is served, then and later?
 func TestArrivingCutMidSegment(t *testing.T) {
 	arriveEnabled(t)
 	r := newArriveRig(t, 240, 0.53, false)

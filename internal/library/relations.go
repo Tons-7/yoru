@@ -91,7 +91,7 @@ func (r *Relations) Fetch(ctx context.Context, animeID int) (int, error) {
 	if anilist.UsedSaved(ctx) {
 		return 0, nil
 	}
-	// Hidden from this account (adult, with adult off) or gone: not a standalone show, and asked again next time.
+	// Hidden from this account (adult, adult off) or gone: not a standalone show, and asked again next time.
 	if !answered {
 		r.log.Warn("anilist did not answer for the show; its franchise stays unknown", "anime", animeID)
 		return 0, nil

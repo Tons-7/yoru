@@ -57,9 +57,6 @@ func TestHolepunchConnect(t *testing.T) {
 	cfg.DataDir = t.TempDir()
 	cfg.AlwaysWantConns = true
 	cfg.Logger = cfg.Logger.WithContextText("leecher")
-	// This way the leecher leecher will still try to use this peer as a relay, but won't be told
-	// about the seeder via PEX.
-	//cfg.DisablePEX = true
 	cfg.Debug = true
 	leecher, err := NewClient(cfg)
 	require.NoError(t, err)
@@ -255,9 +252,6 @@ func testSimultaneousOpen(
 		})
 		<-signal
 		onSignal(conn)
-		//if err == nil {
-		//	conn.Close()
-		//}
 	}
 	go doDial(
 		firstDialer,
@@ -301,9 +295,8 @@ func testSimultaneousOpen(
 
 const defaultMsg = "hello"
 
-// Show that uTP doesn't implement simultaneous open. When two sockets dial each other, they both
-// get separate connections. This means that holepunch connect may result in an accept (and dial)
-// for one or both peers involved.
+// uTP has no simultaneous open: two sockets dialling each other get a connection each, so a holepunch
+// connect may end in an accept (and a dial) on either peer or both.
 func TestUtpSimultaneousOpen(t *testing.T) {
 	t.Parallel()
 	const network = "udp"

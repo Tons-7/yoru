@@ -48,7 +48,12 @@ const page = await context.newPage()
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 let proceeded = 0
+let pausedAll = 0
 await page.route('**/api/download/queue', (route) => route.fulfill({ json: { items: queued, waiting: {}, watching: proceeded === 0 } }))
+await page.route('**/api/download/queue/pause', (route) => {
+  pausedAll++
+  return route.fulfill({ json: { paused: true } })
+})
 await page.route('**/api/download/queue/proceed', (route) => {
   proceeded++
   return route.fulfill({ json: { watching: false } })
@@ -70,6 +75,13 @@ check((await panel.count()) === 0, 'the downloads panel starts closed')
 const before = await state()
 await page.keyboard.press('d')
 check(await panel.waitFor({ timeout: 3000 }).then(() => true, () => false), 'D opens the downloads over the player')
+// A glance keeps the keys with the player: Space pauses the video, never presses the panel's Pause all.
+await page.keyboard.press(' ')
+await sleep(400)
+check((await state()).paused !== before.paused && pausedAll === 0, 'Space still plays or pauses the video with the panel up',
+  `paused all ${pausedAll}x`)
+await page.keyboard.press(' ')
+await sleep(300)
 const text = (await panel.innerText().catch(() => '')).replace(/\n/g, ' | ')
 // The show is the card, its episodes the lines under it: the name is said once.
 check(/Show One[ |]+Episode 3[ |]+playing[ |]+40%/.test(text) && /1\.2 Mbps/.test(text) && /2 peers/.test(text), 'a download shows its show, episode, progress, speed and peers', text)

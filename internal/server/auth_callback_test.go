@@ -80,7 +80,7 @@ func TestIdleSessionReleasesTheEpisode(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.store.PinOnly(ctx, "abc", 0); err != nil {
+	if err := h.store.PinCache(ctx, "abc", 0, true); err != nil {
 		t.Fatal(err)
 	}
 

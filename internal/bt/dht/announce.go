@@ -18,8 +18,7 @@ import (
 	"yoru/internal/bt/dht/traversal"
 )
 
-// Maintains state for an ongoing Announce operation. An Announce is started by calling
-// Server.Announce.
+// Announce is a running Server.Announce.
 type Announce struct {
 	Peers chan PeersValues
 
@@ -73,10 +72,7 @@ func AnnouncePeer(opts AnnouncePeerOpts) AnnounceOpt {
 	}
 }
 
-// Deprecated: Use Server.AnnounceTraversal.
-// Traverses the DHT graph toward nodes that store peers for the infohash, streaming them to the
-// caller, and announcing the local node to each responding node if port is non-zero or impliedPort
-// is true.
+// Deprecated: Use Server.AnnounceTraversal; this also announces us to answering nodes (port or impliedPort).
 func (s *Server) Announce(infoHash [20]byte, port int, impliedPort bool, opts ...AnnounceOpt) (_ *Announce, err error) {
 	if port != 0 || impliedPort {
 		opts = append([]AnnounceOpt{AnnouncePeer(AnnouncePeerOpts{
@@ -87,8 +83,7 @@ func (s *Server) Announce(infoHash [20]byte, port int, impliedPort bool, opts ..
 	return s.AnnounceTraversal(infoHash, opts...)
 }
 
-// Traverses the DHT graph toward nodes that store peers for the infohash, streaming them to the
-// caller.
+// AnnounceTraversal walks toward the nodes holding the infohash's peers, streaming them to the caller.
 func (s *Server) AnnounceTraversal(infoHash [20]byte, opts ...AnnounceOpt) (_ *Announce, err error) {
 	infoHashInt160 := int160.FromByteArray(infoHash)
 	a := &Announce{
@@ -180,9 +175,7 @@ func (a *Announce) getPeers(ctx context.Context, addr krpc.NodeAddr) traversal.Q
 	return res.TraversalQueryResult(addr)
 }
 
-// Corresponds to the "values" key in a get_peers KRPC response. A list of
-// peers that a node has reported as being in the swarm for a queried info
-// hash.
+// PeersValues is a get_peers reply's "values": peers a node says are in the infohash's swarm.
 type PeersValues struct {
 	Peers         []Peer // Peers given in get_peers response.
 	krpc.NodeInfo        // The node that gave the response.

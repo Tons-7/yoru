@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { cx } from '../lib/format'
 import { onToast, TOAST_MS, type Toast } from '../lib/toast'
+import { usePortalHome } from './keys'
 
 /** Shows an action's failure when its own screen has no place for it. */
 export function Toaster() {
   const [toasts, setToasts] = useState<Toast[]>([])
+  // Inside the fullscreen player when there is one: outside it nothing shows.
+  const home = usePortalHome()
 
   useEffect(
     () =>
@@ -18,7 +22,7 @@ export function Toaster() {
     [],
   )
 
-  return (
+  return createPortal(
     <div
       aria-live="polite"
       // Bottom-left from sm up: the device access requests hold the bottom-right corner.
@@ -57,6 +61,7 @@ export function Toaster() {
           </button>
         </div>
       ))}
-    </div>
+    </div>,
+    home,
   )
 }

@@ -244,6 +244,45 @@ func TestCrossSitePostsAreRefused(t *testing.T) {
 	}
 }
 
+// Another site's page in the host's browser can't make Yoru work for it, nor frame it; links still open.
+func TestLoopbackRefusesOtherSitesSubrequests(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	get := func(path string, header map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.RemoteAddr = "127.0.0.1:50000"
+		req.Host = "127.0.0.1:4321"
+		for k, v := range header {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		h.handler.ServeHTTP(rec, req)
+		return rec
+	}
+	for _, header := range []map[string]string{
+		{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image"},
+		{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "iframe"},
+		{"Sec-Fetch-Site": "same-site", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"},
+	} {
+		if rec := get("/api/torrents?q=x", header); rec.Code != http.StatusForbidden {
+			t.Errorf("%v: status %d, want 403", header, rec.Code)
+		}
+	}
+	for _, header := range []map[string]string{
+		{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"},
+		{"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors"},
+		{"Sec-Fetch-Site": "none", "Sec-Fetch-Mode": "navigate"},
+		{}, // mpv, VLC, ffmpeg
+	} {
+		if rec := get("/api/setup", header); rec.Code == http.StatusForbidden {
+			t.Errorf("%v: refused", header)
+		}
+	}
+	rec := get("/api/setup", nil)
+	if rec.Header().Get("X-Frame-Options") != "DENY" || !strings.Contains(rec.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+		t.Errorf("framing allowed: %v", rec.Header())
+	}
+}
+
 // A paired phone can't point the library at host drives, move the database, or link trackers.
 func TestHostOnlyRoutesRefusePairedDevices(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
@@ -256,6 +295,24 @@ func TestHostOnlyRoutesRefusePairedDevices(t *testing.T) {
 		{"GET", "/callback?state=x&code=y", ""},
 		{"GET", "/mal/callback?state=x&code=y", ""},
 		{"POST", "/api/access/network", `{"lan":true}`},
+		{"GET", "/api/network", ""},
+		{"POST", "/api/trackers", `{}`},
+		{"POST", "/api/setup/install/ffmpeg", ""},
+		{"POST", "/api/update/apply", ""},
+		{"POST", "/api/auth/logout", ""},
+		{"POST", "/api/mal/auth/logout", ""},
+		{"GET", "/api/access/devices", ""},
+		{"POST", "/api/access/devices/1", `{}`},
+		{"DELETE", "/api/access/devices/1", ""},
+		{"POST", "/api/access/approval", `{}`},
+		{"GET", "/api/access/https", ""},
+		{"POST", "/api/access/https", `{}`},
+		{"POST", "/api/access/rotate", ""},
+		{"GET", "/api/access/firewall", ""},
+		{"POST", "/api/access/firewall", ""},
+		{"POST", "/api/access/network-settings", `{}`},
+		{"GET", "/api/torrent/firewall", ""},
+		{"POST", "/api/torrent/firewall", ""},
 	} {
 		req := httptest.NewRequest(route.method, route.path, strings.NewReader(route.body))
 		req.RemoteAddr = "192.168.1.50:5555"

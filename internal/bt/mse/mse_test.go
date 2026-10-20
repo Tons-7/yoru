@@ -139,8 +139,7 @@ func TestReceiveRandomData(t *testing.T) {
 	_, _, err := ReceiveHandshake(context.Background(), readWriter{&tr, io.Discard}, nil, DefaultCryptoSelector)
 	// No skey matches
 	require.Error(t, err)
-	// Establishing S, and then reading the maximum padding for giving up on
-	// synchronizing.
+	// S, then the most padding read before giving up on synchronising.
 	require.EqualValues(t, 96+532, tr.n)
 }
 
@@ -211,9 +210,6 @@ func benchmarkStream(t *testing.B, crypto CryptoMethod) {
 		if !bytes.Equal(br[len(ia):], a) {
 			t.Fatalf("B read the wrong A")
 		}
-		// require.Equal(t, b, ar)
-		// require.Equal(t, ia, br[:len(ia)])
-		// require.Equal(t, a, br[len(ia):])
 	}
 }
 

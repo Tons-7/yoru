@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { copyText } from '../lib/downloads'
 import { cx } from '../lib/format'
 import { toast } from '../lib/toast'
 import { useDismiss, useModalFocus } from '../lib/hooks'
@@ -12,7 +13,7 @@ interface ExternalLink {
   expires: string
 }
 
-/** Where each app is asked to play a link: Android lists every video app; iOS has no chooser, so two by name. */
+/** How each app is asked to play a link: Android lists every video app; iOS has no chooser, so two by name. */
 function appLinks(link: ExternalLink): { label: string; href: string }[] {
   const ua = navigator.userAgent
   if (/Android/i.test(ua)) {
@@ -36,12 +37,12 @@ function appLinks(link: ExternalLink): { label: string; href: string }[] {
   return []
 }
 
-/** Hands the episode's own file to a video app: VLC and mpv draw its subtitles as made, styled signs and all. */
+/** Hands the episode's own file to a video app: VLC and mpv draw its subtitles as made, signs and all. */
 export function OpenInApp({ source, open, onClose }: { source: string; open: boolean; onClose: () => void }) {
   const close = useCallback(() => onClose(), [onClose])
   const panel = useDismiss<HTMLDivElement>(close)
   useModalFocus(panel, open)
-  // Made when the sheet opens, so each choice is a plain link the tap follows (a phone won't hand off otherwise).
+  // Made when the sheet opens, so each choice is a plain link the tap follows (a phone won't hand off else).
   // Fresh every time: a restart of Yoru ends every link made before it.
   const link = useQuery({
     queryKey: ['external-link', source],
@@ -52,13 +53,10 @@ export function OpenInApp({ source, open, onClose }: { source: string; open: boo
 
   if (!open) return null
   const apps = link.data ? appLinks(link.data) : []
+  // copyText: a phone on plain http has no clipboard API, which the old way still covers.
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(link.data!.url)
-      toast('Link copied', 'info')
-    } catch {
-      toast('Copy the link from the box instead; this page may not use the clipboard')
-    }
+    if (await copyText(link.data!.url, panel.current ?? undefined)) toast('Link copied', 'info')
+    else toast('Copy the link from the box instead; this page may not use the clipboard')
   }
 
   return (

@@ -29,19 +29,7 @@ func testMarshalUnmarshalMsg(t *testing.T, m Msg, expected string) {
 }
 
 func TestMarshalUnmarshalMsg(t *testing.T) {
-	//{
-	//	"r":
-	//	{
-	//		"id": <20 byte id of sending node (string)>,
-	//		"interval": <the subset refresh interval in seconds (integer)>,
-	//		"nodes": <nodes close to 'target'>,
-	//		"num": <number of infohashes in storage (integer)>,
-	//		"samples": <subset of stored infohashes, N × 20 bytes (string)>
-	//	},
-	//	"t": <transaction-id (string)>,
-	//	"y": "r"
-	//}
-	// Test BEP 51 features
+	// BEP 51: a reply's interval, num and samples.
 	testMarshalUnmarshalMsg(t, Msg{
 		R: &Return{
 			ID: IdFromString("hellohellohellohello"),

@@ -547,13 +547,25 @@ func TestRescueDoesNotEndAStreamWaitingForData(t *testing.T) {
 		read <- err
 	}()
 
-	// Waiting, as a player on a slow swarm does, through several janitor rounds of rescue.
+	// Waiting, as a player on a slow swarm does, until the rescue has seen it (later under load), then
+	// several more janitor rounds, through which it must say so only once and leave the stream be.
+	const line = "a stream waits on a piece no peer was asked for"
+	seen := time.After(20 * time.Second)
+	for lines.count(line) == 0 {
+		select {
+		case err := <-read:
+			t.Fatalf("the rescue ended the stream: %v", err)
+		case <-seen:
+			t.Fatal("the rescue never noticed the waiting stream")
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 	select {
 	case err := <-read:
 		t.Fatalf("the rescue ended the stream: %v", err)
-	case <-time.After(6 * janitorEvery):
+	case <-time.After(4 * janitorEvery):
 	}
-	if n := lines.count("a stream waits on a piece no peer was asked for"); n != 1 {
+	if n := lines.count(line); n != 1 {
 		t.Errorf("no-holder line logged %d times, want once per wait", n)
 	}
 }

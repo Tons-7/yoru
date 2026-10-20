@@ -3,11 +3,11 @@ package traversal
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 
 	"github.com/anacrolix/chansync"
 	"github.com/anacrolix/chansync/events"
-	"github.com/anacrolix/sync"
 
 	"yoru/internal/bt/dht/containers"
 	"yoru/internal/bt/dht/int160"
@@ -17,12 +17,9 @@ import (
 )
 
 type QueryResult struct {
-	// This is set non-nil if a query reply is a response-type as defined by the DHT BEP 5 (contains
-	// "r")
+	// Set when the reply is a BEP 5 response (it has "r").
 	ResponseFrom *krpc.NodeInfo
-	// Data associated with a closest node. Is this ever not a string? I think using generics for
-	// this leaks throughout the entire Operation. Hardly worth it. It's still possible to handle
-	// invalid token types at runtime.
+	// A closest node's data, a token string in practice; generics would spread through all of Operation.
 	ClosestData any
 	Nodes       []krpc.NodeInfo
 	Nodes6      []krpc.NodeInfo
@@ -34,10 +31,8 @@ type OperationInput struct {
 	K          int
 	DoQuery    func(context.Context, krpc.NodeAddr) QueryResult
 	NodeFilter func(types.AddrMaybeId) bool
-	// This filters the adding of nodes to the "closest data" set based on the data they provided.
-	// The data is (usually?) derived from the token field in a reply. For the get_peers traversal
-	// operation for example, we would filter out non-strings, since we later need to pass strings
-	// in to the Token field to announce ourselves to the closest nodes we found to the target.
+	// Which nodes join the closest set by the data (usually the reply's token) they gave: get_peers keeps
+	// strings only, as Token needs one to announce to them.
 	DataFilter func(data any) bool
 }
 

@@ -60,7 +60,7 @@ if ($Target) {
 }
 
 if (-not $Out) {
-    # The name from its parts: a regex on 'yoru.exe' matched twice and gave yoru-windows-arm64.exe-windows-arm64.
+    # Built from its parts: a regex on 'yoru.exe' matched twice, giving yoru-windows-arm64.exe-windows-arm64.
     $targetOS = if ($goos) { $goos } else { go env GOOS }
     $ext = if ($targetOS -eq 'windows') { '.exe' } else { '' }
     $suffix = if ($Target) { "-$goos-$goarch" } else { '' }

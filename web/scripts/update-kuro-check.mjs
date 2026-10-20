@@ -71,7 +71,7 @@ check(build(oldTree, 'kuro', OLD, join(root, 'kuro.exe')).status === 0, `built k
 check(build(REPO, 'yoru', NEW, join(release, 'new.exe')).status === 0, `built Yoru ${NEW}`)
 check(build(REPO, 'yoru', NEWER, join(release, 'newer.exe')).status === 0, `built Yoru ${NEWER}`)
 
-// Each release carries its program twice: yoru.exe for Yoru's updater, kuro.exe for kuro's (package.ps1 does this).
+// Each release carries its program twice: yoru.exe for Yoru's updater, kuro.exe for kuro's (from package.ps1).
 const tar = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
 const pack = (version, binary) => {
   const assets = {}
@@ -94,7 +94,7 @@ let latest = releases[NEW]
 let listed = [NEW, MID, OLD]
 
 // ---------------------------------------------------------------- fake github
-// Both names: kuro's updater asks for Tons-7/kuro (GitHub forwards it after the rename), Yoru's for Tons-7/yoru.
+// Both names: kuro's updater asks for Tons-7/kuro (GitHub forwards it since the rename), Yoru's Tons-7/yoru.
 const gh = createServer((req, res) => {
   const url = req.url ?? ''
   const dl = (name) => `${ghBase()}/dl/${latest.version}/${name}`

@@ -42,7 +42,7 @@ func TestSearchTermsAreClean(t *testing.T) {
 	got := searchTerms(
 		[]string{"Onaji Zemi no Someya-san ga Sexy Joyuu Datta Hanashi."},
 		"My Classmate's a Sexy Actress, and Now We Live Together?!",
-		4, 0, nil, false,
+		4, 0, 0, nil, false,
 	)
 	if len(got) == 0 {
 		t.Fatal("no search terms")

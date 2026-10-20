@@ -2,6 +2,7 @@ package deps
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -64,8 +65,17 @@ func resolveFfmpeg(ctx context.Context, m *Manager) (Release, error) {
 		if err != nil {
 			return Release{}, err
 		}
-		// No version endpoint; the tarball's name is enough to tell an install happened.
-		return Release{Version: "static", URL: url, Archive: true}, nil
+		// No version endpoint: the tarball's name tells an install happened. Only an MD5 is published.
+		sum := m.publishedSum(ctx, url+".md5", 32)
+		if sum == "" {
+			time.Sleep(2 * time.Second)
+			sum = m.publishedSum(ctx, url+".md5", 32)
+		}
+		rel := Release{Version: "static", URL: url, Archive: true}
+		if sum != "" {
+			rel.Digest = "md5:" + sum
+		}
+		return rel, nil
 	default:
 		return Release{}, manualInstall("ffmpeg")
 	}
@@ -94,11 +104,11 @@ func resolveFfmpegWindows(ctx context.Context, m *Manager) (Release, error) {
 		return Release{}, err
 	}
 	const url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z"
-	sum := m.publishedSum(ctx, url+".sha256")
+	sum := m.publishedSum(ctx, url+".sha256", 64)
 	if sum == "" {
 		// Once more after a moment: the sidecar is a tiny file a flaky line loses.
 		time.Sleep(2 * time.Second)
-		sum = m.publishedSum(ctx, url+".sha256")
+		sum = m.publishedSum(ctx, url+".sha256", 64)
 	}
 	if sum == "" {
 		m.log.Warn("ffmpeg checksum unavailable; installing unverified")
@@ -111,8 +121,9 @@ func resolveFfmpegWindows(ctx context.Context, m *Manager) (Release, error) {
 	}, nil
 }
 
-// publishedSum reads a source's published checksum; "" when unreadable, and the install goes on unverified.
-func (m *Manager) publishedSum(ctx context.Context, url string) string {
+// publishedSum reads a source's published checksum of size hex digits; "" when unreadable, and the install
+// goes on unverified.
+func (m *Manager) publishedSum(ctx context.Context, url string, size int) string {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return ""
@@ -134,7 +145,7 @@ func (m *Manager) publishedSum(ctx context.Context, url string) string {
 	}
 	// Either a bare hash or "<hash>  <filename>".
 	sum, _, _ := strings.Cut(strings.TrimSpace(string(raw)), " ")
-	if len(sum) != 64 {
+	if _, err := hex.DecodeString(sum); err != nil || len(sum) != size {
 		return ""
 	}
 	return sum

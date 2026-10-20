@@ -15,8 +15,7 @@ type (
 		Encryption bool `bencode:"e"`
 		// BEP 9
 		MetadataSize int `bencode:"metadata_size,omitempty"`
-		// The local client port. It would be redundant for the receiving side of
-		// a connection to send this.
+		// The sender's listen port; redundant from the side that was dialled.
 		Port   int       `bencode:"p,omitempty"`
 		YourIp CompactIp `bencode:"yourip,omitempty"`
 		Ipv4   CompactIp `bencode:"ipv4,omitempty"`

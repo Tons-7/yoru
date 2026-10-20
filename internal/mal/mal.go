@@ -150,6 +150,18 @@ func Unauthorized(err error) bool {
 	return false
 }
 
+// Unreachable: MAL is down or limiting everyone (5xx, 429, no answer), so the next request would fail too.
+func Unreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var e *Error
+	if asError(err, &e) {
+		return e.Status >= 500 || e.Status == http.StatusTooManyRequests
+	}
+	return true
+}
+
 // get calls an authenticated endpoint; absolute is for paging, where MAL hands back full URLs.
 func (c *Client) get(ctx context.Context, absolute string, out any) error {
 	return c.do(ctx, http.MethodGet, absolute, nil, out)

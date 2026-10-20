@@ -6,11 +6,8 @@ import (
 	pp "yoru/internal/bt/peer_protocol"
 )
 
-// Various connection-level metrics. At the Torrent level these are aggregates. Chunks are messages
-// with data payloads. Data is actual torrent content without any overhead. Useful is something we
-// needed locally. Intended is something we were expecting (I think such as when we cancel a request
-// but it arrives anyway). Written is things sent to the peer, and Read is stuff received from them.
-// Due to the implementation of Count, must be 64-bit aligned on 32-bit platforms for its atomics.
+// Connection metrics, summed per Torrent: chunks carry data, Data is content alone, Useful we needed,
+// Intended we expected. 64-bit aligned on 32-bit platforms, for Count's atomics.
 type ConnStats struct {
 	// Total bytes on the wire. Includes handshakes and encryption.
 	BytesWritten     Count

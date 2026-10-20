@@ -25,11 +25,12 @@ export function Home() {
   const upNextEmpty = upNext.isSuccess && upNext.data.items.length === 0
   const [editing, setEditing] = useState(false)
 
-  // Everything already aired, newest first: the "recently released" strip.
+  // Everything already aired, newest first: the "recently released" strip. Shows on the list lead, or a busy
+  // season pushed them past the cut.
   const now = useNow() / 1000
   const released = (schedule.data?.items ?? [])
     .filter((item) => item.airingAt <= now)
-    .sort((a, b) => b.airingAt - a.airingAt)
+    .sort((a, b) => Number(b.onList) - Number(a.onList) || b.airingAt - a.airingAt)
     .slice(0, 20)
 
   return (
@@ -42,6 +43,8 @@ export function Home() {
 
           {continuing.isPending ? (
             <RailSkeleton title="Continue watching" />
+          ) : continuing.isError && !continuing.data ? (
+            <RailFailed title="Continue watching" retry={() => void continuing.refetch()} />
           ) : (
             continuing.data && continuing.data.items.length > 0 && (
               <Rail
@@ -72,6 +75,8 @@ export function Home() {
 
           {schedule.isPending ? (
             <RailSkeleton title="Recently released" />
+          ) : schedule.isError && !schedule.data ? (
+            <RailFailed title="Recently released" retry={() => void schedule.refetch()} />
           ) : (
             released.length > 0 && (
               <Rail title="Recently released" more={{ to: '/recent' }}>
@@ -114,6 +119,8 @@ export function Home() {
 
           {upcoming.isPending ? (
             <RailSkeleton title="Upcoming" />
+          ) : upcoming.isError && !upcoming.data ? (
+            <RailFailed title="Upcoming" retry={() => void upcoming.refetch()} />
           ) : (
             (upcoming.data?.items ?? []).length > 0 && (
               <Rail title="Upcoming" more={{ to: browseSeason(nextSeason()) }}>

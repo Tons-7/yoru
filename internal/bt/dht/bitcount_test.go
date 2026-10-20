@@ -1,8 +1,6 @@
 package dht
 
-// TODO: The bitcounting is a relic of the old and incorrect distance
-// calculation. It is still useful in some tests but should eventually be
-// replaced with actual distances.
+// TODO: bit counting is left from the old, wrong distance; tests should use real distances.
 
 // How many bits?
 func bitCount(b []byte) int {

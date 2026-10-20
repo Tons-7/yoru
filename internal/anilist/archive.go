@@ -53,6 +53,9 @@ func archiveKey(body []byte, authed bool) string {
 	return hex.EncodeToString(sum.Sum(nil))
 }
 
+// Unreachable: AniList is down or refusing everyone (5xx, 403, 429, no connection), not this one request.
+func Unreachable(ctx context.Context, err error) bool { return unreachable(ctx, err) }
+
 // unreachable: AniList gave no answer. A GraphQL rejection is an answer.
 func unreachable(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil {

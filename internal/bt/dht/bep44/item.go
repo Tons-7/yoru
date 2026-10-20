@@ -41,19 +41,8 @@ func (i *Item) ToPut() Put {
 	return p
 }
 
-// NewItem creates a new arbitrary DHT element. The distinction between storing mutable
-// and immutable items is the inclusion of a public key, a sequence number, signature
-// and an optional salt.
-//
-// cas parameter is short for compare and swap, it has similar semantics as CAS CPU
-// instructions. It is used to avoid race conditions when multiple nodes are writing
-// to the same slot in the DHT. It is optional. If present it specifies the sequence
-// number of the data blob being overwritten by the put.
-//
-// salt parameter is used to make possible several targets using the same private key.
-//
-// The optional seq field specifies that an item's value should only be sent if its
-// sequence number is greater than the given value.
+// NewItem makes a DHT item, mutable when it has a key (then seq and a signature). cas, when set, is the seq the
+// put replaces (compare and swap); salt gives one key several targets; seq sends the value only past it.
 func NewItem(value any, salt []byte, seq, cas int64, k ed25519.PrivateKey) (*Item, error) {
 	v, err := bencode.Marshal(value)
 	if err != nil {

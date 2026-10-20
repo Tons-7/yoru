@@ -56,9 +56,11 @@ type inFlightFetch struct {
 	done  chan struct{}
 	once  sync.Once
 	rec   store.TorrentRecord // under Prefetcher.mu; an empty hash until added, or after a discard
-	// Under Prefetcher.mu: the hash this fetch claimed from adoption, and whether play took its torrent over.
-	hash  string
-	taken bool
+	// Under Prefetcher.mu: the hash this fetch claimed from adoption, whether play took its torrent over,
+	// and whether the fetch, seeing that, has let it go.
+	hash      string
+	taken     bool
+	abandoned bool
 }
 
 // errOvertaken: another path is fetching this episode, or recorded a release for it meanwhile.
@@ -117,10 +119,30 @@ func (p *Prefetcher) Fetching(animeID, episode int) (store.TorrentRecord, bool) 
 	return f.rec, true
 }
 
+// takenOver: play has the torrent, and from here the fetch leaves it to play for good.
 func (p *Prefetcher) takenOver(f *inFlightFetch) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if f.taken {
+		f.abandoned = true
+	}
 	return f.taken
+}
+
+// HandBack returns a torrent play took over but didn't use; false when the fetch already let it go, and the
+// torrent is then the caller's to remove.
+func (p *Prefetcher) HandBack(animeID, episode int, hash string) bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	f := p.fetching[fetchKey(animeID, episode)]
+	if f == nil || f.abandoned || !strings.EqualFold(f.rec.InfoHash, hash) {
+		return false
+	}
+	f.taken = false
+	return true
 }
 
 // inFlight is the fetch of this episode under way, nil when there is none.
@@ -168,11 +190,7 @@ func (p *Prefetcher) Claimed(hash string) bool {
 	return p.claimed[strings.ToLower(hash)]
 }
 
-// Resolved as an episode starts, taken when it ends, so it must outlast one.
-// Play still warms it, so a stale pick costs one failed candidate.
-const preparedTTL = 4 * time.Hour
-
-// preparedFresh is how long a resolved release is not worth resolving again.
+// preparedFresh is how long a resolved release stands: neither resolved again nor passed over by play.
 var preparedFresh = 30 * time.Minute
 
 type preparedRelease struct {
@@ -456,7 +474,7 @@ func (p *Prefetcher) storePrepared(animeID, episode int, r score.Result) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for k, v := range p.prepared {
-		if now.Sub(v.at) > preparedTTL {
+		if now.Sub(v.at) > preparedFresh {
 			delete(p.prepared, k)
 		}
 	}
@@ -484,7 +502,9 @@ func (p *Prefetcher) TakePrepared(animeID, episode int) (score.Result, bool) {
 		return score.Result{}, false
 	}
 	delete(p.prepared, key)
-	if time.Since(got.at) > preparedTTL {
+	// Older than preparedFresh, a better release may be out since (just after airing, a 1080p or v2 follows
+	// the first 720p): play searches, as highest quality always wins over a quicker start.
+	if time.Since(got.at) > preparedFresh {
 		return score.Result{}, false
 	}
 	return got.result, true
@@ -507,7 +527,7 @@ func (p *Prefetcher) DownloadRelease(ctx context.Context, animeID, episode, seas
 		if !errors.Is(err, errOvertaken) {
 			return err
 		}
-		// Another path is fetching this episode or recorded a release for it: that copy is kept, once on record.
+		// Another path fetches this episode or recorded a release for it: that copy is kept, once on record.
 		if f := p.inFlight(animeID, episode); f != nil {
 			select {
 			case <-f.done:

@@ -142,10 +142,8 @@ func (cl *Client) writeRequest(
 	if action == ActionConnect {
 		connId = ConnectRequestConnectionId
 	} else {
-		// We lock here while establishing a connection ID, and then ensuring that the request is
-		// written before allowing the connection ID to change again. This is to ensure the server
-		// doesn't assign us another ID before we've sent this request. Note that this doesn't allow
-		// for us to return if the context is cancelled while we wait to obtain a new ID.
+		// Held from getting a connection ID until the request is written, so the server can't hand out
+		// another first (a cancel can't end the wait for an ID).
 		err = cl.mu.LockCtx(ctx)
 		if err != nil {
 			return fmt.Errorf("locking connection id: %w", err)
@@ -223,8 +221,7 @@ func (cl *Client) request(
 			respBody = dr.Body
 			addr = dr.Addr
 		} else if dr.Header.Action == ActionError {
-			// udp://tracker.torrent.eu.org:451/announce frequently returns "Connection ID
-			// missmatch.\x00"
+			// udp://tracker.torrent.eu.org:451 often answers "Connection ID missmatch.\x00".
 			stringBody := string(dr.Body)
 			err = ErrorResponse{Message: stringBody}
 			if stringBody == ConnectionIdMissmatchNul {

@@ -70,8 +70,14 @@ func (me *Peers) UnmarshalBencode(b []byte) (err error) {
 		vars.Add("http responses with list peers", 1)
 		me.Compact = false
 		for _, i := range v {
+			d, ok := i.(map[string]any)
+			if !ok {
+				return fmt.Errorf("peer entry is %T, not a dict", i)
+			}
 			var p Peer
-			p.FromDictInterface(i.(map[string]any))
+			if err = p.FromDictInterface(d); err != nil {
+				return
+			}
 			me.List = append(me.List, p)
 		}
 		return

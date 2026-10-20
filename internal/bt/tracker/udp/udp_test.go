@@ -18,8 +18,7 @@ import (
 	"yoru/internal/bt/dht/krpc"
 )
 
-// Ensure net.IPs are stored big-endian, to match the way they're read from
-// the wire.
+// net.IPs are stored big-endian, as they are read off the wire.
 func TestNetIPv4Bytes(t *testing.T) {
 	ip := net.IP([]byte{127, 0, 0, 1})
 	if ip.String() != "127.0.0.1" {
@@ -105,8 +104,7 @@ func TestConnClientLogDispatchUnknownTransactionId(t *testing.T) {
 func TestConnectionIdMismatch(t *testing.T) {
 	t.Skip("Server host returns consistent connection ID in limited tests and so isn't effective.")
 	cl, err := NewConnClient(NewConnClientOpts{
-		// This host seems to return `Connection ID missmatch.\x00` every 2 minutes or so under
-		// heavy use.
+		// Answers `Connection ID missmatch.\x00` every couple of minutes under heavy use.
 		Host: "tracker.torrent.eu.org:451",
 		//Host:    "tracker.opentrackr.org:1337",
 		Network: "udp",

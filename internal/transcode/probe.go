@@ -241,8 +241,8 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 	if info.Video == nil {
 		return nil, fmt.Errorf("no video stream in %s", url)
 	}
-	// The playlist ends with the picture and sound: subtitles running past them left slots with nothing to play.
-	// Only by a little: a stale length tag from an older cut of the file must not cut real minutes off the end.
+	// The playlist ends with the picture and sound: subtitles running past them left slots with nothing in.
+	// Only by a little: a stale length tag from an older cut of the file mustn't cut real minutes off the end.
 	if lengthsKnown && mediaEnd > 0 && mediaEnd < info.Duration && info.Duration-mediaEnd <= maxSubtitleOverhang {
 		info.Duration = mediaEnd
 	}
@@ -254,7 +254,7 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 // How far subtitles may run past the picture and sound before the tracks' own lengths are doubted.
 const maxSubtitleOverhang = 30.0
 
-// streamSeconds is one track's own length: ffprobe's, or the DURATION tag Matroska muxers write; 0 when neither.
+// streamSeconds is one track's length: ffprobe's, or the DURATION tag Matroska muxers write; 0 when neither.
 func streamSeconds(duration string, tags map[string]string) float64 {
 	if v, err := strconv.ParseFloat(duration, 64); err == nil && v > 0 {
 		return v
@@ -343,8 +343,9 @@ func planFor(info *MediaInfo, encoder string, track int, snd sound.Options) Plan
 	}
 	if len(info.Audio) > 0 {
 		a := info.Audio[track]
+		// Not Vorbis: browsers take it only in WebM, and these segments are fMP4.
 		switch a.Codec {
-		case "aac", "mp3", "opus", "flac", "vorbis":
+		case "aac", "mp3", "opus", "flac":
 		default:
 			plan.AudioCopy = false
 			reasons = append(reasons, "audio "+a.Codec)

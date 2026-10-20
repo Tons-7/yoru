@@ -79,8 +79,7 @@ func (e *Encoder) reflectByteSlice(s []byte) {
 	e.write(s)
 }
 
-// Returns true if the value implements Marshaler interface and marshaling was
-// done successfully.
+// True when v is a Marshaler and marshalled itself.
 func (e *Encoder) reflectMarshaler(v reflect.Value) bool {
 	if !v.Type().Implements(marshalerType) {
 		if v.Kind() != reflect.Pointer && v.CanAddr() && v.Addr().Type().Implements(marshalerType) {

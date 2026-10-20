@@ -39,14 +39,20 @@ var Defaults = map[string]string{
 	// Subtitle languages, best first. A release in none is ranked down, not
 	// refused (sometimes it's the only one). Same order decides which track plays.
 	"subtitle.languages": `["en"]`,
+	// With a dub in a language read above: signs and songs only ("signs"), none ("off"), or as sub ("same").
+	"subtitle.with_dub": "signs",
+	// Per show only: {"group","delay"}, a subtitle delay kept for that show's releases from one group.
+	"subtitle.delay": "",
+	// Casting: subtitles drawn into the picture (look and signs kept, video re-encoded) over plain text.
+	"cast.burn_subtitles": "false",
 
 	"display.titles": TitleEnglish,
 	// How the app window opens: fullscreen or maximized. Takes effect next launch.
 	"window.mode": "fullscreen",
 
-	"quality.ladder":         `["1080p:BD:HEVC:10","1080p:BD","1080p:WEB","720p"]`,
+	"quality.ladder": `["1080p:BD:HEVC:10","1080p:BD","1080p:WEB","720p"]`,
 	// "best", or "720p"/"480p": the best release up to that, a bigger one only when nothing fits.
-	"quality.prefer": "best",
+	"quality.prefer":         "best",
 	"quality.max_auto_bytes": "3221225472",
 	"quality.allow_hi10p":    "false",
 	// Release groups to favour, as a JSON array; a match earns a scoring bonus.
@@ -364,8 +370,9 @@ func (s *Store) ApplyRemoteFavourites(ctx context.Context, ids []int) (int, erro
 		remote[id] = true
 	}
 
+	// MAL-only titles (negative ids) are never on AniList's list, so its list says nothing about them.
 	rows, err := s.r.QueryContext(ctx,
-		`SELECT anime_id, favourite FROM user_anime WHERE favourite_dirty = 0`)
+		`SELECT anime_id, favourite FROM user_anime WHERE favourite_dirty = 0 AND anime_id > 0`)
 	if err != nil {
 		return 0, err
 	}

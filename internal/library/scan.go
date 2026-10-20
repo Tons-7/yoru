@@ -192,7 +192,7 @@ func (s *Scanner) walkInto(ctx context.Context, root, dir string, visited map[st
 	visited[dir] = true
 	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			// A root that cannot be read is a configuration problem worth surfacing; a folder inside it is noted.
+			// An unreadable root is a configuration problem worth surfacing; a folder inside it is only noted.
 			if path == root {
 				return err
 			}

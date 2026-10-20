@@ -23,6 +23,8 @@ import (
 
 var vars = expvar.NewMap("tracker/http")
 
+const maxResponseBytes = 4 << 20
+
 func setAnnounceParams(_url *url.URL, ar *AnnounceRequest, opts AnnounceOpt) {
 	q := url.Values{}
 
@@ -34,9 +36,7 @@ func setAnnounceParams(_url *url.URL, ar *AnnounceRequest, opts AnnounceOpt) {
 	q.Set("uploaded", strconv.FormatInt(ar.Uploaded, 10))
 	q.Set("downloaded", strconv.FormatInt(ar.Downloaded, 10))
 
-	// The AWS S3 tracker returns "400 Bad Request: left(-1) was not in the valid range 0 -
-	// 9223372036854775807" if left is out of range, or "500 Internal Server Error: Internal Server
-	// Error" if omitted entirely.
+	// AWS S3's tracker answers 400 for a left out of range (-1 included) and 500 for none at all.
 	left := ar.Left
 	if left < 0 {
 		left = math.MaxInt64
@@ -111,8 +111,15 @@ func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceO
 		return
 	}
 	defer resp.Body.Close()
+	// An announce answer is a few KB; the tracker is whoever a magnet named.
 	var buf bytes.Buffer
-	io.Copy(&buf, resp.Body)
+	if _, err = io.Copy(&buf, io.LimitReader(resp.Body, maxResponseBytes+1)); err != nil {
+		return
+	}
+	if buf.Len() > maxResponseBytes {
+		err = fmt.Errorf("tracker response over %d bytes", maxResponseBytes)
+		return
+	}
 	if resp.StatusCode != 200 {
 		err = fmt.Errorf("response from tracker: %s: %q", resp.Status, buf.Bytes())
 		return

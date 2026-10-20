@@ -93,6 +93,7 @@ export const api = {
   get: <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal }),
   post: <T>(path: string, body?: unknown, signal?: AbortSignal) =>
     request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined, signal }),
+  put: <T>(path: string, body: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   /** The file as sent; the server tells the formats apart by content. */
   upload: <T>(path: string, file: File) =>
@@ -404,6 +405,8 @@ export interface StreamInfo {
   fonts: string[]
   /** Present when the file has subtitles; fonts are extracted in the background. */
   fontsUrl?: string
+  /** The file's only subtitles are pictures (PGS, VobSub), which the browser can't draw. */
+  imageSubtitles?: boolean
 }
 
 export interface SkipRange {

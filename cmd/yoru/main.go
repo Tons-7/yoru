@@ -4,15 +4,17 @@ package main
 //go:generate go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64,arm64 --manifest none --icon ../../web/public/icon-512.png --out rsrc
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -38,6 +40,7 @@ import (
 	"yoru/internal/metadata"
 	"yoru/internal/player"
 	"yoru/internal/proc"
+	"yoru/internal/push"
 	"yoru/internal/score"
 	"yoru/internal/server"
 	"yoru/internal/shortcut"
@@ -88,6 +91,7 @@ func newTorrentEngine(cfg config.Config, log *slog.Logger) (*engine.Engine, erro
 		PeerLimit:      cfg.Torrent.PeerLimit,
 		UploadLimit:    upload,
 		DisableUPnP:    !cfg.Torrent.UPnPEnabled(),
+		AwaitLimits:    true,
 	}, log)
 }
 
@@ -177,31 +181,92 @@ func main() {
 	// Started by an update: first the old process goes, as it holds the port and the data folder.
 	update.WaitFor(os.Args[1:], 30*time.Second)
 	// To the console and to a file in the data folder: a double-clicked console closes with its last words.
-	log := slog.New(slog.NewTextHandler(logOutput(), nil))
-	if err := run(log); err != nil {
+	out := &logSink{}
+	log := slog.New(slog.NewTextHandler(out, nil))
+	if err := run(log, out); err != nil {
 		log.Error("fatal", "err", err)
+		// Failed before claiming the data folder (config.toml unreadable): the default folder's log keeps why.
+		out.keepEarly(config.DefaultDataDir())
 		proc.Alert("Yoru could not start", err.Error())
 		os.Exit(1)
 	}
 }
 
-// logOutput is stdout plus yoru.log in the data folder, the last run kept aside as yoru.log.1.
-func logOutput() io.Writer {
-	// Moved from kuro's folder first, or the log would make the new one and strand the data in the old.
-	dir := config.PrepareDataDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return os.Stdout
-	}
-	path := filepath.Join(dir, config.Name+".log")
-	os.Rename(path, path+".1")
-	f, err := os.Create(path)
-	if err != nil {
-		return os.Stdout
-	}
-	return io.MultiWriter(os.Stdout, f)
+// logSink is the console, plus yoru.log once this launch holds the data folder: a second launch handing over
+// to the running one must not rotate or empty that one's log. Lines from before are kept for the file.
+type logSink struct {
+	mu     sync.Mutex
+	file   *os.File
+	early  bytes.Buffer
+	closed bool
 }
 
-// retargetShortcuts points the user's shortcuts and pins to kuro.exe, which would open nothing now, at yoru.exe.
+func (s *logSink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	switch {
+	case s.file != nil:
+		s.file.Write(p)
+	case !s.closed:
+		s.early.Write(p)
+	}
+	s.mu.Unlock()
+	// No console (a service) fails this; the file still has the line.
+	os.Stdout.Write(p)
+	return len(p), nil
+}
+
+// open starts yoru.log in dir, the last run's kept aside as yoru.log.1.
+func (s *logSink) open(dir string) {
+	path := filepath.Join(dir, config.Name+".log")
+	var f *os.File
+	var err error
+	if rerr := os.Rename(path, path+".1"); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+		// Still open by a failed version on its way out: added to, never emptied.
+		f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	} else {
+		f, err = os.Create(path)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Unwritable (read-only, locked, full): the console only, not lines held in memory for good.
+	if err != nil {
+		s.early, s.closed = bytes.Buffer{}, true
+		return
+	}
+	f.Write(s.early.Bytes())
+	s.early = bytes.Buffer{}
+	s.file = f
+}
+
+// keepEarly adds lines held since start to yoru.log in dir, when it was never opened. Appended, not rotated:
+// a running Yoru may be writing there.
+func (s *logSink) keepEarly(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file != nil || s.closed || s.early.Len() == 0 || os.MkdirAll(dir, 0o755) != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, config.Name+".log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	f.Write(s.early.Bytes())
+	f.Close()
+	s.early.Reset()
+}
+
+// close lets go of yoru.log, so the folder holding it can move; later lines reach only the console.
+func (s *logSink) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file != nil {
+		s.file.Close()
+		s.file = nil
+	}
+	s.closed = true
+}
+
+// retargetShortcuts points shortcuts and pins aimed at kuro.exe, which opens nothing now, at yoru.exe.
 func retargetShortcuts(log *slog.Logger, from, to string) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -215,8 +280,8 @@ func retargetShortcuts(log *slog.Logger, from, to string) {
 	}
 }
 
-func run(log *slog.Logger) error {
-	// SIGTERM too: closing the console, a log-off or a service manager, which otherwise end the process at once.
+func run(log *slog.Logger, out *logSink) error {
+	// SIGTERM too: a closed console, a log-off or a service manager otherwise end the process at once.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// Also ended by an update handing over to the new binary.
@@ -225,11 +290,11 @@ func run(log *slog.Logger) error {
 
 	exe, _ := os.Executable()
 	// kuro.exe running this code, from the old updater: renamed before anything takes its path.
+	var renamedFrom string
 	if exe != "" {
 		if named := update.TakeName(exe); named != exe {
 			log.Info("renamed to Yoru", "from", exe, "to", named)
-			go retargetShortcuts(log, exe, named)
-			exe = named
+			renamedFrom, exe = exe, named
 		}
 	}
 	// A new version that dies before serving hands back to the previous one.
@@ -245,12 +310,20 @@ func run(log *slog.Logger) error {
 				return
 			}
 			log.Warn("this version failed to start; the previous one is back")
+			// kuro reads its own folder and names: the data goes back with it, the log let go of first.
+			if filepath.Base(back) == config.ExeName(config.Legacy) {
+				out.close()
+				if err := config.UndoLegacyMove(); err != nil {
+					log.Error("give kuro its data folder back", "err", err)
+				}
+			}
 			if err := update.Relaunch(back); err != nil {
 				log.Error("start the previous version", "err", err)
 			}
 		}()
 	}
 	log.Info("Yoru", "version", update.Version)
+	config.FinderPath()
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -273,10 +346,17 @@ func run(log *slog.Logger) error {
 		return showRunning()
 	}
 	defer unlock()
+	out.open(cfg.DataDir())
 	claim, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		return showRunning()
 	}
+	// Let go of on a failed start before the rollback above hands the port to the restored version.
+	defer func() {
+		if !serving {
+			claim.Close()
+		}
+	}()
 
 	// The OS ends ffmpeg/mpv if Yoru is killed; only now, or a hand-off would take its window down too.
 	if err := proc.KillChildrenOnExit(); err != nil {
@@ -328,36 +408,49 @@ func run(log *slog.Logger) error {
 
 	malClient := newMAL(ctx, cfg, st, log)
 
-	// In the user's order (the first wins a shared torrent); cached, as one episode is six queries a site.
-	var sites, adultSites []indexer.Source
-	for _, in := range cfg.Indexers {
-		// Skipped, not fatal: Yoru then starts and Setup names the bad block.
-		src, err := indexer.Build(in.Type, in.URL, in.Adult)
-		if err != nil {
-			log.Warn("config.toml: skipping an [[indexer]] block", "err", err)
-			continue
-		}
-		if in.Adult {
-			adultSites = append(adultSites, indexer.NewCached(src))
-		} else {
-			sites = append(sites, indexer.NewCached(src))
-		}
+	// Alerts on phones with Yoru closed: one key pair for good, as every subscription is bound to it.
+	fresh, err := push.NewKeys()
+	if err != nil {
+		return err
 	}
-	var sources indexer.Source
-	if len(sites) > 0 {
-		sources = indexer.Multi{Sources: sites}
-		log.Info("release sources", "sites", len(sites), "adult", len(adultSites), "config", cfg.ConfigPath())
+	stored, err := st.EnsureSetting(ctx, "push.vapid_key", fresh.Encode())
+	if err != nil {
+		return err
+	}
+	var pusher *push.Sender
+	if keys, err := push.DecodeKeys(stored); err != nil {
+		log.Warn("phone alerts off", "err", err)
 	} else {
-		log.Warn("no release sources configured; nothing can be searched",
-			"add", "[[indexer]] blocks", "config", cfg.ConfigPath())
+		pusher = push.NewSender(keys, st, log)
+		st.OnNotification(func(n store.Notification) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			if alert, ok := server.ReleaseAlert(ctx, st, n); ok {
+				pusher.Send(ctx, alert)
+			}
+		})
+	}
+
+	// In the user's order (the first wins a shared torrent); cached, as one episode is six queries a site.
+	// Edited in the app, the list is swapped while running.
+	sites := indexer.NewSites()
+	siteList, saved, err := server.LoadSites(ctx, st, cfg)
+	if err != nil {
+		log.Warn("release sites saved in the app are unreadable; using config.toml's", "err", err)
+	}
+	for _, err := range sites.Set(siteList) {
+		// Skipped, not fatal: Yoru then starts and Setup names the bad one.
+		log.Warn("skipping a release site", "err", err)
+	}
+	if general, adult := sites.Counts(); general > 0 {
+		log.Info("release sources", "sites", general, "adult", adult, "saved_in_app", saved)
+	} else {
+		log.Warn("no release sites yet; nothing can be searched", "add", "Settings › Downloads › Release sites")
 	}
 	if stray := cfg.StrayConfig(); stray != "" {
 		log.Warn("config.toml.txt found; Yoru reads only config.toml", "path", stray)
 	}
-	finder := library.NewFinder(st, sources, log)
-	if len(adultSites) > 0 {
-		finder = finder.WithAdultIndexer(indexer.Multi{Sources: adultSites})
-	}
+	finder := library.NewFinder(st, sites.General(), log).WithAdultIndexer(sites.Adult())
 	enricher := library.NewEnricher(st, metadata.New(), log).WithAniList(al)
 	ingester := library.NewIngester(st, corpus.NewFetcher(), al, log)
 
@@ -365,7 +458,7 @@ func run(log *slog.Logger) error {
 	finder.WithHydrator(importer.Hydrate)
 	malSync := library.NewMALSync(st, malClient, log)
 	sync := library.NewSync(st, al, log).WithMAL(malSync).WithImporter(importer)
-	watcher := library.NewWatcher(st, finder, sources, log)
+	watcher := library.NewWatcher(st, finder, sites.General(), log)
 	scheduler := jobs.New(log)
 
 	torrentEngine, err := newTorrentEngine(cfg, log)
@@ -378,12 +471,32 @@ func run(log *slog.Logger) error {
 	torrents := torrentEngine.Client()
 	// Before the first start, so no upload or uncapped read happens against the user's settings.
 	presence := library.NewPresence(st, log)
-	if prefs, err := st.Prefs(ctx, 0); err == nil {
+	// The engine waits for these: started without them it would ignore a chosen VPN network.
+	applyPrefs := func() bool {
+		prefs, err := st.Prefs(ctx, 0)
+		if err != nil {
+			return false
+		}
 		torrents.SetLimits(library.TorrentLimits(prefs))
 		presence.Apply(prefs)
+		return true
 	}
-	if err := torrentEngine.Ensure(ctx); err != nil {
-		log.Warn("torrent engine not running; it starts when something needs it", "err", err)
+	if applyPrefs() {
+		if err := torrentEngine.Ensure(ctx); err != nil {
+			log.Warn("torrent engine not running; it starts when something needs it", "err", err)
+		}
+	} else {
+		log.Warn("settings unreadable at start; torrents wait until they can be read")
+		go func() {
+			for !applyPrefs() {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(2 * time.Second):
+				}
+			}
+			torrentEngine.Ensure(ctx)
+		}()
 	}
 
 	mpv := player.New(cfg.Tool("mpv"), "", log)
@@ -589,7 +702,9 @@ func run(log *slog.Logger) error {
 		Relaunch:   relaunchSelf(exe, cancel),
 		Token:      token,
 		Player:     mpv,
-		Indexer:    sources,
+		Indexer:    sites.General(),
+		Sites:      sites,
+		Push:       pusher,
 		Finder:     finder,
 		Deps:       depsManager,
 		Log:        log,
@@ -614,6 +729,11 @@ func run(log *slog.Logger) error {
 		if err := api.RebuildIndex(ctx); err != nil {
 			log.Warn("rebuild match index", "err", err)
 		}
+	})
+	// Files another program puts in the library folders are found without a Scan press, not downloaded again.
+	scheduler.Add(jobs.Job{
+		Name: "library-scan", Every: 30 * time.Minute,
+		Run: api.ScanLibrary,
 	})
 	// Keeps airing shows current even when nobody opens them.
 	scheduler.Add(jobs.Job{
@@ -640,7 +760,7 @@ func run(log *slog.Logger) error {
 	}
 	binder := &binder{srv: srv, log: log, claimed: claim}
 	// HTTPS shares the port; without a certificate a TLS hello is simply refused.
-	secure := certs.New(filepath.Join(cfg.DataDir(), "certs"), server.OutboundIP, log)
+	secure := certs.New(filepath.Join(cfg.DataDir(), "certs"), server.PairingIP, log)
 	// A bad certificate costs HTTPS, not the app.
 	if cert, key := cfg.TLSFiles(); cert != "" {
 		if err := secure.UseFiles(cert, key); err != nil {
@@ -675,11 +795,19 @@ func run(log *slog.Logger) error {
 	if exe != "" {
 		update.Cleanup(exe)
 	}
+	// Only now: a failed start hands back to kuro.exe, which the shortcuts must still open.
+	if renamedFrom != "" {
+		go retargetShortcuts(log, renamedFrom, exe)
+	}
 	if len(api.PairingURLs()) > 0 {
 		go api.LogFirewall(ctx)
 	}
-	for _, url := range api.PairingURLs() {
-		log.Info("reachable on this network", "url", url, "qr", "/api/access/qr.svg")
+	// Without the token: logs get shared, and the token opens every download to deletion.
+	for _, link := range api.PairingURLs() {
+		if u, err := url.Parse(link); err == nil {
+			u.RawQuery = ""
+			log.Info("reachable on this network; pair a device from Settings > Devices", "url", u.String())
+		}
 	}
 
 	// Running the executable should show the app, not print a URL to paste.
@@ -721,7 +849,7 @@ func (b *binder) bind(addr string) error {
 	if ln == nil {
 		var err error
 		if ln, err = net.Listen("tcp", addr); err != nil {
-			// Linux refuses a wildcard beside a loopback listener on the port: a moment of nothing listening it is.
+			// Linux refuses a wildcard beside a loopback listener on the port: briefly, nothing listens.
 			b.mu.Lock()
 			previous := b.ln
 			b.mu.Unlock()

@@ -139,14 +139,17 @@ func (s *Server) requestAccess(w http.ResponseWriter, r *http.Request, id, name 
 	if id == "" && s.deniedAddr(r) {
 		return store.DeviceDenied
 	}
+	addr, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		addr = r.RemoteAddr
+	}
+	if id == "" && s.store.PendingFrom(r.Context(), addr, name) {
+		return store.DevicePending
+	}
 	if id == "" {
 		secret := NewAccessToken()
 		keepCookie(w, r, deviceCookie, legacyDeviceCookie, secret)
 		id = deviceID(secret)
-	}
-	addr, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		addr = r.RemoteAddr
 	}
 	if err := s.store.RequestAccess(r.Context(), id, name, addr); err != nil {
 		s.log.Warn("record access request", "err", err)
@@ -271,6 +274,15 @@ func (s *Server) decideDevice(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "decide device", err)
 		return
 	}
+	// Only a device that had access can have made links; declining a stranger ends nobody's playback.
+	if body.Status == store.DeviceDenied {
+		if a.status[id] == store.DeviceApproved {
+			s.grantEpoch.Add(1)
+		}
+		if err := s.store.DeleteDevicePush(r.Context(), id); err != nil {
+			s.log.Warn("stop a declined device's alerts", "err", err)
+		}
+	}
 	a.status[id] = body.Status
 	a.seen[id] = time.Now()
 	send(w, http.StatusOK, map[string]any{"status": body.Status})
@@ -285,6 +297,12 @@ func (s *Server) removeDevice(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.DeleteDevice(r.Context(), id); err != nil {
 		s.fail(w, "remove device", err)
 		return
+	}
+	if a.status[id] == store.DeviceApproved {
+		s.grantEpoch.Add(1)
+	}
+	if err := s.store.DeleteDevicePush(r.Context(), id); err != nil {
+		s.log.Warn("stop a removed device's alerts", "err", err)
 	}
 	delete(a.status, id)
 	delete(a.seen, id)
@@ -308,5 +326,5 @@ main{max-width:22rem;padding:2rem;text-align:center}h1{font-size:1.25rem;margin:
 code{display:inline-block;margin-top:1rem;padding:.25rem .6rem;border-radius:.4rem;background:#151822;color:#d6dbe6}
 </style></head><body><main><h1>` + title + `</h1><p>` + detail + `</p><code>` + html.EscapeString(name) + `</code></main>
 <script>setInterval(async()=>{try{const r=await fetch('/api/access/me',{cache:'no-store'});const s=(await r.json()).status;
-if(s!=='` + status + `')location.reload()}catch{}},3000)</script></body></html>`
+if(s&&s!=='` + status + `')location.reload()}catch{}},3000)</script></body></html>`
 }

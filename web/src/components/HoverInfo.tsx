@@ -74,7 +74,8 @@ export function HoverInfo({ anime, children }: { anime: HoverAnime; children: Re
   }
 
   return (
-    <div ref={anchor} onMouseEnter={open} onMouseLeave={close} onFocus={open} onBlur={close}>
+    // Pointer only: opened on focus it sat over the next cards, and Tab never reached its links.
+    <div ref={anchor} onMouseEnter={open} onMouseLeave={close}>
       {children}
       {box &&
         createPortal(

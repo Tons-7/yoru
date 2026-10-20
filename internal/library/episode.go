@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -38,6 +39,55 @@ type Finder struct {
 	hydrate func(ctx context.Context, ids []int) (int, error)
 	// franchise learns the show's relations: cours and films are told apart by their siblings. Nil skips it.
 	franchise func(ctx context.Context, animeID int) error
+
+	askedMu sync.Mutex
+	asked   map[[2]int]asked
+}
+
+// asked is what a person searched or pasted for an episode in the release picker. The play or download that
+// follows looks the chosen release up again by hash, so each Find of that episode includes it for a while.
+type asked struct {
+	words  string
+	pasted *indexer.Torrent
+	until  time.Time
+}
+
+// askedFor long enough to choose, then play or download.
+const askedFor = 10 * time.Minute
+
+// Pasted is the indexer name of a release given by its magnet rather than found.
+const Pasted = "pasted"
+
+// Ask adds words to search with, or a pasted release, to the episode's next searches.
+func (f *Finder) Ask(animeID, episode int, words string, pasted *indexer.Torrent) {
+	f.askedMu.Lock()
+	defer f.askedMu.Unlock()
+	if f.asked == nil {
+		f.asked = map[[2]int]asked{}
+	}
+	key := [2]int{animeID, episode}
+	a := f.asked[key]
+	if time.Now().After(a.until) {
+		a = asked{}
+	}
+	if words = strings.TrimSpace(words); words != "" {
+		a.words = words
+	}
+	if pasted != nil {
+		a.pasted = pasted
+	}
+	a.until = time.Now().Add(askedFor)
+	f.asked[key] = a
+}
+
+func (f *Finder) askedOf(animeID, episode int) asked {
+	f.askedMu.Lock()
+	defer f.askedMu.Unlock()
+	a := f.asked[[2]int{animeID, episode}]
+	if time.Now().After(a.until) {
+		return asked{}
+	}
+	return a
 }
 
 // WithFranchise has every search learn the show's relations first, not only the ones playback starts.
@@ -58,8 +108,7 @@ func NewFinder(s *store.Store, idx indexer.Source, log *slog.Logger) *Finder {
 }
 
 // ErrNoIndexers is the answer to any search while no site is configured.
-var ErrNoIndexers = errors.New(
-	"no release sources configured: add [[indexer]] blocks to config.toml and restart")
+var ErrNoIndexers = errors.New("no release sites yet: add one under Settings › Downloads › Release sites")
 
 // WithHardwareTranscode tells the finder whether playback can hardware-transcode,
 // which decides whether HEVC/Hi10P releases are ranked down as stall-prone.
@@ -94,7 +143,7 @@ type Request struct {
 	// Apart: a film, OVA or special, not counted on from its series; Film: one part alone, no season's episode.
 	Apart, Film bool
 
-	// Shows are a film's franchise series by name (as releaseName spells them), which a numbered release may be.
+	// Shows: a film's franchise series by name (as releaseName spells them), which a numbered release may be.
 	Shows []string
 
 	Cour Cour
@@ -121,6 +170,7 @@ type Candidates struct {
 	Queries []string       `json:"queries"`
 	Results []score.Result `json:"results"`
 	Best    *score.Result  `json:"best,omitempty"`
+	req     Request        // as numbered, for reading the results' numbers
 }
 
 // learnRelations is bounded: a throttled AniList must not hold up every search.
@@ -166,34 +216,49 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	if req.Episode <= 1 {
 		series = f.filmSeries(ctx, req.AnimeID)
 	}
-	queries := searchTerms(titles, english, req.Episode, req.Alias.Tvdb, groups, req.Prefs.Audio == "dub", series.queries()...)
+	queries := searchTerms(titles, english, req.Episode, req.Alias.Tvdb, req.Alias.Absolute, groups,
+		req.Prefs.Audio == "dub", series.queries()...)
+	// What a person typed in the picker goes first, in their own words.
+	ask := f.askedOf(req.AnimeID, req.Episode)
+	if ask.words != "" {
+		queries = append([]string{ask.words}, queries...)
+	}
 
 	// Several seconds per request, and the variants are independent: run
 	// sequentially they put half a minute between pressing play and anything.
 	source := f.indexer
 	adult, adultErr := f.store.IsAdult(ctx, req.AnimeID)
-	if adult && f.adult != nil {
+	if adult && indexer.Configured(f.adult) {
 		source = f.adult
 		f.log.Info("searching the adult tracker", "anime", req.AnimeID)
 	} else if adultErr != nil {
 		f.log.Warn("adult flag unreadable", "anime", req.AnimeID, "err", adultErr)
 	}
-	if source == nil {
+	var batches []searchBatch
+	switch {
+	case indexer.Configured(source):
+		batches = f.searchAll(ctx, source, queries)
+		// Every site failing is an outage, not "nobody released it"; a pasted magnet still stands then.
+		if err := allFailed(batches); err != nil {
+			if ask.pasted == nil {
+				return Candidates{}, err
+			}
+			break
+		}
+		// Trackers match every token, so one romanisation spelled differently
+		// ("Semi" for "Zemi") matches nothing. Only paid for when nothing was found.
+		if countResults(batches) == 0 {
+			if short := shortTerms(titles, english); len(short) > 0 {
+				batches = append(batches, f.searchAll(ctx, source, short)...)
+			}
+		}
+	case ask.pasted == nil:
 		return Candidates{}, ErrNoIndexers
 	}
-	batches := f.searchAll(ctx, source, queries)
-
-	// Every site failing is an outage, not "nobody released it".
-	if err := allFailed(batches); err != nil {
-		return Candidates{}, err
-	}
-
-	// Trackers match every token, so one romanisation spelled differently
-	// ("Semi" for "Zemi") matches nothing. Only paid for when nothing was found.
-	if countResults(batches) == 0 {
-		if short := shortTerms(titles, english); len(short) > 0 {
-			batches = append(batches, f.searchAll(ctx, source, short)...)
-		}
+	// A magnet pasted in the picker is a release like the rest, but the person's choice: not checked below.
+	// Added after the searches, or its one result would stop the short-terms fallback.
+	if ask.pasted != nil {
+		batches = append(batches, searchBatch{query: "pasted magnet", results: []indexer.Torrent{*ask.pasted}})
 	}
 
 	identity := newShowIdentity(append(append([]string{}, titles...), english))
@@ -217,10 +282,12 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 			seen[t.InfoHash] = struct{}{}
 
 			rel := parse.Parse(t.Title)
+			pasted := t.Indexer == Pasted
 			c := score.Candidate{
 				Torrent: t, Release: rel, TotalEpisodes: total, RuntimeMinutes: runtime,
 				// Kept, not dropped: the picker shows what was found and why not.
-				WrongShow: !identity.matches(rel, t.Title),
+				WrongShow: !pasted && !identity.matches(rel, t.Title),
+				ByHand:    pasted,
 			}
 			if series != nil {
 				// Every film is "episode 1", so the number verifies nothing; the name does.
@@ -236,7 +303,7 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 					c.Confirmed = wholeSeries.MatchString(t.Title)
 				}
 			} else {
-				if !verifies(rel, req) {
+				if !pasted && !verifies(rel, req) {
 					continue
 				}
 				c.Confirmed, c.Numbers, c.Episode = confirms(rel, req), numbersFor(rel, req), req.Episode
@@ -251,7 +318,7 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 		}
 	}
 
-	out := Candidates{Queries: used, Results: score.Rank(cands, req.Prefs)}
+	out := Candidates{Queries: used, Results: score.Rank(cands, req.Prefs), req: req}
 	if len(out.Results) > 0 && out.Results[0].AutoPick {
 		best := out.Results[0]
 		out.Best = &best
@@ -352,6 +419,10 @@ func (f *Finder) EpisodeNumbers(ctx context.Context, animeID int) ([]int, error)
 			continue
 		}
 		rel := r.Release
+		// A later cour's release naming no cour counts from the first ("Show - 30"), not this entry.
+		if bare(rel, found.req) {
+			continue
+		}
 		switch {
 		// A batch states the range it holds, which is the whole list at once.
 		case rel.EpisodeEnd > rel.Episode && rel.Episode > 0:
@@ -971,7 +1042,9 @@ func cleanQuery(title string) string {
 	return strings.TrimSpace(strings.Trim(out, "-– "))
 }
 
-func searchTerms(titles []string, english string, episode, tvdb int, bestGroups []string, dub bool, series ...string) []string {
+func searchTerms(
+	titles []string, english string, episode, tvdb, absolute int, bestGroups []string, dub bool, series ...string,
+) []string {
 	var latin []string
 	seen := map[string]struct{}{}
 
@@ -1005,7 +1078,7 @@ func searchTerms(titles []string, english string, episode, tvdb int, bestGroups 
 	// English while the primary title is romaji, and a wrong pairing matches nothing.
 	for _, g := range bestGroups {
 		if g = strings.TrimSpace(g); g != "" && mostlyLatin(g) {
-			push(fmt.Sprintf("%s %s", g, shortest(latin)))
+			push(fmt.Sprintf("%s %s", g, shortest(spelledOut(latin))))
 			break
 		}
 	}
@@ -1041,6 +1114,10 @@ func searchTerms(titles []string, english string, episode, tvdb int, bestGroups 
 			if tvdb > 0 && tvdb != episode {
 				push(fmt.Sprintf("%s %02d", base, tvdb))
 			}
+			// Some groups number across the whole franchise ("The Final Season - 80").
+			if absolute > 0 && absolute != episode && absolute != tvdb {
+				push(fmt.Sprintf("%s %02d", base, absolute))
+			}
 			push(fmt.Sprintf("%s %02d", base, episode))
 		}
 	}
@@ -1074,6 +1151,20 @@ func baseTitle(title string) string {
 		}
 	}
 	return ""
+}
+
+// spelledOut drops initials-style synonyms: a one-word title under six letters, unless nothing else is left.
+func spelledOut(titles []string) []string {
+	var out []string
+	for _, t := range titles {
+		if len(t) >= 6 || strings.Contains(t, " ") {
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return titles
+	}
+	return out
 }
 
 // The shortest title is the most likely substring of any release name.

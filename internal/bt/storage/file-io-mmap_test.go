@@ -9,10 +9,8 @@ import (
 	"github.com/go-quicktest/qt"
 )
 
-// Note this is AI slop with some modifications. Test if writes to mmap without sync or flush are
-// detected by a subsequent seek data. It would appear they are since the mmap is created from the
-// file descriptor used for the seek, and probably because we're in the same process so MAP_SHARED
-// kicks in.
+// A seek for data sees mmap writes that were never synced or flushed: the map shares the seek's
+// descriptor, and MAP_SHARED within one process.
 func TestFileIoImplementationsSeekDataDetection(t *testing.T) {
 	testData := []byte{0x42}
 	writeOffset := int64(1234567) // Large enough for sparse files to kick in.
@@ -54,7 +52,7 @@ func TestFileIoImplementationsSeekDataDetection(t *testing.T) {
 			qt.Assert(t, qt.IsNil(err))
 			defer reader.Close()
 			if m, ok := impl.fileIo.(*mmapFileIo); ok {
-				// The store's own reference goes as a torrent's storage closes; the file unmaps with the reader.
+				// The store's reference goes with the torrent's storage; the reader's unmaps the file.
 				qt.Assert(t, qt.IsNil(m.closeAll()))
 			}
 

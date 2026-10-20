@@ -337,7 +337,7 @@ await page.goto(`${BASE}/watch/${ANIME}/9`, { waitUntil: 'domcontentloaded' })
 check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'next episode loads')
 check(await until(() => video.evaluate((v) => Math.abs(v.volume - 0.3) < 0.01 && v.playbackRate === 1.5)), 'volume and speed carried to the next episode', await video.evaluate((v) => `vol=${v.volume} rate=${v.playbackRate}`))
 
-// ---------------------------------------------------------------- player: controls hide after a keyboard resume
+// ------------------------------------------------------------ player: controls hide after a keyboard resume
 // The pointer never moves after the first nudge, so only the resume can re-arm the hide timer.
 const cursorHidden = () =>
   page.evaluate(() => !!document.querySelector('.group\\/player')?.classList.contains('cursor-none'))
@@ -373,7 +373,7 @@ await search.press('ArrowDown')
 await search.press('Enter')
 check(await until(() => page.url().endsWith(`/anime/${ANIME}`)), 'keyboard pick opens the series page', page.url())
 await search.fill('zzzz nothing')
-check(await until(() => page.getByText('Nothing in your library.').isVisible()), 'no local match says so')
+check(await until(() => page.getByText(/^Nothing saved matches/).isVisible()), 'no local match says so')
 check(await page.getByRole('option', { name: /Search AniList for/ }).isVisible(), 'AniList search offered as the last row')
 await search.press('Escape')
 
@@ -532,12 +532,18 @@ await notifyPage.addInitScript(() => {
     }
   }
   window.Notification = FakeNotification
+  // With the alerts worker registered, the tab shows them through it.
+  ServiceWorkerRegistration.prototype.showNotification = function (title, opts) {
+    window.__notes.push({ title, body: opts?.body })
+    return Promise.resolve()
+  }
 })
 await notifyPage.goto(`${BASE}/settings?tab=Notifications`, { waitUntil: 'domcontentloaded' })
-const desktopSwitch = notifyPage.getByRole('switch', { name: 'Desktop alerts' })
-check(await until(() => desktopSwitch.isVisible()), 'desktop alerts switch offered')
+const desktopSwitch = notifyPage.getByRole('switch', { name: 'Alerts on this device' })
+check(await until(() => desktopSwitch.isVisible()), 'alerts switch offered')
 await desktopSwitch.click()
-check(await until(() => notifyPage.evaluate(() => localStorage.getItem('yoru.notify.desktop') === '1')), 'desktop alerts switch turns on')
+// The headless browser has no push service: alerts in an open tab still turn on.
+check(await until(() => notifyPage.evaluate(() => localStorage.getItem('yoru.notify.desktop') === '1')), 'alerts switch turns on')
 // First sight only records the backlog; a newer item after that is announced.
 await notifyPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
 await sleep(1500)

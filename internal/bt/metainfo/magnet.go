@@ -37,9 +37,7 @@ func (m Magnet) String() string {
 		vs.Add("dn", m.DisplayName)
 	}
 
-	// Transmission and Deluge both expect "urn:btih:" to be unescaped. Deluge wants it to be at the
-	// start of the magnet link. The InfoHash field is expected to be BitTorrent in this
-	// implementation.
+	// "urn:btih:" unescaped for Transmission and Deluge, and first for Deluge; InfoHash is BitTorrent's.
 	u := url.URL{
 		Scheme:   "magnet",
 		RawQuery: "xt=" + btihPrefix + m.InfoHash.HexString(),

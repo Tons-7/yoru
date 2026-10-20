@@ -5,6 +5,7 @@ import type { UpNextItem } from '../lib/api'
 import { clockTime, cx } from '../lib/format'
 import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 import { useUpNext, useUpNextEdit } from '../lib/queries'
+import { toast } from '../lib/toast'
 import { buttonClass } from '../lib/ui'
 import { upNextSummary, useInUpNext } from '../lib/upnext'
 import { Rail, RailItem } from './Rail'
@@ -80,7 +81,18 @@ export function UpNextRail({ onEdit }: { onEdit: () => void }) {
 }
 
 function UpNextCard({ item, place }: { item: UpNextItem; place: number }) {
-  const { remove } = useUpNextEdit()
+  const { add, remove } = useUpNextEdit()
+  // At once, with an Undo: the ✕ beside it on Continue watching asks, and this one used to just go.
+  const drop = () => {
+    const v = { animeId: item.animeId, episode: item.episode }
+    remove.mutate(v, {
+      onSuccess: () =>
+        toast(`Removed episode ${item.episode} of ${item.title} from Up next`, 'info', {
+          label: 'Undo',
+          run: () => add.mutate(v),
+        }),
+    })
+  }
   const watch = `/watch/${item.animeId}/${item.episode}`
   const started = (item.position ?? 0) > 0 && (item.duration ?? 0) > 0
   const percent = started ? Math.min(100, (item.position! / item.duration!) * 100) : 0
@@ -88,7 +100,7 @@ function UpNextCard({ item, place }: { item: UpNextItem; place: number }) {
   return (
     <div className="group/upnext relative">
       <button
-        onClick={() => remove.mutate({ animeId: item.animeId, episode: item.episode })}
+        onClick={drop}
         disabled={remove.isPending}
         aria-label={`Remove ${item.title} episode ${item.episode} from Up next`}
         title="Remove from Up next"
@@ -142,7 +154,13 @@ function UpNextCard({ item, place }: { item: UpNextItem; place: number }) {
 
 /** Editing the list: a side sheet on a wide screen, a bottom sheet on a phone. */
 export function UpNextSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const close = useCallback(() => onClose(), [onClose])
+  // Ends a drag without moving anything; set while a grip is held.
+  const cancelDrag = useRef<(() => void) | null>(null)
+  const close = useCallback(() => {
+    // Escape mid-drag drops the drag, not the sheet, whose drop would still have reordered.
+    if (cancelDrag.current) return cancelDrag.current()
+    onClose()
+  }, [onClose])
   const panel = useDismiss<HTMLDivElement>(close, open)
   useModalFocus(panel, open)
   const list = useUpNext()
@@ -209,19 +227,29 @@ export function UpNextSheet({ open, onClose }: { open: boolean; onClose: () => v
       dragging.current = { ...d, order }
       setDrag(dragging.current)
     }
-    const onEnd = (ev: PointerEvent) => {
+    const stop = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onEnd)
       window.removeEventListener('pointercancel', onEnd)
-      const d = dragging.current
       dragging.current = null
+      cancelDrag.current = null
       setDrag(null)
+    }
+    const onEnd = (ev: PointerEvent) => {
+      const d = dragging.current
+      stop()
       if (d && ev.type === 'pointerup') moveTo(d.start, d.id, d.order.indexOf(d.id))
     }
+    cancelDrag.current = stop
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onEnd)
     window.addEventListener('pointercancel', onEnd)
   }
+  // Closed or gone with a grip still held: the drag ends there.
+  useEffect(() => {
+    if (!open) cancelDrag.current?.()
+  }, [open])
+  useEffect(() => () => cancelDrag.current?.(), [])
 
   if (!open) return null
 

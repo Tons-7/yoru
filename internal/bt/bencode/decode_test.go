@@ -15,6 +15,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// A few bytes of nesting must not recurse until the stack runs out.
+func TestDecodeDepthIsBounded(t *testing.T) {
+	deep := strings.Repeat("l", 100000) + strings.Repeat("e", 100000)
+	var v any
+	qt.Check(t, qt.IsNotNil(Unmarshal([]byte(deep), &v)))
+	var typed struct {
+		A []any `bencode:"a"`
+	}
+	qt.Check(t, qt.IsNotNil(Unmarshal([]byte("d1:a"+deep+"e"), &typed)))
+	// A field with its own UnmarshalBencode (the torrent's "info") is read raw first, by another path.
+	var raw struct {
+		Info Bytes `bencode:"info"`
+	}
+	qt.Check(t, qt.IsNotNil(Unmarshal([]byte("d4:info"+deep+"e"), &raw)))
+	ok := strings.Repeat("l", 100) + strings.Repeat("e", 100)
+	qt.Check(t, qt.IsNil(Unmarshal([]byte(ok), &v)))
+}
+
 type random_decode_test struct {
 	data     string
 	expected any
@@ -154,13 +172,11 @@ func TestIgnoreUnmarshalTypeError(t *testing.T) {
 	assert.EqualValues(t, 42, s.Ignore)
 }
 
-// Test unmarshalling []byte into something that has the same kind but
-// different type.
+// Unmarshalling []byte into another type of the same kind.
 func TestDecodeCustomSlice(t *testing.T) {
 	type flag byte
 	var fs3, fs2 []flag
-	// We do a longer slice then a shorter slice to see if the buffers are
-	// shared.
+	// A longer slice then a shorter, to catch shared buffers.
 	d := NewDecoder(bytes.NewBufferString("3:\x01\x10\xff2:\x04\x0f"))
 	require.NoError(t, d.Decode(&fs3))
 	require.NoError(t, d.Decode(&fs2))
@@ -253,10 +269,8 @@ func TestDecodeStringIntoBoolPtr(t *testing.T) {
 	check("d7:privatei1ee", false, true)
 	check("d7:privatei0ee", false, false)
 	check("d7:privatei42ee", false, true)
-	// This is a weird case. We could not allocate the bool to indicate it was bad (maybe a bad
-	// serializer which isn't uncommon), but that requires reworking the decoder to handle
-	// automatically. I think if we cared enough we'd create a custom Unmarshaler. Also if we were
-	// worried enough about performance I'd completely rewrite this package.
+	// An empty string for a bool (bad serializers aren't rare) is false; telling it apart would take a
+	// custom Unmarshaler.
 	check("d7:private0:e", false, false)
 	check("d7:private1:te", false, true)
 	check("d7:private5:falsee", false, false)

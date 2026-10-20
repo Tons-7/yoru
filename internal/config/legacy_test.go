@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"slices"
 	"testing"
+
+	"yoru/internal/proc"
 )
 
 // put writes each file under dir, folders included.
@@ -57,7 +59,7 @@ func TestLegacyDataMovesWhole(t *testing.T) {
 	}
 }
 
-// The log opens before the config loads, so the new folder can exist first; the data still comes over.
+// The new folder can exist first (an older build's log made it); the data still comes over.
 func TestLegacyDataMergesIntoAFolderTheLogMade(t *testing.T) {
 	base := t.TempDir()
 	oldDir, newDir := filepath.Join(base, "kuro"), filepath.Join(base, "yoru")
@@ -104,7 +106,7 @@ func TestLegacyDataFreshInstall(t *testing.T) {
 	}
 }
 
-// A database held open stays where it is, under its old name, journal and all; the next start finishes the move.
+// A database held open stays under its old name, journal and all; the next start finishes the move.
 func TestLegacyDataHeldStaysWhole(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("only Windows refuses to move a file another program holds")
@@ -133,6 +135,63 @@ func TestLegacyDataHeldStaysWhole(t *testing.T) {
 	held.Close()
 	if got := moveLegacyData(newDir, oldDir); got != newDir || !slices.Contains(tree(newDir), "yoru.db-wal") {
 		t.Errorf("once let go: %s %v", got, tree(newDir))
+	}
+}
+
+// A running kuro holds its lock; its folder stays put however the OS would allow the move.
+func TestLegacyDataOfARunningKuroStays(t *testing.T) {
+	base := t.TempDir()
+	oldDir, newDir := filepath.Join(base, "kuro"), filepath.Join(base, "yoru")
+	put(t, oldDir, "kuro.db", "kuro.lock")
+	unlock, err := proc.Lock(filepath.Join(oldDir, "kuro.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := moveLegacyData(newDir, oldDir); got != oldDir || dirExists(newDir) {
+		t.Errorf("data in %s while kuro held it, new folder made %v", got, dirExists(newDir))
+	}
+	if got := tree(oldDir); !slices.Equal(got, []string{"kuro.db", "kuro.lock"}) {
+		t.Errorf("old folder holds %v", got)
+	}
+
+	unlock()
+	if got := moveLegacyData(newDir, oldDir); got != newDir {
+		t.Errorf("once kuro stopped: %s %v", got, tree(newDir))
+	}
+}
+
+// A failed update handing back to kuro.exe gives kuro its folder and names back, as they were.
+func TestLegacyMoveUndone(t *testing.T) {
+	base := t.TempDir()
+	oldDir, newDir := filepath.Join(base, "kuro"), filepath.Join(base, "yoru")
+	put(t, oldDir, "kuro.db", "kuro.db-wal", "kuro.log", "window/Preferences")
+	// Other tests' moves are recorded too.
+	moved = nil
+	t.Cleanup(func() { moved = nil })
+
+	if got := moveLegacyData(newDir, oldDir); got != newDir {
+		t.Fatalf("data in %s, want %s", got, newDir)
+	}
+	if err := UndoLegacyMove(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"kuro.db", "kuro.db-wal", "kuro.log", "window/Preferences"}
+	if got := tree(oldDir); !slices.Equal(got, want) || dirExists(newDir) {
+		t.Errorf("after the undo: old %v, new made %v", got, dirExists(newDir))
+	}
+
+	// Merged into a folder that was there first: only what came over goes back.
+	put(t, newDir, "yoru.log")
+	moveLegacyData(newDir, oldDir)
+	if err := UndoLegacyMove(); err != nil {
+		t.Fatal(err)
+	}
+	if got := tree(oldDir); !slices.Equal(got, want) {
+		t.Errorf("after undoing a merge: old %v", got)
+	}
+	if got := tree(newDir); !slices.Equal(got, []string{"yoru.log"}) {
+		t.Errorf("after undoing a merge: new %v", got)
 	}
 }
 

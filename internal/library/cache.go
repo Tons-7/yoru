@@ -139,6 +139,12 @@ func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
 	if err := c.refresh(ctx); err != nil {
 		c.log.Warn("refresh cache sizes", "err", err)
 	}
+	// Replaced releases held back while their replacement downloaded go once it is whole.
+	if eps, err := c.store.SupersededEpisodes(ctx); err == nil {
+		for _, ep := range eps {
+			dropSuperseded(ctx, c.store, c.torrent, c.log, ep.AnimeID, ep.EpKey)
+		}
+	}
 
 	usage, err := c.store.CacheUsage(ctx)
 	if err != nil {
@@ -149,7 +155,8 @@ func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
 	if usage.Budget <= 0 || usage.Bytes <= usage.Budget {
 		return rep, nil
 	}
-	c.evictDownTo(ctx, &rep, usage.Budget, evictionOrder(usage.Entries, c.stalled(), c.lastPlayed(ctx)), torrentBytes(usage.Entries))
+	order := slices.DeleteFunc(evictionOrder(usage.Entries, c.stalled(), c.lastPlayed(ctx)), c.fetching)
+	c.evictDownTo(ctx, &rep, usage.Budget, order, torrentBytes(usage.Entries))
 
 	if rep.Evicted > 0 {
 		c.log.Info("cache swept",
@@ -222,7 +229,7 @@ func (c *Cache) MakeRoom(ctx context.Context, need int64, animeID int) bool {
 	}
 	freed := torrentBytes(usage.Entries)
 	order := slices.DeleteFunc(evictionOrder(usage.Entries, c.stalled(), c.lastPlayed(ctx)), func(e store.CacheEntry) bool {
-		return spared[e.InfoHash]
+		return spared[e.InfoHash] || c.fetching(e)
 	})
 	var available int64
 	counted := map[string]bool{}
@@ -259,6 +266,11 @@ func (c *Cache) lastPlayed(ctx context.Context) episodeRef {
 		return episodeRef{}
 	}
 	return episodeRef{animeID: animeID, epKey: epKey}
+}
+
+// fetching: a queue or prefetch fetch has claimed the torrent for another episode, not yet on record.
+func (c *Cache) fetching(e store.CacheEntry) bool {
+	return c.claimed != nil && c.claimed(strings.ToLower(e.InfoHash))
 }
 
 // A pin, a keep or the episode last played covers its whole torrent: eviction deletes every file of it.
@@ -327,8 +339,9 @@ func (c *Cache) AutoDelete(ctx context.Context, animeID int) (int, error) {
 	}
 	veto := map[string]bool{}
 	candidates := map[string]bool{}
+	doneFiles := map[string]map[int]bool{}
 	for _, e := range entries {
-		if e.AnimeID == nil || *e.AnimeID != animeID {
+		if e.AnimeID == nil || *e.AnimeID != animeID || c.fetching(e) {
 			veto[e.InfoHash] = true
 			continue
 		}
@@ -338,11 +351,15 @@ func (c *Cache) AutoDelete(ctx context.Context, animeID int) (int, error) {
 			continue
 		}
 		candidates[e.InfoHash] = true
+		if doneFiles[e.InfoHash] == nil {
+			doneFiles[e.InfoHash] = map[int]bool{}
+		}
+		doneFiles[e.InfoHash][e.FileIndex] = true
 	}
 
 	removed := 0
 	for hash := range candidates {
-		if veto[hash] {
+		if veto[hash] || c.holdsUnrecorded(ctx, hash, doneFiles[hash]) {
 			continue
 		}
 		if err := c.evict(ctx, store.CacheEntry{InfoHash: hash}); err != nil {
@@ -355,6 +372,25 @@ func (c *Cache) AutoDelete(ctx context.Context, animeID int) (int, error) {
 		c.log.Info("watched episodes removed", "anime", animeID, "count", removed, "rule", mode)
 	}
 	return removed, nil
+}
+
+// holdsUnrecorded: the torrent has a selected file no watched row covers, like a pack whose other
+// episodes were never played here; deleting the torrent would take those unwatched episodes too.
+func (c *Cache) holdsUnrecorded(ctx context.Context, hash string, watched map[int]bool) bool {
+	id, ok := c.liveID(ctx, hash)
+	if !ok {
+		return false
+	}
+	d, err := c.torrent.Details(ctx, id)
+	if err != nil {
+		return true
+	}
+	for i, f := range d.Files {
+		if f.Included && !watched[i] {
+			return true
+		}
+	}
+	return false
 }
 
 // dropSuperseded removes an episode's replaced releases, which would otherwise sit hidden in the engine.
@@ -370,6 +406,10 @@ func dropSuperseded(ctx context.Context, st *store.Store, tc *torrent.Client, lo
 		}
 	}
 	for _, hash := range hashes {
+		// Playing, kept or finished: it waits for the sweep to see the new release complete.
+		if ready, err := st.SupersededReady(ctx, animeID, epKey, hash); err != nil || !ready {
+			continue
+		}
 		if id, ok := live[strings.ToLower(hash)]; ok {
 			if err := tc.Delete(ctx, id); err != nil {
 				log.Warn("remove superseded release", "hash", hash, "err", err)
@@ -444,7 +484,7 @@ func (c *Cache) Clear(ctx context.Context, completedOnly bool) (int, int64, erro
 	// Eviction takes the whole torrent: one protected file protects all of it.
 	held := map[string]bool{}
 	for _, e := range entries {
-		if e.Pinned || e.Kept || (completedOnly && !e.Complete) {
+		if e.Pinned || e.Kept || (completedOnly && !e.Complete) || c.fetching(e) {
 			held[strings.ToLower(e.InfoHash)] = true
 		}
 	}
@@ -758,12 +798,39 @@ func (c *Cache) removeByName(ctx context.Context, e store.CacheEntry, live map[s
 	if name == "" {
 		return nil
 	}
+	// Under the engine's name for it: tagged with the hash on a clash (only this torrent has those, so they
+	// go first), made safe for Windows, or as older versions wrote it.
+	var refused error
+	for _, n := range torrent.DiskNames(name, e.InfoHash) {
+		found, err := c.removeNamed(ctx, n, live)
+		// One form can't be a name here (an older one's ':' on Windows); the others still can.
+		if errors.Is(err, errNotOwnName) {
+			refused = err
+			continue
+		}
+		if found || err != nil {
+			return err
+		}
+	}
+	return refused
+}
+
+// errNotOwnName: a name that is the cache root, outside it, or one of Yoru's folders.
+var errNotOwnName = errors.New("not a download's own name; nothing deleted")
+
+// removeNamed deletes a top-level cache name unless a live torrent maps there; found: it was there.
+func (c *Cache) removeNamed(ctx context.Context, name string, live map[string]int) (found bool, err error) {
+	// A torrent names itself: "." or "x/.." is the cache root, and "hls" or "engine-session" Yoru's own.
+	first := strings.ToLower(strings.Split(filepath.ToSlash(filepath.Clean(name)), "/")[0])
+	if !filepath.IsLocal(name) || torrent.OwnFolder(first) {
+		return false, fmt.Errorf("%q: %w", name, errNotOwnName)
+	}
 	path := filepath.Join(c.dir, name)
-	if !torrent.Within(c.dir, path) {
-		return fmt.Errorf("%s is outside the cache", name)
+	if !torrent.Within(c.dir, path) || filepath.Clean(path) == filepath.Clean(c.dir) {
+		return false, fmt.Errorf("%q is outside the cache: %w", name, errNotOwnName)
 	}
 	if _, err := os.Stat(path); err != nil {
-		return nil
+		return false, nil
 	}
 	for _, id := range live {
 		d, err := c.torrent.Details(ctx, id)
@@ -771,15 +838,21 @@ func (c *Cache) removeByName(ctx context.Context, e store.CacheEntry, live map[s
 			continue
 		}
 		if filepath.Clean(d.OutputFolder) == filepath.Clean(path) {
-			return nil
+			return true, nil
 		}
 		for _, f := range d.Files {
-			if filepath.Join(d.OutputFolder, filepath.FromSlash(f.Name)) == path {
-				return nil
+			if strings.EqualFold(filepath.Join(d.OutputFolder, onDisk(f)), path) {
+				return true, nil
 			}
 		}
 	}
-	return os.RemoveAll(path)
+	// Through a root: a junction or symlink inside the cache can't lead the delete out of it.
+	root, err := os.OpenRoot(c.dir)
+	if err != nil {
+		return true, err
+	}
+	defer root.Close()
+	return true, root.RemoveAll(name)
 }
 
 // Sizes come from the disk, not progress; see Progress.
@@ -850,6 +923,14 @@ func (c *Cache) refresh(ctx context.Context) error {
 	return nil
 }
 
+// onDisk is a file's path under OutputFolder; the engine reports it, as names can differ from the torrent's.
+func onDisk(f torrent.File) string {
+	if len(f.Components) > 0 {
+		return filepath.Join(f.Components...)
+	}
+	return filepath.FromSlash(f.Name)
+}
+
 // heldBytes is what the torrent's files actually occupy on disk, which is what the budget spends.
 func heldBytes(detail torrent.Detail, fileIndex int) int64 {
 	var total int64
@@ -861,10 +942,7 @@ func heldBytes(detail torrent.Detail, fileIndex int) int64 {
 			continue
 		}
 
-		path := filepath.Join(detail.OutputFolder, filepath.Join(f.Components...))
-		if len(f.Components) == 0 {
-			path = filepath.Join(detail.OutputFolder, f.Name)
-		}
+		path := filepath.Join(detail.OutputFolder, onDisk(f))
 		info, err := os.Stat(path)
 		if err != nil {
 			continue
@@ -922,12 +1000,9 @@ func (c *Cache) adopt(ctx context.Context) error {
 
 // EngineSessionDirName holds the engine's torrents; SessionDirName is rqbit's, imported once.
 const (
-	SessionDirName       = "rqbit-session"
-	EngineSessionDirName = "engine-session"
+	SessionDirName       = torrent.LegacySessionDir
+	EngineSessionDirName = torrent.EngineSessionDir
 )
-
-// Not downloads: transcode output, scrub sheets, a staged update and engine sessions.
-var ours = map[string]bool{"hls": true, "thumbs": true, "update": true, SessionDirName: true, EngineSessionDirName: true}
 
 type Orphan struct {
 	Name  string `json:"name"`
@@ -976,8 +1051,15 @@ func (c *Cache) orphans(ctx context.Context, dryRun bool, only map[string]bool) 
 	}
 
 	keep := map[string]bool{}
-	for _, name := range known {
-		keep[strings.ToLower(name)] = true
+	for _, k := range known {
+		keep[strings.ToLower(k.Name)] = true
+		// As the engine writes it: made safe for Windows, or tagged with the hash when the name was taken.
+		for _, name := range torrent.DiskNames(k.Name, k.InfoHash) {
+			keep[strings.ToLower(name)] = true
+		}
+		if host, ok := torrent.StreamHost(k.Name); ok {
+			keep[strings.ToLower(host)] = true
+		}
 	}
 	for _, t := range torrents {
 		keep[strings.ToLower(t.Name)] = true
@@ -1003,10 +1085,16 @@ func (c *Cache) orphans(ctx context.Context, dryRun bool, only map[string]bool) 
 		return nil, err
 	}
 
+	root, err := os.OpenRoot(c.dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+
 	out := []Orphan{}
 	for _, e := range entries {
 		name := e.Name()
-		if ours[name] || strings.HasPrefix(name, "chapters-") || keep[strings.ToLower(name)] {
+		if torrent.OwnFolder(name) || keep[strings.ToLower(name)] {
 			continue
 		}
 		if only != nil && !only[name] {
@@ -1018,7 +1106,7 @@ func (c *Cache) orphans(ctx context.Context, dryRun bool, only map[string]bool) 
 		}
 		o := Orphan{Name: name, Bytes: dirSize(path)}
 		if !dryRun {
-			if err := os.RemoveAll(path); err != nil {
+			if err := root.RemoveAll(name); err != nil {
 				c.log.Warn("remove orphaned download", "path", name, "err", err)
 				continue
 			}

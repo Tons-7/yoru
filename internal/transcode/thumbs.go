@@ -59,7 +59,7 @@ const (
 
 func sheetPath(dir string) string { return filepath.Join(dir, "thumbs.jpg") }
 
-// sheetArgs decodes keyframes only: 160 px tiles need no more, and every frame of a film took longer than the deadline.
+// sheetArgs decodes keyframes only: 160 px tiles need no more, and a film's every frame overran the deadline.
 func sheetArgs(source, filter, part string) []string {
 	return []string{"-hide_banner", "-loglevel", "error", "-y", "-skip_frame", "nokey", "-i", source,
 		"-vf", filter, "-frames:v", "1", "-q:v", "6", part}

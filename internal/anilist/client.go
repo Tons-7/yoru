@@ -47,6 +47,24 @@ type Client struct {
 	pausedUntil time.Time
 	downUntil   time.Time
 	archive     Archive
+	// The login AniList last refused, and when: public reads skip it a while instead of costing two requests.
+	refusedToken string
+	refusedAt    time.Time
+}
+
+// How long a refused login is skipped for public reads before it is tried again.
+const refusedFor = 10 * time.Minute
+
+func (c *Client) noteRefused(token string) {
+	c.mu.Lock()
+	c.refusedToken, c.refusedAt = token, time.Now()
+	c.mu.Unlock()
+}
+
+func (c *Client) loginRefused(token string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return token != "" && token == c.refusedToken && time.Since(c.refusedAt) < refusedFor
 }
 
 type Option func(*Client)
@@ -150,6 +168,29 @@ func (c *Client) queryAnonymous(ctx context.Context, query string, vars map[stri
 // Query executes a document and unmarshals the data field into out. Reads are
 // served from a short-lived response cache; see cache.go for why.
 func (c *Client) Query(ctx context.Context, query string, vars map[string]any, out any) error {
+	// A login AniList refuses (expired, revoked) makes it refuse public reads too: those go without it, so
+	// browsing works until the user reconnects. Sync still sees the refusal and asks for that.
+	token := c.bearer()
+	public := token != "" && !isMutation(query) && ctx.Value(anonymousKey{}) == nil && ctx.Value(tokenKey{}) == nil
+	triedAnonymous := false
+	if public && c.loginRefused(token) {
+		if c.queryAnonymous(ctx, query, vars, out) == nil {
+			return nil
+		}
+		// A read that needs the login: tried with it, so the caller sees AniList's own answer.
+		triedAnonymous = true
+	}
+	err := c.query(ctx, query, vars, out)
+	if errs, ok := errors.AsType[Errors](err); ok && errs.Unauthorized() && public {
+		c.noteRefused(token)
+		if !triedAnonymous && c.queryAnonymous(ctx, query, vars, out) == nil {
+			return nil
+		}
+	}
+	return err
+}
+
+func (c *Client) query(ctx context.Context, query string, vars map[string]any, out any) error {
 	body, err := json.Marshal(map[string]any{"query": query, "variables": vars})
 	if err != nil {
 		return err
@@ -348,8 +389,7 @@ func (c *Client) post(ctx context.Context, body []byte) (*http.Response, []byte,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	// AniList's edge answers 403 "API temporarily disabled" to requests without
-	// one, whatever the user agent. Sent on every call since 2026-09-09.
+	// AniList's edge answers 403 "API temporarily disabled" to any request without one, whatever the agent.
 	req.Header.Set("Referer", Referer)
 	if token := c.bearerFor(ctx); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)

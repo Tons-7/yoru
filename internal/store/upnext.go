@@ -136,7 +136,7 @@ func (s *Store) MoveUpNext(ctx context.Context, animeID, to int) error {
 	return tx.Commit()
 }
 
-// FillUpNext adds the next aired unwatched episode of every show being watched, the most recently watched first.
+// FillUpNext adds the next aired unwatched episode of every show being watched, the latest watched first.
 // A show already on the list, or caught up, is skipped, so a second press adds nothing.
 func (s *Store) FillUpNext(ctx context.Context) (int, error) {
 	rows, err := s.r.QueryContext(ctx, `

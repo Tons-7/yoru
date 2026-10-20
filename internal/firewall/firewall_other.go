@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -73,7 +74,20 @@ func AllowPeers(context.Context, int, string) error {
 
 func active(ctx context.Context, unit string) bool {
 	out, err := exec.CommandContext(ctx, "systemctl", "is-active", unit).Output()
-	return err == nil && strings.TrimSpace(string(out)) == "active"
+	if err != nil || strings.TrimSpace(string(out)) != "active" {
+		return false
+	}
+	// ufw's unit is active even with ufw disabled, Ubuntu's default; its own config says whether it filters.
+	if unit == "ufw" {
+		if conf, err := os.ReadFile("/etc/ufw/ufw.conf"); err == nil {
+			for line := range strings.SplitSeq(string(conf), "\n") {
+				if v, ok := strings.CutPrefix(strings.TrimSpace(line), "ENABLED="); ok {
+					return strings.EqualFold(strings.Trim(v, `"' `), "yes")
+				}
+			}
+		}
+	}
+	return true
 }
 
 func Allow(context.Context, int, string, bool) error {

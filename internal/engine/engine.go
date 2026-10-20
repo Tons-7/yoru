@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	alog "github.com/anacrolix/log"
 	"golang.org/x/time/rate"
 	"yoru/internal/bt"
 	"yoru/internal/bt/metainfo"
@@ -35,6 +34,8 @@ type Options struct {
 	PeerLimit   int
 	UploadLimit int
 	DisableUPnP bool
+	// AwaitLimits: no start before SetLimits, whose network choice the client must be made with.
+	AwaitLimits bool
 }
 
 // Engine implements torrent.Engine; the client it hands out talks to it over loopback.
@@ -70,16 +71,24 @@ type Engine struct {
 	// secret is what Yoru's own client sends and a web page cannot.
 	secret string
 	closed bool
-	// limits are Settings' speed, upload and network choices; downLimit is always in place, as a nil one can't change.
+	// limits: Settings' speed, upload and network choices; downLimit is always set, as a nil one can't change.
 	limits    torrent.Limits
+	limitsSet bool
 	downLimit *rate.Limiter
 	// bound is the adapter address the client uses (see network.go); offline, that the client is down for the
 	// network and session.json must stay as it was. keepIDs carries torrents' ids into the client that follows.
-	bound       bindAddrs
-	offline     bool
-	keepIDs     map[metainfo.Hash]int
+	bound   bindAddrs
+	offline bool
+	keepIDs map[metainfo.Hash]int
+	// carry is the session a rebind hands the next client, taken from memory before the old one closed.
+	carry       *sessionDoc
 	resolve     func(adapter string) (bindAddrs, error)
 	janitorOnce sync.Once
+	// unclean: the last run didn't stop cleanly, so unfinished downloads' completion may claim lost data.
+	unclean     bool
+	uncleanOnce sync.Once
+	// crashChecked: torrents rechecked for the unclean stop already; a rebind's restore must not again.
+	crashChecked map[metainfo.Hash]bool
 
 	// Test hooks: adjust the client config; see each torrent as it is added.
 	configure func(*bt.ClientConfig)
@@ -96,6 +105,9 @@ type entry struct {
 	// verifying: checking data already on disk; reported as "initializing".
 	verifying bool
 	err       string
+	// writeErr: the last chunk write failed (disk full, file locked); downloading resumes after writeRetry.
+	writeErr   string
+	writeErrAt time.Time
 
 	// Speed, sampled on each stats read.
 	lastBytes int64
@@ -175,10 +187,13 @@ func (e *Engine) Ensure(ctx context.Context) error {
 
 func (e *Engine) start() error {
 	e.mu.Lock()
-	closed := e.closed
+	closed, waiting := e.closed, e.opts.AwaitLimits && !e.limitsSet
 	e.mu.Unlock()
 	if closed {
 		return errors.New("engine stopped")
+	}
+	if waiting {
+		return errors.New("waiting for settings to be read")
 	}
 	// First: a chosen network that's down keeps the client from starting, with nothing opened.
 	bind, err := e.binding()
@@ -190,9 +205,21 @@ func (e *Engine) start() error {
 			return err
 		}
 	}
-	pieces, err := storage.NewBoltPieceCompletion(e.opts.SessionDir)
+	e.uncleanOnce.Do(func() {
+		marker := filepath.Join(e.opts.SessionDir, runningMarker)
+		_, err := os.Stat(marker)
+		e.unclean = err == nil
+		if e.unclean {
+			e.log.Warn("the last run did not stop cleanly; unfinished downloads are checked again")
+		}
+		os.WriteFile(marker, nil, 0o644)
+	})
+	pieces, reset, err := storage.NewBoltPieceCompletionRecovering(e.opts.SessionDir)
 	if err != nil {
 		return fmt.Errorf("piece completion: %w", err)
+	}
+	if reset {
+		e.log.Warn("piece completion was damaged; moved aside, every download's data is checked again")
 	}
 
 	port := e.opts.ListenPort
@@ -220,10 +247,17 @@ func (e *Engine) start() error {
 	}
 
 	e.mu.Lock()
-	// After a rebind the torrents come back from session.json; each keeps the id the rest of Yoru knows it by.
+	// A rebind brings torrents back from the carried session, each under the id the rest of Yoru knows.
 	e.keepIDs = make(map[metainfo.Hash]int, len(e.byHash))
 	for hash, en := range e.byHash {
 		e.keepIDs[hash] = en.id
+	}
+	// Inspections end with the old client; their names and peers go too, as the janitor's expiry does.
+	for hash := range e.inspected {
+		if _, managed := e.byHash[hash]; !managed {
+			e.names.forget(hash)
+			delete(e.known, hash)
+		}
 	}
 	clear(e.byID)
 	clear(e.byHash)
@@ -267,7 +301,7 @@ func freePort() int {
 func (e *Engine) clientConfig(pieces storage.PieceCompletion, port int) *bt.ClientConfig {
 	cfg := bt.NewDefaultClientConfig()
 	cfg.DataDir = e.opts.CacheDir
-	cfg.DefaultStorage = files{base: e.opts.CacheDir, pieces: pieces, names: e.names}
+	cfg.DefaultStorage = files{base: e.opts.CacheDir, pieces: pieces, names: e.names, vanished: e.vanished}
 	cfg.ListenPort = port
 	if e.opts.PeerLimit > 0 {
 		cfg.EstablishedConnsPerTorrent = e.opts.PeerLimit
@@ -296,8 +330,7 @@ func (e *Engine) clientConfig(pieces storage.PieceCompletion, port int) *bt.Clie
 	// Shares while it downloads, which keeps peers giving; a finished episode seeds nobody.
 	cfg.StopSeedingWhenComplete = true
 	cfg.DownloadRateLimiter = e.downLimit
-	cfg.DisableWebtorrent = true
-	cfg.Logger = alog.Default.WithFilterLevel(alog.Warning)
+	// Slogger alone: bt then routes its older logger here too, rather than to stderr.
 	cfg.Slogger = slog.New(warnOnly{e.log.Handler()})
 	e.peers.hook(cfg)
 	if e.configure != nil {
@@ -316,6 +349,7 @@ func (e *Engine) SetLimits(l torrent.Limits) {
 	e.mu.Lock()
 	moved := e.limits.Adapter != l.Adapter
 	e.limits = l
+	e.limitsSet = true
 	cl, offline := e.cl, e.offline
 	e.mu.Unlock()
 	if cl != nil {
@@ -351,7 +385,11 @@ func (e *Engine) Stop() {
 	if pieces != nil {
 		pieces.Close()
 	}
+	os.Remove(filepath.Join(e.opts.SessionDir, runningMarker))
 }
+
+// runningMarker exists while the engine runs; finding it at start means the last run crashed.
+const runningMarker = "engine.running"
 
 // Var so tests need not wait.
 var janitorEvery = 5 * time.Second
@@ -398,6 +436,7 @@ func (e *Engine) janitor() {
 			e.mu.Unlock()
 		}
 		for _, en := range entries {
+			e.retryWrites(en, now)
 			e.shed(en, now)
 			e.rescue(en, now)
 			e.regroup(en, now)

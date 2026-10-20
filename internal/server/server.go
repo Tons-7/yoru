@@ -22,6 +22,7 @@ import (
 	"yoru/internal/library"
 	"yoru/internal/mal"
 	"yoru/internal/parse"
+	"yoru/internal/push"
 	"yoru/internal/store"
 	"yoru/internal/torrent"
 	"yoru/internal/transcode"
@@ -52,6 +53,8 @@ type Server struct {
 	prefetch   *library.Prefetcher
 	player     library.Player
 	indexer    indexer.Source
+	sites      *indexer.Sites
+	push       *push.Sender
 	deps       *deps.Manager
 	downloader *library.Downloader
 	updater    *update.Updater
@@ -88,6 +91,8 @@ type Server struct {
 	token   string
 	// grantSecret signs player-app links (see external.go); new each run, so a restart ends them.
 	grantSecret []byte
+	// grantEpoch is in the signing key too: denying or removing a device ends the links made so far.
+	grantEpoch atomic.Int64
 	// Set by main, which owns the listener; nil in tests.
 	rebind func(addr string) error
 	// HTTPS certificates; nil in tests and builds that do not serve.
@@ -98,6 +103,7 @@ type Server struct {
 	rising     risingCache
 	refreshing atomic.Bool
 	scanning   atomic.Bool
+	rescan     atomic.Bool // asked for while scanning: the running scan goes round once more
 }
 
 type Deps struct {
@@ -122,6 +128,8 @@ type Deps struct {
 	Prefetch   *library.Prefetcher
 	Player     library.Player
 	Indexer    indexer.Source
+	Sites      *indexer.Sites // the holder behind Indexer, swapped when the release sites are edited
+	Push       *push.Sender
 	Finder     *library.Finder
 	Deps       *deps.Manager
 	Downloader *library.Downloader
@@ -137,7 +145,7 @@ func New(d Deps) *Server {
 	s := &Server{
 		cfg: d.Config, store: d.Store, anilist: d.AniList,
 		importer: d.Importer, ingester: d.Ingester,
-		indexer: d.Indexer, log: d.Log,
+		indexer: d.Indexer, sites: d.Sites, push: d.Push, log: d.Log,
 		// Built once by the caller; a second one here lacked the real one's configuration.
 		finder:      d.Finder,
 		playback:    d.Playback,
@@ -202,6 +210,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/franchise", s.franchise)
 	mux.HandleFunc("GET /api/episodes", s.episodes)
 	mux.HandleFunc("GET /api/episode/sources", s.episodeSources)
+	mux.HandleFunc("POST /api/episode/sources", s.episodeSources)
 	mux.HandleFunc("POST /api/fillers/refresh", s.refreshFillers)
 	mux.HandleFunc("POST /api/seadex/refresh", s.refreshSeaDex)
 	mux.HandleFunc("GET /api/schedule", s.schedule)
@@ -225,6 +234,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/local/{id}/stream", s.localStream)
 	mux.HandleFunc("GET /api/network", hostOnly(s.network))
 	mux.HandleFunc("POST /api/stream/external", s.externalLink)
+	mux.HandleFunc("POST /api/stream/{id}/cast", s.castLink)
+	mux.HandleFunc("GET /c/{grant}/{file}", s.castFile)
+	mux.HandleFunc("OPTIONS /c/{grant}/{file}", s.castFile)
 	mux.HandleFunc("GET /x/{grant}/{name}", s.externalStream)
 	mux.HandleFunc("GET /api/jobs", s.jobStatus)
 	mux.HandleFunc("POST /api/jobs/{name}", s.runJob)
@@ -233,12 +245,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings", s.settings)
 	mux.HandleFunc("GET /api/trackers", s.trackers)
 	mux.HandleFunc("POST /api/trackers", hostOnly(s.setTracker))
+	mux.HandleFunc("GET /api/sites", s.sitesList)
+	mux.HandleFunc("PUT /api/sites", hostOnly(s.saveSites))
+	mux.HandleFunc("POST /api/sites/test", hostOnly(s.testSite))
 	mux.HandleFunc("GET /api/setup", s.setup)
-	mux.HandleFunc("POST /api/setup/install/{name}", s.installComponent)
+	mux.HandleFunc("POST /api/setup/install/{name}", hostOnly(s.installComponent))
 	mux.HandleFunc("POST /api/setup/data-dir", hostOnly(s.setDataDir))
 	mux.HandleFunc("GET /api/update", s.updateStatus)
 	mux.HandleFunc("POST /api/update/check", s.updateCheck)
-	mux.HandleFunc("POST /api/update/apply", s.updateApply)
+	mux.HandleFunc("POST /api/update/apply", hostOnly(s.updateApply))
 	mux.HandleFunc("GET /api/auth/login", hostOnly(s.authLogin))
 	mux.HandleFunc("POST /api/auth/logout", hostOnly(s.authLogout))
 	mux.HandleFunc("GET /callback", hostOnly(s.authCallback))
@@ -311,6 +326,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/history", s.history)
 	mux.HandleFunc("GET /api/history/stats", s.watchStats)
 	mux.HandleFunc("POST /api/history/forget", s.forgetHistory)
+	mux.HandleFunc("GET /api/push", s.pushKey)
+	mux.HandleFunc("POST /api/push/subscribe", s.pushSubscribe)
+	mux.HandleFunc("POST /api/push/unsubscribe", s.pushUnsubscribe)
+	mux.HandleFunc("POST /api/push/test", s.pushTest)
 	mux.HandleFunc("GET /api/notifications", s.notifications)
 	mux.HandleFunc("POST /api/notifications/read", s.markRead)
 	mux.HandleFunc("DELETE /api/notifications", s.deleteNotification)
@@ -466,7 +485,7 @@ func (s *Server) torrents(w http.ResponseWriter, r *http.Request) {
 	}
 	limit, _ := strconv.Atoi(q.Get("limit"))
 
-	if s.indexer == nil {
+	if !indexer.Configured(s.indexer) {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": library.ErrNoIndexers.Error()})
 		return
 	}

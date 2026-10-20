@@ -30,13 +30,22 @@ func (p Peer) String() string {
 	}
 }
 
-// Set from the non-compact form in BEP 3.
-func (p *Peer) FromDictInterface(d map[string]any) {
-	p.IP = net.ParseIP(d["ip"].(string))
-	if _, ok := d["peer id"]; ok {
-		p.ID = []byte(d["peer id"].(string))
+// Set from the non-compact form in BEP 3. The tracker is untrusted: any missing or mistyped field is an error.
+func (p *Peer) FromDictInterface(d map[string]any) error {
+	ip, ok := d["ip"].(string)
+	if !ok {
+		return fmt.Errorf("peer ip is %T", d["ip"])
 	}
-	p.Port = int(d["port"].(int64))
+	port, ok := d["port"].(int64)
+	if !ok || port < 0 || port > 65535 {
+		return fmt.Errorf("peer port is %v", d["port"])
+	}
+	p.IP = net.ParseIP(ip)
+	if id, ok := d["peer id"].(string); ok {
+		p.ID = []byte(id)
+	}
+	p.Port = int(port)
+	return nil
 }
 
 func (p Peer) FromNodeAddr(na krpc.NodeAddr) Peer {

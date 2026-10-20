@@ -82,7 +82,8 @@ func (s *Server) browseCount(w http.ResponseWriter, r *http.Request) {
 		known := max(filter.Page, 1)*max(filter.PerPage, 1) + 1
 		return s.anilist.BrowseCount(r.Context(), filter, known)
 	})
-	if errors.Is(err, anilist.ErrBusy) {
+	// Busy, or AniList slow or down: 503, which the page asks again; a refusal stays 502, which it doesn't.
+	if errors.Is(err, anilist.ErrBusy) || anilist.Unreachable(r.Context(), err) {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error(), "busy": true})
 		return
 	}

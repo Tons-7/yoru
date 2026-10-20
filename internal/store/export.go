@@ -102,6 +102,10 @@ func (s *Store) ImportEntries(ctx context.Context, entries []ExportEntry) (Impor
 		if err := ensureAnime(ctx, tx, e.AnimeID); err != nil {
 			return rep, err
 		}
+		// A hand-edited or foreign status would be refused by AniList on every push, forever.
+		if !ValidStatus(e.Status) {
+			e.Status = ""
+		}
 
 		// A favourite never added to the list is exported too; an entry for it would put it on AniList's list.
 		listed := e.Status != "" || e.Progress > 0 || e.Score > 0 || e.Repeat > 0
@@ -114,7 +118,9 @@ func (s *Store) ImportEntries(ctx context.Context, entries []ExportEntry) (Impor
 			        ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
 			ON CONFLICT(anime_id) DO UPDATE SET
 			    progress = max(list_entry.progress, excluded.progress),
-			    status = coalesce(excluded.status, list_entry.status),
+			    -- An older export can't move a finished show back to watching; a rewatch it records can.
+			    status = CASE WHEN list_entry.status = 'COMPLETED' AND coalesce(excluded.status, '') <> 'REPEATING'
+			                  THEN list_entry.status ELSE coalesce(excluded.status, list_entry.status) END,
 			    score = CASE WHEN excluded.score > 0 THEN excluded.score ELSE list_entry.score END,
 			    repeat_count = max(list_entry.repeat_count, excluded.repeat_count),
 			    started_at = coalesce(list_entry.started_at, excluded.started_at),

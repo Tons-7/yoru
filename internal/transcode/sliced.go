@@ -2,7 +2,10 @@ package transcode
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -10,7 +13,7 @@ import (
 	"time"
 )
 
-// A copied picture cuts only at keyframes, counted from each pass's start, so evenly spaced segments drift apart;
+// A copied picture cuts only at keyframes, counted from each pass's start, so even segments drift apart;
 // knowing the source's keyframes, segments start on them, every pass's per-keyframe files gathered alike.
 
 // How far a fragment may start from its planned keyframe: the index and fragments agree to the millisecond.
@@ -19,7 +22,7 @@ const startSlack = 0.002
 // The shortest a last segment may be: a keyframe closer to the end than this starts nothing.
 const minTail = 1.0
 
-// planSegments starts a segment at 0 and then at the first keyframe at least SegmentSeconds past the last start.
+// planSegments starts a segment at 0, then at the first keyframe at least SegmentSeconds past the last start.
 func planSegments(keys []float64, duration float64) []float64 {
 	starts := []float64{0}
 	for _, k := range keys {
@@ -129,13 +132,22 @@ func (s *Session) gather(r *run) {
 				continue
 			}
 		}
-		data, err := os.ReadFile(cur)
+		at, ok, err := partStart(tracks, cur)
 		if err != nil {
-			break
+			// Gone (taken from under it): its span is lost, the rest still gathers. Anything else (a scanner
+			// holding it a moment) is tried again while the pass runs, or its later parts would pile up.
+			if errors.Is(err, fs.ErrNotExist) {
+				j++
+				continue
+			}
+			if exited {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+			continue
 		}
-		at, ok := pictureStart(tracks, data)
 		j++
-		// The seek landed on the keyframe before the segment asked for: that lead-in belongs to no segment here.
+		// The seek landed on the keyframe before the one asked for: that lead-in belongs to no segment here.
 		if ok && at < s.segmentStart(r.from)-startSlack {
 			os.Remove(cur)
 			continue
@@ -169,6 +181,30 @@ func (s *Session) gather(r *run) {
 	for ; fileReady(s.partPath(r, j)); j++ {
 		os.Remove(s.partPath(r, j))
 	}
+}
+
+// partStart is a part's picture start, from its head: the moof is at the front, and a part can be 15 MB.
+func partStart(tracks map[uint32]fmp4Track, path string) (float64, bool, error) {
+	f, err := openShared(path)
+	if err != nil {
+		return 0, false, err
+	}
+	defer f.Close()
+	head := make([]byte, 256<<10)
+	n, err := io.ReadFull(f, head)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return 0, false, err
+	}
+	if at, ok := pictureStart(tracks, head[:n]); ok || n < len(head) {
+		return at, ok, nil
+	}
+	// A moof bigger than the head: the whole part, as before.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false, err
+	}
+	at, ok := pictureStart(tracks, data)
+	return at, ok, nil
 }
 
 // sliceSegment is a finished sliced segment: the pass that made it and its parts, in order, served as they are.

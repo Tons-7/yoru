@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"yoru/internal/indexer"
@@ -20,6 +21,36 @@ type Watcher struct {
 	indexer indexer.Source
 	queue   *Downloader
 	log     *slog.Logger
+
+	// waiting: episodes found only in audio the notifications don't ask for, and when last searched.
+	waitMu  sync.Mutex
+	waiting map[[2]int]time.Time
+}
+
+// How long such an episode waits before it is searched again: a dub comes days after the sub, and searching
+// it every poll spends each site's budget on nothing. A var so tests need not wait.
+var recheckWanted = 6 * time.Hour
+
+// waitingFor reports an episode searched lately without what the notifications want; seen marks it so.
+func (w *Watcher) waitingFor(animeID, episode int) bool {
+	w.waitMu.Lock()
+	defer w.waitMu.Unlock()
+	at, ok := w.waiting[[2]int{animeID, episode}]
+	return ok && time.Since(at) < recheckWanted
+}
+
+func (w *Watcher) setWaiting(animeID, episode int, waiting bool) {
+	w.waitMu.Lock()
+	defer w.waitMu.Unlock()
+	key := [2]int{animeID, episode}
+	if !waiting {
+		delete(w.waiting, key)
+		return
+	}
+	if w.waiting == nil {
+		w.waiting = map[[2]int]time.Time{}
+	}
+	w.waiting[key] = time.Now()
 }
 
 func NewWatcher(s *store.Store, f *Finder, idx indexer.Source, log *slog.Logger) *Watcher {
@@ -64,12 +95,12 @@ func (w *Watcher) Poll(ctx context.Context) (WatchReport, error) {
 		}
 		rep.Checked++
 
-		// News is the episode that aired last, and only that; the backlog is known, a show long finished is silent.
+		// News is the last episode aired and only that: the backlog is known, a long-finished show is silent.
 		latest := f.Latest(time.Now().Unix())
 		if latest <= f.Progress || latest > f.Progress+maxBacklog || (f.Episodes > 0 && latest > f.Episodes) {
 			continue
 		}
-		if seen, _ := w.store.AlreadyNotified(ctx, "", f.AnimeID, latest); seen {
+		if seen, _ := w.store.AlreadyNotified(ctx, "", f.AnimeID, latest); seen || w.waitingFor(f.AnimeID, latest) {
 			continue
 		}
 		w.check(ctx, f.AnimeID, latest, notifyOn, auto, want, &rep)
@@ -113,13 +144,22 @@ func (w *Watcher) check(ctx context.Context, animeID, episode int, notifyOn, aut
 		return
 	}
 	rep.Found++
+	// Downloaded once per episode, whichever release (or later announcement) comes first.
+	fetchedBefore := w.store.EpisodeFetched(ctx, animeID, episode)
 
 	switch {
-	case !notifyOn || announce == nil:
+	case !notifyOn:
 		if err := w.store.RecordNotified(ctx, fetch.Torrent.InfoHash, animeID, episode); err != nil {
 			w.log.Warn("record release", "err", err)
 		}
+	case announce == nil:
+		// Nothing the notifications ask for yet (a sub, when they want a dub): it stays news for a later one.
+		if err := w.store.RecordFetched(ctx, fetch.Torrent.InfoHash, animeID, episode); err != nil {
+			w.log.Warn("record release", "err", err)
+		}
+		w.setWaiting(animeID, episode, true)
 	default:
+		w.setWaiting(animeID, episode, false)
 		if err := w.notify(ctx, animeID, episode, announce.Torrent.Title, announce.Torrent.InfoHash); err != nil {
 			w.log.Warn("notify", "err", err)
 		} else {
@@ -127,7 +167,7 @@ func (w *Watcher) check(ctx context.Context, animeID, episode int, notifyOn, aut
 		}
 	}
 
-	if auto && w.download(ctx, animeID, episode) {
+	if auto && !fetchedBefore && w.download(ctx, animeID, episode) {
 		rep.Downloaded++
 	}
 }

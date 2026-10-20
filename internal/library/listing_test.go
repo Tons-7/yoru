@@ -13,12 +13,17 @@ import (
 	"yoru/internal/store"
 )
 
+// listing is the enrichment's step on its own, with a crawl of its own.
+func (e *Enricher) listing(ctx context.Context, animeID, malID int) {
+	e.listingFrom(ctx, animeID, func() (metadata.Listing, error) { return e.meta.Listing(ctx, malID) })
+}
+
 const listingJSON = `{"data":[
   {"mal_id":1,"title":"Ilse's Notebook","title_japanese":"イルゼの手帳","aired":"2013-12-09T00:00:00+00:00","duration":1398,"synopsis":"A scout writes."},
   {"mal_id":2,"title":"Episode 2","aired":null}
 ],"pagination":{"last_visible_page":1,"has_next_page":false}}`
 
-// listed is a store holding one OVA of that many parts, and an enricher whose MyAnimeList answers with two episodes.
+// listed: a store with one OVA of that many parts, and an enricher whose MyAnimeList answers two episodes.
 func listed(t *testing.T, status string, parts int) (*Enricher, *store.Store, *atomic.Int32) {
 	t.Helper()
 	st := openStore(t)

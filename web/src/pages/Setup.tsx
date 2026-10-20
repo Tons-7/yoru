@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import { cx } from '../lib/format'
 import { useSetup } from '../lib/queries'
 import { ComponentState } from '../components/ComponentState'
+import { SitesEditor } from '../components/SitesEditor'
 import { WhereThingsGo } from '../components/WhereThingsGo'
 import { Badge, Button, ErrorState, LinkButton, PageHeader, Skeleton } from '../components/ui'
 
@@ -122,40 +123,9 @@ export function SetupPage() {
       )}
 
       <section className="surface p-4">
-        <h2 className="text-sm font-semibold text-base-100">Release sources</h2>
-        {data.indexers > 0 ? (
-          <p className="mt-1 text-sm text-base-400">
-            {data.indexers} site{data.indexers === 1 ? '' : 's'} configured in{' '}
-            <code className="text-base-300">{data.configPath}</code>.
-          </p>
-        ) : (
-          <>
-            <p className="mt-1 text-sm text-base-400">
-              Yoru ships with no torrent sites. Add one block per site to{' '}
-              <code className="text-base-300">{data.configPath}</code> and restart.{' '}
-              <code className="text-base-300">type</code> is the feed format
-              (<code className="text-base-300">nyaa</code> or{' '}
-              <code className="text-base-300">tokyotosho</code>); the first site listed
-              decides the record kept for a torrent several carry.
-            </p>
-            <pre className="mt-3 rounded-md bg-base-950 p-3 text-xs text-base-300">
-              {'[[indexer]]\ntype = "nyaa"\nurl = "https://…"\n\n[[indexer]]\ntype = "tokyotosho"\nurl = "https://…"'}
-            </pre>
-          </>
-        )}
-        {(data.badIndexers ?? []).length > 0 && (
-          <div className="mt-3 rounded-md border border-recap/40 bg-recap/10 p-3 text-sm">
-            <p className="text-base-100">
-              {data.badIndexers!.length === 1 ? 'One block was' : `${data.badIndexers!.length} blocks were`}{' '}
-              skipped. Fix {data.badIndexers!.length === 1 ? 'it' : 'them'} and restart:
-            </p>
-            <ul className="mt-1 list-disc pl-5 text-xs text-base-300">
-              {data.badIndexers!.map((reason) => (
-                <li key={reason}>{reason}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+        <h2 className="text-sm font-semibold text-base-100">Release sites</h2>
+        <p className="mt-1 text-sm text-base-400">Where Yoru looks for episodes. Saved at once, no restart.</p>
+        <SitesEditor />
       </section>
 
       {missing.length > 0 ? (
@@ -183,7 +153,7 @@ export function SetupPage() {
         <section className="rounded-xl border border-accent-500/30 bg-accent-500/5 p-4">
           <p className="text-sm text-base-100">
             Everything is installed.
-            {data.indexers === 0 && ' Add a release source above to be able to play anything.'}
+            {data.indexers === 0 && ' Add a release site above to be able to play anything.'}
           </p>
           <LinkButton to="/" variant="primary" className="mt-3">
             Start watching

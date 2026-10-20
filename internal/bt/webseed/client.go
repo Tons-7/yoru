@@ -21,10 +21,8 @@ import (
 	"yoru/internal/bt/segments"
 )
 
-// How many consecutive bytes to allow discarding from responses. This number is based on
-// https://archive.org/download/BloodyPitOfHorror/BloodyPitOfHorror.asr.srt. It seems that
-// archive.org might be using a webserver implementation that refuses to do partial responses to
-// small files. TODO: Make this configurable.
+// The most of a response that may be skipped, as archive.org sends small files whole instead of the range
+// asked. TODO: configurable.
 const MaxDiscardBytes = 48 << 10
 
 // Output debug information to stdout.
@@ -76,11 +74,8 @@ type Client struct {
 
 	fileIndex *segments.Index
 	info      *metainfo.Info
-	// The pieces we can request with the Url. We're more likely to ban/block at the file-level
-	// given that's how requests are mapped to webseeds, but the torrent.Client works at the piece
-	// level. We can map our file-level adjustments to the pieces here. This probably need to be
-	// private in the future, if Client ever starts removing pieces. TODO: This belongs in
-	// webseedPeer. TODO: Unused.
+	// The pieces the Url can serve, where file-level blocks would map to the Client's pieces.
+	// TODO: unused; it belongs in webseedPeer.
 	Pieces roaring.Bitmap
 	// This wraps http.Response bodies, for example to limit the download rate.
 	ResponseBodyWrapper     ResponseBodyWrapper
@@ -143,9 +138,8 @@ func (ws *Client) StartNewRequest(ctx context.Context, r RequestSpec, debugLogge
 		}
 		requestParts = append(requestParts, part)
 	}
-	// Technically what we want to ensure is that all parts exist consecutively. If the file data
-	// isn't consecutive, then it is piece aligned and we wouldn't need to be doing multiple
-	// requests. TODO: Assert this.
+	// The parts should run on from each other: data that doesn't is piece aligned and needs no several
+	// requests. TODO: assert it.
 	panicif.Zero(len(requestParts))
 	body, w := io.Pipe()
 	req := Request{
@@ -209,8 +203,7 @@ func (me *Client) recvPartResult(ctx context.Context, w io.Writer, part requestP
 	if a := me.ResponseBodyWrapper; a != nil {
 		body = a(body, func() { panicif.Err(resp.Body.Close()) })
 	}
-	// We did set resp.Body to nil here, but I'm worried the HTTP machinery might do something
-	// funny.
+	// resp.Body stays set: niling it might upset the HTTP machinery.
 	if ctx.Err() != nil {
 		return context.Cause(ctx)
 	}
@@ -242,16 +235,14 @@ func (me *Client) recvPartResult(ctx context.Context, w io.Writer, part requestP
 			// from the origin. If you try again later it will probably work.
 			return ErrStatusOkForRangeRequest{}
 		}
-		// Instead of discarding, we could try receiving all the chunks present in the response
-		// body. I don't know how one would handle multiple chunk requests resulting in an OK
-		// response for the same file. The request algorithm might be need to be smarter for that.
+		// Skipped rather than taken as chunks: several requests answered by one whole file would need a
+		// smarter request algorithm.
 		discarded, err := io.CopyN(io.Discard, body, discard)
 		if err != nil {
 			return fmt.Errorf("error discarding bytes from http ok response: %w", err)
 		}
 		panicif.NotEq(discarded, discard)
-		// Because the reply is not a partial aware response, we limit the body reader
-		// intentionally.
+		// Not a ranged reply, so the body is cut to the part.
 		_, err = io.CopyN(w, body, part.fileRange.Length)
 		return err
 	case http.StatusServiceUnavailable:

@@ -30,10 +30,8 @@ func (r requestStrategyInputMultiTorrent) Capacity() (int64, bool) {
 	return (*r.capFunc)()
 }
 
-// I don't think we need this for correctness purposes, but it must be faster to look up the Torrent
-// input because it's locked to a given Torrent. It would be easy enough to drop in the
-// multi-torrent version in this place and compare. TODO: With unique.Handle on infohash, this would
-// not be necessary anymore. I don't think it's provided any performance benefit for some time now.
+// The input bound to one Torrent, for a quicker lookup; not needed for correctness. TODO: unique.Handle
+// on infohash would make it unnecessary.
 type requestStrategyInputSingleTorrent struct {
 	requestStrategyInputCommon
 	t *Torrent
@@ -83,6 +81,10 @@ func (r requestStrategyPiece) CountUnverified() bool {
 
 func (r requestStrategyPiece) Request() bool {
 	return r.p.effectivePriority() > PiecePriorityNone
+}
+
+func (r requestStrategyPiece) Available() bool {
+	return r.p.availability() > 0
 }
 
 var _ requestStrategy.Piece = requestStrategyPiece{}

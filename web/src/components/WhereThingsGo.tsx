@@ -122,7 +122,11 @@ function DataDirPicker({ fallback }: { fallback: string }) {
       <div className="flex gap-2">
         <TextInput
           value={path}
-          onChange={(e) => setPath(e.target.value)}
+          onChange={(e) => {
+            setPath(e.target.value)
+            // The warning was about the folder asked for, not the one typed since.
+            if (existing) move.reset()
+          }}
           placeholder="D:\Yoru\data"
           aria-label="Data folder"
           className="min-w-0 flex-1"
@@ -146,7 +150,7 @@ function DataDirPicker({ fallback }: { fallback: string }) {
           </p>
           <div className="flex gap-2">
             <button
-              onClick={() => move.mutate({ path: path.trim(), useExisting: true })}
+              onClick={() => move.mutate({ path: move.variables?.path ?? path.trim(), useExisting: true })}
               className="rounded-md bg-recap/80 px-3 py-1.5 font-medium text-white hover:bg-recap"
             >
               Use that history

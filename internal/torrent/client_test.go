@@ -498,6 +498,20 @@ func TestAwaitGivesUpOnAStalledSwarm(t *testing.T) {
 }
 
 // Pausing from the downloads list is a decision, not a failure, so the queue can tell the two apart.
+// A failed disk write is retried by the engine, so Await waits on through it; a stall then says why.
+func TestAwaitWaitsThroughAWriteWarning(t *testing.T) {
+	fastPoll(t)
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"state":"live","warning":"can't write the download to disk: full","progress_bytes":100,"total_bytes":300}`)
+	})
+
+	err := c.Await(context.Background(), 1, 5*time.Millisecond)
+	var stall *StallError
+	if !errors.As(err, &stall) || !strings.Contains(stall.Cause, "can't write") {
+		t.Errorf("got %v, want a stall carrying the write warning", err)
+	}
+}
+
 func TestAwaitReportsAPause(t *testing.T) {
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"state":"paused","progress_bytes":100,"total_bytes":300}`)

@@ -3,11 +3,11 @@ package bt
 import (
 	"bytes"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/anacrolix/chansync"
 	"github.com/anacrolix/log"
-	"github.com/anacrolix/sync"
 
 	pp "yoru/internal/bt/peer_protocol"
 )
@@ -73,9 +73,7 @@ type peerConnMsgWriter struct {
 	dataUploadRate        float64
 }
 
-// Routine that writes to the peer. Some of what to write is buffered by
-// activity elsewhere in the Client, and some is determined locally when the
-// connection is writable.
+// Writes to the peer: what the Client buffered, and what is decided here once the connection is writable.
 func (cn *peerConnMsgWriter) run(keepAliveTimeout time.Duration) {
 	lastWrite := time.Now()
 	keepAliveTimer := time.NewTimer(keepAliveTimeout)
@@ -144,7 +142,7 @@ func (cn *peerConnMsgWriter) writeToBuffer(msg pp.Message) (err error) {
 	originalLen := cn.writeBuffer.Len()
 	defer func() {
 		if err != nil {
-			// Since an error occurred during buffer write, revert buffer to its original state before the write.
+			// A failed write leaves the buffer as it was before it.
 			cn.writeBuffer.Truncate(originalLen)
 		}
 	}()

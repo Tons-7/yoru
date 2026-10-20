@@ -23,6 +23,17 @@ func PickTitle(mode, romaji string, english *string) string {
 	return ""
 }
 
+// ShownTitle is the show's name as the app shows it, or "" for one never imported.
+func (s *Store) ShownTitle(ctx context.Context, animeID int) string {
+	var romaji string
+	var english *string
+	if s.r.QueryRowContext(ctx, `SELECT title_romaji, title_english FROM anime WHERE id = ?`, animeID).
+		Scan(&romaji, &english) != nil {
+		return ""
+	}
+	return PickTitle(s.TitleMode(ctx, animeID), romaji, english)
+}
+
 // TitleMode reads the display preference, per anime where one is set.
 func (s *Store) TitleMode(ctx context.Context, animeID int) string {
 	prefs, err := s.Prefs(ctx, animeID)

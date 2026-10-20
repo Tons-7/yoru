@@ -341,7 +341,7 @@ func TestAutoDeleteNowTakesOnlyWatchedCachedEpisodes(t *testing.T) {
 	if _, err := st.MarkWatched(ctx, 7, 3); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.PinOnly(ctx, "playing", 2); err != nil {
+	if err := st.PinCache(ctx, "playing", 2, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.KeepDownload(ctx, "kept", true); err != nil {
