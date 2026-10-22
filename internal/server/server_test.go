@@ -24,6 +24,7 @@ type harness struct {
 	handler http.Handler
 	server  *Server
 	store   *store.Store
+	db      *db.DB
 	indexer *stubIndexer
 	calls   int
 }
@@ -40,7 +41,7 @@ func newHarness(t *testing.T, cfg config.Config, upstream http.HandlerFunc, extr
 		t.Fatal(err)
 	}
 
-	h := &harness{store: store.New(conn), indexer: &stubIndexer{}}
+	h := &harness{store: store.New(conn), db: conn, indexer: &stubIndexer{}}
 	if upstream == nil {
 		upstream = func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"data":{}}`) }
 	}

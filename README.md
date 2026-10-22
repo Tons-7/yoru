@@ -254,6 +254,13 @@ The torrent engine in `internal/bt` grew out of anacrolix/torrent and its DHT,
 and those files stay under the [Mozilla Public License 2.0](internal/bt/LICENSE),
 as that license requires.
 
+Anime names and the links between sites' ids come from manami-project's
+[anime-offline-database](https://github.com/manami-project/anime-offline-database),
+under the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/),
+and from nattadasu's [animeApi](https://github.com/nattadasu/animeApi). Show
+details, lists and schedules come from AniList; Yoru is not affiliated with
+AniList or MyAnimeList.
+
 ## Layout
 
 ```

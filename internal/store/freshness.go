@@ -38,6 +38,16 @@ func (s *Store) AnimeRecord(ctx context.Context, id int) (Anime, time.Time, bool
 	return a, time.Unix(synced, 0), true, nil
 }
 
+// FinishedMedia is AniList's saved answer for a finished or cancelled show, if fetched since then.
+func (s *Store) FinishedMedia(ctx context.Context, id int, since time.Time) (string, bool) {
+	var media string
+	err := s.r.QueryRowContext(ctx, `
+		SELECT media FROM anime
+		WHERE id = ? AND media IS NOT NULL AND status IN ('FINISHED', 'CANCELLED') AND synced_at >= ?`,
+		id, since.Unix()).Scan(&media)
+	return media, err == nil
+}
+
 // How long an airing show may go unchecked; once its next episode airs, it is due.
 const (
 	airingMaxAge   = 6 * time.Hour

@@ -171,6 +171,13 @@ func (s *Store) DeadAnime(ctx context.Context, ids []int) (map[int]bool, error) 
 	return out, nil
 }
 
+// IsSaved: Yoru keeps the show's full record, so someone has come across it.
+func (s *Store) IsSaved(ctx context.Context, id int) bool {
+	var n int
+	err := s.r.QueryRowContext(ctx, `SELECT count(*) FROM anime WHERE id = ? AND synced_at > 0`, id).Scan(&n)
+	return err == nil && n > 0
+}
+
 // HasRelations: the graph was walked for this anime, a standalone show's franchise of one included.
 func (s *Store) HasRelations(ctx context.Context, animeID int) (bool, error) {
 	var count int

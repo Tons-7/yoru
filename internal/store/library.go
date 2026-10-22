@@ -43,6 +43,8 @@ type Anime struct {
 	TrailerSite  *string
 	NextEpisode  *int
 	NextAiringAt *int
+	// Media is AniList's answer as JSON for a finished show, whose page is served from it unasked.
+	Media *string
 }
 
 type Entry struct {
@@ -110,7 +112,7 @@ var animeContent = []string{
 	"duration", "format", "season", "season_year", "country", "is_adult", "description", "cover_url",
 	"cover_color", "cover_medium", "banner_url", "average_score", "mean_score", "popularity", "favourites",
 	"genres", "studios", "tags", "links", "source", "start_date", "end_date", "trailer_id", "trailer_site",
-	"next_episode", "next_airing_at",
+	"next_episode", "next_airing_at", "media",
 }
 
 // An unchanged row is restamped after this, well inside what the airing refresh calls stale.
@@ -133,8 +135,8 @@ INSERT INTO anime (
     country, is_adult, description, cover_url, cover_color, cover_medium, banner_url,
     average_score, mean_score, popularity, favourites,
     genres, studios, tags, links, source, start_date, end_date,
-    trailer_id, trailer_site, next_episode, next_airing_at, synced_at
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    trailer_id, trailer_site, next_episode, next_airing_at, media, synced_at
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
     mal_id=excluded.mal_id, title_romaji=excluded.title_romaji,
     title_english=excluded.title_english, title_native=excluded.title_native,
@@ -152,7 +154,7 @@ ON CONFLICT(id) DO UPDATE SET
     source=excluded.source, start_date=excluded.start_date, end_date=excluded.end_date,
     trailer_id=excluded.trailer_id, trailer_site=excluded.trailer_site,
     next_episode=excluded.next_episode, next_airing_at=excluded.next_airing_at,
-    synced_at=excluded.synced_at
+    media=excluded.media, synced_at=excluded.synced_at
 WHERE ` + animeChanged()
 
 const entryUpdateSet = `
@@ -237,7 +239,7 @@ func (s *Store) ImportList(ctx context.Context, anime []Anime, entries []Entry, 
 			a.AverageScore, a.MeanScore, a.Popularity, a.Favourites,
 			orJSON(a.Genres), orJSON(a.Studios), orJSON(a.Tags), orJSON(a.Links),
 			a.Source, nullable(a.StartDate), nullable(a.EndDate),
-			a.TrailerID, a.TrailerSite, a.NextEpisode, a.NextAiringAt, now)
+			a.TrailerID, a.TrailerSite, a.NextEpisode, a.NextAiringAt, a.Media, now)
 		if err != nil {
 			return ImportResult{}, err
 		}

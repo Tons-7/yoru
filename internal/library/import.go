@@ -31,6 +31,10 @@ func (i *Importer) Run(ctx context.Context, userID int, mode store.ImportMode) (
 	if err != nil {
 		return store.ImportResult{}, err
 	}
+	// A saved answer would stamp old rows as fresh, and in replace mode drop entries added since.
+	if anilist.UsedSaved(ctx) {
+		return store.ImportResult{}, errors.New("AniList isn't answering; the list wasn't imported")
+	}
 
 	anime := make([]store.Anime, 0, len(entries))
 	rows := make([]store.Entry, 0, len(entries))
@@ -138,6 +142,15 @@ func toAnime(m anilist.Media) store.Anime {
 	if m.NextAiring != nil {
 		a.NextEpisode = &m.NextAiring.Episode
 		a.NextAiringAt = &m.NextAiring.AiringAt
+	}
+	// Finished shows only, the ones served from it; without the trending count, or every fetch rewrites the row.
+	if m.Status != nil && (*m.Status == "FINISHED" || *m.Status == "CANCELLED") {
+		kept := m
+		kept.Trending = nil
+		if b, err := json.Marshal(kept); err == nil {
+			media := string(b)
+			a.Media = &media
+		}
 	}
 	return a
 }

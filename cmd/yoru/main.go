@@ -511,6 +511,7 @@ func run(log *slog.Logger, out *logSink) error {
 	}
 	prefetcher := library.NewPrefetcher(st, finder, torrents, log)
 	relations := library.NewRelations(st, al, log)
+	ingester.Relations = relations
 	finder.WithFranchise(relations.Ensure)
 
 	playback := library.NewPlayback(st, finder, torrents, mpv, cfg.CacheDir, log).

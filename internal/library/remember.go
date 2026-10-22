@@ -88,6 +88,22 @@ func (i *Importer) Refresh(ctx context.Context, limit int) (int, error) {
 	return i.Hydrate(ctx, ids)
 }
 
+// A finished show moves little (its score, an editor's fix): its answer stands a day, then it's asked again.
+const FinishedFreshFor = 24 * time.Hour
+
+// Finished is AniList's answer for a finished show, saved within FinishedFreshFor; false means ask AniList.
+func (i *Importer) Finished(ctx context.Context, id int) (anilist.Media, bool) {
+	raw, ok := i.store.FinishedMedia(ctx, id, time.Now().Add(-FinishedFreshFor))
+	if !ok {
+		return anilist.Media{}, false
+	}
+	var m anilist.Media
+	if err := json.Unmarshal([]byte(raw), &m); err != nil || m.ID != id {
+		return anilist.Media{}, false
+	}
+	return m, true
+}
+
 // FromRecord rebuilds AniList's shape from a saved row. Studio ids aren't kept.
 func FromRecord(a store.Anime) anilist.Media {
 	m := anilist.Media{

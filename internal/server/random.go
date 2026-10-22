@@ -192,25 +192,32 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 		}, true, false
 	}
 
-	media, err := s.anilist.MediaByIDs(r.Context(), []int{id})
-	failed := err != nil && !errors.Is(err, anilist.ErrIncomplete)
-	if failed {
-		if m, ok := s.savedAnime(r.Context(), id); ok {
-			s.log.Warn("anilist unreachable, showing the saved record", "anime", id, "err", err)
-			media, failed = []anilist.Media{m}, false
-		}
-	}
-	if failed || len(media) == 0 {
-		s.log.Warn("anime lookup failed", "anime", id, "returned", len(media), "err", err)
-		return nil, false, failed
-	}
-	m := media[0]
-
-	// Keep the local record current: facts like the adult flag decide which
-	// trackers are searched, and a stub row created elsewhere never had them.
+	// A finished show checked within the day is served as AniList gave it, unasked; anything else is asked.
+	m, fresh := anilist.Media{}, false
 	if s.importer != nil {
-		if _, err := s.importer.Save(r.Context(), media); err != nil {
-			s.log.Warn("save anime", "anime", id, "err", err)
+		m, fresh = s.importer.Finished(r.Context(), id)
+	}
+	if !fresh {
+		media, err := s.anilist.MediaByIDs(r.Context(), []int{id})
+		failed := err != nil && !errors.Is(err, anilist.ErrIncomplete)
+		if failed {
+			if m, ok := s.savedAnime(r.Context(), id); ok {
+				s.log.Warn("anilist unreachable, showing the saved record", "anime", id, "err", err)
+				media, failed = []anilist.Media{m}, false
+			}
+		}
+		if failed || len(media) == 0 {
+			s.log.Warn("anime lookup failed", "anime", id, "returned", len(media), "err", err)
+			return nil, false, failed
+		}
+		m = media[0]
+
+		// Keep the local record current: facts like the adult flag decide which
+		// trackers are searched, and a stub row created elsewhere never had them.
+		if s.importer != nil {
+			if _, err := s.importer.Save(r.Context(), media); err != nil {
+				s.log.Warn("save anime", "anime", id, "err", err)
+			}
 		}
 	}
 

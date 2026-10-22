@@ -2382,6 +2382,7 @@ function AboutTab() {
         <LogSection />
         <ComponentsSection />
         <JobsSection />
+        <CreditsSection />
       </div>
     )
   }
@@ -2461,7 +2462,21 @@ function AboutTab() {
       <LogSection />
       <ComponentsSection />
       <JobsSection />
+      <CreditsSection />
     </div>
+  )
+}
+
+// Where the anime information comes from, credited as manami's Open Database License asks.
+function CreditsSection() {
+  return (
+    <Section title="Data" hint="Where Yoru's anime information comes from." keywords="credits license manami animeapi anilist">
+      <p className="py-2 text-sm text-base-300">
+        Show details, lists and schedules come from AniList. Anime names and the links between sites come from
+        manami-project's anime-offline-database (Open Database License) and nattadasu's animeApi. Yoru is not
+        affiliated with AniList or MyAnimeList.
+      </p>
+    </Section>
   )
 }
 
