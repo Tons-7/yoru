@@ -8,13 +8,20 @@ import {
   refreshDownloads,
   useDownloadQueue,
   useDownloads,
+  useBetterCopies,
+  useDriveRoom,
+  useReleaseHolds,
   useNotifications,
+  useNow,
   usePrefs,
   useSpeedUnit,
   type Download,
   type Notification,
   type Queued,
+  type ReleaseHold,
+  type BetterCopy,
 } from '../lib/queries'
+import { BetterCopyOffer } from '../components/BetterCopy'
 import {
   Badge,
   Button,
@@ -306,6 +313,16 @@ export function Downloads() {
 
   const { data, isPending, isError, error, refetch } = useDownloads()
   const queue = useDownloadQueue()
+  const room = useDriveRoom()
+  const holds = useReleaseHolds()
+  const better = useBetterCopies()
+  const takeNow = useMutation({
+    mutationFn: (h: ReleaseHold) => api.post(`/api/releases/waiting/${h.animeId}/${h.episode}`),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['release-holds'] })
+      refreshDownloads(qc)
+    },
+  })
   // Settings can have kept downloads deleted after watching; the page says so instead of promising they stay.
   const prefs = usePrefs()
   const keptGo =
@@ -426,6 +443,8 @@ export function Downloads() {
 
   const items = data?.items ?? []
   const queued = queue.data?.items ?? []
+  const holdItems = holds.data?.items ?? []
+  const offers = better.data?.items ?? []
   // Clear never takes a kept download or one playing now.
   const removable = items.filter((d) => !d.pinned && !d.kept).length
 
@@ -441,8 +460,12 @@ export function Downloads() {
     ...(waiting > 0 ? [{ group: 'Waiting', meta: String(waiting) }] : []),
     ...held.map((d, i) => ({ d, position: i + 1 })),
     ...waitingQueue.map((q, i) => ({ q, position: held.length + i + 1 })),
+    ...(holdItems.length > 0 ? [{ group: 'Held for a better release', meta: String(holdItems.length) }] : []),
+    ...holdItems.map((hold) => ({ hold })),
     ...(failed.length > 0 ? [{ group: 'Failed' }] : []),
     ...failed.map((q) => ({ q })),
+    ...(offers.length > 0 ? [{ group: 'Better copies', meta: "SeaDex's best for what you kept" }] : []),
+    ...offers.map((offer) => ({ offer })),
     ...(finished.length > 0
       ? [{ group: 'On disk', meta: `${bytes(cachedBytes)} cached · ${bytes(keptBytes)} downloaded` }]
       : []),
@@ -473,6 +496,7 @@ export function Downloads() {
                 active.length > 0 && `${active.length} downloading`,
                 waiting > 0 && `${waiting} waiting`,
                 finished.length > 0 && `${finished.length} on disk`,
+                room.data?.freeBytes != null && `${bytes(room.data.freeBytes)} free on ${room.data.drive}`,
               ]
                 .filter(Boolean)
                 .join(' · ')
@@ -527,6 +551,14 @@ export function Downloads() {
           </Link>
         </p>
       )}
+      {!queuePaused && queue.data?.short && (
+        <p role="status" className={cx(card, 'flex items-center justify-between gap-3 px-3 py-2 text-sm text-base-200')}>
+          {`Downloads wait for room: ${queue.data.short.drive} has ${bytes(queue.data.short.freeBytes)} free, and they need ${bytes(queue.data.short.needBytes)}. They carry on once there's space.`}
+          <Link to="/settings?tab=Storage" className="shrink-0 text-xs font-medium text-accent-300 hover:underline">
+            Free space
+          </Link>
+        </p>
+      )}
       {queuePaused && (
         <p role="status" className={cx(card, 'flex items-center justify-between gap-3 px-3 py-2 text-sm text-base-200')}>
           Downloads are paused. Nothing starts until you resume.
@@ -577,6 +609,27 @@ export function Downloads() {
         <ul className="space-y-2">
           {rows.map((r) => {
             if ('group' in r) return <Group key={r.group} label={r.group} meta={r.meta} />
+            if ('offer' in r)
+              return (
+                <li key={`offer-${r.offer.animeId}`} className={cx(card, 'flex items-center gap-3 p-3')}>
+                  <Gutter />
+                  {r.offer.cover ? (
+                    <img src={r.offer.cover} alt="" loading="lazy" className="h-14 w-10 shrink-0 rounded object-cover shadow-card" />
+                  ) : (
+                    <div className="h-14 w-10 shrink-0 rounded bg-base-850" />
+                  )}
+                  <BetterCopyOffer offer={r.offer} className="min-w-0 flex-1" />
+                </li>
+              )
+            if ('hold' in r)
+              return (
+                <HoldRow
+                  key={`hold-${r.hold.animeId}-${r.hold.episode}`}
+                  hold={r.hold}
+                  pending={takeNow.isPending}
+                  onNow={() => takeNow.mutate(r.hold)}
+                />
+              )
             if ('q' in r)
               return (
                 <QueueRow
@@ -628,6 +681,46 @@ type Row =
   | { d: Download; position?: number }
   | { q: Queued; position?: number }
   | { show: Show }
+  | { hold: ReleaseHold }
+  | { offer: BetterCopy }
+
+// A new episode auto-download holds for a better release: what for, until when, and a way to take it anyway.
+function HoldRow({ hold, pending, onNow }: { hold: ReleaseHold; pending: boolean; onNow: () => void }) {
+  const now = useNow()
+  return (
+    <li className={cx(card, 'p-3')}>
+      <div className="flex items-center gap-3 max-sm:flex-wrap">
+        <Gutter />
+        {hold.cover ? (
+          <img src={hold.cover} alt="" loading="lazy" className="h-14 w-10 shrink-0 rounded object-cover shadow-card" />
+        ) : (
+          <div className="h-14 w-10 shrink-0 rounded bg-base-850" />
+        )}
+        <div className="min-w-0 flex-1">
+          <Link to={`/anime/${hold.animeId}`} className="block truncate text-sm font-medium text-base-100 hover:underline">
+            {hold.title || `Anime ${hold.animeId}`}
+            <span className="ml-1.5 font-normal text-base-400">episode {hold.episode}</span>
+          </Link>
+          <p className="text-xs text-base-400">
+            Waiting for {hold.wants} · takes the best there is{' '}
+            {hold.until * 1000 > now ? relativeTime(hold.until) : 'at the next check'}
+          </p>
+        </div>
+        <div className={rail}>
+          <button
+            onClick={onNow}
+            disabled={pending}
+            aria-label={`Download episode ${hold.episode} now`}
+            title="Download now: take the best release there is"
+            className={iconButton}
+          >
+            <FrontGlyph />
+          </button>
+        </div>
+      </div>
+    </li>
+  )
+}
 
 /** One show's finished downloads, listed together. */
 interface Show {
@@ -793,6 +886,28 @@ function ShowRows({
   )
 }
 
+// Below this a failed write is the full drive; above it the engine's own words say what else went wrong.
+const DISK_FULL_BELOW = 512 * 1024 * 1024
+
+// A download the engine can't write, said in words: it otherwise sits at 0 MB/s like a slow swarm.
+function DiskProblem({ d }: { d: Download }) {
+  const full = d.freeBytes != null && d.freeBytes < DISK_FULL_BELOW
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 text-xs text-recap">
+      <span className="min-w-0">
+        {full
+          ? `Disk full · ${d.drive} has ${bytes(d.freeBytes!)} free. It carries on once there's space.`
+          : d.warning!.charAt(0).toUpperCase() + d.warning!.slice(1)}
+      </span>
+      {full && (
+        <Link to="/settings?tab=Storage" className="font-medium text-accent-300 hover:underline">
+          Free space
+        </Link>
+      )}
+    </p>
+  )
+}
+
 function DownloadRow({
   d,
   position,
@@ -847,6 +962,7 @@ function DownloadRow({
               {retry} · {d.queued?.error}
             </p>
           )}
+          {d.warning && unfinished && <DiskProblem d={d} />}
           {/* How far, big, fast, long; speed and peers tell slow from stalled. */}
           <p className="mt-0.5 text-xs text-base-400">
             {unfinished && <span className="font-medium text-base-100">{Math.round(d.percent)}% · </span>}

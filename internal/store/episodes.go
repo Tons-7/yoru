@@ -43,6 +43,8 @@ type EpisodeRow struct {
 	OnDisk    bool `json:"onDisk"`
 	// Local: a file in a library folder plays it, so there is nothing to download.
 	Local bool `json:"local,omitempty"`
+	// Spoiler: title, synopsis and still are held back until it's watched or tapped open.
+	Spoiler bool `json:"spoiler,omitempty"`
 }
 
 func (s *Store) SaveEpisodes(ctx context.Context, animeID int, eps []metadata.Episode) (int, error) {
@@ -246,7 +248,8 @@ SELECT e.anime_id, e.ep_key, e.number, e.absolute,
        coalesce(p.watched, 0) OR e.number <= coalesce(l.progress, 0),
        coalesce(p.position_s, 0), coalesce(p.duration_s, 0),
        EXISTS (SELECT 1 FROM torrent_file tf
-               WHERE tf.anime_id = e.anime_id AND tf.ep_key = e.ep_key AND tf.selected = 1)
+               WHERE tf.anime_id = e.anime_id AND tf.ep_key = e.ep_key AND tf.selected = 1),
+       coalesce(p.done_s, 0)
 FROM episode e
 LEFT JOIN anime a      ON a.id = e.anime_id
 LEFT JOIN list_entry l ON l.anime_id = e.anime_id
@@ -270,13 +273,14 @@ func (s *Store) Episodes(ctx context.Context, animeID int) ([]EpisodeRow, error)
 	for rows.Next() {
 		var e EpisodeRow
 		var watched, recap int
+		var done float64
 		if err := rows.Scan(&e.AnimeID, &e.EpKey, &e.Number, &e.Absolute,
 			&e.TitleEN, &e.TitleJA, &e.Overview, &e.Still, &e.AirDate, &e.Runtime,
-			&e.Filler, &recap, &watched, &e.Position, &e.Duration, &e.OnDisk); err != nil {
+			&e.Filler, &recap, &watched, &e.Position, &e.Duration, &e.OnDisk, &done); err != nil {
 			return nil, err
 		}
 		e.Watched = watched == 1
-		e.Resumable = resumable(e.Position, e.Duration, e.Watched, threshold)
+		e.Resumable = resumable(e.Position, e.Duration, e.Watched, threshold, done)
 		e.Recap = recap == 1
 		out = append(out, e)
 	}
@@ -296,7 +300,30 @@ func (s *Store) Episodes(ctx context.Context, animeID int) ([]EpisodeRow, error)
 	for i := range out {
 		out[i].Display = out[i].Number
 	}
-	return s.asScheduled(ctx, animeID, s.asItself(ctx, animeID, s.markLocal(ctx, animeID, out))), nil
+	return s.markSpoilers(ctx, animeID, s.asScheduled(ctx, animeID, s.asItself(ctx, animeID, s.markLocal(ctx, animeID, out)))), nil
+}
+
+// markSpoilers flags the episodes the show's spoiler rule holds back, past the first unwatched aired one.
+func (s *Store) markSpoilers(ctx context.Context, animeID int, out []EpisodeRow) []EpisodeRow {
+	mode := s.SpoilerMode(ctx, animeID)
+	if mode == SpoilersOff {
+		return out
+	}
+	now := time.Now().Unix()
+	next := 0
+	for _, e := range out {
+		if !e.Watched && (e.AirDate == nil || *e.AirDate <= now) {
+			next = e.Number
+			break
+		}
+	}
+	if next == 0 && len(out) > 0 {
+		next = out[len(out)-1].Number + 1
+	}
+	for i := range out {
+		out[i].Spoiler = HidesSpoilers(mode, out[i].Number, next, out[i].Watched)
+	}
+	return out
 }
 
 // asScheduled holds air dates to the catalogue's next airing, so the list and playback agree on what aired.
@@ -458,7 +485,7 @@ func (s *Store) plannedEpisodes(ctx context.Context, animeID int) ([]EpisodeRow,
 		row := EpisodeRow{AnimeID: animeID, EpKey: key, Number: n, Display: n, Planned: true}
 		if p, ok := played[key]; ok {
 			row.Watched, row.Position, row.Duration = p.watched, p.position, p.duration
-			row.Resumable = resumable(p.position, p.duration, p.watched, threshold)
+			row.Resumable = resumable(p.position, p.duration, p.watched, threshold, p.done)
 		}
 		row.Watched = row.Watched || n <= entry.Progress
 		_, row.OnDisk = cached[key]
@@ -471,11 +498,12 @@ type playedEpisode struct {
 	watched  bool
 	position float64
 	duration float64
+	done     float64
 }
 
 func (s *Store) playbackByEpisode(ctx context.Context, animeID int) (map[string]playedEpisode, error) {
 	rows, err := s.r.QueryContext(ctx,
-		`SELECT ep_key, watched, position_s, coalesce(duration_s, 0) FROM playback WHERE anime_id = ?`,
+		`SELECT ep_key, watched, position_s, coalesce(duration_s, 0), coalesce(done_s, 0) FROM playback WHERE anime_id = ?`,
 		animeID)
 	if err != nil {
 		return nil, err
@@ -487,7 +515,7 @@ func (s *Store) playbackByEpisode(ctx context.Context, animeID int) (map[string]
 		var key string
 		var watched int
 		var p playedEpisode
-		if err := rows.Scan(&key, &watched, &p.position, &p.duration); err != nil {
+		if err := rows.Scan(&key, &watched, &p.position, &p.duration, &p.done); err != nil {
 			return nil, err
 		}
 		p.watched = watched == 1
@@ -578,6 +606,8 @@ func (s *Store) onceAired(ctx context.Context, animeID, episode int) (int, error
 type EpisodeAlias struct {
 	Tvdb     int
 	Absolute int
+	// TvdbSeason is TheTVDB's season for Tvdb, 0 when it was derived rather than stated.
+	TvdbSeason int
 	// Stated per number: the catalogue carried it, and a derived one must not override it.
 	StatedTvdb, StatedAbsolute bool
 }
@@ -610,7 +640,7 @@ func (s *Store) EpisodeAlias(ctx context.Context, animeID, episode int) (Episode
 	// Per number: a stated one is the catalogue's; a missing one may still be counted through the franchise.
 	out := EpisodeAlias{StatedTvdb: tvdb != nil, StatedAbsolute: absolute != nil}
 	if tvdb != nil && *tvdb != episode {
-		out.Tvdb = *tvdb
+		out.Tvdb, out.TvdbSeason = *tvdb, *season
 	}
 	if absolute != nil && *absolute != episode {
 		out.Absolute = *absolute

@@ -89,7 +89,7 @@ func TestPlayerExitReleasesTheEpisode(t *testing.T) {
 	pl.events <- player.Event{Kind: player.EventPosition, Position: 10, Duration: 1400}
 	pl.events <- player.Event{Kind: player.EventExit}
 	close(pl.events)
-	p.track(pl, 1, 5, 1, p.trackGen.Load())
+	p.track(pl, 1, 5, 1, p.trackGen.Load(), 0)
 
 	entries, _ := p.store.CacheEntries(ctx)
 	for _, e := range entries {
@@ -123,7 +123,7 @@ func TestStaleTrackerDoesNotUnpin(t *testing.T) {
 	old := &fakePlayer{events: make(chan player.Event, 1)}
 	gen := p.trackGen.Load()
 	done := make(chan struct{})
-	go func() { p.track(old, 1, 5, 1, gen); close(done) }()
+	go func() { p.track(old, 1, 5, 1, gen, 0); close(done) }()
 	p.trackGen.Add(1) // the relaunch, before the old player is told to stop
 	old.events <- player.Event{Kind: player.EventExit}
 	close(old.events)

@@ -75,22 +75,122 @@ func TestLadderOrderDecidesRanking(t *testing.T) {
 	}
 }
 
-func TestSeaDexOutweighsTier(t *testing.T) {
+// SeaDex's pick wins among releases of its resolution, never over a higher one.
+func TestSeaDexWinsWithinItsResolution(t *testing.T) {
 	prefs := DefaultPreferences()
 
 	web := candidate("[G] Show - 01 [1080p][WEB-DL].mkv", 500, 1<<30)
-	curated := candidate("[sam] Show - 01 [720p].mkv", 20, 500<<20)
+	curated := candidate("[sam] Show - 01 [1080p].mkv", 20, 1<<30)
 	curated.SeaDexBest = true
-
 	best, ok := Best([]Candidate{web, curated}, prefs)
 	if !ok {
 		t.Fatal("expected an automatic pick")
 	}
 	if best.Release.Group != "sam" {
-		t.Fatalf("picked %q; a curated best release should outrank a higher tier", best.Release.Group)
+		t.Fatalf("picked %q; the curated best should outrank another 1080p", best.Release.Group)
 	}
 	if !containsReason(best.Reasons, "SeaDex") {
 		t.Errorf("reasons do not mention SeaDex: %v", best.Reasons)
+	}
+
+	lower := candidate("[sam] Show - 01 [720p].mkv", 20, 500<<20)
+	lower.SeaDexBest = true
+	if best, _ := Best([]Candidate{lower, web}, prefs); best.Release.Resolution != "1080p" {
+		t.Fatalf("a 720p SeaDex pick outranked a 1080p release")
+	}
+}
+
+// A group's v2 beats its own v1 however many more seed the v1, and never a higher resolution.
+func TestFixedReleaseBeatsItsFirstVersion(t *testing.T) {
+	prefs := DefaultPreferences()
+	v1 := candidate("[SubsPlease] Show - 05 (1080p) [AAAA1111].mkv", 500, 1400<<20)
+	v2 := candidate("[SubsPlease] Show - 05v2 (1080p) [BBBB2222].mkv", 30, 1400<<20)
+	v1.Torrent.InfoHash, v2.Torrent.InfoHash = "v1", "v2"
+	best, _ := Best([]Candidate{v1, v2}, prefs)
+	if best.Torrent.InfoHash != "v2" {
+		t.Fatalf("picked %s; the fixed v2 should beat the v1", best.Torrent.InfoHash)
+	}
+	if !containsReason(best.Reasons, "fixed release") {
+		t.Errorf("reasons don't say why: %v", best.Reasons)
+	}
+
+	lower := candidate("[SubsPlease] Show - 05v2 (720p) [CCCC3333].mkv", 30, 700<<20)
+	lower.Torrent.InfoHash = "720v2"
+	if best, _ := Best([]Candidate{v1, lower}, prefs); best.Torrent.InfoHash != "v1" {
+		t.Fatalf("picked %s; a 720p v2 beat the 1080p v1", best.Torrent.InfoHash)
+	}
+	other := candidate("[Erai-raws] Show - 05 [1080p].mkv", 900, 1400<<20)
+	other.Torrent.InfoHash = "other"
+	if best, _ := Best([]Candidate{other, v2}, prefs); best.Torrent.InfoHash != "other" {
+		t.Fatalf("picked %s; a version only orders one group's releases", best.Torrent.InfoHash)
+	}
+}
+
+// An avoided group or an excluded word is never picked on its own, but stays listed with the reason.
+func TestAvoidedReleasesStayListedButAreNeverPicked(t *testing.T) {
+	prefs := DefaultPreferences()
+	prefs.AvoidGroups = []string{"badgroup"}
+	prefs.ExcludeTerms = []string{"x265 mini"}
+	bad := candidate("[BadGroup] Show - 05 [1080p].mkv", 900, 1<<30)
+	mini := candidate("[Good] Show - 05 [1080p x265 Mini].mkv", 900, 300<<20)
+	fine := candidate("[Fine] Show - 05 [720p].mkv", 10, 500<<20)
+	ranked := Rank([]Candidate{bad, mini, fine}, prefs)
+	if ranked[0].Release.Group != "Fine" {
+		t.Fatalf("picked %s; avoided releases must not be taken on their own", ranked[0].Release.Group)
+	}
+	for _, r := range ranked[1:] {
+		if r.AutoPick || r.Blocked == "" {
+			t.Errorf("%s: autoPick %v, blocked %q; want listed with a reason", r.Torrent.Title, r.AutoPick, r.Blocked)
+		}
+	}
+}
+
+// TRaSH's grades order groups within a source and resolution; a low-quality group ranks last, or with
+// AvoidLQ is never picked on its own.
+func TestGroupTiersOrderWithinAResolution(t *testing.T) {
+	SetGroupTiers([]GroupTier{
+		NewGroupTier("web", 1, "Top", `\b(Top)\b`),
+		NewGroupTier("web", 6, "Low", `\b(Low)\b`),
+		NewGroupTier("lq", 1, "Mini", `\[Mini\]`),
+	})
+	t.Cleanup(func() { SetGroupTiers(nil) })
+	prefs := DefaultPreferences()
+
+	top := candidate("[Top] Show - 05 (WEB 1080p).mkv", 40, 1<<30)
+	low := candidate("[Low] Show - 05 (WEB 1080p).mkv", 40, 1<<30)
+	mini := candidate("[Mini] Show - 05 (WEB 1080p).mkv", 40, 1<<30)
+	if best, _ := Best([]Candidate{mini, low, top}, prefs); best.Release.Group != "Top" {
+		t.Fatalf("picked %s; the tier-1 group should lead", best.Release.Group)
+	}
+	ranked := Rank([]Candidate{mini, low}, prefs)
+	if ranked[0].Release.Group != "Low" || !ranked[1].AutoPick {
+		t.Fatalf("ranked %s first, mini autoPick %v; a low-quality group ranks last, still allowed", ranked[0].Release.Group, ranked[1].AutoPick)
+	}
+	prefs.AvoidLQ = true
+	if r := Rank([]Candidate{mini}, prefs)[0]; r.AutoPick {
+		t.Fatal("with low-quality groups avoided, one was still picked")
+	}
+	// A grade never buys a lower resolution.
+	lower := candidate("[Top] Show - 05 (WEB 720p).mkv", 40, 500<<20)
+	if best, _ := Best([]Candidate{lower, low}, DefaultPreferences()); best.Release.Resolution != "1080p" {
+		t.Fatal("a tier-1 720p outranked a 1080p")
+	}
+}
+
+// A season pack at 1080p beats a single episode at 720p: a pack only waits behind singles of its resolution.
+func TestHigherResolutionPackBeatsLowerSingle(t *testing.T) {
+	prefs := DefaultPreferences()
+	single := Candidate{
+		Torrent: indexer.Torrent{Title: "[G] Show - 05 [720p].mkv", Seeders: 200, Size: 500 << 20, InfoHash: "single"},
+		Release: parse.Parse("[G] Show - 05 [720p].mkv"),
+	}
+	pack := Candidate{
+		Torrent:       indexer.Torrent{Title: "[G] Show (01-12) [1080p][BD][Batch]", Seeders: 40, Size: 12 << 30, InfoHash: "pack"},
+		Release:       parse.Parse("[G] Show (01-12) [1080p][BD][Batch]"),
+		TotalEpisodes: 12,
+	}
+	if best, _ := Best([]Candidate{single, pack}, prefs); best.Torrent.InfoHash != "pack" {
+		t.Fatalf("picked %s; the 720p single outranked the 1080p pack", best.Torrent.InfoHash)
 	}
 }
 

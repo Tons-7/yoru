@@ -18,6 +18,8 @@ const browser = await chromium.launch()
 // A phone: short enough that the dialog has to scroll.
 const page = await browser.newPage({ viewport: { width: 412, height: 700 }, isMobile: true, hasTouch: true })
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
+// A phone folds the watch page's switches.
+await page.getByRole('button', { name: 'Playback options' }).click()
 await page.getByRole('button', { name: /^Anime4K/ }).click()
 const dialog = page.getByRole('dialog', { name: 'Anime4K' })
 await dialog.waitFor()

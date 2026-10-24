@@ -1,9 +1,11 @@
 package library
 
 import (
+	"slices"
 	"testing"
 
 	"yoru/internal/parse"
+	"yoru/internal/store"
 )
 
 // An entry is one season from one, so omitting the season never yields a later season's episode 1.
@@ -34,5 +36,27 @@ func TestLaterSeasonIsRejectedForAFirstSeasonRequest(t *testing.T) {
 	}
 	if !verifies(rel, Request{Episode: 1, Season: 2}) {
 		t.Error("S02E01 should satisfy season 2 episode 1")
+	}
+}
+
+// Conan's 1218 is TheTVDB's S34E32; the show's own episode 32, from 1996, is not it.
+func TestTvdbSeasonRestartIsNotTheShowsOwnNumber(t *testing.T) {
+	req := Request{Episode: 1218, Season: 1, Alias: store.EpisodeAlias{Tvdb: 32, TvdbSeason: 34, StatedTvdb: true}}
+	for _, tc := range []struct {
+		title string
+		want  bool
+	}{
+		{"Detective Conan S01E32 VOSTFR 1080p WEB x264 AAC -Tsundere-Raws (ADN) (Meitantei Conan,Case Closed)", false},
+		{"[JnF] Meitantei Conan 030-032 [DVDRip]", false},
+		{"[ShinkaDan] Знаменитый детектив Конан / Meitantei Conan 31-32 серия [RU-sub]", false},
+		{"[SubsPlease] Detective Conan - 1218 (1080p) [845D5162].mkv", true},
+	} {
+		rel := parse.Parse(tc.title)
+		if got := verifies(rel, req) && confirms(rel, req); got != tc.want {
+			t.Errorf("taken as 1218: %v, want %v: %s", got, tc.want, tc.title)
+		}
+		if slices.Contains(numbersFor(rel, req), 32) {
+			t.Errorf("a file numbered 32 would be picked from %s", tc.title)
+		}
 	}
 }

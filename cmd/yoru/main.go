@@ -39,6 +39,7 @@ import (
 	"yoru/internal/mal"
 	"yoru/internal/metadata"
 	"yoru/internal/player"
+	"yoru/internal/power"
 	"yoru/internal/proc"
 	"yoru/internal/push"
 	"yoru/internal/score"
@@ -61,6 +62,16 @@ func windowWanted() bool {
 		}
 	}
 	return true
+}
+
+// startedInTray: started at sign-in, so the tray icon comes up and the window waits to be asked for.
+func startedInTray() bool {
+	for _, arg := range os.Args[1:] {
+		if arg == shortcut.TrayArg {
+			return true
+		}
+	}
+	return false
 }
 
 func interval(st *store.Store, key string, fallback time.Duration) time.Duration {
@@ -256,31 +267,6 @@ func (s *logSink) keepEarly(dir string) {
 	s.early.Reset()
 }
 
-// close lets go of yoru.log, so the folder holding it can move; later lines reach only the console.
-func (s *logSink) close() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.file != nil {
-		s.file.Close()
-		s.file = nil
-	}
-	s.closed = true
-}
-
-// retargetShortcuts points shortcuts and pins aimed at kuro.exe, which opens nothing now, at yoru.exe.
-func retargetShortcuts(log *slog.Logger, from, to string) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	n, err := shortcut.Retarget(ctx, from, to)
-	if err != nil {
-		log.Warn("point shortcuts at Yoru", "err", err)
-		return
-	}
-	if n > 0 {
-		log.Info("shortcuts now open Yoru", "count", n)
-	}
-}
-
 func run(log *slog.Logger, out *logSink) error {
 	// SIGTERM too: a closed console, a log-off or a service manager otherwise end the process at once.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -293,14 +279,6 @@ func run(log *slog.Logger, out *logSink) error {
 	defer close(stopped)
 
 	exe, _ := os.Executable()
-	// kuro.exe running this code, from the old updater: renamed before anything takes its path.
-	var renamedFrom string
-	if exe != "" {
-		if named := update.TakeName(exe); named != exe {
-			log.Info("renamed to Yoru", "from", exe, "to", named)
-			renamedFrom, exe = exe, named
-		}
-	}
 	// A new version that dies before serving hands back to the previous one.
 	serving := false
 	if exe != "" && update.Handover(os.Args[1:]) {
@@ -308,20 +286,12 @@ func run(log *slog.Logger, out *logSink) error {
 			if serving {
 				return
 			}
-			back, err := update.Rollback(exe)
-			if err != nil {
+			if err := update.Rollback(exe); err != nil {
 				log.Error("restore the previous version", "err", err)
 				return
 			}
 			log.Warn("this version failed to start; the previous one is back")
-			// kuro reads its own folder and names: the data goes back with it, the log let go of first.
-			if filepath.Base(back) == config.ExeName(config.Legacy) {
-				out.close()
-				if err := config.UndoLegacyMove(); err != nil {
-					log.Error("give kuro its data folder back", "err", err)
-				}
-			}
-			if err := update.Relaunch(back); err != nil {
+			if err := update.Relaunch(exe); err != nil {
 				log.Error("start the previous version", "err", err)
 			}
 		}()
@@ -340,8 +310,8 @@ func run(log *slog.Logger, out *logSink) error {
 			return fmt.Errorf("Yoru is already running on this data folder, or another program holds %s", cfg.Addr)
 		}
 		log.Info("Yoru is already running; showing it", "url", cfg.LocalURL())
-		// Asked of the running Yoru, so its window is one it watches; one from before asking existed opens here.
-		if windowWanted() && !askToShow(cfg.LocalURL()) {
+		// Asked of the running Yoru, so it owns the window; a Yoru too old to be asked gets one opened here.
+		if windowWanted() && !startedInTray() && !askToShow(cfg.LocalURL()) {
 			config.OpenApp(ctx, cfg.LocalURL(), cfg.ProfileDir(), log)
 		}
 		return nil
@@ -530,7 +500,7 @@ func run(log *slog.Logger, out *logSink) error {
 			return score.DefaultPreferences()
 		}
 		return library.Preferences(prefs)
-	}, log)
+	}, log).WithRoom(cfg.CacheDir)
 	// A pin left behind by a crash would never be released, and Quiet below would keep its torrent running.
 	if err := st.UnpinAll(ctx); err != nil {
 		log.Warn("clear stale cache pins", "err", err)
@@ -575,6 +545,11 @@ func run(log *slog.Logger, out *logSink) error {
 	scheduler.Add(jobs.Job{
 		Name: "seadex", Every: 24 * time.Hour, OnStart: true,
 		Run: func(ctx context.Context) error { _, err := enricher.SeaDex(ctx, false); return err },
+	})
+	// TRaSH Guides' release-group grades; the start run loads the saved ones into the ranking.
+	scheduler.Add(jobs.Job{
+		Name: "group-tiers", Every: 24 * time.Hour, OnStart: true,
+		Run: func(ctx context.Context) error { _, err := enricher.GroupTiers(ctx, false); return err },
 	})
 	// Pushing keeps MAL's refresh token alive; push first: the pull reads changes since as site edits.
 	scheduler.Add(jobs.Job{
@@ -788,6 +763,7 @@ func run(log *slog.Logger, out *logSink) error {
 		}
 	}()
 	go api.WarmRankings(anilist.Background(ctx))
+	go api.KeepAwake(ctx, power.New(log))
 
 	srv := &http.Server{
 		Handler:           api.Handler(),
@@ -831,10 +807,6 @@ func run(log *slog.Logger, out *logSink) error {
 	if exe != "" {
 		update.Cleanup(exe)
 	}
-	// Only now: a failed start hands back to kuro.exe, which the shortcuts must still open.
-	if renamedFrom != "" {
-		go retargetShortcuts(log, renamedFrom, exe)
-	}
 	if len(api.PairingURLs()) > 0 {
 		go api.LogFirewall(ctx)
 	}
@@ -868,8 +840,10 @@ func run(log *slog.Logger, out *logSink) error {
 			log.Warn("tray icon", "err", err)
 		}
 		defer icon.Close()
-		// Running the executable should show the app, not print a URL to paste.
-		go window.Open(ctx, cfg.LocalURL())
+		// Running the executable should show the app, not print a URL to paste; with no icon, the window it is.
+		if !startedInTray() || err != nil {
+			go window.Open(ctx, cfg.LocalURL())
+		}
 	}
 
 	<-ctx.Done()
@@ -988,7 +962,7 @@ func askToShow(base string) bool {
 	return res.StatusCode == http.StatusNoContent
 }
 
-// yoruAnswers tells a running Yoru (or kuro, before the rename) from another program holding the port.
+// yoruAnswers tells a running Yoru from another program holding the port.
 func yoruAnswers(base string) bool {
 	client := http.Client{Timeout: 2 * time.Second}
 	res, err := client.Get(strings.TrimSuffix(base, "/") + "/api/health")

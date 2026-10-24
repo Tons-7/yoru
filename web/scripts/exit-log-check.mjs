@@ -44,8 +44,8 @@ const clip = await page.evaluate(() => navigator.clipboard.readText()).catch(() 
 check(clip.includes('==== This run'), 'the log is on the clipboard', clip.slice(0, 80))
 
 // ---------------------------------------------------------------- closing the window, in Playback
-await page.goto(`${BASE}/settings?tab=Playback`, { waitUntil: 'domcontentloaded' })
-const closing = page.locator('[data-row]', { has: page.getByText('When the window closes', { exact: true }) })
+await page.goto(`${BASE}/settings?tab=Computer`, { waitUntil: 'domcontentloaded' })
+const closing =page.locator('[data-row]', { has: page.getByText('When the window closes', { exact: true }) })
 if (process.platform === 'win32') {
   check(await until(() => closing.isVisible(), 15_000), 'Playback says what closing the window does')
   check(await closing.getByText('Yoru exits').isVisible(), 'by default Yoru exits with it')

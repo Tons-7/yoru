@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"yoru/internal/disk"
 	"yoru/internal/library"
 )
 
@@ -65,6 +66,10 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 			out["rawAvailable"] = true
 			out["rawTitle"] = missing.RawTitle
 		}
+		// Not out yet, or raw only: the page offers to say when it's out, or download it then.
+		if missing != nil && (missing.Unaired || missing.RawOnly) {
+			out["notOut"] = true
+		}
 		send(w, http.StatusBadGateway, out)
 		return
 	}
@@ -85,20 +90,10 @@ func (s *Server) cacheStatus(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "cache usage", err)
 		return
 	}
+	if free, drive, err := disk.Free(s.cfg.CacheDir); err == nil {
+		usage.FreeBytes, usage.Drive = &free, drive
+	}
 	send(w, http.StatusOK, usage)
-}
-
-func (s *Server) sweepCache(w http.ResponseWriter, r *http.Request) {
-	if s.cache == nil {
-		send(w, http.StatusServiceUnavailable, map[string]any{"error": "cache manager unavailable"})
-		return
-	}
-	rep, err := s.cache.Sweep(r.Context())
-	if err != nil {
-		s.fail(w, "cache sweep", err)
-		return
-	}
-	send(w, http.StatusOK, rep)
 }
 
 func (s *Server) stopPlayback(w http.ResponseWriter, r *http.Request) {

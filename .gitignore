@@ -11,7 +11,6 @@
 # build output
 /yoru.exe
 /yoru
-/kuro.exe
 /e2e-seed.exe
 /dist/
 /web/dist/
@@ -28,3 +27,6 @@ config.toml
 *.pid
 
 .idea
+
+# Claude Code's workflows and settings: this machine's tooling, not Yoru
+.claude/

@@ -32,7 +32,6 @@ import (
 var Version = "dev"
 
 const (
-	// Renamed from Tons-7/kuro, whose address GitHub forwards here for older versions' update checks.
 	Repo      = "Tons-7/yoru"
 	userAgent = "Yoru"
 	sumsFile  = "SHA256SUMS.txt"
@@ -459,8 +458,7 @@ func (u *Updater) fetchSmall(ctx context.Context, url string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(res.Body, 64<<10))
 }
 
-// AssetName is the zip package.ps1 publishes for this platform. Releases also carry kuro-named ones holding
-// the program as kuro.exe, for versions from before the rename, which ask for those.
+// AssetName is the zip package.ps1 publishes for this platform.
 func AssetName(version string) string {
 	if runtime.GOOS == "windows" {
 		return fmt.Sprintf("%s-%s-update.zip", config.Name, version)
@@ -555,7 +553,7 @@ func (u *Updater) apply(ctx context.Context, rel Release) error {
 	}
 	if err := u.launch(u.exe); err != nil {
 		// Put the running version back, or nothing is left to start next time.
-		if _, rerr := Rollback(u.exe); rerr != nil {
+		if rerr := Rollback(u.exe); rerr != nil {
 			u.log.Error("restore the previous version", "err", rerr)
 		}
 		return fmt.Errorf("start the new version: %w", err)
@@ -563,44 +561,22 @@ func (u *Updater) apply(ctx context.Context, rel Release) error {
 	return nil
 }
 
-// Rollback puts the previous binary back in place of a new one that failed, returning the one to start. The
-// first Yoru renamed itself on start, so the version before it may wait as kuro.exe.old.
-func Rollback(exe string) (string, error) {
-	old, back := exe+".old", exe
+// Rollback puts the previous binary back in place of a new one that failed.
+func Rollback(exe string) error {
+	old := exe + ".old"
 	if _, err := os.Stat(old); err != nil {
-		legacy := filepath.Join(filepath.Dir(exe), config.ExeName(config.Legacy))
-		if _, lerr := os.Stat(legacy + ".old"); lerr != nil {
-			return "", err
-		}
-		old, back = legacy+".old", legacy
+		return err
 	}
 	failed := exe + ".failed"
 	os.Remove(failed)
 	if err := os.Rename(exe, failed); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", err
+		return err
 	}
-	if err := os.Rename(old, back); err != nil {
+	if err := os.Rename(old, exe); err != nil {
 		os.Rename(failed, exe)
-		return "", err
+		return err
 	}
-	return back, nil
-}
-
-// TakeName renames a kuro.exe running the renamed code to yoru.exe, before anything holds its path; it returns
-// the path to use from then on. A yoru.exe already there is left alone, and so is kuro.exe.
-func TakeName(exe string) string {
-	if !strings.EqualFold(filepath.Base(exe), config.ExeName(config.Legacy)) {
-		return exe
-	}
-	named := filepath.Join(filepath.Dir(exe), config.ExeName(config.Name))
-	if _, err := os.Lstat(named); err == nil {
-		return exe
-	}
-	// A running program can be renamed, though not deleted, on Windows too: the update swap relies on it.
-	if err := os.Rename(exe, named); err != nil {
-		return exe
-	}
-	return named
+	return nil
 }
 
 // Handover reports a start by an update, the only time a failed start falls back to the old binary.
@@ -766,18 +742,11 @@ func swap(exe, fresh string) error {
 	return nil
 }
 
-// Cleanup removes the last update's leftovers once this version serves; until then .old is the way back. The
-// kuro-named ones go too, once this runs under the new name.
+// Cleanup removes the last update's leftovers once this version serves; until then .old is the way back.
 func Cleanup(exe string) {
-	stems := []string{exe}
-	if legacy := filepath.Join(filepath.Dir(exe), config.ExeName(config.Legacy)); !strings.EqualFold(legacy, exe) {
-		stems = append(stems, legacy)
-	}
-	for _, stem := range stems {
-		os.Remove(stem + ".old")
-		os.Remove(stem + ".new")
-		os.Remove(stem + ".failed")
-	}
+	os.Remove(exe + ".old")
+	os.Remove(exe + ".new")
+	os.Remove(exe + ".failed")
 }
 
 // RelaunchSelf starts this binary again, told to wait for this process, for a change that needs a restart.

@@ -71,6 +71,8 @@ for (const [key, value] of [['playback.voice', 'medium'], ['playback.night', 'tr
 await post('/api/prefs', { key: 'playback.autonext', value: 'true' })
 // VLC skips only what Settings ask for, as the browser player does.
 await post('/api/prefs', { key: 'playback.autoskip_op', value: 'true' })
+// Episode 1 keeps its song by default; the skip itself is what's checked here.
+await post('/api/prefs', { key: 'playback.skip_keep_bookends', value: 'false' })
 
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })

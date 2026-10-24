@@ -9,7 +9,7 @@ import { ConfirmInline } from './ui'
 import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 import { desktopNotifyWanted, notificationTarget } from '../lib/notifications'
 
-/** New episodes at a glance, handled in place, linking out only when there is more. */
+/** Notifications at a glance, handled in place, linking out only when there is more. */
 export function NotificationPanel() {
   const [open, setOpen] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
@@ -25,6 +25,11 @@ export function NotificationPanel() {
   const unread = data?.unread ?? 0
   const items = (data?.items ?? []).slice(0, 8)
   useDesktopNotifications(data?.items)
+  // The installed app's icon shows the unread count an alert set, and clears when they're read here.
+  useEffect(() => {
+    if (!data || !('setAppBadge' in navigator)) return
+    void (unread > 0 ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {})
+  }, [data, unread])
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['notifications'] })
   const markRead = useMutation({
@@ -75,7 +80,7 @@ export function NotificationPanel() {
           >
             <div className="flex items-center justify-between gap-2 border-b border-base-750 px-3 py-2">
               <p className="text-sm font-medium text-base-100">
-                New episodes
+                Notifications
                 {unread > 0 && (
                   <span className="ml-1.5 rounded bg-accent-500/25 px-1.5 text-[11px] text-accent-200">
                     {unread}

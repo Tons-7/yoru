@@ -114,6 +114,7 @@ func (s *Server) externalStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this link has expired; open the episode in the app again from Yoru", http.StatusForbidden)
 		return
 	}
+	defer s.serving()()
 	if p, ok := s.localSource(r.Context(), g.Source); ok {
 		f, err := os.Open(p)
 		if err != nil {

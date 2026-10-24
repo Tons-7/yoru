@@ -43,12 +43,12 @@ type Chapter struct {
 	Title string  `json:"title"`
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
-	// "op", "ed" or empty when the title names no part of the episode.
+	// "op", "ed", "recap", "preview", "eyecatch" or empty when the title names no part of the episode.
 	Kind string `json:"kind"`
 }
 
-// Release groups label the same two things a dozen ways: "Intro"/"Opening"/"OP"
-// and "Credits"/"Ending"/"Outro", often numbered. Anything else is body.
+// Release groups label the same things a dozen ways: "Intro"/"Opening"/"OP", "Credits"/"Ending"/"Outro",
+// "Preview"/"Next Episode"/"予告", often numbered. Anything else is body.
 func chapterKind(title string) string {
 	t := strings.ToLower(strings.TrimSpace(title))
 	// The first word, minus any number: "op", "OP1", "ED 2", "OP - Kick Back".
@@ -65,8 +65,37 @@ func chapterKind(title string) string {
 	case head == "ed", strings.Contains(t, "ending"),
 		strings.Contains(t, "credits"), strings.Contains(t, "outro"):
 		return "ed"
+	case containsAny(t, "recap", "previously", "前回"):
+		return "recap"
+	case containsAny(t, "preview", "next episode", "next ep", "next time", "yokoku", "予告"):
+		return "preview"
+	case containsAny(t, "eyecatch", "eye catch", "eye-catch", "アイキャッチ"):
+		return "eyecatch"
 	}
 	return ""
+}
+
+// plausibleSpan is how long a part of this kind runs, in seconds.
+func plausibleSpan(kind string) (lo, hi float64) {
+	switch kind {
+	case "eyecatch":
+		return 1, 30
+	case "preview":
+		return 5, 120
+	case "recap":
+		return 10, 300
+	default:
+		return 15, 240
+	}
+}
+
+func containsAny(s string, words ...string) bool {
+	for _, w := range words {
+		if strings.Contains(s, w) {
+			return true
+		}
+	}
+	return false
 }
 
 type MediaInfo struct {
@@ -230,8 +259,8 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 		}
 		title := c.Tags["title"]
 		kind := chapterKind(title)
-		// A theme runs a minute or two; anything else is a mislabelled body.
-		if span := end - start; span < 15 || span > 240 {
+		// Outside its kind's usual length, it's a mislabelled body.
+		if lo, hi := plausibleSpan(kind); end-start < lo || end-start > hi {
 			kind = ""
 		}
 		info.Chapters = append(info.Chapters, Chapter{

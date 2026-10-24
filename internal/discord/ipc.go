@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"sync/atomic"
@@ -84,6 +85,10 @@ func (c *conn) write(op uint32, payload any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
+	}
+	// The frame states its length in 32 bits.
+	if uint64(len(body)) > math.MaxUint32-8 {
+		return fmt.Errorf("discord: payload of %d bytes is too large", len(body))
 	}
 	frame := make([]byte, 8, 8+len(body))
 	binary.LittleEndian.PutUint32(frame[0:], op)

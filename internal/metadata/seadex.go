@@ -10,7 +10,7 @@ import (
 )
 
 // SeaDex curates each anime's best release, keyed by AniList id, so no title matching.
-const SeaDexURL = "https://releases.moe/api/collections/entries/records"
+const SeaDexURL = "https://seadex.moe/api/collections/entries/records"
 
 type SeaDexRelease struct {
 	AniListID    int
@@ -23,6 +23,14 @@ type SeaDexRelease struct {
 	Incomplete   bool
 	Notes        string
 	Tags         []string
+	// Comparison pages (slow.pics and the like) for the entry, and the release's files.
+	Comparison []string
+	Files      []SeaDexFile
+}
+
+type SeaDexFile struct {
+	Name   string `json:"name"`
+	Length int64  `json:"length"`
 }
 
 type seadexPage struct {
@@ -34,15 +42,17 @@ type seadexPage struct {
 		AniListID  int    `json:"alID"`
 		Incomplete bool   `json:"incomplete"`
 		Notes      string `json:"notes"`
+		Comparison string `json:"comparison"`
 		Expand     struct {
 			Torrents []struct {
-				InfoHash     string `json:"infoHash"`
-				ReleaseGroup string `json:"releaseGroup"`
-				Tracker      string `json:"tracker"`
-				URL          string `json:"url"`
-				IsBest       bool   `json:"isBest"`
-				DualAudio    bool   `json:"dualAudio"`
-				Tags         any    `json:"tags"`
+				InfoHash     string       `json:"infoHash"`
+				ReleaseGroup string       `json:"releaseGroup"`
+				Tracker      string       `json:"tracker"`
+				URL          string       `json:"url"`
+				IsBest       bool         `json:"isBest"`
+				DualAudio    bool         `json:"dualAudio"`
+				Tags         any          `json:"tags"`
+				Files        []SeaDexFile `json:"files"`
 			} `json:"trs"`
 		} `json:"expand"`
 	} `json:"items"`
@@ -93,8 +103,10 @@ func (c *Client) SeaDex(ctx context.Context) ([]SeaDexRelease, error) {
 					IsBest:       tr.IsBest,
 					DualAudio:    tr.DualAudio,
 					Incomplete:   item.Incomplete,
-					Notes:        item.Notes,
+					Notes:        strings.TrimSpace(item.Notes),
 					Tags:         toTags(tr.Tags),
+					Comparison:   links(item.Comparison),
+					Files:        tr.Files,
 				})
 			}
 		}
@@ -122,6 +134,17 @@ func usableHash(raw string) string {
 		}
 	}
 	return h
+}
+
+// links splits the comma-separated comparison field, keeping web addresses only: the picker opens them.
+func links(field string) []string {
+	var out []string
+	for part := range strings.SplitSeq(field, ",") {
+		if u, err := url.Parse(strings.TrimSpace(part)); err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" {
+			out = append(out, u.String())
+		}
+	}
+	return out
 }
 
 // tags arrive as a list on some records and a string on others.

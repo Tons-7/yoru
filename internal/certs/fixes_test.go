@@ -52,6 +52,53 @@ func TestSecondDuckDNSSetupStopsTheFirst(t *testing.T) {
 	}
 }
 
+// A router with DNS rebind protection drops the name's home address: said so, and cleared when it answers.
+func TestARouterThatWontAnswerTheNameIsNoticed(t *testing.T) {
+	var calls []url.Values
+	duckServer(t, "OK", &calls)
+	was := manageCert
+	manageCert = func(context.Context, *certmagic.Config, string) error { return nil }
+	t.Cleanup(func() { manageCert = was })
+	answer := []string{}
+	var failure error
+	lookup := lookupHost
+	lookupHost = func(context.Context, string) ([]string, error) { return answer, failure }
+	t.Cleanup(func() { lookupHost = lookup })
+
+	s := New(t.TempDir(), func() string { return "" }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := s.UseDuckDNS("myyoru", "token"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.StopDuckDNS)
+	if st := s.Status(); st.AtHome != nil {
+		t.Fatalf("asked before there was an address: %+v", st)
+	}
+	s.mu.RLock()
+	d := s.duck
+	s.mu.RUnlock()
+	d.mu.Lock()
+	d.ip = "192.168.1.10"
+	d.mu.Unlock()
+
+	if st := s.CheckHome(context.Background()); st.AtHome == nil || *st.AtHome || !s.HomeBlocked() {
+		t.Errorf("no answer at home, yet %+v", st)
+	}
+	answer = []string{"192.168.1.10"}
+	if st := s.CheckHome(context.Background()); st.AtHome == nil || !*st.AtHome || s.HomeBlocked() {
+		t.Errorf("the router answers now, yet %+v", st)
+	}
+
+	// A slow resolver is no verdict; a router dropping the answer reads as the name not existing.
+	answer, failure = nil, &net.DNSError{Err: "i/o timeout", Name: "myyoru.duckdns.org", IsTimeout: true}
+	if st := s.CheckHome(context.Background()); st.AtHome == nil || !*st.AtHome || s.HomeBlocked() {
+		t.Errorf("a timeout counted as the router blocking the name: %+v", st)
+	}
+	failure = &net.DNSError{Err: "no such host", Name: "myyoru.duckdns.org", IsNotFound: true}
+	if st := s.CheckHome(context.Background()); st.AtHome == nil || *st.AtHome || !s.HomeBlocked() {
+		t.Errorf("a dropped answer wasn't noticed: %+v", st)
+	}
+}
+
 // An owner certificate for this machine's own address pairs over https too.
 func TestOwnCertificateForTheLANAddressNamesIt(t *testing.T) {
 	ip := ownPrivateIP()

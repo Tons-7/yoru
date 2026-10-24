@@ -453,6 +453,21 @@ func (s *Store) Franchise(ctx context.Context, animeID int) (Franchise, error) {
 	return out, nil
 }
 
+// NextSeason is the franchise's next entry in broadcast order once it has started airing, 0 if none: a finale
+// plays on into it. Only the very next one, so an unaired season 2 never jumps ahead to a season 3.
+func (s *Store) NextSeason(ctx context.Context, animeID int) int {
+	var id int
+	s.r.QueryRowContext(ctx, `
+		SELECT n.anime_id
+		FROM franchise f
+		JOIN franchise n ON n.root_id = f.root_id
+		 AND n.ordinal = (SELECT min(ordinal) FROM franchise WHERE root_id = f.root_id AND ordinal > f.ordinal)
+		JOIN anime a ON a.id = n.anime_id AND a.status IN ('RELEASING', 'FINISHED')
+		WHERE f.anime_id = ?
+		LIMIT 1`, animeID).Scan(&id)
+	return id
+}
+
 func (s *Store) soloFranchise(ctx context.Context, animeID int) (Franchise, error) {
 	var season Season
 	err := s.r.QueryRowContext(ctx, `

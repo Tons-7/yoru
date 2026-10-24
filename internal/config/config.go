@@ -15,6 +15,12 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// Name is the app's name in folders and files.
+const Name = "yoru"
+
+// Env reads YORU_<key>.
+func Env(key string) string { return os.Getenv("YORU_" + key) }
+
 type Config struct {
 	Addr     string    `toml:"addr"`
 	CacheDir string    `toml:"cache_dir"`
@@ -177,7 +183,8 @@ func (c Config) TLSFiles() (cert, key string) {
 }
 
 func (c Config) DataDir() string      { return c.dataDir }
-func (c Config) DatabasePath() string { return c.dataFile(".db") }
+func (c Config) DatabasePath() string { return filepath.Join(c.dataDir, Name+".db") }
+func (c Config) LockPath() string     { return filepath.Join(c.dataDir, Name+".lock") }
 func (c Config) ProfileDir() string   { return filepath.Join(c.dataDir, "window") }
 func (c Config) Path(name string) string {
 	return filepath.Join(c.BinDir, name)
@@ -250,11 +257,8 @@ func Load() (Config, error) {
 	}
 
 	cfg.root, cfg.temporary = root, underTemp(root)
-	if cfg.Data == "" {
-		cfg.dataDir = PrepareDataDir()
-	} else {
+	if cfg.Data != "" {
 		cfg.dataDir = cfg.ResolveDataDir(cfg.Data)
-		renameLegacyFiles(cfg.dataDir)
 	}
 	cfg.CacheDir = cfg.resolve(cfg.CacheDir, filepath.Join(root, "cache"))
 	cfg.BinDir = cfg.resolve(cfg.BinDir, filepath.Join(root, "bin"))
@@ -272,7 +276,7 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-// rootDir holds config.toml, bin/ and cache/: beside the program, or YORU_ROOT (KURO_ROOT before the rename).
+// rootDir holds config.toml, bin/ and cache/: beside the program, or YORU_ROOT.
 func rootDir() (string, error) {
 	if root := Env("ROOT"); root != "" {
 		return root, nil
@@ -337,16 +341,12 @@ func underTemp(dir string) bool {
 // DefaultDataDir is where the data lives when data_dir is empty: Local, since Roaming would sync the DB.
 func DefaultDataDir() string { return dataDir() }
 
-func dataDir() string { return appDataFor(Name) }
-
-func legacyDataDir() string { return appDataFor(Legacy) }
-
-func appDataFor(name string) string {
+func dataDir() string {
 	if d := os.Getenv("LOCALAPPDATA"); d != "" {
-		return filepath.Join(d, name)
+		return filepath.Join(d, Name)
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "."+name)
+	return filepath.Join(home, "."+Name)
 }
 
 const template = `# Register an application at https://anilist.co/settings/developer

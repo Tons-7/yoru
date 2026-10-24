@@ -148,22 +148,10 @@ func (s Status) Reachable() bool {
 }
 
 // RuleName carries the port, so a changed port gets a rule of its own.
-func RuleName(port int) string { return ruleName("Yoru", port) }
-
-// legacyRuleName is RuleName from before the rename; that rule names no program, so it still works.
-func legacyRuleName(port int) string { return ruleName("kuro", port) }
-
-func ruleName(app string, port int) string { return fmt.Sprintf("%s (LAN, TCP %d)", app, port) }
+func RuleName(port int) string { return fmt.Sprintf("Yoru (LAN, TCP %d)", port) }
 
 // PeerRuleName names the pair of rules (TCP, UDP) for the torrent peer port.
-func PeerRuleName(port int) string { return peerRuleName("Yoru", port) }
-
-// legacyPeerRuleName's rules are for kuro.exe, so they no longer let peers in; allowing again replaces them.
-func legacyPeerRuleName(port int) string { return peerRuleName("kuro", port) }
-
-func peerRuleName(app string, port int) string {
-	return fmt.Sprintf("%s (torrent peers, %d)", app, port)
-}
+func PeerRuleName(port int) string { return fmt.Sprintf("Yoru (torrent peers, %d)", port) }
 
 // ErrCancelled: the administrator prompt was declined.
 var ErrCancelled = fmt.Errorf("the administrator prompt was declined")

@@ -48,6 +48,30 @@ func TestPausedQueueStartsNothingUntilResumed(t *testing.T) {
 	}
 }
 
+// A nearly full drive holds the queue and says how much is left; room again lets it carry on.
+func TestQueueWaitsForRoomOnTheDrive(t *testing.T) {
+	d, _ := pausableQueue(t)
+	d.WithRoom(t.TempDir())
+	free := int64(MinFree - 1)
+	old := freeSpace
+	freeSpace = func(string) (int64, string, error) { return free, "D:", nil }
+	t.Cleanup(func() { freeSpace = old })
+
+	if d.roomy() {
+		t.Fatal("a download would start with the drive nearly full")
+	}
+	if got, drive := d.Short(); got != free || drive != "D:" {
+		t.Errorf("short = %d on %q, want %d on D:", got, drive, free)
+	}
+	free = MinFree
+	if !d.roomy() {
+		t.Fatal("room again, yet the queue still waits")
+	}
+	if got, _ := d.Short(); got != 0 {
+		t.Errorf("still says short: %d", got)
+	}
+}
+
 // Pausing also stops the download in flight, which goes back to wait its turn.
 func TestPausingTheQueueStopsTheDownloadInFlight(t *testing.T) {
 	d, _ := pausableQueue(t)

@@ -361,6 +361,7 @@ const inProgress = `dismissed = 0 AND position_s >= 15
           (SELECT CAST(value AS REAL) FROM anime_pref
            WHERE anime_id = playback.anime_id AND key = 'sync.progress_at'
              AND CAST(value AS REAL) > 0 AND CAST(value AS REAL) <= 1), ?1))
+      AND NOT (coalesce(done_s, 0) > 0 AND position_s >= done_s)
       AND NOT (coalesce(duration_s, 0) <= 0 AND watched = 1)`
 
 // latestFirst: newest first; within one second, the unfinished row is the one being played.

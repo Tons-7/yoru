@@ -173,18 +173,24 @@ function Row({
     rel.Batch && 'batch',
   ].filter(Boolean)
 
+  // The curator's word on a release SeaDex lists: its notes and comparisons, under the row, not in its button.
+  const curated = r.SeaDexBest || r.SeaDexListed
+  const notes = curated ? r.SeaDexNotes : undefined
+  const compare = curated ? (r.SeaDexCompare ?? []) : []
+  const longNotes = !!notes && (notes.length > 140 || notes.includes('\n'))
+
   return (
-    <li>
+    <li
+      className={cx(
+        'rounded-lg border transition-colors',
+        active ? 'border-accent-500/50 bg-accent-500/10' : 'border-base-850',
+        r.blocked && 'opacity-60',
+      )}
+    >
       <button
         onClick={onPick}
         title={r.reasons?.join('\n')}
-        className={cx(
-          'block w-full rounded-lg border px-3 py-2 text-left transition-colors',
-          active
-            ? 'border-accent-500/50 bg-accent-500/10'
-            : 'border-base-850 hover:bg-base-850',
-          r.blocked && 'opacity-60',
-        )}
+        className={cx('block w-full rounded-lg px-3 py-2 text-left', !active && 'hover:bg-base-850')}
       >
         <p className="line-clamp-2 text-sm text-base-100">{r.Torrent.title}</p>
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-base-400">
@@ -203,10 +209,40 @@ function Row({
           <span className="ml-auto tabular-nums text-base-500">{Math.round(r.score)}</span>
           {active && <Badge tone="accent">{activeLabel}</Badge>}
           {r.SeaDexBest && <Badge tone="accent">SeaDex</Badge>}
+          {!r.SeaDexBest && r.SeaDexListed && <Badge>SeaDex alt</Badge>}
+          {curated && r.SeaDexIncomplete && <Badge tone="filler">SeaDex incomplete</Badge>}
           {!r.playable && <Badge tone="filler">Software transcode</Badge>}
           {r.blocked && <Badge tone="recap">{r.blocked}</Badge>}
         </div>
       </button>
+      {(notes || compare.length > 0) && <CuratorNotes notes={notes} compare={compare} long={longNotes} />}
     </li>
+  )
+}
+
+function CuratorNotes({ notes, compare, long }: { notes?: string; compare: string[]; long: boolean }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="space-y-1 px-3 pb-2 text-[11px] text-base-400">
+      {notes && <p className={cx('whitespace-pre-line', long && !open && 'line-clamp-2')}>{notes}</p>}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {long && (
+          <button onClick={() => setOpen((o) => !o)} className="py-1 font-medium text-accent-300 hover:underline">
+            {open ? 'Fewer notes' : 'All notes'}
+          </button>
+        )}
+        {compare.map((url, i) => (
+          <a
+            key={url}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="py-1 font-medium text-accent-300 hover:underline"
+          >
+            {compare.length > 1 ? `Comparison ${i + 1}` : 'Comparison'}
+          </a>
+        ))}
+      </div>
+    </div>
   )
 }

@@ -216,7 +216,12 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	if req.Episode <= 1 {
 		series = f.filmSeries(ctx, req.AnimeID)
 	}
-	queries := searchTerms(titles, english, req.Episode, req.Alias.Tvdb, req.Alias.Absolute, groups,
+	// A lower TheTVDB number alone finds the show's own early episode of that number.
+	tvdb := req.Alias.Tvdb
+	if tvdb < req.Episode {
+		tvdb = 0
+	}
+	queries := searchTerms(titles, english, req.Episode, tvdb, req.Alias.Absolute, groups,
 		req.Prefs.Audio == "dub", series.queries()...)
 	// What a person typed in the picker goes first, in their own words.
 	ask := f.askedOf(req.AnimeID, req.Episode)
@@ -309,10 +314,12 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 				c.Confirmed, c.Numbers, c.Episode = confirms(rel, req), numbersFor(rel, req), req.Episode
 			}
 			if info, ok := bestByHash[strings.ToLower(t.InfoHash)]; ok {
-				c.SeaDexBest, c.SeaDexGroup = info.IsBest, true
-			} else if _, ok := bestByGroup[strings.ToLower(rel.Group)]; ok {
+				c.SeaDexBest, c.SeaDexGroup, c.SeaDexListed = info.IsBest, true, true
+				c.SeaDexNotes, c.SeaDexCompare, c.SeaDexIncomplete = info.Notes, info.Comparison, info.Incomplete
+			} else if info, ok := bestByGroup[strings.ToLower(rel.Group)]; ok {
 				// Private trackers redact the hash; the group is all that survives.
 				c.SeaDexGroup = true
+				c.SeaDexNotes, c.SeaDexCompare, c.SeaDexIncomplete = info.Notes, info.Comparison, info.Incomplete
 			}
 			cands = append(cands, c)
 		}
@@ -889,7 +896,18 @@ func numbersFor(rel parse.Release, req Request) []int {
 	if !bare(rel, req) {
 		out = append(out, req.Episode)
 	}
-	return append(out, req.Alias.Numbers()...)
+	if tvdb := req.Alias.Tvdb; tvdb > 0 && tvdbCounts(rel, req) {
+		out = append(out, tvdb)
+	}
+	if abs := req.Alias.Absolute; abs > 0 && !slices.Contains(out, abs) {
+		out = append(out, abs)
+	}
+	return out
+}
+
+// TheTVDB's number counts through cours when higher; lower, it needs its season stated (Conan 1218 = S34E32).
+func tvdbCounts(rel parse.Release, req Request) bool {
+	return req.Alias.Tvdb > req.Episode || (req.Alias.TvdbSeason > 0 && rel.Season == req.Alias.TvdbSeason)
 }
 
 // covers reports that a batch's stated range holds the number; a batch stating no range may hold anything.
@@ -948,7 +966,7 @@ func numbered(rel parse.Release, req Request) (stated, inBatch bool) {
 	}
 	// Counting across cours needs this show's name: a bare "Bleach - 42" is the
 	// original series'. A stated season makes the count TheTVDB's: S17E42 is ours.
-	if tvdb := req.Alias.Tvdb; tvdb > 0 && (namesShow(rel, req) || broadcast(rel, req)) {
+	if tvdb := req.Alias.Tvdb; tvdb > 0 && tvdbCounts(rel, req) && (namesShow(rel, req) || broadcast(rel, req)) {
 		stated = stated || rel.Episode == tvdb
 		inBatch = inBatch || covers(rel, tvdb)
 	}

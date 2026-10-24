@@ -120,3 +120,23 @@ func TestSkipRangeContains(t *testing.T) {
 		}
 	}
 }
+
+// A trusted source's part wins, and one source keeps every range of a part: an A and a B eyecatch.
+func TestMergeKeepsEveryRangeOfTheSourceItTakes(t *testing.T) {
+	marked := []SkipRange{{Kind: "op", Start: 80, End: 170, Source: "marked"}}
+	chapters := []SkipRange{
+		{Kind: "op", Start: 85, End: 175, Source: "chapters"},
+		{Kind: "eyecatch", Start: 600, End: 605, Source: "chapters"},
+		{Kind: "eyecatch", Start: 610, End: 615, Source: "chapters"},
+	}
+	aniskip := []SkipRange{
+		{Kind: "eyecatch", Start: 700, End: 705, Source: "aniskip"},
+		// One ending given twice: kept once.
+		{Kind: "ed", Start: 1300, End: 1390, Source: "aniskip"},
+		{Kind: "mixed-ed", Start: 1302, End: 1392, Source: "aniskip"},
+	}
+	got := Merge(marked, chapters, aniskip)
+	if len(got) != 4 || got[0].Source != "marked" || got[1].Start != 600 || got[2].Start != 610 || got[3].Start != 1300 {
+		t.Errorf("merged %+v, want the marked opening, both chapter eyecatches and one ending", got)
+	}
+}

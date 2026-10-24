@@ -18,6 +18,7 @@ import (
 
 	"yoru/internal/library"
 	"yoru/internal/sound"
+	"yoru/internal/store"
 	"yoru/internal/torrent"
 	"yoru/internal/transcode"
 )
@@ -363,10 +364,22 @@ func (s *Server) readablePath(ctx context.Context, animeID, episode int, fallbac
 		return fallback
 	}
 	rec, found, err := s.store.TorrentForEpisode(ctx, animeID, strconv.Itoa(episode))
-	if err != nil || !found || rec.FilePath == "" {
+	if err != nil || !found {
 		return fallback
 	}
+	path := s.cachePath(rec)
+	// Only fetched bytes make the file worth reading; the rest reads as zeroes.
+	if path == "" || s.cache != nil && s.cache.Downloaded(ctx, rec.InfoHash) == 0 {
+		return fallback
+	}
+	return path
+}
 
+// cachePath is where the engine writes a torrent's episode file, "" when it isn't there.
+func (s *Server) cachePath(rec store.TorrentRecord) string {
+	if rec.FilePath == "" {
+		return ""
+	}
 	// A pack's files sit in a folder named after it, a single file in the cache, under the engine's names
 	// (see DiskNames). The folder first: a lone release may share a pack file's name.
 	var inPack []string
@@ -380,25 +393,15 @@ func (s *Server) readablePath(ctx context.Context, animeID, episode int, fallbac
 	for _, file := range torrent.DiskNames(rec.FilePath, rec.InfoHash) {
 		candidates = append(candidates, filepath.Join(s.cfg.CacheDir, file))
 	}
-	path := ""
 	for _, p := range candidates {
 		if !torrent.Within(s.cfg.CacheDir, p) {
 			continue
 		}
 		if info, err := os.Stat(p); err == nil && !info.IsDir() {
-			path = p
-			break
+			return p
 		}
 	}
-	if path == "" {
-		return fallback
-	}
-
-	// Only fetched bytes make the file worth reading; the rest reads as zeroes.
-	if s.cache != nil && s.cache.Downloaded(ctx, rec.InfoHash) == 0 {
-		return fallback
-	}
-	return path
+	return ""
 }
 
 func (s *Server) streamPlaylist(w http.ResponseWriter, r *http.Request) {

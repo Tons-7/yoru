@@ -1,4 +1,3 @@
-import './lib/storage-rename'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -47,8 +46,10 @@ window.addEventListener('vite:preloadError', (e) => {
   location.reload()
 })
 
-// While alerts are wanted, the alerts worker is registered again, so an update to it takes over.
-if (desktopNotifyWanted()) void registerWorker()?.catch(() => {})
+// Registered each start, so an update takes over: for alerts, and the installed app's "can't reach" page.
+const installed =
+  matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true
+if (desktopNotifyWanted() || installed) void registerWorker()?.catch(() => {})
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

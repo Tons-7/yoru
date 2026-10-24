@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState, type RefObject } from 'react'
+import { useCallback, useEffect, useEffectEvent, useRef, useState, type RefObject } from 'react'
 import type Hls from 'hls.js'
 import type JASSUB from 'jassub'
 // ?worker&url, not ?url: the plain form copies worker.js verbatim, leaving its
@@ -670,22 +670,71 @@ export function useEmbeddedFonts(fontsUrl?: string, generation = 0) {
   return fonts
 }
 
-/** Auto-skip fires once per range; re-entering by seeking back is deliberate. */
 /** What an AniSkip range is: op and mixed-op open, ed and mixed-ed end, recap is its own. */
-export function skipKind(kind: string): 'opening' | 'ending' | 'recap' | undefined {
+export type SkipName = 'opening' | 'ending' | 'recap' | 'preview' | 'eyecatch' | 'chapter'
+
+export function skipKind(kind: string): SkipName | undefined {
   const k = kind.toLowerCase()
   if (k === 'op' || k === 'mixed-op') return 'opening'
   if (k === 'ed' || k === 'mixed-ed') return 'ending'
   if (k === 'recap') return 'recap'
+  if (k === 'preview') return 'preview'
+  if (k === 'eyecatch') return 'eyecatch'
+  // A chapter named in Settings as one to skip.
+  if (k === 'skip') return 'chapter'
   return undefined
 }
 
+export type AutoSkip = { op: boolean; ed: boolean; recap: boolean; preview: boolean }
+
+function wanted(kind: SkipName | undefined, on: AutoSkip): boolean {
+  switch (kind) {
+    case 'opening':
+      return on.op
+    case 'ending':
+      return on.ed
+    case 'recap':
+      return on.recap
+    case 'preview':
+    case 'eyecatch':
+      return on.preview
+    case 'chapter':
+      return true
+    default:
+      return false
+  }
+}
+
+/** What was just jumped over, offered back for a moment; byHand: Skip was pressed, so no "Watch it". */
+export type Skipped = { range: SkipRange; at: number; byHand?: boolean }
+
+// A tap this soon after the offer shows is the second half of a double tap on Skip, in the same place.
+export const SKIPPED_GUARD = 500
+
+// How long "Watch it" stays: long enough to reach for, short enough not to sit over the picture.
+const SKIPPED_FOR = 3000
+
+// Each range skips once: seeking back into one is deliberate. onKept hears of a skip left standing (no
+// "Watch it", no "Wrong skip") once its moment has passed.
 export function useAutoSkip(
   video: HTMLVideoElement | null,
   ranges: SkipRange[],
-  enabled: { op: boolean; ed: boolean },
+  enabled: AutoSkip,
+  onKept?: (range: SkipRange) => void,
 ) {
   const skipped = useRef<Set<string>>(new Set())
+  const [last, setLast] = useState<Skipped | null>(null)
+  // The skip on offer, until it's undone or its moment passes; a newer one replacing it counts it kept.
+  const pending = useRef<SkipRange | null>(null)
+  const onKeptRef = useRef(onKept)
+  useEffect(() => {
+    onKeptRef.current = onKept
+  })
+  const offer = useCallback((next: Skipped) => {
+    if (pending.current) onKeptRef.current?.(pending.current)
+    pending.current = next.range
+    setLast(next)
+  }, [])
 
   useEffect(() => {
     skipped.current.clear()
@@ -698,16 +747,14 @@ export function useAutoSkip(
       const t = video.currentTime
       for (const range of ranges) {
         // A shape change upstream must not throw inside timeupdate.
-        if (!range?.kind) continue
-        // A recap has no toggle of its own, so it is offered, never skipped unasked.
-        const kind = skipKind(range.kind)
-        if (kind === 'ending' ? !enabled.ed : kind === 'opening' ? !enabled.op : true) continue
+        if (!range?.kind || !wanted(skipKind(range.kind), enabled)) continue
 
         const key = `${range.kind}-${range.start}`
         if (skipped.current.has(key)) continue
         if (t >= range.start && t < range.end - 0.4) {
           skipped.current.add(key)
           video.currentTime = range.end
+          offer({ range, at: Date.now() })
           return
         }
       }
@@ -715,7 +762,32 @@ export function useAutoSkip(
 
     video.addEventListener('timeupdate', onTime)
     return () => video.removeEventListener('timeupdate', onTime)
-  }, [video, ranges, enabled.op, enabled.ed])
+  }, [video, ranges, enabled, offer])
+
+  useEffect(() => {
+    if (!last) return
+    const id = window.setTimeout(() => {
+      if (pending.current) onKeptRef.current?.(pending.current)
+      pending.current = null
+      setLast(null)
+    }, SKIPPED_FOR)
+    return () => window.clearTimeout(id)
+  }, [last])
+
+  // Its key stays skipped, so "Watch it" seeking back to the start plays it through this time.
+  const dismiss = useCallback(() => {
+    pending.current = null
+    setLast(null)
+  }, [])
+  // A Skip pressed by hand: kept, and open to a "Wrong skip" when it's AniSkip's.
+  const note = useCallback(
+    (range: SkipRange) => {
+      skipped.current.add(`${range.kind}-${range.start}`)
+      offer({ range, at: Date.now(), byHand: true })
+    },
+    [offer],
+  )
+  return { skipped: last, dismiss, note }
 }
 
 /** Floats the whole player (native PiP drops subtitles); container must be a portal host, to keep handlers. */

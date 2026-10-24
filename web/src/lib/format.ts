@@ -15,6 +15,11 @@ export function bytes(n: number): string {
   return `${(n / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
 }
 
+/** A whole number of hours for a sentence: "1 hour", "3 hours". */
+export function waitLabel(hours: string): string {
+  return hours === '1' ? '1 hour' : `${hours || '0'} hours`
+}
+
 /** Settings' unit for speeds: megabits as speed tests give them, or megabytes as file sizes are. */
 export type SpeedUnit = 'mbps' | 'mbs'
 

@@ -19,6 +19,8 @@ type UpNextItem struct {
 	// Where a started episode resumes, for the card's bar.
 	Position float64 `json:"position,omitempty"`
 	Duration float64 `json:"duration,omitempty"`
+	// Spoiler: the episode's title is held back by the show's spoiler rule (see markSpoilers).
+	Spoiler bool `json:"spoiler,omitempty"`
 }
 
 // Pick is an episode to play.
@@ -56,7 +58,27 @@ func (s *Store) UpNext(ctx context.Context) ([]UpNextItem, error) {
 		it.Title = PickTitle(mode, romaji, english)
 		out = append(out, it)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// After the cursor closes: these reads need a pool connection of their own. The list holds unwatched
+	// episodes, so the next is the one after the list's progress.
+	type rule struct {
+		mode string
+		next int
+	}
+	rules := map[int]rule{}
+	for i := range out {
+		it := &out[i]
+		r, ok := rules[it.AnimeID]
+		if !ok {
+			entry, _ := s.ListEntry(ctx, it.AnimeID)
+			r = rule{s.SpoilerMode(ctx, it.AnimeID), entry.Progress + 1}
+			rules[it.AnimeID] = r
+		}
+		it.Spoiler = it.EpisodeTitle != "" && HidesSpoilers(r.mode, it.Episode, r.next, false)
+	}
+	return out, nil
 }
 
 // AddUpNext puts an episode on the list: with its show's other episodes if any are there, else at the bottom.
@@ -224,11 +246,23 @@ func (s *Store) PlayOrder(ctx context.Context, animeID, episode, n int) (picks [
 			return nil, 0, err
 		}
 		if next == 0 {
-			break
+			// Past a season's finale, the next season's first episode once it has aired.
+			sequel := s.NextSeason(ctx, last.AnimeID)
+			if sequel == 0 || !s.isFinale(ctx, last) {
+				break
+			}
+			picks = append(picks, Pick{AnimeID: sequel, Episode: 1})
+			continue
 		}
 		picks = append(picks, Pick{AnimeID: last.AnimeID, Episode: next})
 	}
 	return picks, fromList, nil
+}
+
+// isFinale: the entry's last episode by its count; NextEpisode's zero also means "not aired yet".
+func (s *Store) isFinale(ctx context.Context, p Pick) bool {
+	total, _ := s.EpisodeCount(ctx, p.AnimeID)
+	return total > 0 && p.Episode >= total
 }
 
 // leaveUpNext takes a watched episode off the list, as a rewatch keeps progress where it was.

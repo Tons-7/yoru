@@ -11,12 +11,14 @@ import {
   useDownloads,
   useNow,
   usePrefs,
+  useSetPref,
   useUpNextEdit,
 } from '../lib/queries'
 import { isUnaired } from '../lib/episodes'
 import { Badge, ConfirmInline, inputClass, TextInput } from './ui'
 import { ListCheckGlyph, ListPlusGlyph } from './UpNext'
 import { useInUpNext } from '../lib/upnext'
+import { reveal, useRevealed } from '../lib/spoilers'
 import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 
 const PAGE_SIZE = 50
@@ -89,6 +91,21 @@ export function EpisodeList({
     () => new Set((queue.data?.items ?? []).filter((q) => q.animeId === animeId && q.state === 'failed').map((q) => q.episode)),
     [queue.data, animeId],
   )
+  // Spoilers for this show alone: shown all at once, or hidden again under the rule Settings sets.
+  const showPrefs = usePrefs(animeId)
+  const setPref = useSetPref()
+  const showsAll = showPrefs.data?.overrides?.['display.spoilers'] === 'off'
+  const anyHidden = episodes.some((e) => e.spoiler)
+  const setSpoilers = (value: string) =>
+    setPref.mutate(
+      { key: 'display.spoilers', value, animeId },
+      {
+        onSuccess: () => {
+          void qc.invalidateQueries({ queryKey: ['episodes', animeId] })
+          void qc.invalidateQueries({ queryKey: ['upnext'] })
+        },
+      },
+    )
   const listed = useInUpNext(animeId)
   const upNextEdit = useUpNextEdit()
   const toggleUpNext = (episode: number) =>
@@ -226,6 +243,17 @@ export function EpisodeList({
               { value: 'downloaded', label: 'Downloaded', hidden: downloadedCount === 0 },
             ]}
           />
+
+          {(anyHidden || showsAll) && (
+            <button
+              type="button"
+              onClick={() => setSpoilers(showsAll ? '' : 'off')}
+              disabled={setPref.isPending}
+              className="rounded-lg px-2.5 py-1 text-xs text-base-400 ring-1 ring-base-700 transition-colors hover:bg-base-800 hover:text-white disabled:opacity-50 pointer-coarse:min-h-11"
+            >
+              {showsAll ? 'Hide spoilers again' : 'Show all titles'}
+            </button>
+          )}
 
           {searchable && (
             <div className="relative w-full sm:w-56">
@@ -561,7 +589,11 @@ function EpisodeRow({
   }, [active, compact])
 
   const number = episode.display || episode.number
-  const title = episode.titleEn || episode.titleJa || `Episode ${number}`
+  // The one playing is never hidden: it's on screen anyway.
+  const isRevealed = useRevealed()
+  const hidden = !!episode.spoiler && !active && !isRevealed(animeId, episode.number)
+  // The number is on the thumbnail already; saying the title is hidden explains the blur.
+  const title = hidden ? 'Title hidden' : episode.titleEn || episode.titleJa || `Episode ${number}`
   // The server's rule, not the tick: a watched episode wound back is watched and resumable.
   const resumeAt = episode.resumable && typeof episode.position === 'number' && !unaired ? episode.position : undefined
   const played =
@@ -597,6 +629,8 @@ function EpisodeRow({
           className={cx(
             'size-full object-cover transition-[transform,filter] duration-300 group-hover/ep:scale-105',
             !episode.still && 'opacity-30 blur-[1px]',
+            // Scaled up so the blur's soft edge stays inside the box.
+            hidden && episode.still && 'scale-125 blur-xl',
             // Watched and not the one playing: set back, not hidden.
             watched && !active && 'brightness-[0.55] saturate-50',
           )}
@@ -643,16 +677,18 @@ function EpisodeRow({
         <p
           className={cx(
             'min-w-0 line-clamp-1 text-sm font-medium',
-            unaired ? 'text-base-400' : watched && !active ? 'text-base-400' : 'text-white',
+            unaired || hidden ? 'text-base-400' : watched && !active ? 'text-base-400' : 'text-white',
           )}
         >
           {title}
         </p>
       </div>
-      {!compact && episode.overview && (
+      {!compact && episode.overview && (hidden ? (
+        <p className="mt-1 hidden text-xs text-base-600 sm:block">Title and synopsis hidden to avoid spoilers</p>
+      ) : (
         // Not on a phone: squeezed beside the still it came out as a few words.
         <p className="mt-1 line-clamp-2 hidden text-xs leading-relaxed text-base-500 sm:block">{episode.overview}</p>
-      )}
+      ))}
       <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-base-500">
         {unaired ? (
           <span className="font-medium text-sky-300">Airs {relativeTime(episode.airDate!)}</span>
@@ -775,6 +811,19 @@ function EpisodeRow({
       </button>
     )
 
+  // Not in the player's narrow list, where a fourth button squeezes titles away; the show page has room.
+  const showSpoiler = hidden && !onToggle && !compact && (
+    <button
+      type="button"
+      onClick={() => reveal(animeId, episode.number)}
+      aria-label={`Show episode ${number}'s title and synopsis`}
+      title="Show title and synopsis"
+      className="tap relative grid size-8 shrink-0 place-items-center rounded-full text-base-500 ring-1 ring-base-700 transition-colors hover:bg-base-800 hover:text-base-100"
+    >
+      <EyeGlyph />
+    </button>
+  )
+
   const queueUp = !unaired && !onToggle && (
     <button
       type="button"
@@ -812,6 +861,7 @@ function EpisodeRow({
         <div className={cx(shell, 'cursor-default opacity-75')}>
           {thumb}
           {text}
+          {showSpoiler}
         </div>
       ) : onToggle ? (
         <button
@@ -837,12 +887,13 @@ function EpisodeRow({
           <Link
             to={`/watch/${animeId}/${episode.number}`}
             aria-current={active ? 'true' : undefined}
-            aria-label={`Episode ${number}: ${title}`}
+            aria-label={hidden ? `Episode ${number}` : `Episode ${number}: ${title}`}
             className="flex min-w-0 flex-1 items-center gap-3"
           >
             {thumb}
             {text}
           </Link>
+          {showSpoiler}
           {queueUp}
           {download}
           {tick}
@@ -901,6 +952,21 @@ function PlayGlyph() {
 }
 
 // A filled check, a state: the arrow beside it on the next row is the Download action.
+function EyeGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <path
+        d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  )
+}
+
 function DiskGlyph() {
   return (
     <svg viewBox="0 0 24 24" className="size-3" aria-hidden>

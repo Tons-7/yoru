@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { useHeldData } from '../lib/hooks'
 import { useAccess } from '../lib/queries'
 import { toast } from '../lib/toast'
 import { Badge, Button, FilterToggle, RefreshFailed, Select, Skeleton, TextInput } from './ui'
@@ -147,6 +148,7 @@ function AddSite({
   })
   // A result speaks for the address it was run on, not one edited since.
   const tested = test.variables && test.variables.url === site.url && test.variables.type === site.type
+  const result = useHeldData(test)
 
   return (
     <form
@@ -186,9 +188,9 @@ function AddSite({
       <Button type="submit" variant="primary" disabled={!site.url || adding}>
         {adding ? 'Adding…' : 'Add'}
       </Button>
-      {tested && test.isSuccess && (
+      {tested && result && (
         <p className="basis-full text-xs text-accent-300">
-          {test.data.count} result{test.data.count === 1 ? '' : 's'} · {(test.data.ms / 1000).toFixed(1)} s
+          {result.count} result{result.count === 1 ? '' : 's'} · {(result.ms / 1000).toFixed(1)} s
         </p>
       )}
       {tested && test.isError && (

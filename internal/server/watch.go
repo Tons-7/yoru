@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -77,12 +78,16 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 		Position: body.Position,
 		Duration: body.Duration,
 		Played:   body.Played,
+		Ending:   s.endingFor(ctx, body.AnimeID, body.Episode),
 	})
 	if err != nil {
 		s.fail(w, "save playback", err)
 		return
 	}
-	host := isLoopback(r.RemoteAddr) && loopbackHost(r.Host)
+	if !body.Final {
+		s.maybeReadyNext(ctx, body.AnimeID, body.Episode, body.Position, body.Duration)
+	}
+	host := fromHost(r)
 	s.presence.Report(ctx, body.AnimeID, body.Episode, body.Position, body.Duration, body.Paused, body.Final, host)
 	if !host {
 		s.noteWatching(r, body.AnimeID, body.Episode, body.Final || body.Paused)
@@ -133,7 +138,7 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusAccepted, map[string]any{"preparing": true})
 }
 
-// skips serves the browser player's op/ed times: the file's chapters, else AniSkip.
+// skips serves the browser player's skip times by the order of trust below, and looks for what none knows.
 func (s *Server) skips(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	animeID, _ := strconv.Atoi(q.Get("anime"))
@@ -146,57 +151,75 @@ func (s *Server) skips(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	prefs, _ := s.store.Prefs(ctx, animeID)
-
-	// Chapters fit this exact file, so they win; one marking only op or ed gets the other fetched.
-	chapters := s.chapterSkips(animeID, episode)
-	source := "aniskip"
-	switch {
-	case len(chapters) == 0:
-	case hasKind(chapters, "op") && hasKind(chapters, "ed"):
-		source = "chapters"
-	default:
-		source = "mixed"
+	own, err := s.store.OwnSkips(ctx, animeID, episode)
+	if err != nil {
+		s.fail(w, "skip ranges", err)
+		return
 	}
 
-	if source != "chapters" && s.enricher != nil {
-		if err := s.enricher.Skips(ctx, animeID, episode, duration); err != nil {
-			s.log.Debug("fetch skip times", "anime", animeID, "err", err)
+	// Each part from the most trusted source that knows it: the viewer's marks, the file's own chapters (they
+	// fit this exact release), AniSkip, then what Yoru found in the sound.
+	chapters := s.chapterSkips(animeID, episode, player.SkipNames(prefs.String("playback.skip_chapters")))
+	ranges := player.Merge(player.From(own, "marked"), chapters)
+	// Sharing asks AniSkip either way: what it lacks is what the chapters can give it.
+	sharing := prefs.Bool("skips.share")
+	if sharing || !player.HasPart(ranges, "op") || !player.HasPart(ranges, "ed") {
+		if s.enricher != nil {
+			if err := s.enricher.Skips(ctx, animeID, episode, duration); err != nil {
+				s.log.Debug("fetch skip times", "anime", animeID, "err", err)
+			}
 		}
-	}
-
-	ranges := chapters
-	if source != "chapters" {
 		stored, err := s.store.SkipRanges(ctx, animeID, episode)
 		if err != nil {
 			s.fail(w, "skip ranges", err)
 			return
 		}
-		for _, r := range stored {
-			if !hasKind(ranges, r.Kind) {
-				ranges = append(ranges, r)
+		ranges = player.Merge(ranges, stored)
+		if sharing && s.enricher != nil && duration > 0 {
+			for _, c := range chapters {
+				if !player.HasPart(stored, c.Part()) {
+					go s.shareSkip(animeID, episode, c, float64(duration))
+				}
 			}
 		}
 	}
+	ranges = player.Merge(ranges, player.From(own, "found"))
 
+	var missing []string
+	for _, part := range []string{"op", "ed"} {
+		if !player.HasPart(ranges, part) {
+			missing = append(missing, part)
+		}
+	}
 	send(w, http.StatusOK, map[string]any{
-		"ranges":     ranges,
-		"source":     source,
-		"autoSkipOp": prefs.Bool("playback.autoskip_op"),
-		"autoSkipEd": prefs.Bool("playback.autoskip_ed"),
+		"ranges":  ranges,
+		"finding": s.findSkipsSoon(animeID, episode, missing),
+		"share":   sharing,
 	})
 }
 
-func hasKind(ranges []player.SkipRange, kind string) bool {
-	for _, r := range ranges {
-		if r.Kind == kind {
-			return true
-		}
+// endingFor is where the ending starts by the skip times' order of trust, as for mpv; 0 unless that rule is on.
+func (s *Server) endingFor(ctx context.Context, animeID, episode int) float64 {
+	prefs, err := s.store.Prefs(ctx, animeID)
+	if err != nil || prefs.String("sync.progress_at") != store.EndingThreshold {
+		return 0
 	}
-	return false
+	own, _ := s.store.OwnSkips(ctx, animeID, episode)
+	stored, _ := s.store.SkipRanges(ctx, animeID, episode)
+	return player.EndingStart(player.Merge(player.From(own, "marked"), s.chapterSkips(animeID, episode, nil), stored,
+		player.From(own, "found")))
 }
 
-// chapterSkips reads op/ed off the open session's file; not stored, as each release has its own.
-func (s *Server) chapterSkips(animeID, episode int) []player.SkipRange {
+func (s *Server) shareSkip(animeID, episode int, r player.SkipRange, length float64) {
+	ctx, cancel := detached(time.Minute)
+	defer cancel()
+	if err := s.enricher.ShareSkip(ctx, animeID, episode, r, length); err != nil {
+		s.log.Debug("share skip time", "anime", animeID, "episode", episode, "err", err)
+	}
+}
+
+// chapterSkips reads the open file's skippable chapters, names too; not stored, as each release has its own.
+func (s *Server) chapterSkips(animeID, episode int, names []string) []player.SkipRange {
 	if s.streams == nil {
 		return nil
 	}
@@ -207,10 +230,9 @@ func (s *Server) chapterSkips(animeID, episode int) []player.SkipRange {
 
 	var out []player.SkipRange
 	for _, c := range session.Info.Chapters {
-		if c.Kind == "" {
-			continue
+		if kind := player.ChapterKind(c.Kind, c.Title, names); kind != "" {
+			out = append(out, player.SkipRange{Kind: kind, Start: c.Start, End: c.End, Source: "chapters"})
 		}
-		out = append(out, player.SkipRange{Kind: c.Kind, Start: c.Start, End: c.End})
 	}
 	return out
 }

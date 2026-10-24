@@ -14,6 +14,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// Available: this system shows Yoru's icon.
+const Available = true
+
 // Options says what the icon does. Open and Exit run on their own goroutine; Ending runs on the icon's, and
 // Windows ends the process once it returns, so it must stop Yoru first (bounded).
 type Options struct {

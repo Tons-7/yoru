@@ -6,6 +6,8 @@ import {
   ApiError,
   beacon,
   query,
+  type Episode,
+  type FollowState,
   type PlaySession,
   type SkipRange,
   SOUND_PREFS,
@@ -14,8 +16,18 @@ import {
   type UpNextItem,
   type VoiceLevel,
 } from '../lib/api'
-import { bytes, cx } from '../lib/format'
-import { refreshDownloads, useDownloads, useEpisodes, useNow, usePrefs, useSetPref } from '../lib/queries'
+import { bytes, cx, relativeTime } from '../lib/format'
+import {
+  refreshDownloads,
+  useDownloads,
+  useEpisodes,
+  useFranchise,
+  useNow,
+  usePrefs,
+  useRecommendations,
+  useSetPref,
+  type Season,
+} from '../lib/queries'
 import { Anime4KDialog } from '../components/Anime4KDialog'
 import { CharacterRail } from '../components/CharacterRail'
 import { EpisodeList } from '../components/EpisodeList'
@@ -26,6 +38,7 @@ import { StatusMenu } from '../components/StatusMenu'
 import { Badge, Button, ErrorState, LinkButton, Segmented, Skeleton, Spinner } from '../components/ui'
 import { useDocumentTitle } from '../lib/hooks'
 import { buttonClass } from '../lib/ui'
+import { getSleep, noteAutoStart, noteInput, setSleep, unattendedRun, useSleep, type Unattended } from '../lib/watching'
 
 type AudioChoice = 'sub' | 'dub' | 'either'
 import { Player } from '../player/Player'
@@ -175,11 +188,28 @@ export function Watch() {
     enabled: id !== 0 && ep > 0 && episodeLength > 0,
     queryKey: ['skips', id, ep, episodeLength],
     queryFn: () =>
-      api.get<{ ranges: SkipRange[]; autoSkipOp: boolean; autoSkipEd: boolean }>(
+      api.get<{ ranges: SkipRange[]; finding: boolean; share: boolean }>(
         `/api/episode/skips${query({ anime: id, episode: ep, duration: episodeLength })}`,
       ),
     staleTime: 60 * 60_000,
+    // Yoru is finding the opening or ending in the sound: it lands in seconds.
+    refetchInterval: (q) => (q.state.data?.finding ? 5000 : false),
   })
+  const refetchSkips = skips.refetch
+  const skipMarks = useMemo(
+    () => ({
+      mark: (kind: 'op' | 'ed', start: number, end: number) =>
+        api
+          .post('/api/episode/skips/mark', { animeId: id, episode: ep, kind, start, end, duration: episodeLength })
+          .then(() => refetchSkips()),
+      forget: () => void api.post('/api/episode/skips/forget', { animeId: id, episode: ep }).then(() => refetchSkips()),
+    }),
+    [id, ep, episodeLength, refetchSkips],
+  )
+  const voteSkip = useCallback(
+    (skipId: string, up: boolean) => beacon('/api/episode/skips/vote', { id: skipId, up }),
+    [],
+  )
 
   const download = useMutation({
     meta: { inline: true },
@@ -215,9 +245,16 @@ export function Watch() {
     enabled: id !== 0,
     queryKey: ['anime', id],
     queryFn: () =>
-      api.get<{ title: string; listStatus?: string; coverImage?: { large?: string; extraLarge?: string }; cover?: string }>(
-        `/api/anime/${id}`,
-      ),
+      api.get<{
+        title: string
+        listStatus?: string
+        score?: number
+        notify?: FollowState
+        status?: string
+        episodes?: number
+        coverImage?: { large?: string; extraLarge?: string }
+        cover?: string
+      }>(`/api/anime/${id}`),
     staleTime: 5 * 60_000,
   })
 
@@ -241,7 +278,20 @@ export function Watch() {
     refetchInterval: 2 * 60_000,
   })
   const fromList = after.data?.fromList ? after.data.next : undefined
-  const hasNext = !!fromList || !!next
+  // Past this entry's last aired episode: still airing (one is due), or a finale leading to the next season.
+  const franchise = useFranchise(id)
+  const upcoming = next ? undefined : list.find((e) => e.number > ep && isUnaired(e, now))
+  // The entry's last episode by its count, as the server's play order has it: not filler skipped to the end.
+  const total = detail.data?.episodes ?? 0
+  const finale = !fromList && !next && !upcoming && total > 0 && ep >= total
+  const seasons = franchise.data?.seasons ?? []
+  const thisSeason = seasons.find((s) => s.id === id)
+  const sequel =
+    thisSeason && seasons.filter((s) => s.ordinal > thisSeason.ordinal).sort((a, b) => a.ordinal - b.ordinal)[0]
+  // Played on into only once it has aired, as the server's play order does.
+  const sequelOut = !!sequel && (sequel.status === 'RELEASING' || sequel.status === 'FINISHED')
+  const sequelPath = finale && sequelOut ? `/watch/${sequel.id}/1` : undefined
+  const hasNext = !!fromList || !!next || !!sequelPath
 
   // The release filename is what the server resolved; it is not what anyone
   // calls the episode. Fall back to it only when nothing better is known.
@@ -275,20 +325,30 @@ export function Watch() {
     ? `/watch/${fromList.animeId}/${fromList.episode}`
     : next
       ? `/watch/${id}/${next.number}`
-      : undefined
+      : sequelPath
   // The end of an episode is decided here, so what this page saw then goes to the server's log.
   const note = useCallback(
     (event: string, detail: Record<string, unknown>) =>
       beacon('/api/playback/note', { animeId: id, episode: ep, event, detail }),
     [id, ep],
   )
+  // At the end the episode after this one is the next to watch, so under the default rule its title shows.
+  const endHides = (animeId: number, number: number, spoiler?: boolean) =>
+    !!spoiler && !(effective['display.spoilers'] !== 'unwatched' && animeId === id && number === next?.number)
+  const nextAnime = fromList ? fromList.animeId : !next && sequelPath ? sequel!.id : id
+  const nextEpisode = fromList ? fromList.episode : next ? next.number : sequelPath ? 1 : undefined
   const advance = useCallback(
     (by: string) => {
       if (!nextPath) return
+      // Started by the countdown alone, it adds to the run that "Still watching?" counts.
+      if (by === 'countdown' && nextEpisode) noteAutoStart({ animeId: nextAnime, episode: nextEpisode })
+      else noteInput()
+      // Played on by hand after the sleep timer stopped things: someone's awake.
+      if (by !== 'countdown' && getSleep().kind === 'fired') setSleep({ kind: 'off' })
       note('next', { by, to: nextPath })
       navigate(nextPath)
     },
-    [nextPath, navigate, note],
+    [nextPath, navigate, note, nextAnime, nextEpisode],
   )
   const goNext = useCallback((by: 'button' | 'key' | 'media' = 'button') => advance(by), [advance])
   // A subtitle delay kept for the show belongs to one group's timing; another group's release starts at zero.
@@ -340,19 +400,48 @@ export function Watch() {
           ? 'up next list'
           : next
             ? 'up next'
-            : 'none'
+            : upcoming
+              ? 'airs later'
+              : finale
+                ? sequelPath
+                  ? 'next season'
+                  : 'finale'
+                : 'none'
   const autoNext = flag('playback.autonext')
+  const sleep = useSleep()
+  // Past the limit of untouched episodes the card asks instead of counting down; so does a timer gone off.
+  const stillLimit = Number(effective['playback.still_watching'] ?? '3')
+  const [asked, setAsked] = useState<{ key: string; run: Unattended[] } | null>(null)
+  const askedRun = asked?.key === `${id}-${ep}` ? asked.run : null
+  const counting = autoNext && sleep.kind !== 'fired' && sleep.kind !== 'episode' && !askedRun
   const onEnded = useCallback(() => {
     endedAt.current = Date.now()
     setEndedKey(`${id}-${ep}`)
+    if (getSleep().kind === 'episode') setSleep({ kind: 'fired' })
+    const run = unattendedRun()
+    if (autoNext && stillLimit > 0 && run.length >= stillLimit) setAsked({ key: `${id}-${ep}`, run })
     note('ended', {
       card,
       next: next?.number ?? 'none',
       list: fromList ? `${fromList.animeId}-${fromList.episode}` : 'none',
       autoNext,
       episodes: list.length,
+      unattended: run.length,
     })
-  }, [id, ep, card, next, fromList, autoNext, list.length, note])
+  }, [id, ep, card, next, fromList, autoNext, stillLimit, list.length, note])
+
+  // Any key, tap, wheel or mouse movement on the page counts as someone watching.
+  useEffect(() => {
+    const seen = (e: Event) => {
+      if (e instanceof PointerEvent && e.type === 'pointermove' && e.pointerType !== 'mouse') return
+      noteInput()
+    }
+    const events = ['keydown', 'pointerdown', 'pointermove', 'wheel'] as const
+    for (const name of events) window.addEventListener(name, seen, { passive: true })
+    return () => {
+      for (const name of events) window.removeEventListener(name, seen)
+    }
+  }, [])
   const clearEnded = useCallback(
     (by: string) => {
       if (endedNow.current) note('countdown-cleared', { by, afterMs: Date.now() - endedAt.current })
@@ -381,15 +470,23 @@ export function Watch() {
     }
   }, [stream.data?.id])
 
+  // A first episode's opening is new and a finale's ending is often its own: heard, unless asked otherwise.
+  const bookend =
+    effective['playback.skip_keep_bookends'] !== 'false' &&
+    (ep === 1 || (detail.data?.status === 'FINISHED' && !!detail.data.episodes && ep === detail.data.episodes))
+  const skipOp = flag('playback.autoskip_op') && !bookend
+  const skipEd = flag('playback.autoskip_ed') && !bookend
+  const skipRecap = flag('playback.autoskip_recap')
+  const skipPreview = flag('playback.autoskip_preview')
   const autoSkip = useMemo(
-    () => ({ op: flag('playback.autoskip_op'), ed: flag('playback.autoskip_ed') }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [effective['playback.autoskip_op'], effective['playback.autoskip_ed']],
+    () => ({ op: skipOp, ed: skipEd, recap: skipRecap, preview: skipPreview }),
+    [skipOp, skipEd, skipRecap, skipPreview],
   )
 
   // Per episode, unlike the toggles beside it: the saved default is untouched.
   const [upscale, setUpscale] = useState<{ enabled: boolean; mode: string } | null>(null)
   const [tuning, setTuning] = useState(false)
+  const [optionsOpen, setOptionsOpen] = useState(false)
   useEffect(() => setUpscale(null), [id, ep])
 
   // The saved default is shared with mpv on the host; each browser decides whether it applies here.
@@ -416,7 +513,7 @@ export function Watch() {
 
   const failure =
     play.error instanceof ApiError
-      ? (play.error.body as { rawAvailable?: boolean; rawTitle?: string } | undefined)
+      ? (play.error.body as { rawAvailable?: boolean; rawTitle?: string; notOut?: boolean } | undefined)
       : undefined
 
   return (
@@ -430,6 +527,8 @@ export function Watch() {
                 <NoRelease
                   message={(play.error as Error).message}
                   animeId={id}
+                  episode={ep}
+                  notOut={failure?.notOut}
                   rawAvailable={!allowRaw && !!failure?.rawAvailable}
                   rawTitle={failure?.rawTitle}
                   onRetry={() => play.refetch()}
@@ -447,6 +546,8 @@ export function Watch() {
                   startAt={play.data?.startAt ?? 0}
                   skips={skips.data?.ranges ?? []}
                   autoSkip={autoSkip}
+                  onSkipVote={skips.data?.share ? voteSkip : undefined}
+                  skipMarks={skipMarks}
                   autoPlay={flag('playback.autoplay')}
                   subLanguages={subLanguages}
                   withDub={(['signs', 'off', 'same'] as const).find((v) => v === effective['subtitle.with_dub']) ?? 'signs'}
@@ -474,6 +575,8 @@ export function Watch() {
                         inPlayer
                         message={(play.error as Error).message}
                         animeId={id}
+                        episode={ep}
+                        notOut={failure?.notOut}
                         rawAvailable={!allowRaw && !!failure?.rawAvailable}
                         rawTitle={failure?.rawTitle}
                         onRetry={() => play.refetch()}
@@ -493,24 +596,60 @@ export function Watch() {
                         onRetry={() => stream.refetch()}
                         onPick={() => setPicking(true)}
                       />
+                    ) : ended && askedRun && hasNext ? (
+                      <StillWatching
+                        run={askedRun}
+                        onKeep={() => {
+                          setAsked(null)
+                          advance('card')
+                        }}
+                        onStop={() => {
+                          setAsked(null)
+                          clearEnded('still-watching')
+                        }}
+                      />
                     ) : ended && fromList ? (
                       <UpNext
                         label="Up next · from your list"
                         line={`${fromList.animeId === id ? '' : `${fromList.title} · `}Episode ${fromList.episode}${
-                          fromList.animeId === id && fromList.episodeTitle ? ` · ${fromList.episodeTitle}` : ''
+                          fromList.animeId === id && fromList.episodeTitle && !endHides(fromList.animeId, fromList.episode, fromList.spoiler)
+                            ? ` · ${fromList.episodeTitle}`
+                            : ''
                         }`}
                         then={after.data?.then && `Then ${after.data.then.title} · Ep ${after.data.then.episode}`}
-                        auto={autoNext}
+                        auto={counting}
+                        stopped={sleep.kind === 'fired' && autoNext}
                         onPlay={advance}
                         onCancel={() => clearEnded('cancel')}
                       />
                     ) : ended && next ? (
                       <UpNext
                         label="Up next"
-                        line={`Episode ${next.display || next.number}${next.titleEn ? ` · ${next.titleEn}` : ''}`}
-                        auto={autoNext}
+                        line={`Episode ${next.display || next.number}${
+                          next.titleEn && !endHides(id, next.number, next.spoiler) ? ` · ${next.titleEn}` : ''
+                        }`}
+                        auto={counting}
+                        stopped={sleep.kind === 'fired' && autoNext}
                         onPlay={advance}
                         onCancel={() => clearEnded('cancel')}
+                      />
+                    ) : ended && sequelPath && sequel ? (
+                      <UpNext
+                        label="Season finale · next season"
+                        line={`${sequel.english || sequel.romaji} · Episode 1`}
+                        auto={counting}
+                        stopped={sleep.kind === 'fired' && autoNext}
+                        onPlay={advance}
+                        onCancel={() => clearEnded('cancel')}
+                      />
+                    ) : ended && (finale || upcoming) ? (
+                      <EndOfAired
+                        animeId={id}
+                        upcoming={upcoming}
+                        sequel={finale ? sequel : undefined}
+                        score={detail.data?.score ?? 0}
+                        alerting={!!detail.data?.notify?.on}
+                        onClose={() => clearEnded('cancel')}
                       />
                     ) : null
                   }
@@ -529,7 +668,14 @@ export function Watch() {
                     <span className="line-clamp-1">{showTitle || 'Series'}</span>
                     <span className="text-base-500 transition-transform group-hover:translate-x-0.5">›</span>
                   </Link>
-                  <p className="mt-0.5 line-clamp-1 text-sm text-base-400">{episodeLabel}</p>
+                  <p className="mt-0.5 flex min-w-0 items-center gap-2 text-sm text-base-400">
+                    <span className="line-clamp-1">{episodeLabel}</span>
+                    {play.data?.source && (
+                      <Badge tone={play.data.source === 'local' ? 'accent' : 'neutral'}>
+                        {play.data.source === 'local' ? 'Local file' : 'Torrent'}
+                      </Badge>
+                    )}
+                  </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -580,76 +726,79 @@ export function Watch() {
               {!prefs.data ? (
                 <Skeleton className="h-12 w-full rounded-lg" />
               ) : (
-                <div className="flex flex-wrap items-center gap-2 rounded-lg bg-base-900/60 p-2.5 shadow-card">
-                  {play.data?.source && (
-                    <Badge tone={play.data.source === 'local' ? 'accent' : 'neutral'}>
-                      {play.data.source === 'local' ? 'Local file' : 'Torrent'}
-                    </Badge>
-                  )}
+                <>
+                  {/* A phone keeps the switches folded: they're set once a show, not every episode. */}
+                  <button
+                    type="button"
+                    aria-expanded={optionsOpen}
+                    onClick={() => setOptionsOpen((v) => !v)}
+                    className="flex min-h-11 w-full items-center justify-between rounded-lg bg-base-900/60 px-3 text-sm text-base-200 shadow-card sm:hidden"
+                  >
+                    Playback options
+                    <span aria-hidden className={cx('transition-transform', optionsOpen && 'rotate-180')}>
+                      ▾
+                    </span>
+                  </button>
+                  <div
+                    className={cx(
+                      'flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg bg-base-900/60 p-2.5 shadow-card',
+                      !optionsOpen && 'max-sm:hidden',
+                    )}
+                  >
+                    {/* Three scopes, each a group that wraps whole, so its label never leaves its switches. */}
+                    <OptionGroup label="This show">
+                      {/* Switching resolves another release, as most carry one language. */}
+                      <Segmented
+                        size="sm"
+                        value={wantAudio}
+                        onChange={setAudio}
+                        options={[
+                          { value: 'sub', label: 'Sub' },
+                          { value: 'dub', label: 'Dub' },
+                          { value: 'either', label: 'Either' },
+                        ]}
+                      />
+                      <Toggle
+                        label="Skip filler"
+                        on={skipFiller}
+                        onChange={(v) => setPref.mutate({ key: 'playback.skip_filler', value: String(v), animeId: id })}
+                      />
+                      {/* Per show: some openings are worth hearing every time. Settings holds the default. */}
+                      <Toggle
+                        label="Skip opening"
+                        on={flag('playback.autoskip_op')}
+                        onChange={(v) => setPref.mutate({ key: 'playback.autoskip_op', value: String(v), animeId: id })}
+                      />
+                      <Toggle
+                        label="Skip ending"
+                        on={flag('playback.autoskip_ed')}
+                        onChange={(v) => setPref.mutate({ key: 'playback.autoskip_ed', value: String(v), animeId: id })}
+                      />
+                    </OptionGroup>
 
-                  {/* Three scopes here; each group says which. */}
-                  <span className="text-[10px] font-semibold tracking-wider text-base-500 uppercase">
-                    This show
-                  </span>
-                  {/* Switching resolves another release, as most carry one language. */}
-                  <Segmented
-                    size="sm"
-                    value={wantAudio}
-                    onChange={setAudio}
-                    options={[
-                      { value: 'sub', label: 'Sub' },
-                      { value: 'dub', label: 'Dub' },
-                      { value: 'either', label: 'Either' },
-                    ]}
-                  />
+                    {/* A toggle flipped here becomes the new default. */}
+                    <OptionGroup label="Everywhere">
+                      <Toggle label="Auto play" on={flag('playback.autoplay')} onChange={setFlag('playback.autoplay')} />
+                      <Toggle label="Auto next" on={flag('playback.autonext')} onChange={setFlag('playback.autonext')} />
+                    </OptionGroup>
 
-                  <Toggle
-                    label="Skip filler"
-                    on={skipFiller}
-                    onChange={(v) =>
-                      setPref.mutate({ key: 'playback.skip_filler', value: String(v), animeId: id })
-                    }
-                  />
-
-                  <span className="ml-1 border-l border-base-800 pl-3 text-[10px] font-semibold tracking-wider text-base-500 uppercase">
-                    Everywhere
-                  </span>
-                  {/* A toggle flipped here becomes the new default. */}
-                  <Toggle
-                    label="Auto play"
-                    on={flag('playback.autoplay')}
-                    onChange={setFlag('playback.autoplay')}
-                  />
-                  <Toggle
-                    label="Auto next"
-                    on={flag('playback.autonext')}
-                    onChange={setFlag('playback.autonext')}
-                  />
-                  <Toggle
-                    label="Skip opening"
-                    on={flag('playback.autoskip_op')}
-                    onChange={setFlag('playback.autoskip_op')}
-                  />
-                  <Toggle
-                    label="Skip ending"
-                    on={flag('playback.autoskip_ed')}
-                    onChange={setFlag('playback.autoskip_ed')}
-                  />
-
-                  {!playingInMpv && (
-                    <button
-                      onClick={() => setTuning(true)}
-                      className={cx(
-                        'rounded-md px-2.5 py-1 text-xs font-medium transition-colors pointer-coarse:min-h-11',
-                        upscaling.enabled
-                          ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
-                          : 'bg-base-800 text-base-300 hover:bg-base-700',
-                      )}
-                    >
-                      Anime4K{upscaling.enabled ? ` · ${upscaling.mode}` : ''}
-                    </button>
-                  )}
-                </div>
+                    {!playingInMpv && (
+                      <OptionGroup label="This device">
+                        <button
+                          onClick={() => setTuning(true)}
+                          className={cx(
+                            'rounded-md px-2.5 py-1 text-xs font-medium transition-colors pointer-coarse:min-h-11',
+                            upscaling.enabled
+                              ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
+                              : 'bg-base-800 text-base-300 hover:bg-base-700',
+                          )}
+                        >
+                          Anime4K{upscaling.enabled ? ` · ${upscaling.mode}` : ''}
+                        </button>
+                      </OptionGroup>
+                    )}
+                  </div>
+                </>
               )}
 
               {steppedTo && (
@@ -836,10 +985,49 @@ function Searching({ note }: { note: { title: string; detail: string } }) {
   )
 }
 
+// Not out yet, or raw only: an alert when it is, or the episode downloaded then.
+function WhenOut({ animeId, episode }: { animeId: number; episode: number }) {
+  const qc = useQueryClient()
+  const [done, setDone] = useState<'notify' | 'want' | null>(null)
+  const ask = useMutation({
+    meta: { inline: true },
+    mutationFn: (what: 'notify' | 'want') =>
+      what === 'notify'
+        ? api.post(`/api/anime/${animeId}/notify`, { on: true })
+        : api.post(`/api/anime/${animeId}/want`, { episode }),
+    onSuccess: (_, what) => {
+      setDone(what)
+      void qc.invalidateQueries({ queryKey: ['anime', animeId] })
+    },
+  })
+  if (done) {
+    return (
+      <p role="status" className="mt-4 text-sm text-base-200">
+        {done === 'notify'
+          ? 'You get an alert when it is out.'
+          : `Episode ${episode} downloads when it is out, and you get an alert.`}
+      </p>
+    )
+  }
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+      <Button variant="primary" onClick={() => ask.mutate('notify')} disabled={ask.isPending}>
+        Tell me when it's out
+      </Button>
+      <Button onClick={() => ask.mutate('want')} disabled={ask.isPending}>
+        Download it when it's out
+      </Button>
+      {ask.isError && <p className="basis-full text-xs text-recap">{(ask.error as Error).message}</p>}
+    </div>
+  )
+}
+
 // Usually "nobody has subbed this yet", said plainly with the ways out.
 function NoRelease({
   message,
   animeId,
+  episode,
+  notOut,
   rawAvailable,
   rawTitle,
   inPlayer,
@@ -850,6 +1038,9 @@ function NoRelease({
 }: {
   message: string
   animeId: number
+  episode?: number
+  /** Not aired yet, or out raw only: worth waiting for. */
+  notOut?: boolean
   rawAvailable?: boolean
   rawTitle?: string
   // Covering a player rather than standing in for one.
@@ -868,7 +1059,8 @@ function NoRelease({
       )}
     >
       <div className="max-w-lg">
-        <p className="text-sm text-base-200">{message}</p>
+        {/* Server reasons are Go errors, lower-case: here one starts a sentence. */}
+        <p className="text-sm text-base-200">{message.charAt(0).toUpperCase() + message.slice(1)}</p>
 
         {rawAvailable && (
           <div className="mt-4 rounded-lg border border-base-800 bg-base-900/60 p-3 text-left">
@@ -886,6 +1078,8 @@ function NoRelease({
             </button>
           </div>
         )}
+
+        {notOut && episode ? <WhenOut animeId={animeId} episode={episode} /> : null}
 
         {needsTranscoder ? (
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
@@ -945,6 +1139,7 @@ function UpNext({
   line,
   then,
   auto,
+  stopped,
   onPlay,
   onCancel,
 }: {
@@ -953,6 +1148,8 @@ function UpNext({
   /** What follows it on the Up next list. */
   then?: string
   auto: boolean
+  /** The sleep timer held back the countdown: said, so a missing one isn't a mystery. */
+  stopped?: boolean
   /** By the countdown running out, or a press on the card. */
   onPlay: (by: 'countdown' | 'card') => void
   onCancel: () => void
@@ -977,16 +1174,17 @@ function UpNext({
       <p className="text-[11px] font-medium tracking-wide text-base-400 uppercase">{label}</p>
       <p className="mt-0.5 truncate text-sm text-base-100">{line}</p>
       {then && <p className="mt-0.5 truncate text-xs text-base-500">{then}</p>}
+      {stopped && <p className="mt-1 text-xs text-base-400">The sleep timer stopped auto next.</p>}
       <div className="mt-2.5 flex items-center gap-2">
         <button
           onClick={() => onPlay('card')}
-          className="rounded-md bg-white px-3 py-1.5 text-sm font-semibold text-base-950 hover:bg-base-100"
+          className="rounded-md bg-white px-3 py-1.5 text-sm font-semibold text-base-950 hover:bg-base-100 pointer-coarse:min-h-11"
         >
           {auto ? `Play now · ${left}` : 'Play next'}
         </button>
         <button
           onClick={onCancel}
-          className="rounded-md px-3 py-1.5 text-sm text-base-300 hover:bg-base-800 hover:text-white"
+          className="rounded-md px-3 py-1.5 text-sm text-base-300 hover:bg-base-800 hover:text-white pointer-coarse:min-h-11"
         >
           {auto ? 'Cancel' : 'Dismiss'}
         </button>
@@ -999,6 +1197,210 @@ function UpNext({
           />
         </div>
       )}
+    </div>
+  )
+}
+
+// Nothing aired to play on to: when the next episode airs; or at a finale, the coming season (Plan to watch, an
+// alert), a score for this one, and with no season to come, a few shows like it.
+function EndOfAired({
+  animeId,
+  upcoming,
+  sequel,
+  score,
+  alerting,
+  onClose,
+}: {
+  animeId: number
+  upcoming?: Episode
+  sequel?: Season
+  score: number
+  /** Alerts are on for this show already: said, not offered. */
+  alerting: boolean
+  onClose: () => void
+}) {
+  const qc = useQueryClient()
+  const alertFor = upcoming ? animeId : sequel?.id
+  const alert = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post(`/api/anime/${alertFor}/notify`, { on: true }),
+  })
+  const plan = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post('/api/status', { animeId: sequel!.id, status: 'PLANNING' }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['franchise', animeId] }),
+  })
+  const rate = useMutation({
+    meta: { inline: true },
+    mutationFn: (tens: number) => api.post('/api/score', { animeId, score: tens * 10 }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['anime', animeId] })
+      void qc.invalidateQueries({ queryKey: ['library'] })
+    },
+  })
+  const theEnd = !upcoming && !sequel
+  const recs = useRecommendations(theEnd ? animeId : undefined)
+  const scored = rate.variables ?? Math.round(score / 10)
+  const button = 'rounded-md px-3 py-1.5 text-sm pointer-coarse:min-h-11'
+  const failed = [alert, plan, rate].find((m) => m.isError)?.error as Error | undefined
+
+  return (
+    <div
+      role="dialog"
+      aria-label={upcoming ? 'Next episode' : 'Season finale'}
+      className="absolute right-4 bottom-20 z-20 w-[22rem] max-w-[calc(100%-2rem)] animate-rise rounded-xl border border-base-700 bg-base-950/90 p-3 shadow-xl shadow-black/60 backdrop-blur-sm"
+    >
+      <p className="text-[11px] font-medium tracking-wide text-base-400 uppercase">
+        {upcoming ? 'Up next' : sequel ? 'Season finale' : 'The end'}
+      </p>
+      <p className="mt-0.5 text-sm text-base-100">
+        {upcoming
+          ? `Episode ${upcoming.display || upcoming.number} airs ${upcoming.airDate ? relativeTime(upcoming.airDate) : 'later'}`
+          : sequel
+            ? `${sequel.english || sequel.romaji} · ${sequel.year ? `coming ${sequel.year}` : 'announced'}`
+            : "You've seen every episode."}
+      </p>
+
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        {sequel && !upcoming && !sequel.onList && (
+          <button
+            onClick={() => plan.mutate()}
+            disabled={plan.isPending || plan.isSuccess}
+            className={cx(button, 'bg-white font-semibold text-base-950 hover:bg-base-100 disabled:opacity-60')}
+          >
+            {plan.isSuccess ? 'In Planning' : 'Add to Planning'}
+          </button>
+        )}
+        {alertFor && upcoming && alerting ? (
+          <span className="text-xs text-base-400">Alerts are on for this show.</span>
+        ) : (
+          alertFor && (
+            <button
+              onClick={() => alert.mutate()}
+              disabled={alert.isPending || alert.isSuccess}
+              className={cx(button, 'bg-base-800 text-base-100 hover:bg-base-700 disabled:opacity-60')}
+            >
+              {alert.isSuccess ? "You'll get an alert" : "Alert me when it's out"}
+            </button>
+          )
+        )}
+        <button onClick={onClose} className={cx(button, 'text-base-300 hover:bg-base-800 hover:text-white')}>
+          Dismiss
+        </button>
+      </div>
+
+      {!upcoming && (
+        <div className="mt-3 border-t border-base-800 pt-2">
+          <p className="text-[11px] text-base-400">Your score</p>
+          <div className="mt-1 flex flex-wrap gap-1" role="group" aria-label="Your score">
+            {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+              <button
+                key={n}
+                onClick={() => rate.mutate(n)}
+                aria-pressed={scored === n}
+                className={cx(
+                  'grid size-7 place-items-center rounded-md text-xs tabular-nums transition-colors pointer-coarse:size-11',
+                  scored === n ? 'bg-accent-500 text-white' : 'bg-base-850 text-base-300 hover:bg-base-750',
+                )}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {theEnd && (recs.data?.items.length ?? 0) > 0 && (
+        <div className="mt-3 border-t border-base-800 pt-2">
+          <p className="text-[11px] text-base-400">More like this</p>
+          <div className="mt-1.5 grid grid-cols-3 gap-2">
+            {recs.data!.items.slice(0, 3).map((r) => (
+              <Link key={r.id} to={`/anime/${r.id}`} className="group min-w-0">
+                <img
+                  src={r.cover ?? r.thumb}
+                  alt=""
+                  loading="lazy"
+                  className="aspect-[2/3] w-full rounded-md object-cover ring-1 ring-white/10 transition-transform group-hover:scale-[1.03]"
+                />
+                <p className="mt-1 line-clamp-1 text-[11px] text-base-300 group-hover:text-white">{r.title}</p>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+      {failed && <p className="mt-2 text-xs text-recap">{failed.message}</p>}
+    </div>
+  )
+}
+
+// After a run of episodes auto next started with no one touching anything: asks before going on, and can take
+// back the ticks those episodes earned, in case no one saw them.
+function StillWatching({ run, onKeep, onStop }: { run: Unattended[]; onKeep: () => void; onStop: () => void }) {
+  const qc = useQueryClient()
+  // Unwatching an episode rewinds everything after it too: one call per show, from its first.
+  const firsts = [...new Map(run.map((e) => [e.animeId, e])).keys()].map((animeId) => ({
+    animeId,
+    episode: Math.min(...run.filter((e) => e.animeId === animeId).map((e) => e.episode)),
+  }))
+  const unmark = useMutation({
+    meta: { inline: true },
+    mutationFn: () =>
+      Promise.all(firsts.map((e) => api.post('/api/watched', { animeId: e.animeId, episode: e.episode, watched: false }))),
+    onSuccess: () => {
+      for (const e of firsts) {
+        void qc.invalidateQueries({ queryKey: ['episodes', e.animeId] })
+        void qc.invalidateQueries({ queryKey: ['anime', e.animeId] })
+      }
+      void qc.invalidateQueries({ queryKey: ['upnext'] })
+    },
+  })
+  const one = firsts.length === 1
+  const span = one ? `${firsts[0].episode}${run.length > 1 ? `–${Math.max(...run.map((e) => e.episode))}` : ''}` : ''
+  const unmarkLabel = one ? `Unmark episode${run.length > 1 ? 's' : ''} ${span}` : `Unmark these ${run.length}`
+  const button = 'rounded-md px-3 py-1.5 text-sm pointer-coarse:min-h-11'
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Still watching?"
+      className="absolute right-4 bottom-20 z-20 w-80 max-w-[calc(100%-2rem)] animate-rise rounded-xl border border-base-700 bg-base-950/90 p-3 shadow-xl shadow-black/60 backdrop-blur-sm"
+    >
+      <p className="text-sm font-semibold text-base-100">Still watching?</p>
+      <p className="mt-0.5 text-xs text-base-400">
+        Paused after {run.length} episode{run.length === 1 ? '' : 's'} in a row with no one touching anything.
+      </p>
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        <button onClick={onKeep} className={cx(button, 'bg-white font-semibold text-base-950 hover:bg-base-100')}>
+          Keep watching
+        </button>
+        <button onClick={onStop} className={cx(button, 'text-base-300 hover:bg-base-800 hover:text-white')}>
+          Stop here
+        </button>
+      </div>
+      <div className="mt-2 border-t border-base-800 pt-2">
+        {unmark.isSuccess ? (
+          <p className="text-xs text-base-400">Unmarked, and your tracker is told.</p>
+        ) : (
+          <button
+            onClick={() => unmark.mutate()}
+            disabled={unmark.isPending}
+            className={cx(button, '-mx-3 text-xs text-base-400 hover:bg-base-800 hover:text-white disabled:opacity-50')}
+          >
+            {unmark.isPending ? 'Unmarking…' : `Didn't see them? ${unmarkLabel}`}
+          </button>
+        )}
+        {unmark.isError && <p className="text-xs text-recap">{(unmark.error as Error).message}</p>}
+      </div>
+    </div>
+  )
+}
+
+// A scope's label and its controls, kept together when the row wraps.
+function OptionGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div role="group" aria-label={label} className="flex flex-wrap items-center gap-2">
+      <span className="text-[10px] font-semibold tracking-wider text-base-500 uppercase">{label}</span>
+      {children}
     </div>
   )
 }

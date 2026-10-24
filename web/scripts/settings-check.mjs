@@ -1,4 +1,4 @@
-// Settings as regrouped: nine tabs, old links still landing, and a search that finds a setting in any tab.
+// Settings' tabs, each on its own subject; old links still landing; a search finding a setting anywhere.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -33,23 +33,28 @@ await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
 const tabs = page.getByRole('tab')
 await tabs.first().waitFor({ timeout: 15_000 })
 const names = await tabs.allInnerTexts()
-check(names.join('|') === 'Playback|Sound & picture|Downloads|Storage|Accounts|Library|Notifications|Devices|About',
-  'nine tabs, in the new order', names.join(' | '))
+check(names.join('|') ===
+  'Playback|Language & display|Sound & picture|Downloads|Storage|Accounts|Library|Notifications|Devices|This computer|About',
+  'eleven tabs, in order', names.join(' | '))
 check(await until(() => visible('Auto next episode')), 'Playback opens first, with the automatic options')
-check(!(await visible('Download ahead while watching')), 'download ahead is no longer under Playback')
+check(!(await visible('Download ahead while watching')), 'download ahead is not under Playback')
+check(!(await visible('Show titles as')) && !(await visible('Open Yoru')), 'nor language or how Yoru runs')
 
-// The window and casting each have a section of their own, not mixed into Player and Language.
+// Casting stays with playback; how Yoru runs on its computer, and language, have tabs of their own.
 const section = (title) => page.locator('section', { has: page.getByRole('heading', { name: title, exact: true }) })
-check(await until(() => section('Window').getByText('Open Yoru', { exact: true }).isVisible()), 'Window holds how Yoru opens')
-if (process.platform === 'win32') {
-  check(await section('Window').getByText('When the window closes', { exact: true }).isVisible(), 'and what closing it does')
-}
-check(!(await section('Player').getByText('Open Yoru', { exact: true }).isVisible()), 'no longer under Player')
 check(await section('Casting').getByText('Draw subtitles into the picture', { exact: true }).isVisible(),
   'Casting holds its subtitles choice')
 check(await section('Casting').getByText(/Cast button in the player's bar/).isVisible(), 'and says where casting starts')
-check(!(await section('Language').getByText(/subtitles into the picture/).isVisible()), 'no longer under Language')
 await page.screenshot({ path: `${SHOTS}/settings-playback.png`, fullPage: true })
+await page.getByRole('tab', { name: 'This computer' }).click()
+check(await until(() => section('This computer').getByText('Open Yoru', { exact: true }).isVisible()),
+  'This computer holds how Yoru opens')
+if (process.platform === 'win32') {
+  check(await section('This computer').getByText('When the window closes', { exact: true }).isVisible(), 'and what closing it does')
+}
+check(await section('This computer').getByText('Stay awake while downloading', { exact: true }).isVisible(), 'and staying awake')
+await page.getByRole('tab', { name: 'Language & display' }).click()
+check(await until(() => visible('Show titles as')) && (await visible('Hide spoilers')), 'Language & display holds titles and spoilers')
 
 // A stacked row (the control under its words) keeps the control right under them.
 const stacked = page.locator('[data-row]', { has: page.getByText('Subtitle languages', { exact: true }) })
@@ -124,6 +129,30 @@ await search.fill('budget')
 check(await until(() => visible('Budget')), 'searching works on a phone too')
 check((await over()) <= 0, 'and its results fit the width', `${await over()}px over`)
 await page.screenshot({ path: `${SHOTS}/settings-phone-search.png` })
+
+// Clear cache asks first, then says what it freed: here nothing, as the test instance has nothing cached.
+await page.setViewportSize({ width: 1280, height: 900 })
+await page.goto(`${BASE}/settings?tab=Storage`, { waitUntil: 'domcontentloaded' })
+const cleared = page.waitForRequest((r) => r.url().includes('/api/downloads/clear?scope=completed'))
+await page.getByRole('button', { name: 'Clear cache' }).click()
+check(await page.getByText("Streamed episodes go; what's playing or downloading, and downloads you keep, stay").isVisible(),
+  'Clear cache asks first, saying what stays')
+await page.getByRole('button', { name: 'Clear cache' }).click()
+await cleared
+check(await until(() => page.getByText(/^Nothing to clear: /).isVisible()), 'and says what it cleared')
+// Pressed again, its answer stays until the next one lands: never a blink back to the words it started with.
+const hint = page.locator('[data-row]', { hasText: 'In use' }).locator('p').nth(1)
+await hint.evaluate((el) => {
+  window.__hints = []
+  new MutationObserver(() => window.__hints.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true })
+})
+const again = page.waitForResponse((r) => r.url().includes('/api/downloads/clear'))
+await page.getByRole('button', { name: 'Clear cache' }).click()
+await page.getByRole('button', { name: 'Clear cache' }).click()
+await again
+await sleep(500)
+const seen = await page.evaluate(() => window.__hints)
+check(!seen.some((t) => / cached · .* downloaded$/.test(t)), 'pressed again, it never blinks back', JSON.stringify(seen))
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 await browser.close()

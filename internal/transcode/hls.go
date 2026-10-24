@@ -482,6 +482,21 @@ func (m *Manager) discardSession(s *Session) {
 	os.RemoveAll(s.dir)
 }
 
+// Converting: a session is re-encoding its picture on the CPU, which background work must not slow.
+func (m *Manager) Converting() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.sessions {
+		s.mu.Lock()
+		busy := s.run != nil && !s.Plan.VideoCopy && !usesHardware(s.encoder)
+		s.mu.Unlock()
+		if busy {
+			return true
+		}
+	}
+	return false
+}
+
 // Sources lists what open sessions read, since a pack's torrent may serve another episode still.
 func (m *Manager) Sources() []string {
 	m.mu.Lock()

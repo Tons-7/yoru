@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +38,10 @@ type duck struct {
 	state   string // working | ready | error
 	problem string
 	ip      string
+	// When ip was last set, as a resolver may hold the old answer a while.
+	pointed time.Time
+	// Whether this network's resolver answers the name with ip: "" unasked, "yes" or "no", and what it said.
+	home, homeSaw string
 }
 
 // ready is whether a certificate is loaded, however it got there: fetched just now or read from disk.
@@ -69,6 +75,9 @@ type Status struct {
 	// Expires is when the certificate runs out, unix seconds; renewed well before.
 	Expires int64  `json:"expires,omitempty"`
 	IP      string `json:"ip,omitempty"`
+	// AtHome: this network's resolver answers the name with IP; nil until asked. HomeAnswer is what it said.
+	AtHome     *bool  `json:"atHome,omitempty"`
+	HomeAnswer string `json:"homeAnswer,omitempty"`
 }
 
 func (s *Source) Status() Status {
@@ -79,7 +88,11 @@ func (s *Source) Status() Status {
 		return Status{State: StateOff}
 	}
 	d.mu.Lock()
-	out := Status{Domain: d.domain, State: d.state, Problem: d.problem, IP: d.ip}
+	out := Status{Domain: d.domain, State: d.state, Problem: d.problem, IP: d.ip, HomeAnswer: d.homeSaw}
+	if d.home != "" {
+		at := d.home == "yes"
+		out.AtHome = &at
+	}
 	d.mu.Unlock()
 	// Ready is a certificate that still holds; one that ran out is being fetched again, or failed to be.
 	if out.State == StateReady && !d.ready() {
@@ -240,16 +253,95 @@ func (s *Source) runDuck(ctx context.Context, d *duck) {
 
 	tick := time.NewTicker(duckIPCheck)
 	defer tick.Stop()
+	settled := time.After(time.Until(d.pointedAt().Add(homeSettle)))
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-settled:
+			s.checkHome(ctx, d)
 		case <-tick.C:
 			if err := s.pointDuck(ctx, d); err != nil {
 				s.log.Warn("duckdns address update", "name", d.domain, "err", err)
 			}
+			if wait := time.Until(d.pointedAt().Add(homeSettle)); wait > 0 {
+				settled = time.After(wait)
+			} else {
+				s.checkHome(ctx, d)
+			}
 		}
 	}
+}
+
+// How long after setting the address a resolver's answer is trusted: DuckDNS answers live a minute.
+const homeSettle = 2 * time.Minute
+
+func (d *duck) pointedAt() time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.pointed
+}
+
+// lookupHost asks the system's resolver, at home the router phones ask too; a var so tests can answer.
+var lookupHost = net.DefaultResolver.LookupHost
+
+// checkHome asks whether this network answers the name with this machine's address. Routers with DNS rebind
+// protection drop answers that point at a home address, and then no phone here can open the name.
+func (s *Source) checkHome(ctx context.Context, d *duck) {
+	d.mu.Lock()
+	ip := d.ip
+	d.mu.Unlock()
+	if ip == "" {
+		return
+	}
+	lookup, cancel := context.WithTimeout(ctx, 10*time.Second)
+	addrs, err := lookupHost(lookup, d.domain)
+	cancel()
+	if ctx.Err() != nil {
+		return
+	}
+	home := "no"
+	var dnsErr *net.DNSError
+	switch {
+	case slices.Contains(addrs, ip):
+		home = "yes"
+	case err != nil && !(errors.As(err, &dnsErr) && dnsErr.IsNotFound):
+		// A timeout says nothing of the router (one dropping answers says "not found"): the last answer stands.
+		s.log.Debug("ask this network for the name", "name", d.domain, "err", err)
+		return
+	}
+	d.mu.Lock()
+	was := d.home
+	d.home, d.homeSaw = home, strings.Join(addrs, ", ")
+	d.mu.Unlock()
+	if home == "no" && was != "no" {
+		s.log.Warn("this network doesn't answer the name with this machine's address; phones here can't open it",
+			"name", d.domain, "want", ip, "answered", addrs, "err", err)
+	}
+}
+
+// CheckHome asks the network again, for Settings' Check again.
+func (s *Source) CheckHome(ctx context.Context) Status {
+	s.mu.RLock()
+	d := s.duck
+	s.mu.RUnlock()
+	if d != nil {
+		s.checkHome(ctx, d)
+	}
+	return s.Status()
+}
+
+// HomeBlocked: this network won't answer the DuckDNS name with this machine's address.
+func (s *Source) HomeBlocked() bool {
+	s.mu.RLock()
+	d := s.duck
+	s.mu.RUnlock()
+	if d == nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.home == "no"
 }
 
 // pointDuck sets the name's address to this machine's, when it is not already.
@@ -282,7 +374,7 @@ func (s *Source) pointDuck(ctx context.Context, d *duck) error {
 		return errors.New("duckdns.org refused the name or token; check both on duckdns.org")
 	}
 	d.mu.Lock()
-	d.ip = ip
+	d.ip, d.pointed = ip, time.Now()
 	d.mu.Unlock()
 	return nil
 }

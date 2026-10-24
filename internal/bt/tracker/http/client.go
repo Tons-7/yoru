@@ -2,7 +2,6 @@ package httpTracker
 
 import (
 	"context"
-	"crypto/tls"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,10 +20,11 @@ type (
 type NewClientOpts struct {
 	Proxy          ProxyFunc
 	DialContext    DialContextFunc
-	ServerName     string
 	AllowKeepAlive bool
 }
 
+// NewClient checks an HTTPS tracker's certificate against the host each request goes to, a redirect's too,
+// so no one in the way can hand out a peer list of their own.
 func NewClient(url_ *url.URL, opts NewClientOpts) Client {
 	return Client{
 		url_: url_,
@@ -32,10 +32,6 @@ func NewClient(url_ *url.URL, opts NewClientOpts) Client {
 			Transport: &http.Transport{
 				DialContext: opts.DialContext,
 				Proxy:       opts.Proxy,
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-					ServerName:         opts.ServerName,
-				},
 				// This is for S3 trackers that hold connections open.
 				DisableKeepAlives: !opts.AllowKeepAlive,
 			},

@@ -31,7 +31,15 @@ type PlaybackState struct {
 	Duration float64
 	// Seconds of media played since the previous report. Seeks are not played.
 	Played float64
+	// Where the ending starts by every source the player has, seconds; 0 when none knows.
+	Ending float64
 }
+
+// EndingThreshold is sync.progress_at's "when the ending starts": the ending's start, if known and late enough.
+const EndingThreshold = "ed"
+
+// An "ending" earlier than this share of the runtime is a mislabelled or mid-episode song, not the credits.
+const endingFloor = 0.7
 
 // playedShare is how much of an episode must actually play before reaching the
 // threshold counts, so tapping the end of the bar doesn't mark it watched.
@@ -40,8 +48,11 @@ const playedShare = 0.5
 // A single report cannot honestly claim more than this; the players report every five to ten seconds.
 const maxPlayedPerReport = 120.0
 
-// finished is the one "done" rule (position past the threshold), shared so every surface agrees.
-func finished(position, duration float64, watched bool, threshold float64) bool {
+// finished is the one "done" rule (past the threshold, or the ending that ticked it), so every surface agrees.
+func finished(position, duration float64, watched bool, threshold, done float64) bool {
+	if done > 0 && position >= done {
+		return true
+	}
 	if duration > 0 {
 		return position >= duration*threshold
 	}
@@ -61,9 +72,9 @@ func (s *Store) LastPlayed(ctx context.Context) (animeID int, epKey string, ok b
 }
 
 // resumable is where a saved position is worth offering back.
-func resumable(position, duration float64, watched bool, threshold float64) bool {
+func resumable(position, duration float64, watched bool, threshold, done float64) bool {
 	// Resuming a few seconds in is worse than starting over.
-	return position >= 15 && !finished(position, duration, watched, threshold)
+	return position >= 15 && !finished(position, duration, watched, threshold, done)
 }
 
 // RecordTorrent links a torrent to its episode, so our files never need identifying by name.
@@ -275,6 +286,10 @@ type Download struct {
 	Checking bool    `json:"checking"`
 	Mbps     float64 `json:"mbps,omitempty"`
 	Peers    int     `json:"peers,omitempty"`
+	// Warning: the engine can't write it to disk, with the drive's free space when that is why.
+	Warning   string `json:"warning,omitempty"`
+	FreeBytes *int64 `json:"freeBytes,omitempty"`
+	Drive     string `json:"drive,omitempty"`
 }
 
 // DownloadStatus reports what the engine holds, percentages from the sweeper's cache table.
@@ -336,18 +351,18 @@ func (s *Store) DownloadStatus(ctx context.Context) ([]Download, error) {
 // ResumeAt returns where playback stopped, or zero once the episode was finished
 // so a rewatch starts over. Finished is the position, not the watched flag.
 func (s *Store) ResumeAt(ctx context.Context, animeID int, epKey string) (float64, error) {
-	var position, duration float64
+	var position, duration, done float64
 	var watched int
 	err := s.r.QueryRowContext(ctx,
-		`SELECT position_s, coalesce(duration_s, 0), watched FROM playback WHERE anime_id = ? AND ep_key = ?`,
-		animeID, epKey).Scan(&position, &duration, &watched)
+		`SELECT position_s, coalesce(duration_s, 0), watched, coalesce(done_s, 0) FROM playback WHERE anime_id = ? AND ep_key = ?`,
+		animeID, epKey).Scan(&position, &duration, &watched, &done)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
 	if err != nil {
 		return 0, err
 	}
-	if !resumable(position, duration, watched == 1, s.thresholdFor(ctx, animeID)) {
+	if !resumable(position, duration, watched == 1, s.thresholdFor(ctx, animeID), done) {
 		return 0, nil
 	}
 	return position, nil
@@ -363,19 +378,20 @@ type InProgress struct {
 func (s *Store) LastInProgress(ctx context.Context, animeID int) (InProgress, bool, error) {
 	var p InProgress
 	var watched int
+	var done float64
 	err := s.r.QueryRowContext(ctx, `
-		SELECT ep_key, position_s, coalesce(duration_s, 0), watched
+		SELECT ep_key, position_s, coalesce(duration_s, 0), watched, coalesce(done_s, 0)
 		FROM playback
 		WHERE anime_id = ? AND dismissed = 0
 		`+latestFirst+`
-		LIMIT 1`, animeID).Scan(&p.EpKey, &p.Position, &p.Duration, &watched)
+		LIMIT 1`, animeID).Scan(&p.EpKey, &p.Position, &p.Duration, &watched, &done)
 	if errors.Is(err, sql.ErrNoRows) {
 		return InProgress{}, false, nil
 	}
 	if err != nil {
 		return InProgress{}, false, err
 	}
-	if !resumable(p.Position, p.Duration, watched == 1, s.thresholdFor(ctx, animeID)) {
+	if !resumable(p.Position, p.Duration, watched == 1, s.thresholdFor(ctx, animeID), done) {
 		return InProgress{}, false, nil
 	}
 	return p, true, nil
@@ -384,6 +400,7 @@ func (s *Store) LastInProgress(ctx context.Context, animeID int) (InProgress, bo
 // SavePlayback records a report and decides, for both players, whether the episode now counts as watched.
 func (s *Store) SavePlayback(ctx context.Context, p PlaybackState) (bool, error) {
 	threshold := s.thresholdFor(ctx, p.AnimeID)
+	ending := s.endingAt(ctx, p)
 
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -427,6 +444,9 @@ func (s *Store) SavePlayback(ctx context.Context, p PlaybackState) (bool, error)
 	}
 
 	reached := duration > 0 && p.Position/duration >= threshold
+	if ending > 0 {
+		reached = p.Position >= ending
+	}
 	if reached && played >= duration*playedShare {
 		watched = true
 		if err := leaveUpNext(ctx, tx, p.AnimeID, p.EpKey); err != nil {
@@ -443,10 +463,15 @@ func (s *Store) SavePlayback(ctx context.Context, p PlaybackState) (bool, error)
 	// dismissal — a flush on pause should not drag the episode back onto the rail.
 	finished := boolInt(watched && !(existed && flag == 1))
 	resumed := boolInt(step > 0)
+	// Ticked at the ending, it's finished from there on: stopped in the credits isn't a resume point.
+	var done any
+	if watched && ending > 0 {
+		done = ending
+	}
 
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO playback (anime_id, ep_key, position_s, duration_s, played_s, watched, play_count, last_played_at)
-		VALUES (?,?,?,?,?,?,?,?)
+		INSERT INTO playback (anime_id, ep_key, position_s, duration_s, played_s, watched, play_count, last_played_at, done_s)
+		VALUES (?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(anime_id, ep_key) DO UPDATE SET
 		    position_s=excluded.position_s,
 		    duration_s=coalesce(nullif(excluded.duration_s, 0), playback.duration_s),
@@ -454,9 +479,10 @@ func (s *Store) SavePlayback(ctx context.Context, p PlaybackState) (bool, error)
 		    watched=max(playback.watched, excluded.watched),
 		    dismissed=CASE WHEN ? = 1 THEN 0 ELSE playback.dismissed END,
 		    play_count=playback.play_count + ?,
-		    last_played_at=excluded.last_played_at`,
+		    last_played_at=excluded.last_played_at,
+		    done_s=coalesce(excluded.done_s, playback.done_s)`,
 		p.AnimeID, p.EpKey, position, p.Duration, played, boolInt(watched), finished,
-		time.Now().Unix(), resumed, finished)
+		time.Now().Unix(), done, resumed, finished)
 	if err != nil {
 		return false, err
 	}
@@ -479,6 +505,19 @@ func (s *Store) watchedThreshold(ctx context.Context) float64 {
 	return s.thresholdFor(ctx, 0)
 }
 
+// endingAt is where the episode counts as watched under EndingThreshold, seconds; 0 leaves it to the share. The
+// player's report says where the ending starts, from every source it has (marks, chapters, AniSkip, found).
+func (s *Store) endingAt(ctx context.Context, p PlaybackState) float64 {
+	if p.Duration <= 0 || p.Ending < p.Duration*endingFloor || p.Ending >= p.Duration {
+		return 0
+	}
+	prefs, err := s.Prefs(ctx, p.AnimeID)
+	if err != nil || prefs.String("sync.progress_at") != EndingThreshold {
+		return 0
+	}
+	return p.Ending
+}
+
 func defaultThreshold() float64 {
 	v, err := strconv.ParseFloat(Defaults["sync.progress_at"], 64)
 	if err != nil || v <= 0 || v > 1 {
@@ -490,7 +529,7 @@ func defaultThreshold() float64 {
 // SkipRanges returns an episode's op/ed markers, keyed by MAL id as AniSkip is.
 func (s *Store) SkipRanges(ctx context.Context, animeID, episode int) ([]player.SkipRange, error) {
 	rows, err := s.r.QueryContext(ctx, `
-		SELECT k.kind, k.start_s, k.end_s
+		SELECT k.kind, k.start_s, k.end_s, coalesce(k.skip_id, '')
 		FROM skip_time k
 		JOIN anime a ON a.mal_id = k.mal_id
 		WHERE a.id = ? AND k.number = ?
@@ -502,8 +541,8 @@ func (s *Store) SkipRanges(ctx context.Context, animeID, episode int) ([]player.
 
 	var out []player.SkipRange
 	for rows.Next() {
-		var r player.SkipRange
-		if err := rows.Scan(&r.Kind, &r.Start, &r.End); err != nil {
+		r := player.SkipRange{Source: "aniskip"}
+		if err := rows.Scan(&r.Kind, &r.Start, &r.End, &r.ID); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

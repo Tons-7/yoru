@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -52,8 +53,8 @@ func NewAccessToken() string {
 var installAssets = map[string]bool{
 	"/manifest.webmanifest": true, "/icon.svg": true,
 	"/icon-192.png": true, "/icon-512.png": true, "/icon-maskable-512.png": true,
-	// The alerts worker, which a browser re-fetches to check for updates whatever cookies it sends.
-	"/sw.js": true,
+	// The worker, which browsers re-fetch for updates without cookies, and its "can't reach Yoru" page.
+	"/sw.js": true, "/offline.html": true,
 }
 
 func isLoopback(remoteAddr string) bool {
@@ -79,6 +80,106 @@ func loopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// proxyHeaders mark a request a proxy passed on; from a proxy on this machine it arrives on loopback.
+var proxyHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto",
+	"X-Real-Ip", "Cf-Connecting-Ip", "True-Client-Ip", "Via"}
+
+// relayed: sent on by a proxy. nginx's bare proxy_pass adds no header but speaks HTTP/1.0, as browsers don't.
+func relayed(r *http.Request) bool {
+	for _, h := range proxyHeaders {
+		if len(r.Header.Values(h)) > 0 {
+			return true
+		}
+	}
+	return r.ProtoMajor == 1 && r.ProtoMinor == 0 && isLoopback(r.RemoteAddr)
+}
+
+// fromHost: the machine Yoru runs on, addressing it directly; the one caller that needs no token.
+func fromHost(r *http.Request) bool {
+	return isLoopback(r.RemoteAddr) && loopbackHost(r.Host) && !relayed(r)
+}
+
+// clientAddr is the device's address, through a proxy on this machine the one it names, "" when it names none.
+// Headers from anywhere else are ignored: a LAN device could name any address and slip a deny.
+func clientAddr(r *http.Request) string {
+	if relayed(r) && isLoopback(r.RemoteAddr) {
+		return forwardedFor(r.Header)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// forwardedFor is the client a proxy names. X-Forwarded-For's last entry first, as the proxy appends it; the
+// single-address headers can be the client's own, passed through, so they count only without it.
+func forwardedFor(h http.Header) string {
+	ip := func(s string) string {
+		s = strings.Trim(strings.TrimSpace(s), `"`)
+		if host, _, err := net.SplitHostPort(s); err == nil {
+			s = host
+		}
+		if p := net.ParseIP(strings.Trim(s, "[]")); p != nil {
+			return p.String()
+		}
+		return ""
+	}
+	last := func(values []string) string {
+		if len(values) == 0 {
+			return ""
+		}
+		parts := strings.Split(values[len(values)-1], ",")
+		return parts[len(parts)-1]
+	}
+	if v := ip(last(h.Values("X-Forwarded-For"))); v != "" {
+		return v
+	}
+	for pair := range strings.SplitSeq(last(h.Values("Forwarded")), ";") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(pair), "="); ok && strings.EqualFold(k, "for") {
+			if v := ip(v); v != "" {
+				return v
+			}
+		}
+	}
+	for _, name := range []string{"Cf-Connecting-Ip", "X-Real-Ip", "True-Client-Ip"} {
+		if v := ip(h.Get(name)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// secureRequest: reached over HTTPS, here or at a proxy in front.
+func secureRequest(r *http.Request) bool {
+	return r.TLS != nil || relayed(r) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+// proxySeen is the last request a proxy on this machine passed on: when, for whom, and its public address.
+type proxySeen struct {
+	at           time.Time
+	client, site string
+}
+
+// noteProxy records a relayed request; its public address only from one with the token, as the header is the
+// client's to forge and the address goes into a link carrying the token.
+func (s *Server) noteProxy(r *http.Request, authorized bool) {
+	site := ""
+	if host := cmp.Or(r.Header.Get("X-Forwarded-Host"), r.Host); authorized && !loopbackHost(host) {
+		scheme := "http"
+		if secureRequest(r) {
+			scheme = "https"
+		}
+		site = scheme + "://" + strings.TrimSpace(strings.Split(host, ",")[0])
+	}
+	s.proxyMu.Lock()
+	defer s.proxyMu.Unlock()
+	if s.proxy.at.IsZero() {
+		s.log.Info("a proxy on this computer passes requests on; they need the token like any other device's")
+	}
+	s.proxy = proxySeen{at: time.Now(), client: clientAddr(r), site: cmp.Or(site, s.proxy.site)}
+}
+
 // presented pulls the token from whichever channel the caller could use: media
 // elements and mpv cannot set headers, so query parameter and cookie must work.
 func presented(r *http.Request) string {
@@ -88,38 +189,18 @@ func presented(r *http.Request) string {
 	if t := r.URL.Query().Get("token"); t != "" {
 		return t
 	}
-	for _, name := range []string{accessCookie, legacyAccessCookie} {
-		if c, err := r.Cookie(name); err == nil {
-			return c.Value
-		}
+	if c, err := r.Cookie(accessCookie); err == nil {
+		return c.Value
 	}
 	return ""
 }
 
-// Cookies set under kuro's names: still read, and moved to Yoru's the first time a device shows one.
-const (
-	legacyAccessCookie = "kuro_access"
-	legacyDeviceCookie = "kuro_device"
-)
-
-// keepCookie sets a year-long cookie, and clears the one under kuro's name if the device still has it.
-func keepCookie(w http.ResponseWriter, r *http.Request, name, legacy, value string) {
+// keepCookie sets a year-long cookie.
+func keepCookie(w http.ResponseWriter, r *http.Request, name, value string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: name, Value: value, Path: "/",
-		MaxAge: 365 * 24 * 3600, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode,
+		MaxAge: 365 * 24 * 3600, HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteLaxMode,
 	})
-	if _, err := r.Cookie(legacy); err == nil {
-		http.SetCookie(w, &http.Cookie{Name: legacy, Path: "/", MaxAge: -1})
-	}
-}
-
-// onlyLegacy: the request has the cookie under kuro's name alone.
-func onlyLegacy(r *http.Request, name, legacy string) bool {
-	if _, err := r.Cookie(name); err == nil {
-		return false
-	}
-	c, err := r.Cookie(legacy)
-	return err == nil && c.Value != ""
 }
 
 // guard leaves loopback alone so the local browser and mpv need no setup, and
@@ -134,7 +215,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			send(w, http.StatusForbidden, map[string]any{"error": "cross-site request refused"})
 			return
 		}
-		if isLoopback(r.RemoteAddr) && loopbackHost(r.Host) {
+		if fromHost(r) {
 			// Another site's page can't read the answers, but it could still make Yoru search, spawn
 			// processes or spend the AniList budget on its say-so; opening a link to Yoru is fine.
 			if !sameOrigin(r) && !topLevelNavigation(r) {
@@ -143,6 +224,10 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			}
 			next.ServeHTTP(w, r)
 			return
+		}
+		proxied := isLoopback(r.RemoteAddr) && relayed(r)
+		if proxied {
+			s.noteProxy(r, false)
 		}
 		// Closing the listener leaves kept-alive connections, so network off shuts them out too.
 		if !isLoopback(r.RemoteAddr) && s.rebind != nil && !s.bound() {
@@ -173,8 +258,11 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			return
 		}
 
-		if r.URL.Query().Get("token") != "" || onlyLegacy(r, accessCookie, legacyAccessCookie) {
-			keepCookie(w, r, accessCookie, legacyAccessCookie, token)
+		if proxied {
+			s.noteProxy(r, true)
+		}
+		if r.URL.Query().Get("token") != "" {
+			keepCookie(w, r, accessCookie, token)
 		}
 		if !s.admit(w, r) {
 			return
@@ -187,7 +275,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 // the token, but must not reconfigure the host or link its accounts.
 func hostOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r.RemoteAddr) || !loopbackHost(r.Host) {
+		if !fromHost(r) {
 			send(w, http.StatusForbidden, map[string]any{"error": "change this from the host machine"})
 			return
 		}
@@ -323,16 +411,20 @@ func (s *Server) accessToken() string {
 
 func (s *Server) accessURLs() []string {
 	// Never nil: with no address at all the page gets an empty list, not null.
-	urls := []string{}
+	secure, plain := []string{}, []string{}
 	token := s.accessToken()
-	// First, so the QR code is the address a phone can install from.
 	for _, name := range s.httpsNames() {
-		urls = append(urls, fmt.Sprintf("https://%s:%s/?token=%s", name, s.port(), token))
+		secure = append(secure, fmt.Sprintf("https://%s:%s/?token=%s", name, s.port(), token))
 	}
 	for _, host := range lanAddrs() {
-		urls = append(urls, fmt.Sprintf("http://%s:%s/?token=%s", host, s.port(), token))
+		plain = append(plain, fmt.Sprintf("http://%s:%s/?token=%s", host, s.port(), token))
 	}
-	return urls
+	// HTTPS first, so the QR code is the address a phone can install from; last while this network won't
+	// answer its name, as a QR code leading nowhere helps no one.
+	if s.certs != nil && s.certs.HomeBlocked() {
+		return append(plain, secure...)
+	}
+	return append(secure, plain...)
 }
 
 // PairingURLs is empty unless bound beyond loopback, the only case a phone could use them.
@@ -345,15 +437,21 @@ func (s *Server) PairingURLs() []string {
 
 func (s *Server) access(w http.ResponseWriter, r *http.Request) {
 	// Host-only controls aren't offered to a paired device, which would only get a 403.
-	host := isLoopback(r.RemoteAddr) && loopbackHost(r.Host)
-	send(w, http.StatusOK, map[string]any{
+	host := fromHost(r)
+	out := map[string]any{
 		"listening": s.listening(),
 		"reachable": s.bound(),
 		"token":     s.accessToken(),
 		"urls":      s.accessURLs(),
 		"canSwitch": s.rebind != nil && host,
 		"host":      host,
-	})
+	}
+	s.proxyMu.Lock()
+	if p := s.proxy; host && !p.at.IsZero() {
+		out["proxy"] = map[string]any{"seen": p.at.Unix(), "client": p.client, "site": p.site}
+	}
+	s.proxyMu.Unlock()
+	send(w, http.StatusOK, out)
 }
 
 // listening is where the app is bound: the configured address unless the switch moved it.

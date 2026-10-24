@@ -410,7 +410,10 @@ type SeaDexInfo struct {
 	IsBest    bool
 	DualAudio bool
 	Group     string
-	Notes     string
+	// The entry's: the curator's notes, comparison pages, and whether the curation is still in progress.
+	Notes      string
+	Comparison []string
+	Incomplete bool
 }
 
 func (s *Store) SaveSeaDex(ctx context.Context, releases []metadata.SeaDexRelease) (int, error) {
@@ -430,8 +433,9 @@ func (s *Store) SaveSeaDex(ctx context.Context, releases []metadata.SeaDexReleas
 	}
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO seadex (anime_id, info_hash, release_group, tracker, is_best, dual_audio, tags, url)
-		VALUES (?,?,?,?,?,?,?,?)
+		INSERT INTO seadex (anime_id, info_hash, release_group, tracker, is_best, dual_audio, tags, url,
+		                    notes, comparison, incomplete, files)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(anime_id, info_hash, release_group) DO UPDATE SET
 		    is_best=excluded.is_best, dual_audio=excluded.dual_audio, tags=excluded.tags`)
 	if err != nil {
@@ -442,14 +446,128 @@ func (s *Store) SaveSeaDex(ctx context.Context, releases []metadata.SeaDexReleas
 	var written int
 	for _, r := range releases {
 		tags, _ := json.Marshal(r.Tags)
+		comparison, files := []byte("[]"), []byte("[]")
+		if len(r.Comparison) > 0 {
+			comparison, _ = json.Marshal(r.Comparison)
+		}
+		if len(r.Files) > 0 {
+			files, _ = json.Marshal(r.Files)
+		}
 		if _, err := stmt.ExecContext(ctx, r.AniListID, r.InfoHash, nullable(r.ReleaseGroup),
 			nullable(r.Tracker), boolInt(r.IsBest), boolInt(r.DualAudio),
-			string(tags), nullable(r.URL)); err != nil {
+			string(tags), nullable(r.URL), nullable(r.Notes), string(comparison), boolInt(r.Incomplete),
+			string(files)); err != nil {
 			return 0, err
 		}
 		written++
 	}
 	return written, tx.Commit()
+}
+
+// SaveGroupTiers replaces TRaSH's group grades whole: a group dropped upstream stops counting.
+func (s *Store) SaveGroupTiers(ctx context.Context, tiers []metadata.GroupTier) error {
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM group_tier`); err != nil {
+		return err
+	}
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO group_tier (kind, level, name, pattern) VALUES (?,?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, t := range tiers {
+		if _, err := stmt.ExecContext(ctx, t.Kind, t.Level, t.Name, t.Pattern); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) GroupTiers(ctx context.Context) ([]metadata.GroupTier, error) {
+	rows, err := s.r.QueryContext(ctx, `SELECT kind, level, name, pattern FROM group_tier`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []metadata.GroupTier
+	for rows.Next() {
+		var t metadata.GroupTier
+		if err := rows.Scan(&t.Kind, &t.Level, &t.Name, &t.Pattern); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// SeaDexPick is one of SeaDex's best releases for a show, with its files.
+type SeaDexPick struct {
+	InfoHash, Group, Tracker, URL string
+	Files                         []metadata.SeaDexFile
+}
+
+// SeaDexBests lists a show's best releases a public tracker carries, so a hash is all it takes to fetch one.
+func (s *Store) SeaDexBests(ctx context.Context, animeID int) ([]SeaDexPick, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT info_hash, coalesce(release_group, ''), coalesce(tracker, ''), coalesce(url, ''), files
+		FROM seadex WHERE anime_id = ? AND is_best = 1 AND info_hash <> ''`, animeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SeaDexPick
+	for rows.Next() {
+		var p SeaDexPick
+		var files string
+		if err := rows.Scan(&p.InfoHash, &p.Group, &p.Tracker, &p.URL, &files); err != nil {
+			return nil, err
+		}
+		json.Unmarshal([]byte(files), &p.Files)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// KeptCopy is one kept episode's release, with its show.
+type KeptCopy struct {
+	AnimeID         int
+	EpKey, InfoHash string
+	Name, Title     string
+	Cover           *string
+}
+
+// KeptCopies lists every kept episode's release, show by show.
+func (s *Store) KeptCopies(ctx context.Context) ([]KeptCopy, error) {
+	mode := s.TitleMode(ctx, 0)
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT DISTINCT f.anime_id, f.ep_key, f.info_hash, coalesce(t.name, ''),
+		       coalesce(a.title_romaji, ''), a.title_english, a.cover_url
+		FROM cache_entry c
+		JOIN torrent_file f ON f.info_hash = c.info_hash AND f.selected = 1 AND (c.file_index = f.file_index OR c.file_index = ?)
+		JOIN torrent t ON t.info_hash = f.info_hash
+		LEFT JOIN anime a ON a.id = f.anime_id
+		WHERE c.kept = 1 AND f.anime_id IS NOT NULL AND f.ep_key IS NOT NULL
+		ORDER BY f.anime_id, f.ep_key`, WholeTorrent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KeptCopy
+	for rows.Next() {
+		var k KeptCopy
+		var romaji string
+		var english *string
+		if err := rows.Scan(&k.AnimeID, &k.EpKey, &k.InfoHash, &k.Name, &romaji, &english, &k.Cover); err != nil {
+			return nil, err
+		}
+		k.Title = PickTitle(mode, romaji, english)
+		out = append(out, k)
+	}
+	return out, rows.Err()
 }
 
 // BestGroups returns SeaDex's best groups for an anime, searched for directly rather than hoped for.
@@ -478,7 +596,7 @@ func (s *Store) BestGroups(ctx context.Context, animeID int) ([]string, error) {
 // an exact match, and lowercased by group for entries whose hash is redacted.
 func (s *Store) SeaDexFor(ctx context.Context, animeID int) (byHash, byGroup map[string]SeaDexInfo, err error) {
 	rows, err := s.r.QueryContext(ctx, `
-		SELECT info_hash, coalesce(release_group, ''), is_best, dual_audio
+		SELECT info_hash, coalesce(release_group, ''), is_best, dual_audio, coalesce(notes, ''), comparison, incomplete
 		FROM seadex WHERE anime_id = ?`, animeID)
 	if err != nil {
 		return nil, nil, err
@@ -489,12 +607,13 @@ func (s *Store) SeaDexFor(ctx context.Context, animeID int) (byHash, byGroup map
 	byGroup = map[string]SeaDexInfo{}
 
 	for rows.Next() {
-		var hash, group string
-		var best, dual int
-		if err := rows.Scan(&hash, &group, &best, &dual); err != nil {
+		var hash, group, notes, comparison string
+		var best, dual, incomplete int
+		if err := rows.Scan(&hash, &group, &best, &dual, &notes, &comparison, &incomplete); err != nil {
 			return nil, nil, err
 		}
-		info := SeaDexInfo{IsBest: best == 1, DualAudio: dual == 1, Group: group}
+		info := SeaDexInfo{IsBest: best == 1, DualAudio: dual == 1, Group: group, Notes: notes, Incomplete: incomplete == 1}
+		json.Unmarshal([]byte(comparison), &info.Comparison)
 		if hash != "" {
 			byHash[strings.ToLower(hash)] = info
 		}

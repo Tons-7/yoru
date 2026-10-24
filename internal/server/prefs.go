@@ -7,8 +7,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"yoru/internal/library"
+	"yoru/internal/score"
 	"yoru/internal/sound"
 	"yoru/internal/store"
 	"yoru/internal/torrent"
@@ -34,9 +36,14 @@ var allowed = map[string][]string{
 	"window.on_close":          {"exit", "tray"},
 	// 2, 3, 5 or 10 GiB an episode, or none.
 	"quality.max_auto_bytes": {"2147483648", "3221225472", "5368709120", "10737418240", "0"},
-	// The share of an episode that counts as watching it.
-	"sync.progress_at":  {"0.8", "0.85", "0.9", "0.95"},
+	"display.spoilers":       {store.SpoilersOff, store.SpoilersAfterNext, store.SpoilersUnwatched},
+	// Episodes auto next plays unattended before asking whether anyone is watching; 0 never asks.
+	"playback.still_watching": {"0", "2", "3", "5"},
+	// The share of an episode that counts as watching it, or where its ending starts.
+	"sync.progress_at":  {"0.8", "0.85", "0.9", "0.95", store.EndingThreshold},
 	"subtitle.with_dub": {"signs", "off", "same"},
+	// Hours auto-download holds a new episode for a preferred group or a higher resolution; 0 takes the first.
+	"autodownload.wait_hours": {"0", "1", "3", "6", "12"},
 }
 
 // numeric settings take whole numbers; a typo would read as zero.
@@ -85,7 +92,7 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Which network this machine's torrents use is the host's to say, as its firewall is.
-	if hostSettings[body.Key] && (!isLoopback(r.RemoteAddr) || !loopbackHost(r.Host)) {
+	if hostSettings[body.Key] && !fromHost(r) {
 		send(w, http.StatusForbidden, map[string]any{"error": "change this from the host machine"})
 		return
 	}
@@ -134,7 +141,8 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 var (
 	limitSettings = map[string]bool{"downloads.limit_bytes": true, "downloads.upload": true, "downloads.adapter": true}
 	// The Discord card is the host's account, as the network is the host's machine.
-	hostSettings = map[string]bool{"downloads.adapter": true, "discord.enabled": true, "discord.everywhere": true}
+	hostSettings = map[string]bool{"downloads.adapter": true, "discord.enabled": true, "discord.everywhere": true,
+		"power.awake_watching": true, "power.awake_downloading": true}
 )
 
 // applyLimits hands the engine the download cap, upload choice and network as saved; they apply at once.
@@ -257,6 +265,65 @@ func (s *Server) setFollow(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"following": body.Enabled})
 }
 
+// setNotify turns a show's new-episode alerts on or off, whatever turned them on: a follow, Watching, auto.
+func (s *Server) setNotify(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.Atoi(r.PathValue("id"))
+	var body struct {
+		On bool `json:"on"`
+	}
+	if id == 0 || !decode(w, r, &body) {
+		if id == 0 {
+			send(w, http.StatusBadRequest, map[string]any{"error": "a show is required"})
+		}
+		return
+	}
+	if err := s.store.SetNotify(r.Context(), id, body.On); err != nil {
+		s.fail(w, "notify", err)
+		return
+	}
+	if body.On {
+		s.hydrate(r.Context(), []int{id})
+	}
+	s.sendFollow(w, r, id)
+}
+
+// wantEpisode marks one episode to download when the release watch finds it; 0 takes the mark off.
+func (s *Server) wantEpisode(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.Atoi(r.PathValue("id"))
+	var body struct {
+		Episode int `json:"episode"`
+	}
+	if id == 0 || !decode(w, r, &body) {
+		if id == 0 {
+			send(w, http.StatusBadRequest, map[string]any{"error": "a show is required"})
+		}
+		return
+	}
+	value := ""
+	if body.Episode > 0 {
+		value = strconv.Itoa(body.Episode)
+		if err := s.store.EnsureAnime(r.Context(), id); err != nil {
+			s.fail(w, "want episode", err)
+			return
+		}
+		s.hydrate(r.Context(), []int{id})
+	}
+	if err := s.store.SetAnimePref(r.Context(), id, "autodownload.want", value); err != nil {
+		s.fail(w, "want episode", err)
+		return
+	}
+	s.sendFollow(w, r, id)
+}
+
+func (s *Server) sendFollow(w http.ResponseWriter, r *http.Request, id int) {
+	f, err := s.store.FollowOf(r.Context(), id)
+	if err != nil {
+		s.fail(w, "follow state", err)
+		return
+	}
+	send(w, http.StatusOK, f)
+}
+
 // hydrate fills in placeholder rows, which otherwise sit titled "Unknown".
 func (s *Server) hydrate(ctx context.Context, ids []int) {
 	if s.importer == nil {
@@ -269,6 +336,64 @@ func (s *Server) hydrate(ctx context.Context, ids []int) {
 	if _, err := s.importer.Hydrate(ctx, missing); err != nil {
 		s.log.Warn("hydrate anime", "count", len(missing), "err", err)
 	}
+}
+
+// previewReleases says per show what auto-download would take next and why, taking nothing.
+func (s *Server) previewReleases(w http.ResponseWriter, r *http.Request) {
+	if s.watcher == nil {
+		send(w, http.StatusServiceUnavailable, map[string]any{"error": "watcher unavailable"})
+		return
+	}
+	rows, err := s.watcher.Preview(r.Context())
+	if err != nil {
+		s.fail(w, "preview auto-download", err)
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"items": rows})
+}
+
+// releaseWaits lists the new episodes auto-download holds for a better release: what each waits for, and until.
+func (s *Server) releaseWaits(w http.ResponseWriter, r *http.Request) {
+	waits, err := s.store.Waits(r.Context(), 0)
+	if err != nil {
+		s.fail(w, "release waits", err)
+		return
+	}
+	type item struct {
+		store.ReleaseWait
+		Until int64  `json:"until"`
+		Wants string `json:"wants"`
+	}
+	out := []item{}
+	for _, x := range waits {
+		prefs, err := s.store.Prefs(r.Context(), x.AnimeID)
+		if err != nil {
+			continue
+		}
+		hours := time.Duration(prefs.Int64("autodownload.wait_hours")) * time.Hour
+		out = append(out, item{ReleaseWait: x, Until: x.FirstSeen.Add(hours).Unix(), Wants: score.Wanted(library.Preferences(prefs))})
+	}
+	send(w, http.StatusOK, map[string]any{"items": out})
+}
+
+// takeWaitingNow stops holding an episode and queues it: the queue takes the best release there is.
+func (s *Server) takeWaitingNow(w http.ResponseWriter, r *http.Request) {
+	animeID, _ := strconv.Atoi(r.PathValue("anime"))
+	episode, _ := strconv.Atoi(r.PathValue("episode"))
+	if animeID == 0 || episode <= 0 {
+		send(w, http.StatusBadRequest, map[string]any{"error": "anime and episode are needed"})
+		return
+	}
+	if _, err := s.store.Enqueue(r.Context(), animeID, 0, []int{episode}); err != nil {
+		s.fail(w, "queue episode", err)
+		return
+	}
+	if err := s.store.EndWait(r.Context(), animeID, episode); err != nil {
+		s.fail(w, "end wait", err)
+		return
+	}
+	s.downloader.Wake()
+	send(w, http.StatusOK, map[string]any{"queued": true})
 }
 
 func (s *Server) checkReleases(w http.ResponseWriter, r *http.Request) {

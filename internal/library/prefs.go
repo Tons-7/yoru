@@ -69,12 +69,16 @@ func prefsFromSettings(p store.Prefs) scorePrefs {
 	}
 	prefs.AllowHi10P = p.Bool("quality.allow_hi10p")
 
-	if g := p.String("release.prefer_groups"); g != "" {
-		var groups []string
-		if json.Unmarshal([]byte(g), &groups) == nil {
-			prefs.PreferGroups = groups
+	for key, into := range map[string]*[]string{
+		"release.prefer_groups": &prefs.PreferGroups, "release.avoid_groups": &prefs.AvoidGroups,
+		"release.exclude_terms": &prefs.ExcludeTerms,
+	} {
+		var list []string
+		if json.Unmarshal([]byte(p.String(key)), &list) == nil {
+			*into = list
 		}
 	}
+	prefs.AvoidLQ = p.Bool("release.avoid_lq")
 	if a := p.String("audio.prefer"); a != "" {
 		prefs.Audio = a
 	}

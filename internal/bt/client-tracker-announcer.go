@@ -852,7 +852,6 @@ func (me *regularTrackerAnnounceDispatcher) initTrackerClient(
 		Http: trHttp.NewClientOpts{
 			Proxy:       config.HTTPProxy,
 			DialContext: config.TrackerDialContext,
-			ServerName:  u.Hostname(),
 		},
 		UdpNetwork:   u.Scheme,
 		Logger:       logger.WithContextValue(fmt.Sprintf("tracker client for %q", urlStr)),

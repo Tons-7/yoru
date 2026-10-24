@@ -18,9 +18,10 @@ import (
 	"yoru/internal/transcode"
 )
 
-// mpv and VLC skip only what Settings ask for; with auto-skip off they once skipped every range.
+// mpv and VLC skip only what Settings ask for; chapters named to skip always go.
 func TestExternalPlayersSkipOnlyWhatIsAskedFor(t *testing.T) {
-	ranges := []player.SkipRange{{Kind: "op"}, {Kind: "mixed-ed"}, {Kind: "recap"}, {Kind: "ed"}}
+	ranges := []player.SkipRange{{Kind: "op"}, {Kind: "mixed-ed"}, {Kind: "recap"}, {Kind: "ed"}, {Kind: "preview"},
+		{Kind: "eyecatch"}, {Kind: "skip"}}
 	kinds := func(rs []player.SkipRange) (out []string) {
 		for _, r := range rs {
 			out = append(out, r.Kind)
@@ -28,17 +29,38 @@ func TestExternalPlayersSkipOnlyWhatIsAskedFor(t *testing.T) {
 		return
 	}
 	for _, c := range []struct {
-		op, ed bool
-		want   string
+		on   player.AutoSkip
+		want string
 	}{
-		{false, false, "[]"},
-		{true, false, "[op]"},
-		{false, true, "[mixed-ed ed]"},
-		{true, true, "[op mixed-ed ed]"},
+		{player.AutoSkip{}, "[skip]"},
+		{player.AutoSkip{Opening: true}, "[op skip]"},
+		{player.AutoSkip{Ending: true}, "[mixed-ed ed skip]"},
+		{player.AutoSkip{Recap: true, Preview: true}, "[recap preview eyecatch skip]"},
 	} {
-		if got := fmt.Sprint(kinds(autoSkipped(ranges, c.op, c.ed))); got != c.want {
-			t.Errorf("op=%v ed=%v: skipped %s, want %s", c.op, c.ed, got, c.want)
+		if got := fmt.Sprint(kinds(c.on.Skipped(ranges))); got != c.want {
+			t.Errorf("%+v: skipped %s, want %s", c.on, got, c.want)
 		}
+	}
+}
+
+// A first opening and a finished show's last ending play, unless Settings say to skip them too.
+func TestTheFirstAndLastSongsPlay(t *testing.T) {
+	st := skipStore(t)
+	ctx := context.Background()
+	st.SetSetting(ctx, "playback.autoskip_op", "true")
+	st.SetSetting(ctx, "playback.autoskip_ed", "true")
+	p := NewPlayback(st, nil, nil, nil, t.TempDir(), slog.New(slog.DiscardHandler))
+	prefs, _ := st.Prefs(ctx, 7)
+	if a := p.autoSkip(ctx, PlayRequest{AnimeID: 7, Episode: 1}, prefs); a.Opening || a.Ending {
+		t.Errorf("episode 1 skips its songs: %+v", a)
+	}
+	if a := p.autoSkip(ctx, PlayRequest{AnimeID: 7, Episode: 2}, prefs); !a.Opening || !a.Ending {
+		t.Errorf("episode 2 keeps its songs: %+v", a)
+	}
+	st.SetSetting(ctx, "playback.skip_keep_bookends", "false")
+	prefs, _ = st.Prefs(ctx, 7)
+	if a := p.autoSkip(ctx, PlayRequest{AnimeID: 7, Episode: 1}, prefs); !a.Opening {
+		t.Errorf("asked to skip them all, episode 1 still plays its opening: %+v", a)
 	}
 }
 
@@ -80,7 +102,8 @@ func TestMpvSkipRangesPreferChaptersAndFallBack(t *testing.T) {
 	}}}
 	p := NewPlayback(st, nil, nil, nil, t.TempDir(), slog.New(slog.DiscardHandler)).WithProber(both)
 
-	got, duration := p.skipRanges(ctx, req, "x.mkv")
+	prefs, _ := st.Prefs(ctx, 7)
+	got, duration := p.skipRanges(ctx, req, "x.mkv", prefs)
 	if len(got) != 2 || got[0].Kind != "op" || got[0].Start != 90 || got[1].Kind != "ed" {
 		t.Fatalf("chapters not used: %+v", got)
 	}
@@ -99,16 +122,26 @@ func TestMpvSkipRangesPreferChaptersAndFallBack(t *testing.T) {
 	}}}
 	p = NewPlayback(st, nil, nil, nil, t.TempDir(), slog.New(slog.DiscardHandler)).WithProber(opOnly)
 
-	got, _ = p.skipRanges(ctx, req, "x.mkv")
+	got, _ = p.skipRanges(ctx, req, "x.mkv", prefs)
 	if len(got) != 2 {
 		t.Fatalf("got %+v, want the chapter opening and the stored ending", got)
 	}
-	if !hasKind(got, "op") || !hasKind(got, "ed") {
+	if !player.HasPart(got, "op") || !player.HasPart(got, "ed") {
 		t.Errorf("kinds = %+v", got)
 	}
 	for _, r := range got {
 		if r.Kind == "op" && r.Start != 90 {
 			t.Errorf("the chapter opening was replaced: %+v", r)
+		}
+	}
+
+	// The viewer's mark beats the file's chapter; what Yoru found only fills a gap.
+	st.SaveOwnSkip(ctx, 7, 1, player.SkipRange{Kind: "op", Start: 95, End: 185, Source: "marked"})
+	st.SaveOwnSkip(ctx, 7, 1, player.SkipRange{Kind: "ed", Start: 1, End: 2, Source: "found"})
+	got, _ = p.skipRanges(ctx, req, "x.mkv", prefs)
+	for _, r := range got {
+		if r.Part() == "op" && r.Source != "marked" || r.Part() == "ed" && r.Source != "aniskip" {
+			t.Errorf("%s came from %s", r.Kind, r.Source)
 		}
 	}
 }

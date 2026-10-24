@@ -13,9 +13,10 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { api, ApiError, withToken, type Tracker } from '../lib/api'
-import { bytes, cx, relativeTime, speedLimit, type SpeedUnit } from '../lib/format'
+import { bytes, cx, relativeTime, speedLimit, waitLabel, type SpeedUnit } from '../lib/format'
 import { castImpossible } from '../player/cast'
 import {
+  refreshDownloads,
   refreshListState,
   useAccess,
   useAccessDevices,
@@ -25,6 +26,7 @@ import {
   useSetup,
   useTrackers,
   type AccessDevice,
+  type AccessState,
   type ApprovalMode,
 } from '../lib/queries'
 import { ANIME4K_MODES, ANIME4K_SIZES } from '../lib/anime4k'
@@ -32,6 +34,8 @@ import { ComponentState } from '../components/ComponentState'
 import { ReleaseNotesList, type Notes } from '../components/ReleaseNotes'
 import { SitesEditor } from '../components/SitesEditor'
 import { WhereThingsGo } from '../components/WhereThingsGo'
+import { WaitSelect } from '../components/WaitSelect'
+import { ReleasePicker } from '../components/ReleasePicker'
 import { DESKTOP_NOTIFY_KEY, desktopNotifyWanted } from '../lib/notifications'
 import { disablePush, enablePush, pushState, testPush, type PushState } from '../lib/push'
 import {
@@ -50,12 +54,13 @@ import {
   TextInput,
 } from '../components/ui'
 import { buttonClass, ControlLabel } from '../lib/ui'
-import { useDebounced } from '../lib/hooks'
+import { useDebounced, useHeldData } from '../lib/hooks'
 import { copyText } from '../lib/downloads'
 
 // The id is what ?tab= says; the label is what a person reads.
 const TABS = [
   { id: 'Playback', label: 'Playback' },
+  { id: 'Language', label: 'Language & display' },
   { id: 'Sound', label: 'Sound & picture' },
   { id: 'Downloads', label: 'Downloads' },
   { id: 'Storage', label: 'Storage' },
@@ -63,6 +68,7 @@ const TABS = [
   { id: 'Library', label: 'Library' },
   { id: 'Notifications', label: 'Notifications' },
   { id: 'Devices', label: 'Devices' },
+  { id: 'Computer', label: 'This computer' },
   { id: 'About', label: 'About' },
 ] as const
 type Tab = (typeof TABS)[number]['id']
@@ -172,6 +178,10 @@ function TabBody({ tab }: { tab: Tab }) {
   switch (tab) {
     case 'Playback':
       return <PlaybackTab />
+    case 'Language':
+      return <LanguageTab />
+    case 'Computer':
+      return <ComputerTab />
     case 'Sound':
       return <SoundTab />
     case 'Downloads':
@@ -267,6 +277,18 @@ function SideTabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
 // One line icon per tab, drawn as the app's other glyphs are (24 grid, 1.6 stroke).
 const TAB_ICONS: Record<Tab, ReactNode> = {
   Playback: <path d="M8.5 5.5v13l10-6.5-10-6.5Z" strokeLinejoin="round" />,
+  Language: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M3.5 12h17M12 3.5c2.3 2.3 3.5 5.3 3.5 8.5s-1.2 6.2-3.5 8.5c-2.3-2.3-3.5-5.3-3.5-8.5s1.2-6.2 3.5-8.5Z" />
+    </>
+  ),
+  Computer: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="11.5" rx="1.5" />
+      <path d="M9 20h6M12 16v4" strokeLinecap="round" />
+    </>
+  ),
   Sound: (
     <>
       <path d="M4.5 9.5h3l4-3.5v12l-4-3.5h-3v-5Z" strokeLinejoin="round" />
@@ -419,12 +441,19 @@ function useFlag() {
   }
 }
 
-// Yoru's own window, so on the machine it runs on alone: a phone has nothing of it to set.
+// How Yoru runs on the machine it's installed on, so set there alone; another device is told where.
 function WindowSection({ f }: { f: ReturnType<typeof useFlag> }) {
   const access = useAccess()
-  if (!access.data?.host) return null
+  if (access.isPending) return null
+  if (!access.data?.host) {
+    return (
+      <Section title="This computer" hint="How Yoru runs on the computer it's installed on." keywords="window startup awake">
+        <p className="py-2 text-sm text-base-400">These are set on the computer Yoru runs on, in its own window.</p>
+      </Section>
+    )
+  }
   return (
-    <Section title="Window" hint="Yoru's own window on this computer.">
+    <Section title="This computer" hint="How Yoru runs on the computer it's installed on.">
       <Row label="Open Yoru" hint="From the next start. F11 switches either way." keywords="window fullscreen maximized">
         <Select value={f.value('window.mode') || 'fullscreen'} onChange={(v) => f.set('window.mode', v)}>
           <option value="fullscreen">Fullscreen</option>
@@ -432,7 +461,58 @@ function WindowSection({ f }: { f: ReturnType<typeof useFlag> }) {
         </Select>
       </Row>
       <CloseWindowRow f={f} />
+      <SignInRow />
+      <Row
+        label="Stay awake while another device watches"
+        hint={
+          f.get('power.awake_watching')
+            ? "A phone, TV or cast keeps this computer from sleeping while it plays. The screen still turns off, and the lid and power button still sleep it."
+            : 'This computer sleeps on its own schedule, even partway through an episode on another device.'
+        }
+        keywords="sleep awake power standby phone tv cast"
+      >
+        <Switch on={f.get('power.awake_watching')} onChange={(v) => f.set('power.awake_watching', String(v))} />
+      </Row>
+      <Row
+        label="Stay awake while downloading"
+        hint={
+          f.get('power.awake_downloading')
+            ? 'This computer stays awake while a download is receiving, and may sleep a couple of minutes after the last.'
+            : 'Downloads stop while this computer sleeps, and carry on when it wakes.'
+        }
+        keywords="sleep awake power standby downloads overnight"
+      >
+        <Switch on={f.get('power.awake_downloading')} onChange={(v) => f.set('power.awake_downloading', String(v))} />
+      </Row>
     </Section>
+  )
+}
+
+// Started at sign-in, Yoru is there for alerts, downloads and other devices without being opened first.
+function SignInRow() {
+  const qc = useQueryClient()
+  const startup = useQuery({
+    queryKey: ['app-startup'],
+    queryFn: () => api.get<{ on: boolean; tray: boolean }>('/api/app/startup'),
+  })
+  const set = useMutation({
+    meta: { inline: true },
+    mutationFn: (on: boolean) => api.post<{ on: boolean; tray: boolean }>('/api/app/startup', { on }),
+    onSuccess: (data) => qc.setQueryData(['app-startup'], data),
+  })
+  const on = startup.data?.on ?? false
+  const where = startup.data?.tray === false ? 'in the background' : 'in the tray'
+  const hint = startup.isError
+    ? (startup.error as Error).message
+    : set.isError
+      ? (set.error as Error).message
+      : on
+        ? `Yoru starts ${where} when you sign in, so downloads, alerts and your other devices work without opening it.`
+        : 'Yoru starts when you open it.'
+  return (
+    <Row label={`Start Yoru when I sign in, ${where}`} hint={hint} keywords="startup sign in login boot autostart tray">
+      <Switch on={on} onChange={(v) => set.mutate(v)} />
+    </Row>
   )
 }
 
@@ -509,28 +589,48 @@ function PlaybackTab() {
         <Row label="Auto next episode" hint="Counts down at the end, then plays the next." keywords="autonext countdown">
           <Switch on={f.get('playback.autonext')} onChange={(v) => f.set('playback.autonext', String(v))} />
         </Row>
-        <Row label="Skip opening" keywords="intro op">
-          <Switch on={f.get('playback.autoskip_op')} onChange={(v) => f.set('playback.autoskip_op', String(v))} />
+        <Row
+          label="Ask if still watching"
+          hint={
+            f.get('playback.autonext')
+              ? 'After this many episodes in a row with no key, tap or mouse, Auto next stops and asks.'
+              : 'Only with Auto next episode on.'
+          }
+          keywords="still watching asleep sleep binge pause"
+        >
+          <Select value={f.value('playback.still_watching') || '3'} onChange={(v) => f.set('playback.still_watching', v)}>
+            <option value="0">Never</option>
+            <option value="2">After 2 episodes</option>
+            <option value="3">After 3 episodes</option>
+            <option value="5">After 5 episodes</option>
+          </Select>
         </Row>
-        <Row label="Skip ending" keywords="outro ed credits">
-          <Switch on={f.get('playback.autoskip_ed')} onChange={(v) => f.set('playback.autoskip_ed', String(v))} />
-        </Row>
-        <Row label="Skip filler and recaps" hint="Next and download ahead step over them; the list still shows them.">
+        <Row
+          label="Skip filler and recap episodes"
+          hint="Next and download ahead step over them; the list still shows them. Recap scenes are under Skipping."
+        >
           <Switch on={f.get('playback.skip_filler')} onChange={(v) => f.set('playback.skip_filler', String(v))} />
         </Row>
         <Row
           label="Counts as watched at"
-          hint="How far into an episode it is ticked and sent to your tracker. Lower if you stop at the credits."
-          keywords="watched threshold progress percent credits"
+          hint={
+            f.value('sync.progress_at') === 'ed'
+              ? 'Ticked and sent to your tracker when the ending song starts. An episode with no known ending, or one that starts before 70%, counts at 90%.'
+              : 'How far into an episode it is ticked and sent to your tracker. Lower if you stop at the credits.'
+          }
+          keywords="watched threshold progress percent credits ending"
         >
           <Select value={f.value('sync.progress_at') || '0.9'} onChange={(v) => f.set('sync.progress_at', v)}>
             <option value="0.8">80%</option>
             <option value="0.85">85%</option>
             <option value="0.9">90%</option>
             <option value="0.95">95%</option>
+            <option value="ed">When the ending starts</option>
           </Select>
         </Row>
       </Section>
+
+      <SkippingSection f={f} />
 
       <Section title="Player">
         <Row label="Default player" hint="mpv and VLC play on this computer only; a phone or TV uses the browser." keywords="mpv vlc external">
@@ -546,6 +646,18 @@ function PlaybackTab() {
         <VLCNote />
       </Section>
 
+      <CastingSection f={f} />
+    </div>
+  )
+}
+
+function LanguageTab() {
+  const f = useFlag()
+  if (f.loading) return <Skeleton className="h-64 w-full" />
+  if (f.failed) return f.failed
+
+  return (
+    <div className="space-y-4">
       <Section title="Language">
         <Row label="Audio preference" keywords="sub dub dubbed subbed">
           <Select
@@ -570,10 +682,28 @@ function PlaybackTab() {
         </Row>
       </Section>
 
-      <CastingSection f={f} />
-      <WindowSection f={f} />
+      <Section title="Spoilers">
+        <Row
+          label="Hide spoilers"
+          hint="Unwatched episodes show a blurred picture and no title or synopsis; tap the eye to see one. Shows you finished or are rewatching show everything. A show's episode list can show all of its titles."
+          keywords="spoilers blur hide titles synopsis thumbnails"
+        >
+          <Select value={f.value('display.spoilers') || 'after_next'} onChange={(v) => f.set('display.spoilers', v)}>
+            <option value="after_next">After the next episode</option>
+            <option value="unwatched">Every unwatched episode</option>
+            <option value="off">Off</option>
+          </Select>
+        </Row>
+      </Section>
     </div>
   )
+}
+
+function ComputerTab() {
+  const f = useFlag()
+  if (f.loading) return <Skeleton className="h-64 w-full" />
+  if (f.failed) return f.failed
+  return <WindowSection f={f} />
 }
 
 function SoundTab() {
@@ -776,9 +906,16 @@ function StorageTab() {
   // Turning on the deletion of kept downloads asks: those files go for good.
   const [confirmPurge, setConfirmPurge] = useState(false)
   const cache = useQuery({ queryKey: ['cache'], queryFn: () => api.get<Record<string, number>>('/api/cache') })
-  const sweep = useMutation({
-    mutationFn: () => api.post('/api/cache/sweep'),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['cache'] }),
+  // The budget is kept every two minutes by itself; this frees the space now, as the Downloads page's Clear does.
+  const [confirmClear, setConfirmClear] = useState(false)
+  const clear = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post<{ removed: number; freedBytes: number }>('/api/downloads/clear?scope=completed'),
+    onSuccess: () => {
+      setConfirmClear(false)
+      void qc.invalidateQueries({ queryKey: ['cache'] })
+      refreshDownloads(qc)
+    },
   })
   // Looked at first, deleted only once the list has been seen.
   const preview = useMutation({
@@ -794,7 +931,9 @@ function StorageTab() {
       qc.invalidateQueries({ queryKey: ['cache'] })
     },
   })
-  const found = preview.data
+  const found = useHeldData(preview)
+  const cleared = useHeldData(clear)
+  const removedOrphans = useHeldData(orphans)
 
   if (f.loading) return <Skeleton className="h-48 w-full" />
   if (f.failed) return f.failed
@@ -855,25 +994,37 @@ function StorageTab() {
         <Row
           label="In use"
           hint={
-            cache.data
-              ? `${bytes(Number(cache.data.bytes ?? 0))} cached · ${bytes(Number(cache.data.keptBytes ?? 0))} downloaded`
-              : 'Loading…'
+            clear.isError
+              ? (clear.error as Error).message
+              : cleared
+                ? cleared.removed > 0
+                  ? `Cleared ${cleared.removed} download${cleared.removed === 1 ? '' : 's'} · freed ${bytes(cleared.freedBytes)}`
+                  : "Nothing to clear: what's cached is playing, still downloading, or kept."
+                : cache.data
+                  ? `${bytes(Number(cache.data.bytes ?? 0))} cached · ${bytes(Number(cache.data.keptBytes ?? 0))} downloaded`
+                  : 'Loading…'
           }
         >
-          <button
-            onClick={() => sweep.mutate()}
-            disabled={sweep.isPending}
-            className={buttonClass()}
-          >
-            {sweep.isPending ? 'Sweeping…' : 'Sweep now'}
-          </button>
+          {confirmClear ? (
+            <ConfirmInline
+              label={clear.isPending ? 'Clearing…' : 'Clear cache'}
+              note="Streamed episodes go; what's playing or downloading, and downloads you keep, stay"
+              pending={clear.isPending}
+              onConfirm={() => clear.mutate()}
+              onCancel={() => setConfirmClear(false)}
+            />
+          ) : (
+            <button onClick={() => setConfirmClear(true)} className={buttonClass()}>
+              Clear cache
+            </button>
+          )}
         </Row>
         <Row
           label="Orphaned files"
           hint={
-            orphans.data
-              ? `Removed ${orphans.data.removed} · freed ${bytes(orphans.data.freedBytes)}${
-                  orphans.data.kept?.length ? ` · kept ${orphans.data.kept.length} now in use` : ''
+            removedOrphans
+              ? `Removed ${removedOrphans.removed} · freed ${bytes(removedOrphans.freedBytes)}${
+                  removedOrphans.kept?.length ? ` · kept ${removedOrphans.kept.length} now in use` : ''
                 }`
               : found
                 ? found.removed === 0
@@ -1000,6 +1151,7 @@ function DownloadsTab() {
           </Select>
         </Row>
         <PreferGroups f={f} />
+        <AvoidRows f={f} />
         {/* Was fixed at 3 GB, silently passing over remuxes on a line that could take them. */}
         <Row
           label="Largest automatic episode"
@@ -1020,9 +1172,24 @@ function DownloadsTab() {
         <Row label="Allow 10-bit H.264 (Hi10P)" hint="No hardware decodes it; expect high CPU." keywords="hi10p codec">
           <Switch on={f.get('quality.allow_hi10p')} onChange={(v) => f.set('quality.allow_hi10p', String(v))} />
         </Row>
+      </Section>
+
+      <Section title="Auto-download" hint="New episodes of the shows you follow, picked by the rules above." keywords="automatic">
         <Row label="Auto-download followed anime" hint="New episodes of shows you follow download by themselves." keywords="automatic new episodes">
           <Switch on={f.get('autodownload.enabled')} onChange={(v) => f.set('autodownload.enabled', String(v))} />
         </Row>
+        <Row
+          label="Wait for a better release"
+          hint={
+            (f.value('autodownload.wait_hours') || '0') === '0'
+              ? "Auto-download takes a new episode's first good release. A group's fixed v2 still replaces it."
+              : `Auto-download holds a new episode up to ${waitLabel(f.value('autodownload.wait_hours'))} for a preferred group or the top resolution, then takes the best there is. If that release turns up within two days, it replaces the episode while it's unwatched.`
+          }
+          keywords="wait upgrade preferred group better release v2 repack"
+        >
+          <WaitSelect value={f.value('autodownload.wait_hours') || '0'} onChange={(v) => f.set('autodownload.wait_hours', v)} />
+        </Row>
+        <AutoDownloadPreview />
       </Section>
 
       <Section title="Connection">
@@ -1200,11 +1367,245 @@ function TorrentNetworkRow({ f }: { f: ReturnType<typeof useFlag> }) {
   )
 }
 
-// Release groups to favour, typed as a comma list and stored as a JSON array.
+interface PreviewRow {
+  animeId: number
+  title: string
+  episode?: number
+  state: 'download' | 'wait' | 'blocked' | 'none' | 'have' | 'queued' | 'taken' | 'current'
+  release?: string
+  size?: number
+  reason?: string
+}
+
+function previewWords(row: PreviewRow): string {
+  switch (row.state) {
+    case 'download':
+      return `Would download ${row.release} · ${bytes(row.size ?? 0)}`
+    case 'wait':
+      return `Would hold it: ${row.reason}. Best so far: ${row.release}`
+    case 'blocked':
+      return `Left for you to choose: ${row.reason}`
+    case 'none':
+      return `Nothing to take: ${row.reason}`
+    case 'have':
+      return 'Already downloaded'
+    case 'queued':
+      return 'In the download queue'
+    case 'taken':
+      return 'Found before but not downloaded, and auto-download takes an episode once. Choose a release to get it.'
+    default:
+      return 'Up to date: nothing new has aired'
+  }
+}
+
+// What auto-download would take next, show by show, before it runs. Searching each show is all it does.
+function AutoDownloadPreview() {
+  const qc = useQueryClient()
+  const preview = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post<{ items: PreviewRow[] }>('/api/releases/preview'),
+  })
+  const pick = useMutation({
+    meta: { inline: true },
+    mutationFn: (p: { animeId: number; episode: number; infoHash: string; title: string }) =>
+      api.post('/api/download/release', p),
+    onSuccess: () => refreshDownloads(qc),
+  })
+  const [picking, setPicking] = useState<{ animeId: number; episode: number } | null>(null)
+  const rows = useHeldData(preview)?.items
+
+  return (
+    <>
+      <Row
+        label="Preview auto-download"
+        hint={
+          preview.isError
+            ? (preview.error as Error).message
+            : pick.isError
+              ? (pick.error as Error).message
+              : 'What it would take next for each show it follows, and why. Nothing is downloaded.'
+        }
+        keywords="auto download check dry run why"
+      >
+        <button onClick={() => preview.mutate()} disabled={preview.isPending} className={buttonClass()}>
+          {preview.isPending ? 'Searching…' : rows ? 'Preview again' : 'Preview'}
+        </button>
+      </Row>
+      {rows &&
+        (rows.length === 0 ? (
+          <p className="pb-3 text-sm text-base-400">No show you follow has auto-download on.</p>
+        ) : (
+          <ul className="divide-y divide-white/[0.06] pb-2">
+            {rows.map((row) => (
+              <li key={row.animeId} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
+                <div className="min-w-0 flex-1 basis-64">
+                  <p className="truncate text-sm text-base-100">
+                    {row.title}
+                    {row.episode ? <span className="text-base-400"> · Episode {row.episode}</span> : null}
+                  </p>
+                  <p className="text-xs text-base-400">{previewWords(row)}</p>
+                </div>
+                {row.episode && row.state !== 'have' && row.state !== 'current' && (
+                  <button
+                    onClick={() => setPicking({ animeId: row.animeId, episode: row.episode! })}
+                    className={cx(buttonClass(), 'pointer-coarse:min-h-11')}
+                  >
+                    Open picker
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        ))}
+      {picking && (
+        <ReleasePicker
+          animeId={picking.animeId}
+          episode={picking.episode}
+          purpose="download"
+          onClose={() => setPicking(null)}
+          onPick={(infoHash, title) => {
+            pick.mutate({ ...picking, infoHash, title })
+            setPicking(null)
+          }}
+        />
+      )}
+    </>
+  )
+}
+
 function PreferGroups({ f }: { f: ReturnType<typeof useFlag> }) {
+  return (
+    <ListPref
+      f={f}
+      setting="release.prefer_groups"
+      label="Preferred release groups"
+      hint="Comma separated, e.g. SubsPlease, Erai-raws. A match ranks the release higher."
+      placeholder="SubsPlease, Erai-raws"
+      keywords="fansub uploader"
+    />
+  )
+}
+
+// Never taken on their own; the picker still lists them, saying why, so one can be chosen by hand.
+function AvoidRows({ f }: { f: ReturnType<typeof useFlag> }) {
+  return (
+    <>
+      <ListPref
+        f={f}
+        setting="release.avoid_groups"
+        label="Avoided release groups"
+        hint="Comma separated. Never picked on their own; still in the release list to choose by hand."
+        placeholder="Group, Another"
+        keywords="block ban fansub uploader exclude"
+      />
+      <ListPref
+        f={f}
+        setting="release.exclude_terms"
+        label="Excluded words"
+        hint="Comma separated, e.g. x265 mini, Hindi Dub. A release with them in its name is never picked on its own."
+        placeholder="x265 mini, CamRip"
+        keywords="block filter exclude words terms"
+      />
+      <Row
+        label="Avoid low-quality groups"
+        hint={
+          f.get('release.avoid_lq')
+            ? "Groups on TRaSH Guides' low-quality list are never picked on their own."
+            : "Groups on TRaSH Guides' low-quality list rank below others of the same resolution."
+        }
+        keywords="trash guides lq low quality tier"
+      >
+        <Switch on={f.get('release.avoid_lq')} onChange={(v) => f.set('release.avoid_lq', String(v))} />
+      </Row>
+    </>
+  )
+}
+
+function SkippingSection({ f }: { f: ReturnType<typeof useFlag> }) {
+  const finder = useQuery({
+    queryKey: ['skip-finder'],
+    queryFn: () => api.get<{ available: boolean }>('/api/episode/skips/finder'),
+    staleTime: 10 * 60_000,
+  })
+  return (
+    <Section title="Skipping" hint="Opening and ending can be set per show on its watch page.">
+      <Row label="Skip opening" keywords="intro op">
+        <Switch on={f.get('playback.autoskip_op')} onChange={(v) => f.set('playback.autoskip_op', String(v))} />
+      </Row>
+      <Row label="Skip ending" keywords="outro ed credits">
+        <Switch on={f.get('playback.autoskip_ed')} onChange={(v) => f.set('playback.autoskip_ed', String(v))} />
+      </Row>
+      <Row
+        label="Keep the songs on a first and last episode"
+        hint="A first episode's opening plays even when skipping, and so does a finale's ending."
+        keywords="first episode finale opening ending songs"
+      >
+        <Switch
+          on={f.get('playback.skip_keep_bookends')}
+          onChange={(v) => f.set('playback.skip_keep_bookends', String(v))}
+        />
+      </Row>
+      <Row label="Skip recap scenes" hint="The part of an episode that retells the last one." keywords="recap previously">
+        <Switch on={f.get('playback.autoskip_recap')} onChange={(v) => f.set('playback.autoskip_recap', String(v))} />
+      </Row>
+      <Row
+        label="Skip previews"
+        hint="The next episode's preview after the ending, and the short eyecatch breaks."
+        keywords="preview next episode eyecatch"
+      >
+        <Switch on={f.get('playback.autoskip_preview')} onChange={(v) => f.set('playback.autoskip_preview', String(v))} />
+      </Row>
+      <ListPref
+        f={f}
+        setting="playback.skip_chapters"
+        label="More chapters to skip"
+        hint="Comma separated. A chapter whose name has one of these in it is always skipped."
+        placeholder="Sponsor, Logo"
+        keywords="chapters skip names custom"
+      />
+      <Row
+        label="Find openings and endings"
+        hint={
+          finder.data?.available === false
+            ? "This computer's ffmpeg can't compare episodes' sound (it lacks chromaprint), so only chapters and AniSkip are used."
+            : "When neither the file nor AniSkip knows them, Yoru finds them in the sound two episodes share. The player's skip times menu can mark your own."
+        }
+        keywords="detect find intro chromaprint"
+      >
+        <span className={cx('text-xs', finder.data?.available === false ? 'text-amber-300' : 'text-base-400')}>
+          {finder.isPending ? '' : finder.data?.available ? 'Available' : 'Unavailable'}
+        </span>
+      </Row>
+      <Row
+        label="Share skip times with AniSkip"
+        hint="Gives AniSkip the times it lacks (from chapters and your marks) and votes on its own, under an anonymous ID. Only the show, episode and times are sent."
+        keywords="aniskip share submit vote contribute"
+      >
+        <Switch on={f.get('skips.share')} onChange={(v) => f.set('skips.share', String(v))} />
+      </Row>
+    </Section>
+  )
+}
+
+// A comma-separated list setting, saved as a JSON array when the field is left.
+function ListPref({
+  f,
+  setting,
+  label,
+  hint,
+  placeholder,
+  keywords,
+}: {
+  f: ReturnType<typeof useFlag>
+  setting: string
+  label: string
+  hint: string
+  placeholder: string
+  keywords: string
+}) {
   const stored: string[] = (() => {
     try {
-      const parsed = JSON.parse(f.value('release.prefer_groups') || '[]')
+      const parsed = JSON.parse(f.value(setting) || '[]')
       return Array.isArray(parsed) ? parsed : []
     } catch {
       return []
@@ -1222,23 +1623,19 @@ function PreferGroups({ f }: { f: ReturnType<typeof useFlag> }) {
   // Its own mutation, so the Saved hint is this field's and not every switch's on the page.
   const setGroups = useSetPref()
   const save = () => {
-    const groups = text.split(',').map((g) => g.trim()).filter(Boolean)
-    if (groups.join(',') !== stored.join(',')) setGroups.mutate({ key: 'release.prefer_groups', value: JSON.stringify(groups) })
+    const items = text.split(',').map((g) => g.trim()).filter(Boolean)
+    if (items.join(',') !== stored.join(',')) setGroups.mutate({ key: setting, value: JSON.stringify(items) })
   }
 
   return (
-    <Row
-      label="Preferred release groups"
-      hint="Comma separated, e.g. SubsPlease, Erai-raws. A match ranks the release higher."
-      keywords="fansub uploader"
-    >
+    <Row label={label} hint={hint} keywords={keywords}>
       <TextInput
         value={text}
         onChange={(e) => setText(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-        placeholder="SubsPlease, Erai-raws"
-        aria-label="Preferred release groups"
+        placeholder={placeholder}
+        aria-label={label}
         className="w-56"
       />
       <SaveHint state={setGroups} />
@@ -1301,6 +1698,7 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
       ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['bookmarks'] }),
   })
+  const favs = useHeldData(importFavs)
 
   const status = tracker.reconnect
     ? `${tracker.name} refused the saved login. Reconnect to resume syncing.`
@@ -1382,10 +1780,10 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
         </div>
       </Row>
 
-      {importFavs.data && (
+      {favs && (
         <p className="px-3 pb-2 text-xs text-base-400">
-          {importFavs.data.favourited} favourited of {importFavs.data.found} on MyAnimeList
-          {importFavs.data.unmatched > 0 && `, ${importFavs.data.unmatched} not in the catalogue`}.
+          {favs.favourited} favourited of {favs.found} on MyAnimeList
+          {favs.unmatched > 0 && `, ${favs.unmatched} not in the catalogue`}.
         </p>
       )}
       {importFavs.isError && (
@@ -1514,7 +1912,7 @@ function ImportRow() {
     },
   })
 
-  const result = sync.data as { entries?: number; removed?: number } | undefined
+  const result = useHeldData(sync) as { entries?: number; removed?: number } | undefined
 
   return (
     <div className="space-y-2 rounded-lg border border-base-850 bg-base-950/40 p-3">
@@ -1856,6 +2254,7 @@ function NotificationsTab() {
 function DevicesTab() {
   const qc = useQueryClient()
   const access = useAccess()
+  const proxy = access.data?.host ? access.data.proxy : undefined
 
   // Moves the listener there and then, so the phone can be tried immediately.
   const setNetwork = useMutation({
@@ -1892,7 +2291,7 @@ function DevicesTab() {
         <p className="text-sm text-recap">{(access.error as Error).message}</p>
       ) : !access.data?.reachable ? (
         <p className="text-sm text-base-400">
-          Only this machine can reach Yoru right now.
+          {proxy ? 'Only this machine, and the proxy on it, can reach Yoru.' : 'Only this machine can reach Yoru right now.'}
         </p>
       ) : access.data.urls.length === 0 ? (
         <p className="text-sm text-base-300">
@@ -1918,11 +2317,31 @@ function DevicesTab() {
           </div>
         </div>
       )}
+      {proxy && <ProxyRow proxy={proxy} token={access.data?.token ?? ''} />}
       {access.data?.reachable && access.data.host && <FirewallPanel />}
-      {access.data?.reachable && access.data.host && <DeviceApproval />}
+      {(access.data?.reachable || proxy) && access.data?.host && <DeviceApproval />}
       {access.data?.reachable && access.data.host && <InstallAsApp />}
-      {access.data?.reachable && access.data.host && <RevokeDevices />}
+      {(access.data?.reachable || proxy) && access.data?.host && <RevokeDevices />}
     </Section>
+  )
+}
+
+// Devices that come through a proxy on this machine pair with the link like any other.
+function ProxyRow({ proxy, token }: { proxy: NonNullable<AccessState['proxy']>; token: string }) {
+  const link = `${proxy.site}/?token=${token}`
+  return (
+    <Row
+      label="Behind a proxy"
+      hint={`Devices also come through a proxy on this computer, last ${proxy.client ? `from ${proxy.client} ` : ''}${relativeTime(proxy.seen)}. Each opens ${proxy.site ? 'this link' : `the proxy's address with ?token=${token} added`} once to pair.`}
+      stacked={!!proxy.site}
+    >
+      {proxy.site && (
+        <div className="flex min-w-0 items-center gap-2">
+          <code className="min-w-0 truncate text-xs text-accent-400">{link}</code>
+          <CopyButton text={link} />
+        </div>
+      )}
+    </Row>
   )
 }
 
@@ -1933,6 +2352,8 @@ interface HTTPSStatus {
   state: 'off' | 'working' | 'ready' | 'error'
   problem?: string
   expires?: number
+  /** This network's DNS answers the name with this PC's address; absent until asked. */
+  atHome?: boolean
 }
 
 // A phone only installs Yoru as an app over HTTPS: a free DuckDNS name and a certificate Yoru fetches for it.
@@ -1961,22 +2382,34 @@ function InstallAsApp() {
     // The pairing links switch to https once the certificate is in.
     onSettled: () => qc.invalidateQueries({ queryKey: ['access'] }),
   })
+  const check = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post<HTTPSStatus>('/api/access/https/check'),
+    onSuccess: (status) => qc.setQueryData(['access-https'], status),
+    // The QR code goes back to the HTTPS link when the name answers.
+    onSettled: () => qc.invalidateQueries({ queryKey: ['access'] }),
+  })
   const state = https.data?.state ?? 'off'
+  const blocked = state === 'ready' && https.data?.atHome === false
   useEffect(() => {
     if (state === 'ready') void qc.invalidateQueries({ queryKey: ['access'] })
   }, [state, qc])
 
   const hint = save.isError
     ? (save.error as Error).message
-    : state === 'ready'
-      ? `Ready at https://${https.data?.domain}. Open it on the phone and choose Install app.${
-          https.data?.expires ? ` Renews itself; current certificate ends ${relativeTime(https.data.expires)}.` : ''
-        }`
-      : state === 'working'
-        ? `Getting a certificate for ${https.data?.domain}. This takes a minute or two.`
-        : state === 'error'
-          ? `Could not get a certificate yet: ${https.data?.problem}. Yoru keeps trying.`
-          : 'Phones install Yoru as an app only over HTTPS. Make a free name at duckdns.org and paste it and its token here.'
+    : check.isError
+      ? (check.error as Error).message
+      : blocked
+        ? `Your router won't answer ${https.data?.domain} with this PC's address (DNS rebind protection), so phones on this network can't open it. Allow the name in the router's rebind exceptions, then check again. Until then the QR code uses the plain link.`
+        : state === 'ready'
+          ? `Ready at https://${https.data?.domain}. Open it on the phone and choose Install app.${
+              https.data?.expires ? ` Renews itself; current certificate ends ${relativeTime(https.data.expires)}.` : ''
+            }`
+          : state === 'working'
+            ? `Getting a certificate for ${https.data?.domain}. This takes a minute or two.`
+            : state === 'error'
+              ? `Could not get a certificate yet: ${https.data?.problem}. Yoru keeps trying.`
+              : 'Phones install Yoru as an app only over HTTPS. Make a free name at duckdns.org and paste it and its token here.'
 
   return (
     <>
@@ -1993,7 +2426,12 @@ function InstallAsApp() {
             />
           </div>
         ) : (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
+            {blocked && (
+              <button onClick={() => check.mutate()} disabled={check.isPending} className={buttonClass('primary')}>
+                {check.isPending ? 'Checking…' : 'Check again'}
+              </button>
+            )}
             <button
               onClick={() => {
                 setDomain(https.data?.domain ?? '')
@@ -2085,7 +2523,7 @@ function DeviceApproval() {
             // The answer is inline-only, so a failed one says so on its own row.
             decide.isError && decide.variables?.id === d.id
               ? (decide.error as Error).message
-              : `${d.addr} · ${DEVICE_STATUS[d.status]} · asked ${relativeTime(d.requestedAt)}`
+              : `${d.addr || 'through a proxy'} · ${DEVICE_STATUS[d.status]} · asked ${relativeTime(d.requestedAt)}`
           }
         >
           <div className="flex flex-wrap justify-end gap-2">
@@ -2467,15 +2905,36 @@ function AboutTab() {
   )
 }
 
-// Where the anime information comes from, credited as manami's Open Database License asks.
+// Every source the app's information comes from, credited as manami's Open Database License asks; TheTVDB's
+// terms ask for a link to its site where its data shows.
+const SOURCES: ReadonlyArray<{ name: string; gives: string; site?: string }> = [
+  { name: 'AniList', gives: 'Show details, lists and schedules' },
+  { name: 'MyAnimeList, through Jikan and Tenrai', gives: 'Episode titles, filler and recap flags, cast and staff' },
+  { name: 'TheTVDB and AniDB, through ani.zip', gives: 'Episode numbering and pictures', site: 'https://thetvdb.com' },
+  { name: 'AniSkip', gives: 'Opening and ending times' },
+  { name: 'SeaDex', gives: 'The best release of a show' },
+  { name: 'TRaSH Guides', gives: 'Release group grades (MIT License)' },
+  { name: 'AniFiller and Anime Filler List', gives: 'Filler episodes' },
+  { name: "manami-project's anime-offline-database", gives: 'Anime names and the links between sites (Open Database License)' },
+  { name: "nattadasu's animeApi", gives: 'The links between sites' },
+]
+
 function CreditsSection() {
   return (
-    <Section title="Data" hint="Where Yoru's anime information comes from." keywords="credits license manami animeapi anilist">
-      <p className="py-2 text-sm text-base-300">
-        Show details, lists and schedules come from AniList. Anime names and the links between sites come from
-        manami-project's anime-offline-database (Open Database License) and nattadasu's animeApi. Yoru is not
-        affiliated with AniList or MyAnimeList.
-      </p>
+    <Section
+      title="Data"
+      hint="Where Yoru's anime information comes from. Yoru isn't affiliated with any of them."
+      keywords="credits license sources"
+    >
+      {SOURCES.map((s) => (
+        <Row key={s.name} label={s.name} hint={s.gives}>
+          {s.site && (
+            <a href={s.site} target="_blank" rel="noopener noreferrer" className="text-sm text-accent-300 hover:underline">
+              {new URL(s.site).host}
+            </a>
+          )}
+        </Row>
+      ))}
     </Section>
   )
 }

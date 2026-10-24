@@ -163,8 +163,9 @@ check(tips.join(' | ') && /\(K\)/.test(tips[0]) && /\(J\)/.test(tips[1]) && /\(L
   'player buttons name their key in the tooltip', tips.join(' | '))
 check(/\(N\)/.test((await tip('Next episode')) ?? ''), 'the Next episode button names N', await tip('Next episode'))
 await page.locator('video').first().hover()
-await page.getByRole('button', { name: 'Keyboard shortcuts', exact: true }).click()
-check(await help.waitFor({ timeout: 3000 }).then(() => true, () => false), 'the keyboard button in the player bar opens the list')
+await page.getByRole('button', { name: /^Player settings/ }).click()
+await page.getByRole('menuitem', { name: /^Keyboard shortcuts/ }).click()
+check(await help.waitFor({ timeout: 3000 }).then(() => true, () => false), "the player's settings menu opens the list")
 await page.keyboard.press('Escape')
 await sleep(300)
 

@@ -114,16 +114,26 @@ func TestJumpQueueSkipsWhatItCancelled(t *testing.T) {
 	pc.queue.rate = perChunks(32)
 	pc.updateRequests()
 	qt.Assert(t, qt.Equals(pc.requestState.Requests.GetCardinality(), 32))
-	// The peer proves quicker, so its queue has room when a reader lands far off.
+	// The peer proves quicker, so its queue has room when a reader lands far off. Pieces are asked shuffled,
+	// so far off is one the first pass didn't ask for: one already asked has nothing to jump.
 	pc.queue.rate = perChunks(64)
-	const far = 60
+	far := -1
+	for i := pieces - 1; i >= 0 && far < 0; i-- {
+		asked := false
+		for r := range RequestIndex(4) {
+			asked = asked || pc.requestState.Requests.Contains(RequestIndex(i)*4+r)
+		}
+		if !asked {
+			far = i
+		}
+	}
 	tor.piece(far).priority = PiecePriorityNow
 	tor.updatePiecePriority(far, "test")
 	pc.updateRequests()
 
 	qt.Check(t, qt.Equals(pc.requestState.Cancelled.GetCardinality(), 32))
 	for r := range RequestIndex(4) {
-		qt.Check(t, qt.IsTrue(pc.requestState.Requests.Contains(far*4+r)))
+		qt.Check(t, qt.IsTrue(pc.requestState.Requests.Contains(RequestIndex(far)*4+r)))
 	}
 	pc.requestState.Requests.Iterate(func(r RequestIndex) bool {
 		qt.Check(t, qt.IsFalse(pc.requestState.Cancelled.Contains(r)), qt.Commentf("request %d", r))

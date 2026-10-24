@@ -126,6 +126,27 @@ var specs = []spec{
 		},
 	},
 	{
+		// The user's own: still offered in the picker with the reason, never taken on its own.
+		name: "avoided", tier: tierPolicy,
+		reject: func(c Candidate, prefs Preferences) string {
+			for _, g := range prefs.AvoidGroups {
+				if g = strings.TrimSpace(g); g != "" && strings.EqualFold(g, c.Release.Group) {
+					return "avoided group " + c.Release.Group
+				}
+			}
+			title := strings.ToLower(c.Torrent.Title)
+			for _, w := range prefs.ExcludeTerms {
+				if w = strings.TrimSpace(w); w != "" && strings.Contains(title, strings.ToLower(w)) {
+					return fmt.Sprintf("title has the excluded words %q", w)
+				}
+			}
+			if prefs.AvoidLQ && lowQualityGroup(c) {
+				return "low-quality group on TRaSH Guides' list"
+			}
+			return ""
+		},
+	},
+	{
 		name: "size", tier: tierPolicy,
 		reject: func(c Candidate, prefs Preferences) string {
 			if prefs.MaxAutoBytes > 0 && c.EpisodeBytes() > c.SizeLimit(prefs) {

@@ -34,6 +34,13 @@ func (s *Store) ShownTitle(ctx context.Context, animeID int) string {
 	return PickTitle(s.TitleMode(ctx, animeID), romaji, english)
 }
 
+// BannerOf is the show's wide picture, else its cover, for an alert; "" when there's neither.
+func (s *Store) BannerOf(ctx context.Context, animeID int) string {
+	var url string
+	s.r.QueryRowContext(ctx, `SELECT coalesce(banner_url, cover_url, '') FROM anime WHERE id = ?`, animeID).Scan(&url)
+	return url
+}
+
 // TitleMode reads the display preference, per anime where one is set.
 func (s *Store) TitleMode(ctx context.Context, animeID int) string {
 	prefs, err := s.Prefs(ctx, animeID)

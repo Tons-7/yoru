@@ -146,7 +146,7 @@ function UpNextCard({ item, place }: { item: UpNextItem; place: number }) {
       </Link>
       <p className="mt-0.5 line-clamp-1 text-xs text-base-500">
         Episode {item.episode}
-        {item.episodeTitle ? ` · ${item.episodeTitle}` : ''}
+        {item.episodeTitle && !item.spoiler ? ` · ${item.episodeTitle}` : ''}
       </p>
     </div>
   )

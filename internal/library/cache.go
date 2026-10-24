@@ -538,6 +538,8 @@ type Progress struct {
 	// Mbps and Peers are what tell a slow download from a stalled one.
 	Mbps  float64 `json:"mbps"`
 	Peers int     `json:"peers"`
+	// Warning is a failed disk write the engine retries by itself: the row says so, not a slow swarm.
+	Warning string `json:"warning,omitempty"`
 }
 
 // Pause stops fetching without discarding what is already on disk. Resume starts it again.
@@ -656,7 +658,8 @@ func (c *Cache) Progress(ctx context.Context) (map[string]Progress, error) {
 			Finished: stats.Finished,
 			Checking: stats.Checking(),
 			// No live section means the engine is not working on it.
-			Paused: stats.Live == nil && !stats.Finished && !stats.Checking(),
+			Paused:  stats.Live == nil && !stats.Finished && !stats.Checking(),
+			Warning: stats.Warning,
 		}
 		if stats.Live != nil {
 			p.Mbps = megabits(stats.Live.DownloadSpeed.Mbps)

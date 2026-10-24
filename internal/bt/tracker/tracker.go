@@ -62,7 +62,6 @@ func (me Announce) Do() (res AnnounceResponse, err error) {
 		Http: trHttp.NewClientOpts{
 			Proxy:       me.HttpProxy,
 			DialContext: me.DialContext,
-			ServerName:  me.ServerName,
 		},
 		UdpNetwork:   me.UdpNetwork,
 		Logger:       me.Logger.WithContextValue(fmt.Sprintf("tracker client for %q", me.TrackerUrl)),

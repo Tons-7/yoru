@@ -83,6 +83,28 @@ func TestKeysAndVAPID(t *testing.T) {
 }
 
 // Send reaches every device, encrypted with the declarative payload, and forgets an endpoint that is gone.
+// Safari reads the declarative part as documented, badge and all; the episode and picture ride beside it.
+func TestMessageKeepsTheDeclarativePartPlain(t *testing.T) {
+	msg := message("https://yoru.example/", Alert{Title: "Frieren", Body: "Episode 6 is available", Tag: "yoru-9",
+		Path: "/watch/1/6", Image: "https://img.example/b.jpg", Badge: 3, Actions: []string{"download", "upnext"}, AnimeID: 1, Episode: 6})
+	note := msg["notification"].(map[string]any)
+	if note["navigate"] != "https://yoru.example/watch/1/6" || note["app_badge"] != "3" {
+		t.Errorf("notification = %v", note)
+	}
+	for _, key := range []string{"image", "actions", "data"} {
+		if _, ok := note[key]; ok {
+			t.Errorf("%q in the declarative part, which documents no such key", key)
+		}
+	}
+	if y := msg["yoru"].(map[string]any); y["animeId"] != 1 || y["episode"] != 6 || y["image"] != "https://img.example/b.jpg" ||
+		len(y["actions"].([]string)) != 2 {
+		t.Errorf("yoru = %v", y)
+	}
+	if _, ok := message("https://yoru.example", Alert{Title: "Test"})["yoru"]; ok {
+		t.Error("an alert with no episode or picture carried Yoru's part")
+	}
+}
+
 func TestSendDeliversAndForgetsGoneDevices(t *testing.T) {
 	conn, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {

@@ -17,7 +17,20 @@ var Defaults = map[string]string{
 	"playback.autoplay":    "false",
 	"playback.autoskip_op": "false",
 	"playback.autoskip_ed": "false",
-	"playback.autonext":    "false",
+	// Recaps of the last episode, and the next one's preview with the eyecatch bumpers.
+	"playback.autoskip_recap":   "false",
+	"playback.autoskip_preview": "false",
+	// A first opening and a finale's ending play even when skipping: one is new, the other often its own.
+	"playback.skip_keep_bookends": "true",
+	// More chapter names to always skip, a JSON list, matched anywhere in a chapter's title.
+	"playback.skip_chapters": `[]`,
+	// Give AniSkip the times it lacks and vote on its own; off until asked, as it sends to a third party.
+	"skips.share":       "false",
+	"playback.autonext": "false",
+	// Auto next asks "Still watching?" after this many episodes it started untouched; 0 never asks.
+	"playback.still_watching": "3",
+	// Unwatched episodes past the next keep their titles, synopses and stills hidden (see spoilers.go).
+	"display.spoilers": SpoilersAfterNext,
 	// Auto-next and prefetch step over filler and recap episodes.
 	"playback.skip_filler": "false",
 	// Dialogue lifted over music and effects (off, medium, high); loud and quiet evened out; a little of
@@ -51,6 +64,9 @@ var Defaults = map[string]string{
 	"window.mode": "fullscreen",
 	// Closing the window: Yoru exits ("exit"), or keeps running in the tray ("tray").
 	"window.on_close": "exit",
+	// The computer stays awake while another device plays, and while downloads move; the lid still sleeps it.
+	"power.awake_watching":    "true",
+	"power.awake_downloading": "true",
 
 	"quality.ladder": `["1080p:BD:HEVC:10","1080p:BD","1080p:WEB","720p"]`,
 	// "best", or "720p"/"480p": the best release up to that, a bigger one only when nothing fits.
@@ -59,6 +75,15 @@ var Defaults = map[string]string{
 	"quality.allow_hi10p":    "false",
 	// Release groups to favour, as a JSON array; a match earns a scoring bonus.
 	"release.prefer_groups": `[]`,
+	// Groups and title words never picked on their own (JSON arrays); they stay in the picker, with the reason.
+	"release.avoid_groups":  `[]`,
+	"release.exclude_terms": `[]`,
+	// TRaSH Guides' low-quality groups rank last within a resolution; with this on, they're never picked alone.
+	"release.avoid_lq": "false",
+	// Per show only: an episode to download when the release watch finds it, without auto-downloading the rest.
+	"autodownload.want": "",
+	// Per show only: the SeaDex release offered over the kept copy that the user turned down.
+	"seadex.dismissed": "",
 
 	"cache.budget_bytes":  "5368709120",
 	"cache.prefetch_next": "false",
@@ -93,6 +118,9 @@ var Defaults = map[string]string{
 	"notify.poll_seconds": "1800",
 
 	"autodownload.enabled": "false",
+	// Hours a new episode is held for a preferred group or a higher resolution; a better one within a day
+	// then replaces it while unwatched. 0 takes the first acceptable release.
+	"autodownload.wait_hours": "0",
 }
 
 // Anime4K's six chains by source quality, and five CNN sizes, each doubling GPU cost.
@@ -121,8 +149,8 @@ func (p Prefs) String(key string) string {
 func (p Prefs) Bool(key string) bool { return p.String(key) == "true" }
 
 func (p Prefs) Int(key string) int {
-	n, _ := strconv.ParseInt(p.String(key), 10, 64)
-	return int(n)
+	n, _ := strconv.Atoi(p.String(key))
+	return n
 }
 
 func (p Prefs) Int64(key string) int64 {

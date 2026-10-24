@@ -10,9 +10,6 @@ Installing and updating want different things:
   yoru-<version>-<os>-<arch>.zip The macOS and Linux binaries, which their updaters fetch.
   Yoru-<version>-mac-<arch>.zip  The macOS program as Yoru.app, and install-mac.sh, which installs it
                                  (`curl … | sh`: fetched by curl it carries no quarantine flag).
-  kuro-<version>-update.zip      The same program as kuro.exe, and kuro-<version>-<os>-<arch>.zip as kuro:
-                                 versions from before the rename ask for these by name. Once running, the
-                                 program renames itself to yoru.exe and moves the data folder over.
   SHA256SUMS.txt                 The updater refuses a zip that does not match.
   SHA256SUMS.txt.sig             Its ed25519 signature; the updater refuses a release without one.
 
@@ -74,7 +71,7 @@ $platforms = @('darwin/arm64', 'darwin/amd64', 'linux/amd64', 'linux/arm64')
 function Write-Step($message) { Write-Host "==> $message" -ForegroundColor Cyan }
 function Write-Note($message) { Write-Host "    $message" -ForegroundColor DarkGray }
 
-# One zip from named files, each written under the name given: the bridge zips hold the program as kuro.
+# One zip from named files, each written under the name given.
 function New-Zip($zip, [hashtable]$entries) {
     $dir = Join-Path $staging ([Guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -121,9 +118,6 @@ Settings -> About. Only yoru.exe is replaced; the downloaded programs, the
 episode cache and your settings stay. To update by hand, replace yoru.exe,
 never the whole folder.
 
-Used kuro before? Yoru is its new name. Put yoru.exe in kuro's folder in place of
-kuro.exe and run it: your history, library and settings come along.
-
 Connecting an AniList account is optional and needs a client id of your own;
 config.toml, written on first run, says how.
 "@
@@ -163,9 +157,6 @@ Settings -> About. Only the yoru program is replaced; the downloaded programs,
 the episode cache and your settings stay. To update by hand, replace the yoru
 file, never the whole folder.
 
-Used kuro before? Yoru is its new name. Put yoru in kuro's folder in place of
-kuro and run it: your history, library and settings come along.
-
 Connecting an AniList account is optional and needs a client id of your own;
 config.toml, written on first run, says how.
 "@
@@ -186,8 +177,6 @@ try {
     Write-Step 'update'
     $updateZip = Join-Path $OutDir "yoru-$Version-update.zip"
     New-Zip $updateZip @{ 'yoru.exe' = $exe }
-    $bridgeZips = @(Join-Path $OutDir "kuro-$Version-update.zip")
-    New-Zip $bridgeZips[0] @{ 'kuro.exe' = $exe }
 
     # Compress-Archive drops the executable bit, so unzipped on a Mac or Linux the program needed chmod.
     $unixzip = Join-Path $staging 'unixzip.exe'
@@ -215,9 +204,6 @@ try {
             Write-Note ("{0} ({1:N1} MB)" -f (Split-Path $appZip -Leaf), ((Get-Item $appZip).Length / 1MB))
             $appZips += $appZip
         }
-        $bridge = Join-Path $OutDir "kuro-$Version-$goos-$goarch.zip"
-        New-Zip $bridge @{ 'kuro' = $bin }
-        $bridgeZips += $bridge
     }
 
     Write-Step 'mac install script'
@@ -229,7 +215,7 @@ try {
 
     Write-Step 'checksums'
     $sums = Join-Path $OutDir 'SHA256SUMS.txt'
-    $lines = foreach ($zip in @($fullZip, $updateZip) + $platformZips + $appZips + $bridgeZips + @($installer)) {
+    $lines = foreach ($zip in @($fullZip, $updateZip) + $platformZips + $appZips + @($installer)) {
         "{0}  {1}" -f (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower(), (Split-Path $zip -Leaf)
     }
     # LF and no BOM: the updater reads it byte for byte.
@@ -251,10 +237,10 @@ try {
 # A secret shipped by accident can't be unshipped: stop on any zip entry but the program, README, license.
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Write-Host ''
-$allowed = @('yoru.exe', 'yoru', 'kuro.exe', 'kuro', 'README.txt', 'LICENSE.md',
+$allowed = @('yoru.exe', 'yoru', 'README.txt', 'LICENSE.md',
     'Yoru.app/Contents/MacOS/yoru', 'Yoru.app/Contents/Info.plist', 'Yoru.app/Contents/Resources/yoru.icns',
     'Yoru.app/Contents/Resources/LICENSE.md')
-foreach ($zip in @($fullZip, $updateZip) + $platformZips + $appZips + $bridgeZips) {
+foreach ($zip in @($fullZip, $updateZip) + $platformZips + $appZips) {
     Write-Host "  $(Split-Path $zip -Leaf)" -ForegroundColor Green
     $archive = [IO.Compression.ZipFile]::OpenRead($zip)
     try {
@@ -274,7 +260,7 @@ if ($Publish) {
     Write-Step "publish v$Version"
     if (-not $Notes) { $Notes = "Yoru $Version" }
     $notesArgs = if ($NotesFile) { @('--notes-file', (Resolve-Path $NotesFile).Path) } else { @('--notes', $Notes) }
-    gh release create "v$Version" $fullZip $updateZip @platformZips @appZips @bridgeZips $installer $sums $sig `
+    gh release create "v$Version" $fullZip $updateZip @platformZips @appZips $installer $sums $sig `
         --repo Tons-7/yoru --title "Yoru $Version" @notesArgs
     if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
     Write-Host "published https://github.com/Tons-7/yoru/releases/tag/v$Version" -ForegroundColor Green

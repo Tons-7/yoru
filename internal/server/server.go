@@ -70,11 +70,23 @@ type Server struct {
 	// Other devices playing, by address, for Exit Yoru to say what it would stop.
 	watchingMu sync.Mutex
 	watching   map[string]watching
+	// Streams TVs and player apps read through their links: how many are open, and when the last one ended.
+	linkReads  atomic.Int32
+	linkReadAt atomic.Int64
 
 	// Extracted fonts per stream session, filled in the background so a stream needn't wait.
 	fontsMu  sync.Mutex
 	fonts    map[string][]transcode.FontFile
 	fontJobs map[string]struct{}
+
+	// When each episode readied the one after it, by session id (ready.go).
+	readyMu  sync.Mutex
+	readying map[string]time.Time
+
+	// Shows whose skips are being found, and when each episode was last tried (skipfind.go).
+	findMu    sync.Mutex
+	finding   map[int]bool
+	findTried map[string]time.Time
 
 	// Version lookups in flight, so a polling setup page cannot stack them.
 	latestMu   sync.Mutex
@@ -94,6 +106,9 @@ type Server struct {
 	// Rotated from a handler while the guard reads it.
 	tokenMu sync.RWMutex
 	token   string
+	// The last request a proxy on this machine passed on, for Settings to say devices come that way.
+	proxyMu sync.Mutex
+	proxy   proxySeen
 	// grantSecret signs player-app links (see external.go); new each run, so a restart ends them.
 	grantSecret []byte
 	// grantEpoch is in the signing key too: denying or removing a device ends the links made so far.
@@ -182,6 +197,9 @@ func New(d Deps) *Server {
 		grantSecret: randomBytes(32),
 		fonts:       map[string][]transcode.FontFile{},
 		fontJobs:    map[string]struct{}{},
+		readying:    map[string]time.Time{},
+		finding:     map[int]bool{},
+		findTried:   map[string]time.Time{},
 		deriving:    map[int]struct{}{},
 	}
 	s.downloader.WhenArrived(s.watchedArrived)
@@ -275,10 +293,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/app/exit", hostOnly(s.appExit))
 	mux.HandleFunc("POST /api/app/show", hostOnly(s.appShow))
 	mux.HandleFunc("GET /api/app/activity", hostOnly(s.appActivity))
+	mux.HandleFunc("GET /api/app/startup", hostOnly(s.appStartup))
+	mux.HandleFunc("POST /api/app/startup", hostOnly(s.appStartup))
 	mux.HandleFunc("GET /api/log", hostOnly(s.logText))
 	mux.HandleFunc("POST /api/log/folder", hostOnly(s.logFolder))
 	mux.HandleFunc("POST /api/prepare", s.prepare)
 	mux.HandleFunc("GET /api/episode/skips", s.skips)
+	mux.HandleFunc("POST /api/episode/skips/mark", s.markSkip)
+	mux.HandleFunc("POST /api/episode/skips/forget", s.forgetSkipMarks)
+	mux.HandleFunc("POST /api/episode/skips/vote", s.voteSkip)
+	mux.HandleFunc("GET /api/episode/skips/finder", s.skipFinder)
 	mux.HandleFunc("POST /api/watched", s.setWatched)
 	mux.HandleFunc("POST /api/status", s.setStatus)
 	mux.HandleFunc("DELETE /api/status/{id}", s.removeStatus)
@@ -312,8 +336,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/downloads/{hash}/files/{index}/keep", s.keepFile)
 	mux.HandleFunc("POST /api/downloads/{hash}/files/{index}/unkeep", s.unkeepFile)
 	mux.HandleFunc("POST /api/downloads/clear", s.clearDownloads)
+	mux.HandleFunc("GET /api/better-copies", s.betterCopies)
+	mux.HandleFunc("POST /api/better-copies/{anime}/replace", s.replaceWithBetter)
+	mux.HandleFunc("POST /api/better-copies/{anime}/dismiss", s.dismissBetter)
 	mux.HandleFunc("GET /api/cache", s.cacheStatus)
-	mux.HandleFunc("POST /api/cache/sweep", s.sweepCache)
 	mux.HandleFunc("GET /api/cache/orphans", s.cleanOrphans)
 	mux.HandleFunc("POST /api/cache/orphans", s.cleanOrphans)
 
@@ -348,7 +374,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/notifications/read", s.markRead)
 	mux.HandleFunc("DELETE /api/notifications", s.deleteNotification)
 	mux.HandleFunc("POST /api/follow", s.setFollow)
+	mux.HandleFunc("POST /api/anime/{id}/notify", s.setNotify)
+	mux.HandleFunc("POST /api/anime/{id}/want", s.wantEpisode)
 	mux.HandleFunc("POST /api/releases/check", s.checkReleases)
+	mux.HandleFunc("GET /api/releases/waiting", s.releaseWaits)
+	mux.HandleFunc("POST /api/releases/preview", s.previewReleases)
+	mux.HandleFunc("POST /api/releases/waiting/{anime}/{episode}", s.takeWaitingNow)
 
 	mux.HandleFunc("GET /api/mal", s.malStatus)
 	mux.HandleFunc("GET /api/mal/auth/login", hostOnly(s.malLogin))
@@ -367,6 +398,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/access/approval", hostOnly(s.setApproval))
 	mux.HandleFunc("GET /api/access/https", hostOnly(s.accessHTTPS))
 	mux.HandleFunc("POST /api/access/https", hostOnly(s.setAccessHTTPS))
+	mux.HandleFunc("POST /api/access/https/check", hostOnly(s.checkAccessHTTPS))
 	mux.HandleFunc("POST /api/access/rotate", hostOnly(s.rotateAccess))
 	mux.HandleFunc("POST /api/access/network", hostOnly(s.setAccessNetwork))
 	mux.HandleFunc("GET /api/access/firewall", hostOnly(s.accessFirewall))

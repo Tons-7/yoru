@@ -63,6 +63,7 @@ export function ReleasedCard({ item, tags, addable }: { item: ScheduleItem; tags
 
             <div className="absolute inset-x-0 bottom-0 p-2 text-[11px] text-base-300">
               <span className="font-medium text-white">Ep {item.episode}</span> · {relativeTime(item.airingAt)}
+              {item.out && <span className="font-medium text-accent-300"> · Out</span>}
             </div>
 
             <div className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover/released:opacity-100 [@media(hover:none)]:opacity-100">

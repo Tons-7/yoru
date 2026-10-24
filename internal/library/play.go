@@ -1135,8 +1135,10 @@ func (p *Playback) launch(ctx context.Context, req PlayRequest, s *Session) erro
 
 	// mpv only auto-skips from these, so they have to be resolved here. Every range becomes a chapter;
 	// only the kinds Settings ask for are skipped, as the browser player does.
-	if ranges, duration := p.skipRanges(ctx, req, opts.URL); len(ranges) > 0 {
-		opts.SkipRanges = autoSkipped(ranges, prefs.Bool("playback.autoskip_op"), prefs.Bool("playback.autoskip_ed"))
+	var ending float64
+	if ranges, duration := p.skipRanges(ctx, req, opts.URL, prefs); len(ranges) > 0 {
+		ending = player.EndingStart(ranges)
+		opts.SkipRanges = p.autoSkip(ctx, req, prefs).Skipped(ranges)
 		opts.AutoSkip = len(opts.SkipRanges) > 0
 
 		path := filepath.Join(p.cacheDir, fmt.Sprintf("chapters-%d-%d.ini", req.AnimeID, req.Episode))
@@ -1155,13 +1157,13 @@ func (p *Playback) launch(ctx context.Context, req PlayRequest, s *Session) erro
 		return fmt.Errorf("start %s: %w", name, err)
 	}
 	s.Player = name
-	go p.track(pl, req.AnimeID, req.Episode, req.Season, gen)
+	go p.track(pl, req.AnimeID, req.Episode, req.Season, gen, ending)
 	return nil
 }
 
-// skipRanges resolves the opening and ending for mpv: the file's own chapters
-// first, then AniSkip, which needs the real length the probe gives; that length comes back too.
-func (p *Playback) skipRanges(ctx context.Context, req PlayRequest, source string) ([]player.SkipRange, float64) {
+// skipRanges resolves what mpv marks and skips, by the browser player's order of trust: the viewer's marks,
+// the file's chapters, AniSkip (which needs the probe's real length, returned too), then what Yoru found.
+func (p *Playback) skipRanges(ctx context.Context, req PlayRequest, source string, prefs store.Prefs) ([]player.SkipRange, float64) {
 	var chapters []player.SkipRange
 	var duration int
 
@@ -1173,63 +1175,47 @@ func (p *Playback) skipRanges(ctx context.Context, req PlayRequest, source strin
 			p.log.Debug("probe for skip times", "anime", req.AnimeID, "err", err)
 		} else {
 			duration = int(info.Duration)
+			names := player.SkipNames(prefs.String("playback.skip_chapters"))
 			for _, c := range info.Chapters {
-				if c.Kind != "" {
-					chapters = append(chapters, player.SkipRange{Kind: c.Kind, Start: c.Start, End: c.End})
+				if kind := player.ChapterKind(c.Kind, c.Title, names); kind != "" {
+					chapters = append(chapters, player.SkipRange{Kind: kind, Start: c.Start, End: c.End, Source: "chapters"})
 				}
 			}
 		}
 	}
 
-	if hasKind(chapters, "op") && hasKind(chapters, "ed") {
-		return chapters, float64(duration)
-	}
-	if p.enricher != nil {
-		if err := p.enricher.Skips(ctx, req.AnimeID, req.Episode, duration); err != nil {
-			p.log.Warn("fetch skip times", "anime", req.AnimeID, "err", err)
-		}
-	}
-
-	stored, err := p.store.SkipRanges(ctx, req.AnimeID, req.Episode)
-	if err != nil {
-		return chapters, float64(duration)
-	}
-	for _, r := range stored {
-		if !hasKind(chapters, r.Kind) {
-			chapters = append(chapters, r)
-		}
-	}
-	return chapters, float64(duration)
-}
-
-// autoSkipped keeps the openings and endings the user asked to skip; recaps never skip on their own.
-func autoSkipped(ranges []player.SkipRange, op, ed bool) []player.SkipRange {
-	var out []player.SkipRange
-	for _, r := range ranges {
-		switch r.Kind {
-		case "op", "mixed-op":
-			if op {
-				out = append(out, r)
-			}
-		case "ed", "mixed-ed":
-			if ed {
-				out = append(out, r)
+	own, _ := p.store.OwnSkips(ctx, req.AnimeID, req.Episode)
+	ranges := player.Merge(player.From(own, "marked"), chapters)
+	if !player.HasPart(ranges, "op") || !player.HasPart(ranges, "ed") {
+		if p.enricher != nil {
+			if err := p.enricher.Skips(ctx, req.AnimeID, req.Episode, duration); err != nil {
+				p.log.Warn("fetch skip times", "anime", req.AnimeID, "err", err)
 			}
 		}
-	}
-	return out
-}
-
-func hasKind(ranges []player.SkipRange, kind string) bool {
-	for _, r := range ranges {
-		if r.Kind == kind {
-			return true
+		if stored, err := p.store.SkipRanges(ctx, req.AnimeID, req.Episode); err == nil {
+			ranges = player.Merge(ranges, stored)
 		}
 	}
-	return false
+	return player.Merge(ranges, player.From(own, "found")), float64(duration)
 }
 
-func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64) {
+// autoSkip is what skips by itself, as in the browser: a first opening and a finale's ending kept if asked.
+func (p *Playback) autoSkip(ctx context.Context, req PlayRequest, prefs store.Prefs) player.AutoSkip {
+	a := player.AutoSkip{
+		Opening: prefs.Bool("playback.autoskip_op"), Ending: prefs.Bool("playback.autoskip_ed"),
+		Recap: prefs.Bool("playback.autoskip_recap"), Preview: prefs.Bool("playback.autoskip_preview"),
+	}
+	if prefs.Bool("playback.skip_keep_bookends") {
+		total, _ := p.store.EpisodeCount(ctx, req.AnimeID)
+		if req.Episode == 1 || total > 0 && req.Episode == total && p.store.Finished(ctx, req.AnimeID) {
+			a.Opening, a.Ending = false, false
+		}
+	}
+	return a
+}
+
+// ending is where the episode's ending starts by skipRanges' sources, 0 when unknown.
+func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64, ending float64) {
 	const saveEvery = 5 * time.Second
 
 	var last time.Time
@@ -1262,7 +1248,7 @@ func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64) {
 				continue
 			}
 			last = time.Now()
-			if p.save(animeID, episode, ev, played) && !reported {
+			if p.save(animeID, episode, ev, played, ending) && !reported {
 				reported = true
 				p.watched(animeID, episode)
 			}
@@ -1283,7 +1269,7 @@ func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64) {
 			if positioned || ev.Position > 0 {
 				// The threshold can be crossed within the last save interval before
 				// a quit, so the final save is the last chance to record it watched.
-				if p.save(animeID, episode, ev, played) && !reported {
+				if p.save(animeID, episode, ev, played, ending) && !reported {
 					reported = true
 					p.watched(animeID, episode)
 				}
@@ -1367,7 +1353,7 @@ func (p *Playback) autoDelete(animeID int) {
 }
 
 // save records a report and returns whether the store now calls the episode watched.
-func (p *Playback) save(animeID, episode int, ev player.Event, played float64) bool {
+func (p *Playback) save(animeID, episode int, ev player.Event, played, ending float64) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -1377,6 +1363,7 @@ func (p *Playback) save(animeID, episode int, ev player.Event, played float64) b
 		Position: ev.Position,
 		Duration: ev.Duration,
 		Played:   played,
+		Ending:   ending,
 	})
 	if err != nil {
 		p.log.Warn("save playback", "err", err)

@@ -27,7 +27,7 @@ $prog = @(Get-NetFirewallApplicationFilter -Program %s | Get-NetFirewallRule | W
 
 // Check reads the network categories and every rule that decides whether a device on them reaches the port.
 func Check(ctx context.Context, port int, exe string) (Status, error) {
-	return check(ctx, port, []string{RuleName(port), legacyRuleName(port)}, exe)
+	return check(ctx, port, []string{RuleName(port)}, exe)
 }
 
 // CheckPeers is Check for the torrent peer port; PortRule is Yoru's peer rule.
@@ -61,30 +61,30 @@ func check(ctx context.Context, port int, rules []string, exe string) (Status, e
 }
 
 const allowScript = `$ErrorActionPreference = 'Stop'
-Remove-NetFirewallRule -DisplayName %[1]s,%[5]s -ErrorAction SilentlyContinue
+Remove-NetFirewallRule -DisplayName %[1]s -ErrorAction SilentlyContinue
 New-NetFirewallRule -DisplayName %[1]s -Description 'Lets devices on this network open Yoru.' -Direction Inbound -Action Allow -Protocol TCP -LocalPort %[2]d -RemoteAddress LocalSubnet -Profile %[3]s | Out-Null
 Get-NetFirewallApplicationFilter -Program %[4]s -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object { $_.Direction.ToString() -eq 'Inbound' -and $_.Action.ToString() -eq 'Block' } | Remove-NetFirewallRule`
 
-// Allow adds Yoru's subnet rule in place of kuro's and drops a declined prompt's block rules, as administrator.
+// Allow adds Yoru's subnet rule and drops a declined prompt's block rules, as administrator.
 func Allow(ctx context.Context, port int, exe string, public bool) error {
 	profiles := "Private,Domain"
 	if public {
 		profiles = "Private,Domain,Public"
 	}
-	return elevated(ctx, fmt.Sprintf(allowScript, quote(RuleName(port)), port, profiles, quote(exe), quote(legacyRuleName(port))))
+	return elevated(ctx, fmt.Sprintf(allowScript, quote(RuleName(port)), port, profiles, quote(exe)))
 }
 
 const allowPeersScript = `$ErrorActionPreference = 'Stop'
-Remove-NetFirewallRule -DisplayName %[1]s,%[4]s -ErrorAction SilentlyContinue
+Remove-NetFirewallRule -DisplayName %[1]s -ErrorAction SilentlyContinue
 foreach ($proto in 'TCP', 'UDP') {
   New-NetFirewallRule -DisplayName %[1]s -Description 'Lets torrent peers connect to Yoru.' -Direction Inbound -Action Allow -Protocol $proto -LocalPort %[2]d -Program %[3]s -Profile Any | Out-Null
 }
 Get-NetFirewallApplicationFilter -Program %[3]s -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object { $_.Direction.ToString() -eq 'Inbound' -and $_.Action.ToString() -eq 'Block' } | Remove-NetFirewallRule`
 
-// AllowPeers lets torrent peers reach yoru.exe on the peer port from anywhere, TCP and UDP, replacing kuro's
-// rules for kuro.exe and removing block rules a declined prompt left.
+// AllowPeers lets torrent peers reach yoru.exe on the peer port from anywhere, TCP and UDP, and removes block
+// rules a declined prompt left.
 func AllowPeers(ctx context.Context, port int, exe string) error {
-	return elevated(ctx, fmt.Sprintf(allowPeersScript, quote(PeerRuleName(port)), port, quote(exe), quote(legacyPeerRuleName(port))))
+	return elevated(ctx, fmt.Sprintf(allowPeersScript, quote(PeerRuleName(port)), port, quote(exe)))
 }
 
 // elevated runs script through Windows' administrator prompt.

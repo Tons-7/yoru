@@ -63,9 +63,10 @@ func tryIpPortFromNetAddr(addr PeerRemoteAddr) (ipPortAddr, bool) {
 	if err != nil {
 		ok = false
 	}
-	portI64, err := strconv.ParseInt(port, 10, 0)
+	// 16 bits, so a port out of range is refused here rather than wrapped by the uint16 its callers make of it.
+	portU, err := strconv.ParseUint(port, 10, 16)
 	if err != nil {
 		ok = false
 	}
-	return ipPortAddr{net.ParseIP(host), int(portI64)}, ok
+	return ipPortAddr{net.ParseIP(host), int(portU)}, ok
 }

@@ -17,15 +17,17 @@ import {
   type VoiceLevel,
 } from '../lib/api'
 import { clockTime, cx, languageName, speed } from '../lib/format'
-import { refreshDownloads, useAccess, useSpeedUnit } from '../lib/queries'
+import { refreshDownloads, useAccess, useNow, useSpeedUnit } from '../lib/queries'
 import { SHOW_SHORTCUTS } from '../components/keys'
 import { PlayIcon } from '../components/PosterCard'
 import { Spinner } from '../components/ui'
-import { useDismiss, useRoomAbove } from '../lib/hooks'
+import { useDismiss, useMediaQuery, useRoomAbove } from '../lib/hooks'
 import { buttonClass } from '../lib/ui'
+import { getSleep, noteInput, setSleep, useSleep, type Sleep } from '../lib/watching'
 import { useAnime4K, type UpscaleTier } from './anime4k'
 import { castImpossible, isBrave, useCast, type CastPhase, type CastSdk } from './cast'
 import {
+  SKIPPED_GUARD,
   skipKind,
   untilWatching,
   useAutoSkip,
@@ -38,6 +40,7 @@ import {
   useStallWatchdog,
   useSubtitles,
   useThumbnails,
+  type AutoSkip,
   type Sheet,
 } from './hooks'
 
@@ -156,7 +159,11 @@ export interface PlayerProps {
   starting?: { title: string; detail: string }
   startAt: number
   skips: SkipRange[]
-  autoSkip: { op: boolean; ed: boolean }
+  autoSkip: AutoSkip
+  /** AniSkip hears whether its times were right; absent unless sharing with it is on. */
+  onSkipVote?: (id: string, up: boolean) => void
+  /** Keeps the viewer's own opening or ending for this episode, or forgets them. */
+  skipMarks?: { mark: (kind: 'op' | 'ed', start: number, end: number) => Promise<unknown>; forget: () => void }
   autoPlay: boolean
   /** Subtitle languages in preference order, from settings. */
   subLanguages?: string[]
@@ -202,6 +209,8 @@ export function Player({
   startAt,
   skips,
   autoSkip,
+  onSkipVote,
+  skipMarks,
   autoPlay,
   subLanguages,
   withDub = 'signs',
@@ -443,7 +452,10 @@ export function Player({
   // Picture in picture moves the player to another document, so the subtitle canvas is rebuilt there.
   const subLook = useMemo(() => ({ scale: subScale, delay: subDelay }), [subScale, subDelay])
   useSubtitles(video, stream, track, fonts, pip.active, subLook)
-  useAutoSkip(video, skips, autoSkip)
+  // A skip of AniSkip's left standing is a vote that it was right.
+  const autoSkipped = useAutoSkip(video, skips, autoSkip, (r) => {
+    if (r.source === 'aniskip' && r.id) onSkipVote?.(r.id, true)
+  })
 
   const upscaleState = useAnime4K({
     video,
@@ -701,7 +713,8 @@ export function Player({
     ]
     for (const [action, handler] of handlers) {
       try {
-        session.setActionHandler(action, handler)
+        // A headset button or media key is someone there, as a key on the page is.
+        session.setActionHandler(action, handler && ((d) => (noteInput(), handler(d))))
       } catch {
         // An action this browser doesn't know.
       }
@@ -740,6 +753,12 @@ export function Player({
   useEffect(() => {
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused'
   }, [playing])
+
+  // The sleep timer gone off pauses, which lets the screen sleep too: the wake lock below goes with playing.
+  const sleep = useSleep()
+  useEffect(() => {
+    if (sleep.kind === 'fired' && video && !video.paused) video.pause()
+  }, [sleep, video])
 
   // The screen stays on while an episode plays, muted too, which the browser's own rule leaves to dim.
   useEffect(() => {
@@ -842,6 +861,14 @@ export function Player({
   }, [nudge])
 
   const activeSkip = skips.find((r) => time >= r.start && time < r.end)
+  const offered = autoSkipped.skipped
+  const canCallWrong = !!onSkipVote && offered?.range.source === 'aniskip' && !!offered.range.id
+  const noteSkip = autoSkipped.note
+  const skipActive = useCallback(() => {
+    if (!video || !activeSkip) return
+    video.currentTime = activeSkip.end
+    noteSkip(activeSkip)
+  }, [video, activeSkip, noteSkip])
 
   useKeyboard({
     video,
@@ -852,7 +879,7 @@ export function Player({
     extra: pip.window,
     showVolume,
     shiftSubDelay: track === null ? undefined : shiftSubDelay,
-    skipTo: activeSkip?.end,
+    skip: activeSkip ? skipActive : undefined,
     // Only where the control shows: a file with no audio has nothing to lift.
     cycleVoice: (stream?.audio?.length ?? 0) > 0 ? cycleVoice : undefined,
     next: hasNext ? goNext : undefined,
@@ -919,6 +946,13 @@ export function Player({
 
   // Floating, the player fills its window; fullscreen is CSS, since `:fullscreen` never matches there.
   const corners = pip.active ? '' : 'sm:rounded-xl'
+  // Buttons on the bar, rows in the settings menu on a phone; the floating window has neither.
+  const audioMenu =
+    !pip.active && stream?.audio && stream.audio.length > 1
+      ? { tracks: stream.audio, value: audioTrack, onChange: switchAudio }
+      : undefined
+  const soundMenu =
+    !pip.active && stream && (stream.audio?.length ?? 0) > 0 ? { value: soundState, onChange: switchSound } : undefined
 
   const body = (
     <div
@@ -964,6 +998,7 @@ export function Player({
         onPointerUp={onSurfaceTouch}
         onPlay={() => {
           setPlaying(true)
+          if (getSleep().kind === 'fired') setSleep({ kind: 'off' })
           onResume?.('play')
           // Any resume re-arms the hide timer, as a keyboard one moves no pointer.
           nudge()
@@ -1091,10 +1126,48 @@ export function Player({
         </div>
       )}
 
+      {sleep.kind === 'fired' && !playing && !video?.ended && (
+        <div className="pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 rounded-full bg-base-950/80 px-3 py-1.5 text-xs text-white ring-1 ring-white/15">
+          Paused by the sleep timer
+        </div>
+      )}
+
+      {/* Where Skip sits: an auto-skip offered back for a moment, and AniSkip's times open to a "wrong". */}
+      {offered && !activeSkip && (!offered.byHand || canCallWrong) && (
+        <div className="absolute right-4 bottom-24 flex items-center gap-1 rounded-md bg-base-950/85 p-1 text-sm text-white ring-1 ring-white/20 backdrop-blur-sm">
+          <span className="px-2 text-white/70">Skipped {skipKind(offered.range.kind) ?? 'ahead'}</span>
+          {!offered.byHand && (
+            <button
+              onClick={() => {
+                if (Date.now() - offered.at < SKIPPED_GUARD) return
+                if (video) video.currentTime = offered.range.start
+                autoSkipped.dismiss()
+              }}
+              className="rounded px-3 py-1 font-medium hover:bg-white/15 pointer-coarse:min-h-11"
+            >
+              Watch it
+            </button>
+          )}
+          {canCallWrong && (
+            <button
+              onClick={() => {
+                if (Date.now() - offered.at < SKIPPED_GUARD) return
+                if (video) video.currentTime = offered.range.start
+                onSkipVote!(offered.range.id!, false)
+                autoSkipped.dismiss()
+              }}
+              className="rounded px-3 py-1 text-white/80 hover:bg-white/15 pointer-coarse:min-h-11"
+            >
+              Wrong skip
+            </button>
+          )}
+        </div>
+      )}
+
       {activeSkip && (
         <button
-          onClick={() => video && (video.currentTime = activeSkip.end)}
-          className="absolute right-4 bottom-24 rounded-md bg-base-950/85 px-4 py-2 text-sm font-medium text-white ring-1 ring-white/20 backdrop-blur-sm transition-transform hover:scale-105"
+          onClick={skipActive}
+          className="absolute right-4 bottom-24 rounded-md bg-base-950/85 px-4 py-2 text-sm font-medium text-white ring-1 ring-white/20 backdrop-blur-sm transition-transform hover:scale-105 pointer-coarse:min-h-11"
         >
           Skip {skipKind(activeSkip.kind) ?? 'ahead'}
           <kbd className="ml-2 font-sans text-xs text-white/50 max-sm:hidden">S</kbd>
@@ -1119,7 +1192,7 @@ export function Player({
           onSeek={(t) => video && (video.currentTime = t)}
         />
 
-        {/* Relative: on a phone, a wide panel (Cast's needs) opens across the bar, not off its button's edge. */}
+        {/* Relative: on a phone a wide panel (Cast's) opens across the bar, not off its button's edge. */}
         <div className="relative mt-2 flex items-center gap-2 text-white">
           <IconButton label={playing ? 'Pause' : 'Play'} hint="K" onClick={togglePlay}>
             {playing ? <PauseIcon /> : <PlayIcon />}
@@ -1169,24 +1242,11 @@ export function Player({
           </span>
 
           <div className="ml-auto flex items-center gap-1">
-            {!pip.active && (
-              <span className="contents max-sm:hidden">
-                <SpeedPicker value={rate} onChange={changeRate} />
-              </span>
-            )}
-
-            {/* The floating window keeps only subtitles and the way back. */}
-            {!pip.active && (stream?.audio?.length ?? 0) > 1 && (
-              <AudioPicker
-                tracks={stream!.audio!}
-                value={audioTrack}
-                onChange={switchAudio}
-              />
-            )}
-
-            {!pip.active && stream && (stream.audio?.length ?? 0) > 0 && (
-              <SoundPicker value={soundState} onChange={switchSound} />
-            )}
+            {/* Not in the floating window, and on a phone in the settings menu instead. */}
+            <span className="contents max-sm:hidden">
+              {audioMenu && <AudioPicker tracks={audioMenu.tracks} value={audioMenu.value} onChange={audioMenu.onChange} />}
+              {soundMenu && <SoundPicker value={soundMenu.value} onChange={soundMenu.onChange} />}
+            </span>
 
             {(stream?.subtitles?.length ?? 0) > 0 && (
               <SubtitlePicker
@@ -1212,16 +1272,17 @@ export function Player({
               </button>
             ) : (
               <>
-                {/* Not on a phone: no keys there, and no room in the bar. */}
-                <span className="contents max-sm:hidden">
-                  <IconButton
-                    label="Keyboard shortcuts"
-                    hint="?"
-                    onClick={() => window.dispatchEvent(new Event(SHOW_SHORTCUTS))}
-                  >
-                    <KeyboardIcon />
-                  </IconButton>
-                </span>
+                <PlayerMenu
+                  rate={rate}
+                  onRate={changeRate}
+                  sleep={sleep}
+                  skips={skips}
+                  video={video}
+                  marks={skipMarks}
+                  audio={audioMenu}
+                  sound={soundMenu}
+                  onOpen={holdControls}
+                />
                 {!castImpossible() && (
                   <CastButton
                     casting={casting}
@@ -1697,14 +1758,6 @@ function AudioPicker({
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close, open)
 
-  const label = (t: AudioTrack, i: number) => {
-    const language = languageName(t.language)
-    const sameLanguage = tracks.filter((o) => languageName(o.language) === language)
-    if (!language) return t.title || `Track ${i + 1}`
-    if (sameLanguage.length > 1 && t.title) return `${language} · ${t.title}`
-    return language
-  }
-
   return (
     <div className="relative" ref={ref}>
       <button
@@ -1716,7 +1769,7 @@ function AudioPicker({
         className="flex h-9 items-center gap-1.5 rounded-md px-2.5 text-xs text-white/90 transition-colors hover:bg-white/15"
       >
         <SpeakerIcon />
-        <span className="max-w-24 truncate max-sm:hidden">{tracks[value] ? label(tracks[value], value) : 'Audio'}</span>
+        <span className="max-w-24 truncate">{audioLabel(tracks, value)}</span>
       </button>
 
       {open && (
@@ -1724,15 +1777,24 @@ function AudioPicker({
           role="menu"
           className="absolute right-0 bottom-full z-50 mb-2 max-h-64 w-44 origin-bottom-right animate-rise overflow-y-auto rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60 scrollbar-thin"
         >
-          {tracks.map((t, i) => (
+          {tracks.map((_, i) => (
             <MenuRow key={i} selected={i === value} onClick={() => { onChange(i); close() }}>
-              {label(t, i)}
+              {audioLabel(tracks, i)}
             </MenuRow>
           ))}
         </div>
       )}
     </div>
   )
+}
+
+function audioLabel(tracks: AudioTrack[], i: number): string {
+  const t = tracks[i]
+  if (!t) return 'Audio'
+  const language = languageName(t.language)
+  if (!language) return t.title || `Track ${i + 1}`
+  if (t.title && tracks.filter((o) => languageName(o.language) === language).length > 1) return `${language} · ${t.title}`
+  return language
 }
 
 const LEVEL_LABELS: Record<VoiceLevel, string> = { off: 'Off', medium: 'Medium', high: 'High' }
@@ -1756,15 +1818,12 @@ function soundSummary(s: SoundOptions): string {
   return on.length ? on.join(', ') : 'Default'
 }
 
-// Enhancing (what the ear picks out) and boosting (how loud the whole thing is) are different asks,
-// so they sit apart, as on the services that offer both.
 function SoundPicker({ value, onChange }: { value: SoundOptions; onChange: (patch: Partial<SoundOptions>) => void }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close, open)
   const room = useRoomAbove(ref, open)
   const summary = soundSummary(value)
-  const heading = 'px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wider text-base-500 uppercase'
 
   return (
     <div className="relative" ref={ref}>
@@ -1781,7 +1840,7 @@ function SoundPicker({ value, onChange }: { value: SoundOptions; onChange: (patc
         )}
       >
         <VoiceIcon />
-        <span className="max-w-32 truncate max-sm:hidden">{summary === 'Default' ? 'Sound' : summary}</span>
+        <span className="max-w-32 truncate">{summary === 'Default' ? 'Sound' : summary}</span>
       </button>
 
       {open && (
@@ -1790,25 +1849,36 @@ function SoundPicker({ value, onChange }: { value: SoundOptions; onChange: (patc
           style={{ maxHeight: room }}
           className="absolute right-0 bottom-full z-50 mb-2 w-52 origin-bottom-right animate-rise overflow-y-auto rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60 scrollbar-thin"
         >
-          <p className={heading}>Voice boost</p>
-          {VOICE_LEVELS.map((level) => (
-            <MenuRow key={level} selected={level === value.voice} onClick={() => onChange({ voice: level })}>
-              {LEVEL_LABELS[level]}
-            </MenuRow>
-          ))}
-          <p className={heading}>Enhance</p>
-          <MenuRow selected={value.night} onClick={() => onChange({ night: !value.night })}>Night mode</MenuRow>
-          <MenuRow selected={value.headphones} onClick={() => onChange({ headphones: !value.headphones })}>Headphones</MenuRow>
-          <MenuRow selected={value.mono} onClick={() => onChange({ mono: !value.mono })}>Mono</MenuRow>
-          <p className={heading}>Volume boost</p>
-          {VOICE_LEVELS.map((level) => (
-            <MenuRow key={level} selected={level === value.boost} onClick={() => onChange({ boost: level })}>
-              {LEVEL_LABELS[level]}
-            </MenuRow>
-          ))}
+          <SoundRows value={value} onChange={onChange} />
         </div>
       )}
     </div>
+  )
+}
+
+// Enhancing (what the ear picks out) and boosting (how loud the whole thing is) are different asks,
+// so they sit apart, as on the services that offer both.
+function SoundRows({ value, onChange }: { value: SoundOptions; onChange: (patch: Partial<SoundOptions>) => void }) {
+  const heading = 'px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wider text-base-500 uppercase'
+  return (
+    <>
+      <p className={heading}>Voice boost</p>
+      {VOICE_LEVELS.map((level) => (
+        <MenuRow key={level} selected={level === value.voice} onClick={() => onChange({ voice: level })}>
+          {LEVEL_LABELS[level]}
+        </MenuRow>
+      ))}
+      <p className={heading}>Enhance</p>
+      <MenuRow selected={value.night} onClick={() => onChange({ night: !value.night })}>Night mode</MenuRow>
+      <MenuRow selected={value.headphones} onClick={() => onChange({ headphones: !value.headphones })}>Headphones</MenuRow>
+      <MenuRow selected={value.mono} onClick={() => onChange({ mono: !value.mono })}>Mono</MenuRow>
+      <p className={heading}>Volume boost</p>
+      {VOICE_LEVELS.map((level) => (
+        <MenuRow key={level} selected={level === value.boost} onClick={() => onChange({ boost: level })}>
+          {LEVEL_LABELS[level]}
+        </MenuRow>
+      ))}
+    </>
   )
 }
 
@@ -1827,10 +1897,69 @@ function VoiceIcon() {
   )
 }
 
-function SpeedPicker({ value, onChange }: { value: number; onChange: (rate: number) => void }) {
+const SKIP_SOURCES: Record<string, string> = {
+  marked: 'Yours', chapters: 'Chapters', aniskip: 'AniSkip', found: 'Found by Yoru',
+}
+
+const SLEEP_MINUTES = [15, 30, 45, 60]
+
+type MenuView = 'main' | 'speed' | 'sleep' | 'skips' | 'audio' | 'sound'
+
+// The player's settings listed with their values, each opening its own options in place.
+function PlayerMenu({
+  rate,
+  onRate,
+  sleep,
+  skips,
+  video,
+  marks,
+  audio,
+  sound,
+  onOpen,
+}: {
+  rate: number
+  onRate: (rate: number) => void
+  sleep: Sleep
+  skips: SkipRange[]
+  video: HTMLVideoElement | null
+  marks?: PlayerProps['skipMarks']
+  audio?: { tracks: AudioTrack[]; value: number; onChange: (index: number) => void }
+  sound?: { value: SoundOptions; onChange: (patch: Partial<SoundOptions>) => void }
+  onOpen: (open: boolean) => void
+}) {
   const [open, setOpen] = useState(false)
-  const close = useCallback(() => setOpen(false), [])
+  const [view, setView] = useState<MenuView>('main')
+  const close = useCallback(() => {
+    setOpen(false)
+    setView('main')
+  }, [])
   const ref = useDismiss<HTMLDivElement>(close, open)
+  const room = useRoomAbove(ref, open)
+  // A phone's player is too short for the list above its bar: there it is a sheet along the screen's bottom.
+  const wide = useMediaQuery('(min-width: 40rem)')
+  useEffect(() => {
+    onOpen(open)
+    return () => onOpen(false)
+  }, [open, onOpen])
+  // Outlives the menu, shut while playing to the part's end; tied to marks, so a new episode starts clean.
+  const [marking, setMarking] = useState<{ kind: 'op' | 'ed'; at: number; marks: unknown } | null>(null)
+  const from = marking?.marks === marks ? marking : null
+  const setFrom = (next: { kind: 'op' | 'ed'; at: number } | null) => setMarking(next && { ...next, marks })
+  // Rounded: the clock can be a few seconds behind.
+  const now = useNow(15_000)
+  const left = sleep.kind === 'at' ? Math.max(1, Math.round((sleep.at - now) / 60_000)) : 0
+  const sleepValue = sleep.kind === 'at' ? `${left} min left` : sleep.kind === 'episode' ? 'End of episode' : 'Off'
+  const busy = sleep.kind === 'at' || sleep.kind === 'episode' || !!from
+  const label =
+    sleep.kind === 'at'
+      ? `Player settings · sleep timer: ${left} min left`
+      : sleep.kind === 'episode'
+        ? 'Player settings · sleep timer: end of this episode'
+        : 'Player settings'
+  const pickSleep = (next: Sleep) => {
+    setSleep(next)
+    close()
+  }
 
   return (
     <div className="relative" ref={ref}>
@@ -1838,27 +1967,224 @@ function SpeedPicker({ value, onChange }: { value: number; onChange: (rate: numb
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Playback speed"
-        onClick={() => setOpen((v) => !v)}
-        title="Speed"
-        className="flex h-9 items-center rounded-md px-2.5 text-xs tabular-nums text-white/90 transition-colors hover:bg-white/15"
+        aria-label={label}
+        title={label}
+        onClick={() => (open ? close() : setOpen(true))}
+        className={cx(
+          'tap flex h-9 items-center gap-1 rounded-md px-2 text-xs tabular-nums transition-colors hover:bg-white/15',
+          busy ? 'text-accent-300' : 'text-white/90',
+        )}
       >
-        {value}×
+        <GearIcon />
+        {sleep.kind === 'at' && <span>{left}m</span>}
       </button>
 
+      {open && !wide && <div aria-hidden className="fixed inset-0 z-50 bg-black/50" onClick={close} />}
       {open && (
         <div
           role="menu"
-          className="absolute right-0 bottom-full z-50 mb-2 w-24 origin-bottom-right animate-rise overflow-hidden rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60"
+          style={{ maxHeight: wide ? room : '70vh' }}
+          className={cx(
+            'z-50 animate-rise overflow-y-auto border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60 scrollbar-thin',
+            wide
+              ? 'absolute right-0 bottom-full mb-2 w-64 origin-bottom-right rounded-lg'
+              : 'fixed inset-x-0 bottom-0 rounded-t-xl pb-[max(0.5rem,env(safe-area-inset-bottom))]',
+          )}
         >
-          {SPEEDS.map((s) => (
-            <MenuRow key={s} selected={s === value} onClick={() => { onChange(s); close() }}>
-              {s}×
-            </MenuRow>
-          ))}
+          {view === 'main' && (
+            <>
+              {/* Wider, the bar has their own buttons. */}
+              {!wide && audio && (
+                <MenuItem label="Audio track" value={audioLabel(audio.tracks, audio.value)} onClick={() => setView('audio')} />
+              )}
+              {!wide && sound && <MenuItem label="Sound" value={soundSummary(sound.value)} onClick={() => setView('sound')} />}
+              <MenuItem label="Speed" value={rate === 1 ? 'Normal' : `${rate}×`} onClick={() => setView('speed')} />
+              <MenuItem label="Sleep timer" value={sleepValue} onClick={() => setView('sleep')} />
+              {marks && (
+                <MenuItem
+                  label="Skip times"
+                  value={from ? 'Marking' : skips.length ? `${skips.length} known` : 'None known'}
+                  onClick={() => setView('skips')}
+                />
+              )}
+              {/* Keys are for a keyboard; a phone has none. */}
+              <div className="pointer-coarse:hidden">
+                <MenuItem label="Keyboard shortcuts" value="?" onClick={() => (window.dispatchEvent(new Event(SHOW_SHORTCUTS)), close())} />
+              </div>
+            </>
+          )}
+
+          {view === 'speed' && (
+            <>
+              <MenuBack label="Speed" onClick={() => setView('main')} />
+              {SPEEDS.map((s) => (
+                <MenuRow key={s} selected={s === rate} onClick={() => (onRate(s), close())}>
+                  {s === 1 ? 'Normal' : `${s}×`}
+                </MenuRow>
+              ))}
+            </>
+          )}
+
+          {view === 'sleep' && (
+            <>
+              <MenuBack label="Sleep timer" onClick={() => setView('main')} />
+              <MenuRow selected={sleepValue === 'Off'} onClick={() => pickSleep({ kind: 'off' })}>
+                Off
+              </MenuRow>
+              {SLEEP_MINUTES.map((m) => (
+                <MenuRow key={m} selected={false} onClick={() => pickSleep({ kind: 'at', at: Date.now() + m * 60_000 })}>
+                  {m} minutes
+                </MenuRow>
+              ))}
+              <MenuRow selected={sleep.kind === 'episode'} onClick={() => pickSleep({ kind: 'episode' })}>
+                End of this episode
+              </MenuRow>
+              {sleep.kind === 'at' && <p className="px-3 py-1.5 text-xs text-base-400">Pauses in {left} min, on any episode.</p>}
+            </>
+          )}
+
+          {view === 'audio' && audio && (
+            <>
+              <MenuBack label="Audio track" onClick={() => setView('main')} />
+              {audio.tracks.map((_, i) => (
+                <MenuRow key={i} selected={i === audio.value} onClick={() => (audio.onChange(i), close())}>
+                  {audioLabel(audio.tracks, i)}
+                </MenuRow>
+              ))}
+            </>
+          )}
+
+          {view === 'sound' && sound && (
+            <>
+              <MenuBack label="Sound" onClick={() => setView('main')} />
+              <SoundRows value={sound.value} onChange={sound.onChange} />
+            </>
+          )}
+
+          {view === 'skips' && marks && (
+            <>
+              <MenuBack label="Skip times" onClick={() => setView('main')} />
+              <SkipTimesPanel skips={skips} video={video} marks={marks} from={from} setFrom={setFrom} />
+            </>
+          )}
         </div>
       )}
     </div>
+  )
+}
+
+// A row of the menu's list: what it sets, and its value now.
+function MenuItem({ label, value, onClick }: { label: string; value: string; onClick: () => void }) {
+  return (
+    <button
+      role="menuitem"
+      onClick={onClick}
+      className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-base-100 transition-colors hover:bg-base-750 pointer-coarse:min-h-11"
+    >
+      <span>{label}</span>
+      <span className="truncate text-xs text-base-400">{value}</span>
+    </button>
+  )
+}
+
+function MenuBack({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      role="menuitem"
+      onClick={onClick}
+      aria-label={`Back from ${label}`}
+      className="mb-1 flex w-full items-center gap-2 border-b border-base-750 px-3 py-2 text-left text-sm font-medium text-base-100 transition-colors hover:bg-base-750 pointer-coarse:min-h-11"
+    >
+      <span aria-hidden className="text-base-400">‹</span>
+      {label}
+    </button>
+  )
+}
+
+// The episode's skip times and where each came from, and marking an opening or ending at the current moment.
+function SkipTimesPanel({
+  skips,
+  video,
+  marks,
+  from,
+  setFrom,
+}: {
+  skips: SkipRange[]
+  video: HTMLVideoElement | null
+  marks: NonNullable<PlayerProps['skipMarks']>
+  from: { kind: 'op' | 'ed'; at: number } | null
+  setFrom: (from: { kind: 'op' | 'ed'; at: number } | null) => void
+}) {
+  const [error, setError] = useState<string | null>(null)
+  const ownMarks = skips.some((r) => r.source === 'marked')
+  const markStart = (kind: 'op' | 'ed') => {
+    if (!video) return
+    setFrom({ kind, at: video.currentTime })
+    setError(null)
+  }
+  const markEnd = () => {
+    if (!video || !from) return
+    marks.mark(from.kind, from.at, video.currentTime).then(
+      () => setFrom(null),
+      (e: Error) => setError(e.message),
+    )
+  }
+  const name = (kind: string) => (kind === 'op' ? 'opening' : 'ending')
+
+  return (
+    <>
+      {skips.length === 0 && <p className="px-3 py-1.5 text-xs text-base-400">None known for this episode.</p>}
+      {skips.map((r) => (
+        <div key={`${r.kind}-${r.start}`} className="flex items-baseline justify-between gap-3 px-3 py-1.5 text-sm text-base-200">
+          <span className="tabular-nums">
+            {skipLabel(r.kind)} {clockTime(r.start)}–{clockTime(r.end)}
+          </span>
+          {r.source && <span className="text-xs text-base-500">{SKIP_SOURCES[r.source] ?? r.source}</span>}
+        </div>
+      ))}
+      <div className="mt-1 border-t border-base-750 pt-1">
+        {from ? (
+          <>
+            <p className="px-3 py-1.5 text-xs text-base-400">
+              The {name(from.kind)} starts at {clockTime(from.at)}. Play to where it ends, then:
+            </p>
+            <MenuRow selected={false} onClick={markEnd}>
+              Mark where it ends
+            </MenuRow>
+            <MenuRow selected={false} onClick={() => setFrom(null)}>
+              Cancel
+            </MenuRow>
+          </>
+        ) : (
+          <>
+            <MenuRow selected={false} onClick={() => markStart('op')}>
+              Mark where the opening starts
+            </MenuRow>
+            <MenuRow selected={false} onClick={() => markStart('ed')}>
+              Mark where the ending starts
+            </MenuRow>
+            {ownMarks && (
+              <MenuRow selected={false} onClick={marks.forget}>
+                Forget my marks
+              </MenuRow>
+            )}
+          </>
+        )}
+        {error && <p className="px-3 py-1 text-xs text-recap">{error}</p>}
+      </div>
+    </>
+  )
+}
+
+function GearIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4 shrink-0" aria-hidden>
+      <circle cx="12" cy="12" r="3" {...stroke} />
+      <path
+        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"
+        {...stroke}
+      />
+    </svg>
   )
 }
 
@@ -1886,7 +2212,7 @@ function MenuRow({
       aria-checked={selected}
       onClick={onClick}
       className={cx(
-        'block w-full truncate px-3 py-1.5 text-left text-sm transition-colors',
+        'block w-full truncate px-3 py-1.5 text-left text-sm transition-colors pointer-coarse:py-3',
         selected ? 'text-accent-400' : 'text-base-200 hover:bg-base-750',
       )}
     >
@@ -1915,7 +2241,7 @@ function useKeyboard({
   extra,
   showVolume,
   shiftSubDelay,
-  skipTo,
+  skip,
   cycleVoice,
   next,
   previous,
@@ -1930,8 +2256,8 @@ function useKeyboard({
   showVolume: () => void
   /** z and x, as in mpv; absent while subtitles are off. */
   shiftSubDelay?: (by: number) => void
-  /** Where the opening or ending on screen ends; absent when there is none to skip. */
-  skipTo?: number
+  /** s: skips the opening or ending on screen; absent when there is none. */
+  skip?: () => void
   /** v: off, medium, high, round again; absent before the stream is open. */
   cycleVoice?: () => void
   /** n: the Next episode button's, absent while it doesn't show. */
@@ -1997,8 +2323,8 @@ function useKeyboard({
           break
         case 's':
           // The same as the button, so only while it shows.
-          if (skipTo === undefined || !video) return
-          video.currentTime = skipTo
+          if (!skip) return
+          skip()
           break
         case 'v':
           if (!cycleVoice) return
@@ -2027,7 +2353,7 @@ function useKeyboard({
       window.removeEventListener('keydown', onKey)
       extra?.removeEventListener('keydown', onKey)
     }
-  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skipTo, cycleVoice, next, previous])
+  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skip, cycleVoice, next, previous])
 }
 
 function IconButton({
@@ -2103,15 +2429,6 @@ function MutedIcon() {
     <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
       <path d="M4 9v6h3.5L12 19V5L7.5 9H4Z" fill="currentColor" />
       <path d="m16 9.5 5 5M21 9.5l-5 5" {...stroke} />
-    </svg>
-  )
-}
-
-function KeyboardIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
-      <rect x="3" y="6" width="18" height="12" rx="2" {...stroke} />
-      <path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" {...stroke} strokeLinecap="round" />
     </svg>
   )
 }

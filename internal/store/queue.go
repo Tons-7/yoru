@@ -41,6 +41,22 @@ func (s *Store) SetQueuedRelease(ctx context.Context, animeID int, epKey, infoHa
 	return n > 0, nil
 }
 
+// EnqueueRelease queues an episode pinned to a release in one write, so the worker never claims it unpinned.
+func (s *Store) EnqueueRelease(ctx context.Context, animeID, season, episode int, infoHash, name string) error {
+	if err := s.EnsureAnime(ctx, animeID); err != nil {
+		return err
+	}
+	_, err := s.w.ExecContext(ctx, `
+		INSERT INTO download_queue (anime_id, ep_key, episode, season, state, queued_at, info_hash, release_name)
+		VALUES (?,?,?,?,'pending',?,?,?)
+		ON CONFLICT(anime_id, ep_key) DO UPDATE SET
+		    state = CASE WHEN download_queue.state IN ('failed','done') THEN 'pending' ELSE download_queue.state END,
+		    info_hash = excluded.info_hash, release_name = excluded.release_name,
+		    error = NULL, attempts = 0, retry_at = NULL`,
+		animeID, strconv.Itoa(episode), episode, season, time.Now().Unix(), nullable(infoHash), nullable(name))
+	return err
+}
+
 // Enqueue adds episodes at the back; a queued one keeps its place, and the worker drops ones on disk.
 func (s *Store) Enqueue(ctx context.Context, animeID, season int, episodes []int) (int, error) {
 	if animeID == 0 || len(episodes) == 0 {

@@ -11,6 +11,9 @@ type Options struct {
 	Ending func()
 }
 
+// Available: this system shows Yoru's icon.
+const Available = false
+
 // Tray is a no-op off Windows.
 type Tray struct{}
 

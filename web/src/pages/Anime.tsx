@@ -2,13 +2,15 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, statusLabel, type Bookmark, type DiscoverItem } from '../lib/api'
-import { clockTime, cx, readableTint, relativeTime, tint, youtubeID } from '../lib/format'
+import { api, statusLabel, type Bookmark, type DiscoverItem, type FollowState } from '../lib/api'
+import { bytes, clockTime, cx, readableTint, relativeTime, tint, youtubeID } from '../lib/format'
 import {
   refreshDownloads,
   useAnimeExtra,
   useDownloadQueue,
   useDownloads,
+  useBetterCopies,
+  useDriveRoom,
   useEpisodes,
   useFranchise,
   useNow,
@@ -27,6 +29,8 @@ import { PlayIcon, PosterCard } from '../components/PosterCard'
 import { toCard } from '../lib/cards'
 import { Rail, RailItem } from '../components/Rail'
 import { StatusMenu } from '../components/StatusMenu'
+import { WaitSelect } from '../components/WaitSelect'
+import { BetterCopyOffer } from '../components/BetterCopy'
 import { TrailerOverlay } from '../components/TrailerOverlay'
 import {
   Badge,
@@ -59,6 +63,10 @@ interface AnimeDetail {
   resume?: { episode: number; position: number; duration: number }
   /** Which trackers hold this title at all. The catalogues do not fully overlap. */
   sync?: { anilist: boolean; mal: boolean }
+  /** An unaired episode AniList moved later: when it was due, and when it airs (null for no date). */
+  delay?: { episode: number; wasAt: number; nowAt: number | null }
+  /** Whether new episodes alert, and why; an episode to download when it's out. */
+  notify?: FollowState
   malId?: number
   anime: {
     trailer?: { id?: string; site?: string } | null
@@ -112,7 +120,7 @@ const STATUS: Record<string, { label: string; tone: string; live?: boolean }> = 
 }
 
 /** The facts under the title, as chips: what, how long, how far along, and how good. */
-function FactChips({ media }: { media: AnimeDetail['anime'] }) {
+function FactChips({ media, delay }: { media: AnimeDetail['anime']; delay?: AnimeDetail['delay'] }) {
   const now = useNow()
   const status = media.status ? STATUS[media.status] : undefined
   const aired = media.nextAiringEpisode ? media.nextAiringEpisode.episode - 1 : null
@@ -149,6 +157,15 @@ function FactChips({ media }: { media: AnimeDetail['anime'] }) {
       {media.nextAiringEpisode && media.nextAiringEpisode.airingAt * 1000 > now && (
         <span className={cx(chip, 'text-emerald-300 ring-emerald-400/30')}>
           Ep {media.nextAiringEpisode.episode} {relativeTime(media.nextAiringEpisode.airingAt)}
+        </span>
+      )}
+      {/* AniList moved it later: said, with when it was due, so a missing episode isn't a mystery. */}
+      {delay && (
+        <span
+          className={cx(chip, 'text-amber-300 ring-amber-400/30')}
+          title={`Was due ${new Date(delay.wasAt * 1000).toLocaleString()}`}
+        >
+          Ep {delay.episode} delayed{delay.nowAt ? '' : ' · no new date yet'}
         </span>
       )}
     </div>
@@ -257,6 +274,9 @@ function Synopsis({ text }: { text: string }) {
 // A status in the action row reads as text: drawn like the buttons beside it, it was tapped and did nothing.
 const STATUS_TEXT = 'flex items-center gap-2 py-2 text-sm text-base-300'
 
+// A 1080p TV episode, for a show with nothing downloaded yet to measure by.
+const EPISODE_BYTES_GUESS = 1.5 * 1024 ** 3
+
 export function Anime() {
   const { animeId } = useParams()
   const id = Number(animeId)
@@ -279,7 +299,9 @@ export function Anime() {
   const queue = useDownloadQueue()
   const waiting = queue.data?.waiting?.[String(id)] ?? 0
   // Polled while anything downloads, so episodes finishing here get their on-disk mark.
-  useDownloads()
+  const downloads = useDownloads()
+  const room = useDriveRoom()
+  const [confirmSpace, setConfirmSpace] = useState(false)
 
   const refreshQueue = () => refreshDownloads(qc)
 
@@ -294,6 +316,14 @@ export function Anime() {
       api.post<{ queued: number }>('/api/download/episodes', { animeId: id, episodes: toDownload }),
     onSuccess: refreshQueue,
   })
+  // Asked first when the show won't fit: this show's own downloads say its size best, else a typical episode.
+  const sized = (downloads.data?.items ?? []).filter((d) => d.animeId === id && d.episodes.length > 0 && d.totalBytes > 0)
+  const perEpisode = sized.length
+    ? sized.reduce((n, d) => n + d.totalBytes / d.episodes.length, 0) / sized.length
+    : EPISODE_BYTES_GUESS
+  const need = toDownload.length * perEpisode
+  const free = room.data?.freeBytes
+  const wontFit = free != null && need > free
 
   const cancelAll = useMutation({
     mutationFn: () => api.del(`/api/download/all/${id}`),
@@ -406,7 +436,7 @@ export function Anime() {
               </h1>
             )}
 
-            {media && <FactChips media={media} />}
+            {media && <FactChips media={media} delay={detail.data?.delay} />}
             {detail.data?.source === 'corpus' && (
               <p className="mt-2">
                 <Badge>Limited info: MyAnimeList unreachable</Badge>
@@ -519,9 +549,21 @@ export function Anime() {
                     </Button>
                   )}
                 </span>
+              ) : toDownload.length > 0 && confirmSpace ? (
+                // A line of its own, so the question sits with its answers rather than beside Favourite.
+                <span className="flex basis-full flex-wrap items-center gap-2">
+                  <ConfirmInline
+                    tone="accent"
+                    label={downloadAll.isPending ? 'Queuing…' : 'Download anyway'}
+                    note={`${toDownload.length === 1 ? 'It needs' : `These ${toDownload.length} need`} about ${bytes(need)}, and ${room.data?.drive} has ${bytes(free ?? 0)} free.`}
+                    pending={downloadAll.isPending}
+                    onConfirm={() => downloadAll.mutate(undefined, { onSettled: () => setConfirmSpace(false) })}
+                    onCancel={() => setConfirmSpace(false)}
+                  />
+                </span>
               ) : toDownload.length > 0 ? (
                 <Button
-                  onClick={() => downloadAll.mutate()}
+                  onClick={() => (wontFit ? setConfirmSpace(true) : downloadAll.mutate())}
                   disabled={downloadAll.isPending}
                   title={`Queues episodes ${toDownload[0]}–${toDownload[toDownload.length - 1]}, one at a time`}
                 >
@@ -536,6 +578,8 @@ export function Anime() {
               <p className="mt-2 text-xs text-recap">{(downloadAll.error as Error).message}</p>
             )}
 
+            <ShowBetterCopy animeId={id} />
+            <NotifyMe animeId={id} state={detail.data?.notify} />
             <AutoDownload animeId={id} />
             <ShowGroups animeId={id} />
             <SyncNote sync={detail.data?.sync} />
@@ -636,6 +680,83 @@ function ClockIcon() {
 }
 
 // Per show, overriding the global default, so one series can auto-download alone.
+const BECAUSE: Record<string, string> = {
+  watching: "On because it's on Watching",
+  followed: 'On',
+  auto: 'On with auto-download',
+}
+
+// New-episode alerts for this show, saying why they're on; and an episode asked for from the player.
+function NotifyMe({ animeId, state }: { animeId: number; state?: FollowState }) {
+  const qc = useQueryClient()
+  const prefs = usePrefs(animeId)
+  const update = (next: FollowState) =>
+    qc.setQueryData<AnimeDetail>(['anime', animeId], (old) => (old ? { ...old, notify: next } : old))
+  const set = useMutation({
+    meta: { inline: true },
+    mutationFn: (on: boolean) => api.post<FollowState>(`/api/anime/${animeId}/notify`, { on }),
+    onSuccess: update,
+  })
+  const unwant = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post<FollowState>(`/api/anime/${animeId}/want`, { episode: 0 }),
+    onSuccess: update,
+  })
+  if (!state) return null
+  const allOff = prefs.data?.defaults?.['notify.enabled'] === 'false'
+  const words = allOff
+    ? 'Alerts are off for every show in Settings'
+    : state.on
+      ? (BECAUSE[state.because ?? ''] ?? 'On')
+      : 'Off'
+  const error = (set.error ?? unwant.error) as Error | null
+
+  return (
+    <div className="mt-3 space-y-1 text-xs text-base-400">
+      <button
+        role="switch"
+        aria-checked={state.on}
+        onClick={() => set.mutate(!state.on)}
+        disabled={set.isPending}
+        className="flex items-center gap-2 transition-colors hover:text-base-200 pointer-coarse:min-h-11"
+      >
+        <span className={cx('relative h-4 w-7 rounded-full transition-colors', state.on ? 'bg-accent-500' : 'bg-base-700')}>
+          <span
+            className={cx(
+              'absolute top-0.5 size-3 rounded-full bg-white transition-all',
+              state.on ? 'left-[0.875rem]' : 'left-0.5',
+            )}
+          />
+        </span>
+        Alert me about new episodes
+        <span className="text-base-500">· {words}</span>
+      </button>
+      {allOff && (
+        <Link to="/settings?tab=Notifications" className="text-accent-300 hover:underline">
+          Turn alerts on
+        </Link>
+      )}
+      {state.wanted ? (
+        <p className="flex flex-wrap items-center gap-2">
+          Episode {state.wanted} downloads when it's out
+          <button onClick={() => unwant.mutate()} disabled={unwant.isPending} className="text-base-500 hover:text-base-200">
+            Cancel
+          </button>
+        </p>
+      ) : null}
+      {error && <p className="text-recap">{error.message}</p>}
+    </div>
+  )
+}
+
+// SeaDex's best over this show's kept episodes, offered where they're downloaded from.
+function ShowBetterCopy({ animeId }: { animeId: number }) {
+  const better = useBetterCopies(animeId)
+  const offer = better.data?.items[0]
+  if (!offer) return null
+  return <BetterCopyOffer offer={offer} showTitle={false} className="mt-3 rounded-lg border border-base-800 p-3" />
+}
+
 function AutoDownload({ animeId }: { animeId: number }) {
   const prefs = usePrefs(animeId)
   const setPref = useSetPref()
@@ -644,31 +765,36 @@ function AutoDownload({ animeId }: { animeId: number }) {
   if (!prefs.isSuccess) return null
 
   return (
-    <button
-      role="switch"
-      aria-checked={on}
-      onClick={() =>
-        setPref.mutate({ animeId, key: 'autodownload.enabled', value: String(!on) })
-      }
-      disabled={setPref.isPending}
-      className="mt-3 flex items-center gap-2 text-xs text-base-400 transition-colors hover:text-base-200 pointer-coarse:min-h-11"
-    >
-      <span
-        className={cx(
-          'relative h-4 w-7 rounded-full transition-colors',
-          on ? 'bg-accent-500' : 'bg-base-700',
-        )}
+    <>
+      <button
+        role="switch"
+        aria-checked={on}
+        onClick={() => setPref.mutate({ animeId, key: 'autodownload.enabled', value: String(!on) })}
+        disabled={setPref.isPending}
+        className="mt-3 flex items-center gap-2 text-xs text-base-400 transition-colors hover:text-base-200 pointer-coarse:min-h-11"
       >
-        <span
-          className={cx(
-            'absolute top-0.5 size-3 rounded-full bg-white transition-all',
-            on ? 'left-[0.875rem]' : 'left-0.5',
-          )}
-        />
-      </span>
-      {/* One fixed label; the switch says on or off. */}
-      Auto-download new episodes
-    </button>
+        <span className={cx('relative h-4 w-7 rounded-full transition-colors', on ? 'bg-accent-500' : 'bg-base-700')}>
+          <span
+            className={cx(
+              'absolute top-0.5 size-3 rounded-full bg-white transition-all',
+              on ? 'left-[0.875rem]' : 'left-0.5',
+            )}
+          />
+        </span>
+        {/* One fixed label; the switch says on or off. */}
+        Auto-download new episodes
+      </button>
+      {on && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-base-400">
+          Wait for a better release
+          <WaitSelect
+            value={prefs.data.overrides?.['autodownload.wait_hours'] ?? ''}
+            inherit={prefs.data.defaults?.['autodownload.wait_hours'] ?? '0'}
+            onChange={(value) => setPref.mutate({ animeId, key: 'autodownload.wait_hours', value })}
+          />
+        </div>
+      )}
+    </>
   )
 }
 
@@ -681,14 +807,63 @@ function parseGroups(raw: string | undefined): string[] {
   }
 }
 
-// One show's groups, over the account-wide ones. A preference, not a filter: quality still decides first.
+// The show's own release lists, over the account-wide ones: groups to prefer (quality still decides first) or
+// avoid, and words to exclude.
+const SHOW_LISTS = [
+  { key: 'release.prefer_groups', label: 'Prefer for this show', fallback: 'SubsPlease' },
+  { key: 'release.avoid_groups', label: 'Avoid for this show', fallback: 'A group' },
+  { key: 'release.exclude_terms', label: 'Exclude words', fallback: 'x265 mini' },
+] as const
+
 function ShowGroups({ animeId }: { animeId: number }) {
   const prefs = usePrefs(animeId)
-  const setPref = useSetPref()
   const [open, setOpen] = useState(false)
+  if (!prefs.isSuccess) return null
 
-  const own = parseGroups(prefs.data?.overrides?.['release.prefer_groups'])
-  const inherited = parseGroups(prefs.data?.defaults?.['release.prefer_groups'])
+  const anySet = SHOW_LISTS.some((l) => parseGroups(prefs.data.overrides?.[l.key]).length > 0)
+  if (!open && !anySet) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="mt-2 block text-xs text-base-500 transition-colors hover:text-base-200 pointer-coarse:min-h-11"
+      >
+        Release groups for this show…
+      </button>
+    )
+  }
+  return (
+    <div className="mt-2 space-y-1.5">
+      {SHOW_LISTS.map((l) => (
+        <ShowList
+          key={l.key}
+          animeId={animeId}
+          setting={l.key}
+          label={l.label}
+          own={parseGroups(prefs.data.overrides?.[l.key])}
+          inherited={parseGroups(prefs.data.defaults?.[l.key])}
+          fallback={l.fallback}
+        />
+      ))}
+    </div>
+  )
+}
+
+function ShowList({
+  animeId,
+  setting,
+  label,
+  own,
+  inherited,
+  fallback,
+}: {
+  animeId: number
+  setting: string
+  label: string
+  own: string[]
+  inherited: string[]
+  fallback: string
+}) {
+  const setPref = useSetPref()
   // The field follows the saved list when it changes, set during render rather than an effect after it.
   const saved = own.join(', ')
   const [text, setText] = useState(saved)
@@ -698,39 +873,25 @@ function ShowGroups({ animeId }: { animeId: number }) {
     setText(saved)
   }
 
-  if (!prefs.isSuccess) return null
-
   const save = () => {
-    const groups = text.split(',').map((g) => g.trim()).filter(Boolean)
-    if (groups.join(',') === own.join(',')) return
-    setPref.mutate({
-      animeId,
-      key: 'release.prefer_groups',
-      value: groups.length > 0 ? JSON.stringify(groups) : '',
-    })
+    const items = text.split(',').map((g) => g.trim()).filter(Boolean)
+    if (items.join(',') === own.join(',')) return
+    setPref.mutate({ animeId, key: setting, value: items.length > 0 ? JSON.stringify(items) : '' })
   }
-
-  if (!open && own.length === 0) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="mt-2 block text-xs text-base-500 transition-colors hover:text-base-200 pointer-coarse:min-h-11"
-      >
-        Prefer a release group for this show…
-      </button>
-    )
-  }
+  const id = `${setting}-${animeId}`
 
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-base-400">
-      <label htmlFor={`groups-${animeId}`}>Prefer for this show</label>
+    <div className="flex flex-wrap items-center gap-2 text-xs text-base-400">
+      <label htmlFor={id} className="w-36">
+        {label}
+      </label>
       <TextInput
-        id={`groups-${animeId}`}
+        id={id}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-        placeholder={inherited.length > 0 ? inherited.join(', ') : 'SubsPlease'}
+        placeholder={inherited.length > 0 ? inherited.join(', ') : fallback}
         className="w-48"
       />
       <SaveHint state={setPref} />
@@ -738,7 +899,7 @@ function ShowGroups({ animeId }: { animeId: number }) {
         <button
           onClick={() => {
             setText('')
-            setPref.mutate({ animeId, key: 'release.prefer_groups', value: '' })
+            setPref.mutate({ animeId, key: setting, value: '' })
           }}
           className="text-base-500 transition-colors hover:text-base-200"
         >

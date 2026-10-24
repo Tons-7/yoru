@@ -184,8 +184,74 @@ export interface Download {
   checking?: boolean
   mbps?: number
   peers?: number
+  /** The engine can't write it to disk and keeps retrying; with the drive's room left when that is known. */
+  warning?: string
+  freeBytes?: number
+  drive?: string
   /** The queue entry this torrent is the download of, paired client-side. */
   queued?: Queued
+}
+
+/** A new episode auto-download holds for a better release, until it lands or the wait ends. */
+export interface ReleaseHold {
+  animeId: number
+  episode: number
+  title: string
+  cover?: string
+  /** When the best there is gets taken anyway, unix seconds. */
+  until: number
+  /** What it waits for: "SubsPlease at 1080p", "a 1080p release". */
+  wants: string
+}
+
+export function useReleaseHolds() {
+  return useQuery({
+    queryKey: ['release-holds'],
+    queryFn: () => api.get<{ items: ReleaseHold[] }>('/api/releases/waiting'),
+    staleTime: 0,
+    refetchInterval: 60_000,
+  })
+}
+
+/** SeaDex's best release for a show whose kept episodes are another copy; offered, never taken on its own. */
+export interface BetterCopy {
+  animeId: number
+  title: string
+  cover?: string
+  /** One kept episode's release, to say what would go. */
+  kept: string
+  episodes: string[]
+  size: number
+  infoHash: string
+  group: string
+  resolution: string
+  source?: string
+  url?: string
+  release: string
+}
+
+export function useBetterCopies(animeId?: number) {
+  return useQuery({
+    queryKey: ['better-copies', animeId ?? 0],
+    queryFn: () => api.get<{ items: BetterCopy[] }>(`/api/better-copies${animeId ? `?anime=${animeId}` : ''}`),
+    staleTime: 5 * 60_000,
+  })
+}
+
+/** Room left on the downloads drive, from /api/cache. */
+export interface DriveRoom {
+  freeBytes?: number
+  drive?: string
+}
+
+/** Free space where downloads go: shown in Downloads, and checked before a whole show is queued. */
+export function useDriveRoom() {
+  return useQuery({
+    queryKey: ['cache'],
+    queryFn: () => api.get<DriveRoom>('/api/cache'),
+    staleTime: 0,
+    refetchInterval: 30_000,
+  })
 }
 
 export interface Queued {
@@ -206,19 +272,24 @@ export interface Queued {
   torrent?: Download
 }
 
-// Both are local, cheap reads: always fresh on arrival, polled fast while anything is moving.
 // Queue entries worth polling fast for: not failed, and not waiting minutes for a retry.
 function pollable(items: Queued[] = []): boolean {
   return items.some((q) => q.state !== 'failed' && !(q.retryAt && q.retryAt - Date.now() > 60_000))
 }
 
+// The queue and downloads are local, cheap reads: always fresh on arrival, polled fast while anything moves.
 export function useDownloadQueue() {
   return useQuery({
     queryKey: ['download-queue'],
     queryFn: () =>
-      api.get<{ items: Queued[]; waiting: Record<string, number>; paused?: boolean; watching?: boolean }>(
-        '/api/download/queue',
-      ),
+      api.get<{
+        items: Queued[]
+        waiting: Record<string, number>
+        paused?: boolean
+        watching?: boolean
+        /** The downloads drive is nearly full, so nothing starts until there's room. */
+        short?: { freeBytes: number; drive: string; needBytes: number }
+      }>('/api/download/queue'),
     staleTime: 0,
     refetchInterval: (q) => (pollable(q.state.data?.items) ? 5000 : 15_000),
   })
@@ -569,6 +640,8 @@ export interface AccessState {
   canSwitch: boolean
   /** This page runs on the machine Yoru runs on. */
   host: boolean
+  /** Host only: the last request a proxy on this machine passed on, and where it's reached from outside. */
+  proxy?: { seen: number; client: string; site: string }
 }
 
 /** Yoru's reach and whether this page is on its machine; one query, read by every page that needs it. */

@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,6 +70,12 @@ func (k Keys) Public() string {
 // Alert is what a device shows; Path is the page a tap opens, under the address the device subscribed from.
 type Alert struct {
 	Title, Body, Tag, Path string
+	// Image is a picture of the show; Badge the unread count for the app's icon, 0 for none.
+	Image string
+	Badge int
+	// Buttons acting on the show or episode without opening Yoru: "download", "upnext", "follow", "plan".
+	Actions          []string
+	AnimeID, Episode int
 }
 
 // Sender sends alerts to every stored subscription and forgets the ones the push service says are gone.
@@ -119,16 +126,26 @@ func (s *Sender) Send(ctx context.Context, a Alert) {
 
 var errGone = errors.New("push: subscription gone")
 
+// message is the declarative form (RFC 8030's "web_push": 8030): Safari shows it without running any script,
+// and browsers without that hand the same JSON to the service worker.
+func message(origin string, a Alert) map[string]any {
+	note := map[string]any{
+		"title": a.Title, "body": a.Body, "tag": a.Tag, "lang": "en",
+		"navigate": strings.TrimRight(origin, "/") + a.Path,
+	}
+	if a.Badge > 0 {
+		note["app_badge"] = strconv.Itoa(a.Badge)
+	}
+	msg := map[string]any{"web_push": 8030, "notification": note}
+	// Outside the declarative part, which documents no buttons or pictures: only Yoru's worker reads it.
+	if a.Image != "" || len(a.Actions) > 0 {
+		msg["yoru"] = map[string]any{"image": a.Image, "actions": a.Actions, "animeId": a.AnimeID, "episode": a.Episode}
+	}
+	return msg
+}
+
 func (s *Sender) sendOne(ctx context.Context, sub store.PushSubscription, a Alert) error {
-	// The declarative form (RFC 8030's "web_push": 8030): Safari shows it without running any script, and
-	// browsers without that hand the same JSON to the service worker.
-	payload, err := json.Marshal(map[string]any{
-		"web_push": 8030,
-		"notification": map[string]any{
-			"title": a.Title, "body": a.Body, "tag": a.Tag, "lang": "en",
-			"navigate": strings.TrimRight(sub.Origin, "/") + a.Path,
-		},
-	})
+	payload, err := json.Marshal(message(sub.Origin, a))
 	if err != nil {
 		return err
 	}

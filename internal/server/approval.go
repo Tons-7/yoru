@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"html"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -73,10 +72,8 @@ func deviceID(secret string) string {
 
 // requestDevice is the device ID the request's cookie names, or "" for a device given none.
 func requestDevice(r *http.Request) string {
-	for _, name := range []string{deviceCookie, legacyDeviceCookie} {
-		if c, err := r.Cookie(name); err == nil && c.Value != "" {
-			return deviceID(c.Value)
-		}
+	if c, err := r.Cookie(deviceCookie); err == nil && c.Value != "" {
+		return deviceID(c.Value)
 	}
 	return ""
 }
@@ -91,14 +88,7 @@ func (s *Server) admit(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 
-	id := ""
-	if c, err := r.Cookie(deviceCookie); err == nil && c.Value != "" {
-		id = deviceID(c.Value)
-	} else if c, err := r.Cookie(legacyDeviceCookie); err == nil && c.Value != "" {
-		// The same secret under Yoru's name, so the device keeps its approval.
-		id = deviceID(c.Value)
-		keepCookie(w, r, deviceCookie, legacyDeviceCookie, c.Value)
-	}
+	id := requestDevice(r)
 	status, now := a.status[id], time.Now()
 	if status == store.DeviceApproved {
 		if a.mode == approvalOnce || now.Sub(a.seen[id]) <= approvalIdle {
@@ -149,16 +139,14 @@ func (s *Server) requestAccess(w http.ResponseWriter, r *http.Request, id, name 
 	if id == "" && s.deniedAddr(r) {
 		return store.DeviceDenied
 	}
-	addr, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		addr = r.RemoteAddr
-	}
-	if id == "" && s.store.PendingFrom(r.Context(), addr, name) {
+	// Through a proxy that names no client every device shares its address: only the cookie tells them apart.
+	addr := clientAddr(r)
+	if id == "" && addr != "" && s.store.PendingFrom(r.Context(), addr, name) {
 		return store.DevicePending
 	}
 	if id == "" {
 		secret := NewAccessToken()
-		keepCookie(w, r, deviceCookie, legacyDeviceCookie, secret)
+		keepCookie(w, r, deviceCookie, secret)
 		id = deviceID(secret)
 	}
 	if err := s.store.RequestAccess(r.Context(), id, name, addr); err != nil {
@@ -172,9 +160,9 @@ func (s *Server) requestAccess(w http.ResponseWriter, r *http.Request, id, name 
 
 // deniedAddr reports a request from the address of a device the host turned down.
 func (s *Server) deniedAddr(r *http.Request) bool {
-	addr, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		addr = r.RemoteAddr
+	addr := clientAddr(r)
+	if addr == "" {
+		return false
 	}
 	devices, err := s.store.Devices(r.Context())
 	if err != nil {

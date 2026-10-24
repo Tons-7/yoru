@@ -1,11 +1,13 @@
 package library
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"time"
 
 	"yoru/internal/anilist"
@@ -58,6 +60,8 @@ func (i *Ingester) Run(ctx context.Context, force bool) (Report, error) {
 	}
 
 	if due, _ := i.due(ctx, "animeapi", discoverInterval, force); due {
+		// The first discovery finds every sequel ever made, not news: nothing is announced from it.
+		before, _ := i.store.SourceRefreshedAt(ctx, "animeapi")
 		missing, upstream, err := i.discover(ctx)
 		if err != nil {
 			return rep, errors.Join(seedErr, fmt.Errorf("discover: %w", err))
@@ -69,7 +73,7 @@ func (i *Ingester) Run(ctx context.Context, force bool) (Report, error) {
 		if err != nil {
 			return rep, errors.Join(seedErr, fmt.Errorf("fetch titles: %w", err))
 		}
-		rep.Linked = i.linkNew(anilist.Background(ctx), recent)
+		rep.Linked = i.linkNew(anilist.Background(ctx), recent, !before.IsZero())
 		// Marked only once fetched, so a retry picks up the rest.
 		if err := i.store.MarkSource(ctx, "animeapi", upstream); err != nil {
 			return rep, errors.Join(seedErr, err)
@@ -197,26 +201,39 @@ func (i *Ingester) fetchTitles(ctx context.Context, ids []int) (fetched, titles,
 
 // linkNew walks the franchise of each new anime that relates to a saved show, so a just-announced season,
 // film or OVA joins that show's Seasons or Related the day it is found, not at the show's weekly walk.
-func (i *Ingester) linkNew(ctx context.Context, ids []int) int {
-	// A first discovery can be thousands; past these, the weekly walk on opening catches up.
-	const maxIDs, maxWalks = 100, 20
+func (i *Ingester) linkNew(ctx context.Context, ids []int, announce bool) int {
+	// A first discovery can be thousands; past these, the weekly walk on opening catches up. Announcing reads
+	// every new one (a day's few; a first discovery announces nothing): a sequel missed here is never told.
+	const maxIDs, maxWalks, maxAnnounce = 100, 20, 1000
 	if i.Relations == nil || len(ids) == 0 {
 		return 0
 	}
 	// Newest first: ids grow, so a cut keeps this week's announcements over older finds.
 	ids = slices.Clone(ids)
 	slices.SortFunc(ids, func(a, b int) int { return b - a })
-	ids = ids[:min(len(ids), maxIDs)]
+	limit := maxIDs
+	if announce {
+		limit = maxAnnounce
+	}
+	ids = ids[:min(len(ids), limit)]
 
-	walked := 0
-	for start := 0; start < len(ids) && walked < maxWalks; start += 25 {
+	walked, failed := 0, 0
+	for start := 0; start < len(ids) && (announce || walked < maxWalks); start += 25 {
 		media, err := i.al.Relations(ctx, ids[start:min(start+25, len(ids))])
 		if err != nil {
 			i.log.Warn("relations of new anime", "err", err)
-			return walked
+			// One failure may pass, so the next batch is tried; two in a row is AniList down or limiting.
+			if failed++; failed >= 2 {
+				return walked
+			}
+			continue
 		}
+		failed = 0
 		for _, m := range media {
-			if walked >= maxWalks || !i.continuesSaved(ctx, m) {
+			if announce {
+				i.announceSeason(ctx, m)
+			}
+			if walked >= maxWalks || start >= maxIDs || !i.continuesSaved(ctx, m) {
 				continue
 			}
 			// Reached by an earlier walk this run (a sequel's film or OVA): its franchise is already current.
@@ -237,6 +254,50 @@ func (i *Ingester) linkNew(ctx context.Context, ids []int) int {
 		i.log.Info("new anime linked to saved shows", "count", walked)
 	}
 	return walked
+}
+
+// Statuses whose shows' sequels are news: anything on the list but dropped.
+var seasonNews = map[string]bool{"CURRENT": true, "REPEATING": true, "COMPLETED": true, "PAUSED": true, "PLANNING": true}
+
+// announceSeason tells of a new anime continuing a show on the list (its PREQUEL edge), a single time.
+func (i *Ingester) announceSeason(ctx context.Context, m anilist.RelatedMedia) {
+	for _, e := range m.Relations.Edges {
+		if e.Type != "PREQUEL" || e.Node.Type != "ANIME" {
+			continue
+		}
+		entry, err := i.store.ListEntry(ctx, e.Node.ID)
+		if err != nil || !seasonNews[entry.Status] || i.store.Notified(ctx, store.NotifySeason, m.ID) {
+			continue
+		}
+		rec, _ := i.store.CorpusRecord(ctx, m.ID)
+		title := cmp.Or(i.store.ShownTitle(ctx, m.ID), rec.Primary)
+		if title == "" {
+			return
+		}
+		body := "Follows " + cmp.Or(i.store.ShownTitle(ctx, e.Node.ID), "a show on your list")
+		if when := monthYear(m.StartDate); when != "" {
+			body += " · from " + when
+		}
+		id := m.ID
+		if _, err := i.store.AddNotification(ctx, store.Notification{
+			Kind: store.NotifySeason, AnimeID: &id, Title: title + " is on AniList", Body: body,
+			Payload: map[string]any{"follows": e.Node.ID},
+		}); err != nil {
+			i.log.Warn("announce new season", "anime", m.ID, "err", err)
+		}
+		return
+	}
+}
+
+// monthYear is "Jan 2027", "2027", or "" for an undated announcement.
+func monthYear(d anilist.FuzzyDate) string {
+	switch {
+	case d.Year == nil:
+		return ""
+	case d.Month == nil || *d.Month < 1 || *d.Month > 12:
+		return strconv.Itoa(*d.Year)
+	}
+	return time.Month(*d.Month).String()[:3] + " " + strconv.Itoa(*d.Year)
 }
 
 // continuesSaved: one of the new anime's season or related edges reaches a show Yoru keeps.

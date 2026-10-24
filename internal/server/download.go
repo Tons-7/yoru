@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"yoru/internal/disk"
+	"yoru/internal/library"
 )
 
 // detached scopes work outliving its request: a download must survive the tab moving on.
@@ -76,12 +79,8 @@ func (s *Server) downloadRelease(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	epKey := strconv.Itoa(body.Episode)
-	if _, err := s.store.Enqueue(ctx, body.AnimeID, body.Season, []int{body.Episode}); err != nil {
+	if err := s.store.EnqueueRelease(ctx, body.AnimeID, body.Season, body.Episode, hash, strings.TrimSpace(body.Title)); err != nil {
 		s.fail(w, "queue download", err)
-		return
-	}
-	if _, err := s.store.SetQueuedRelease(ctx, body.AnimeID, epKey, hash, strings.TrimSpace(body.Title)); err != nil {
-		s.fail(w, "choose release", err)
 		return
 	}
 	if _, err := s.downloader.Restart(ctx, body.AnimeID, epKey); err != nil {
@@ -229,8 +228,12 @@ func (s *Server) downloadQueue(w http.ResponseWriter, r *http.Request) {
 			waiting[q.AnimeID]++
 		}
 	}
-	send(w, http.StatusOK, map[string]any{"items": items, "waiting": waiting, "paused": s.downloader.Paused(),
-		"watching": s.downloader.Watching()})
+	out := map[string]any{"items": items, "waiting": waiting, "paused": s.downloader.Paused(),
+		"watching": s.downloader.Watching()}
+	if free, drive := s.downloader.Short(); free > 0 {
+		out["short"] = map[string]any{"freeBytes": free, "drive": drive, "needBytes": library.MinFree}
+	}
+	send(w, http.StatusOK, out)
 }
 
 // proceedQueue is "Download anyway": the queue runs beside the episodes playing now.
@@ -293,6 +296,11 @@ func (s *Server) downloads(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				continue
 			}
+			if items[i].Warning = p.Warning; p.Warning != "" {
+				if free, drive, err := disk.Free(s.cfg.CacheDir); err == nil {
+					items[i].FreeBytes, items[i].Drive = &free, drive
+				}
+			}
 			items[i].OnDisk = p.Bytes
 			items[i].Paused = p.Paused
 			items[i].Checking = p.Checking
@@ -309,6 +317,54 @@ func (s *Server) downloads(w http.ResponseWriter, r *http.Request) {
 	}
 
 	send(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+// betterCopies lists SeaDex's best releases for shows whose kept episodes are another copy; ?anime= for one.
+func (s *Server) betterCopies(w http.ResponseWriter, r *http.Request) {
+	animeID, _ := strconv.Atoi(r.URL.Query().Get("anime"))
+	offers, err := library.BetterCopies(r.Context(), s.store, animeID)
+	if err != nil {
+		s.fail(w, "better copies", err)
+		return
+	}
+	if offers == nil {
+		offers = []library.BetterCopy{}
+	}
+	send(w, http.StatusOK, map[string]any{"items": offers})
+}
+
+// replaceWithBetter queues the offered release for the show's kept episodes it covers.
+func (s *Server) replaceWithBetter(w http.ResponseWriter, r *http.Request) {
+	animeID, _ := strconv.Atoi(r.PathValue("anime"))
+	var body struct {
+		InfoHash string `json:"infoHash"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	n, err := library.ReplaceWithBetter(r.Context(), s.store, animeID, body.InfoHash)
+	if err != nil {
+		send(w, http.StatusConflict, map[string]any{"error": err.Error()})
+		return
+	}
+	s.downloader.Wake()
+	send(w, http.StatusOK, map[string]any{"queued": n})
+}
+
+// dismissBetter stops offering a release for the show.
+func (s *Server) dismissBetter(w http.ResponseWriter, r *http.Request) {
+	animeID, _ := strconv.Atoi(r.PathValue("anime"))
+	var body struct {
+		InfoHash string `json:"infoHash"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if err := library.DismissBetter(r.Context(), s.store, animeID, body.InfoHash); err != nil {
+		s.fail(w, "dismiss better copy", err)
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"dismissed": true})
 }
 
 // removeDownload deletes one download and its data. Pinned entries belong to

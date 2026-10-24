@@ -96,7 +96,7 @@ try {
   const castButton = page.getByRole('button', { name: 'Cast to a TV' })
   check(await until(() => castButton.isVisible(), 15_000), 'the player offers a Cast button where a device is about')
 
-  // This instance answers on this machine only: the TV could not reach it, so the button says what casting needs.
+  // This instance answers on this machine only, out of a TV's reach: the button says what casting needs.
   await castButton.click()
   const needs = page.getByRole('dialog', { name: 'Cast to a TV' })
   check(await until(() => needs.isVisible()), 'with Yoru unreachable from the TV, Cast lists what casting needs')

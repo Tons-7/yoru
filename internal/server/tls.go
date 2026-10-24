@@ -141,6 +141,15 @@ func (s *Server) accessHTTPS(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, s.certs.Status())
 }
 
+// checkAccessHTTPS asks this network again whether it answers the name, after the router was changed.
+func (s *Server) checkAccessHTTPS(w http.ResponseWriter, r *http.Request) {
+	if s.certs == nil {
+		send(w, http.StatusOK, certs.Status{State: certs.StateOff})
+		return
+	}
+	send(w, http.StatusOK, s.certs.CheckHome(r.Context()))
+}
+
 // setAccessHTTPS saves the DuckDNS name and token (never sent back) and starts; an empty name turns it off.
 func (s *Server) setAccessHTTPS(w http.ResponseWriter, r *http.Request) {
 	var body struct {

@@ -158,6 +158,8 @@ export interface UpNextItem {
   minutes?: number
   position?: number
   duration?: number
+  /** The episode title is held back by the show's spoiler rule. */
+  spoiler?: boolean
 }
 
 export interface LibraryItem {
@@ -229,6 +231,10 @@ export interface ScheduleItem {
   progress: number
   behind: number
   watched: boolean
+  /** On the list and a release is already found or held, so playing it starts straight away. */
+  out?: boolean
+  /** When this episode was due before AniList moved it later, unix seconds. */
+  delayedFrom?: number
   jstWeekday: string
   /** The full show, for the hover panel. */
   show?: DiscoverItem
@@ -268,6 +274,8 @@ export interface Episode {
   onDisk: boolean
   /** A library folder holds it: it plays from there, so there is nothing to download. */
   local?: boolean
+  /** Title, synopsis and still held back by the show's spoiler rule until watched or tapped open. */
+  spoiler?: boolean
 }
 
 /** Mixed episodes are part filler, so they carry the filler colour too. */
@@ -315,12 +323,26 @@ export interface ReleaseCandidate {
     Subtitles?: string[]
   }
   SeaDexBest?: boolean
+  /** SeaDex lists this exact release; without SeaDexBest it's one of its alternatives. */
+  SeaDexListed?: boolean
+  SeaDexGroup?: boolean
+  /** The SeaDex entry's notes and comparison pages, and whether its curation is still open. */
+  SeaDexNotes?: string
+  SeaDexCompare?: string[]
+  SeaDexIncomplete?: boolean
   Confirmed?: boolean
   score: number
   reasons?: string[]
   playable: boolean
   autoPick: boolean
   blocked?: string
+}
+
+/** Whether a show's new episodes alert, and why; and an episode to download when it's out. */
+export interface FollowState {
+  on: boolean
+  because?: 'followed' | 'watching' | 'auto'
+  wanted?: number
 }
 
 export interface Bookmark {
@@ -413,6 +435,10 @@ export interface SkipRange {
   kind: string
   start: number
   end: number
+  /** chapters, aniskip, found (in two episodes' shared sound) or marked (by the viewer). */
+  source?: string
+  /** AniSkip's id, for a vote on it. */
+  id?: string
 }
 
 export const LIST_STATUSES = [

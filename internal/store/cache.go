@@ -148,6 +148,9 @@ type CacheUsage struct {
 	Kept      int          `json:"kept"`
 	KeptBytes int64        `json:"keptBytes"`
 	Entries   []CacheEntry `json:"entries,omitempty"`
+	// Room left on the downloads drive, filled in by the server; nil when the drive can't say.
+	FreeBytes *int64 `json:"freeBytes,omitempty"`
+	Drive     string `json:"drive,omitempty"`
 }
 
 // torrent_file is joined loosely: only played downloads have one.

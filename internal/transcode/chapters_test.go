@@ -17,7 +17,9 @@ func TestChapterKind(t *testing.T) {
 		"Ending Theme": "ed", "End Credits": "ed",
 		// Release groups number them.
 		"OP1": "op", "OP 1": "op", "OP-01": "op", "ED1": "ed", "ED 2": "ed", "ED-01": "ed",
-		"Scene 1": "", "Part B": "", "Preview": "", "": "", "Stop": "", "Prologue": "",
+		"Scene 1": "", "Part B": "", "": "", "Stop": "", "Prologue": "",
+		"Preview": "preview", "Next Episode": "preview", "Next Episode Preview": "preview", "予告": "preview",
+		"Recap": "recap", "Previously": "recap", "Eyecatch": "eyecatch", "Eye Catch": "eyecatch",
 	} {
 		if got := chapterKind(title); got != want {
 			t.Errorf("chapterKind(%q) = %q, want %q", title, got, want)

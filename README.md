@@ -13,9 +13,6 @@ as you watch.
 Everything runs on your own machine: one binary with a built-in torrent engine,
 a browser player and one config file.
 
-Yoru was called kuro until October 2026. An installed kuro updates itself to
-Yoru and keeps your history, library and settings.
-
 ![Yoru home page](docs/screenshots/home.jpg)
 
 ## What it does
@@ -24,8 +21,9 @@ Yoru and keeps your history, library and settings.
   ahead of everything else queued; the rest is fetched in the background so the
   next episode is already there.
 - **Built-in torrent engine.** Picks the best release (resolution, codec, group,
-  seeders, SeaDex), or the best up to 720p or 480p if you'd rather, handles
-  season packs, and needs nothing else installed.
+  seeders, SeaDex and its notes, TRaSH Guides' group grades, a v2 over its v1),
+  or the best up to 720p or 480p if you'd rather, skips groups and words you
+  avoid, handles season packs, and needs nothing else installed.
 - **Plays anywhere.** In the browser by default, so a phone or TV on the same
   network works the same as the laptop. mpv and VLC are available as external
   players, with Anime4K upscaling. On a phone, **Open in app** hands the
@@ -38,11 +36,21 @@ Yoru and keeps your history, library and settings.
 - **Knows 34,000+ anime**, including the ~11,700 that exist on MyAnimeList but
   not AniList.
 - **Marks filler and recap episodes**, so a rewatch can skip them.
-- **Skips openings and endings**, if you ask it to. Nothing is automatic by
-  default.
-- **Follows airing shows:** notifies you of new episodes and can download them.
-  Alerts reach a phone even with Yoru closed (over its HTTPS address; on an
-  iPhone, once Yoru is added to the Home Screen).
+- **Skips openings and endings**, if you ask it to, for every show or one, with
+  **Watch it** to go back; recaps, previews and eyecatches too. The times come
+  from the file's chapters, AniSkip or your own marks, and when none has them
+  Yoru finds them in the sound episodes share. A show's first opening and last
+  ending still play. Nothing is skipped by default.
+- **Watches like a TV service:** an episode can count as watched once its
+  ending starts, auto next asks *Still watching?* after three episodes nobody
+  touched, a sleep timer stops at a time or at the end of the episode, later
+  episodes hide their titles and pictures until you reach them, and a finale
+  leads on to the next season.
+- **Follows airing shows:** notifies you of new episodes, delays and new seasons,
+  and can download them, waiting a few hours for your preferred group if you
+  like; **Notify me** works on any show, even one not out yet. Alerts carry
+  Download and Up next buttons, and reach a phone even with Yoru closed (over
+  its HTTPS address; on an iPhone, once Yoru is added to the Home Screen).
 - **Up next list.** Line up episodes from any shows and they play one after
   another; watched ones leave the list by themselves. One button adds the next
   episode of everything you're watching.
@@ -54,10 +62,15 @@ Yoru and keeps your history, library and settings.
 - **Lets you choose the release** when you want to: every one found, best
   first, and why any was ruled out.
 - **Cleans up after itself.** Downloads stay within a cache size you set, and
-  watched episodes can delete themselves; keep any you want forever.
+  watched episodes can delete themselves; keep any you want forever. On a full
+  drive downloads wait for room, and episodes that aired while Yoru was off are
+  caught up.
 - **Player comforts:** picture-in-picture, media keys and the lock screen,
   keyboard shortcuts, thumbnails on the seek bar, and sound options such as
-  clearer voices and night mode.
+  clearer voices and night mode. Speed, the sleep timer and skip times are in
+  the player's ⚙ menu.
+- **Looks after the PC it runs on:** starts with Windows in the tray if you
+  want, and keeps the PC awake while another device watches or a download runs.
 - **Leaves room on your connection**, with an optional download speed limit,
   and shares pieces only while an episode downloads (or never, if you prefer).
 - **Keeps torrents on your VPN**, if you pick its network: when the VPN drops,
@@ -78,16 +91,12 @@ torrent sites to search. Updates are offered in the app.
 Yoru runs as a normal Windows app, with no console window. While it runs, its
 icon sits in the tray: click it to open Yoru, right-click it to exit (or use
 **Exit Yoru** in the profile menu). Closing the window exits Yoru too, unless
-Settings → Playback → Window keeps it running in the tray. When something goes wrong,
-Settings → About copies or saves the log to send.
+Settings → This computer keeps it running in the tray; the same tab starts it
+when you sign in to Windows. When something goes wrong, Settings → About copies
+or saves the log to send.
 
-**Coming from kuro?** Update from inside kuro (Settings → About) and it becomes
-Yoru by itself. To do it by hand, put `yoru.exe` in kuro's folder in place of
-`kuro.exe` and run it: the data in `%LOCALAPPDATA%\kuro` moves to
-`%LOCALAPPDATA%\yoru` on the first start. After an update from inside kuro,
-your shortcuts and taskbar pins open Yoru too. Windows sees `yoru.exe` as a new
-program, so it may ask once whether torrent peers can connect: allow it, or
-later under Settings → Downloads.
+Windows may ask once whether torrent peers can connect: allow it, or later
+under Settings → Downloads.
 
 **On a Mac**, one line in Terminal installs `Yoru.app` and opens it, with no
 security prompt to get past (fetched by `curl`, the app is not quarantined):
@@ -128,7 +137,7 @@ player needs just ffmpeg.
 
 The torrent engine is built in. It takes peers on port 4240 (TCP and UDP;
 `[torrent] listen_port` changes it) and asks the router to forward it over
-UPnP. Downloads from an older kuro that used rqbit carry over on first run.
+UPnP.
 
 Yoru ships with no torrent sites. Add them on the setup screen or under
 Settings → Downloads → Release sites: the feed type the site serves (`nyaa` or
@@ -165,10 +174,9 @@ offers a newer version under **Settings → About**. Only `yoru.exe` is
 replaced; `bin/`, the cache, `config.toml` and the database stay. Builds from
 `build.ps1` without `-Version` are `dev` and never update themselves.
 
-To publish a release: `./scripts/package.ps1 -Version 2026.08.27 -Publish`
+To publish a release: `./scripts/package.ps1 -Version 2026.08.27 -Publish -NotesFile notes.md`
 (needs `gh auth login` once). It attaches the zips, `SHA256SUMS.txt` and its
-signature, which the updater verifies before touching anything. Each release
-also carries kuro-named update zips, so copies from before the rename find it.
+signature, which the updater verifies before touching anything.
 
 ### Everything in one folder
 
@@ -209,6 +217,10 @@ whatever Yoru page is open here, and the list of devices is in Settings.
 one file, for 12 hours, ended by a restart or by resetting the pairing. It
 never carries the access token.
 
+**Behind a reverse proxy**, give Yoru a domain or subdomain of its own (a
+sub-path is not supported). Forwarded client addresses are believed only from
+a proxy on this machine.
+
 ### Installing as an app on a phone
 
 Android only installs a site as an app (its own window, no address bar) over
@@ -227,7 +239,8 @@ a Let's Encrypt certificate and renews it. `http://localhost:4321` keeps working
 on this machine, on the same port.
 
 The name points at a private address, so this works on the home network only,
-and a few routers refuse such names ("DNS rebinding protection").
+and a few routers refuse such names ("DNS rebinding protection"); Settings
+checks yours and says so.
 
 To use a certificate of your own instead (your domain, or `tailscale cert`),
 point `config.toml` at the files; Yoru rereads them when they are renewed:
@@ -254,12 +267,22 @@ The torrent engine in `internal/bt` grew out of anacrolix/torrent and its DHT,
 and those files stay under the [Mozilla Public License 2.0](internal/bt/LICENSE),
 as that license requires.
 
-Anime names and the links between sites' ids come from manami-project's
-[anime-offline-database](https://github.com/manami-project/anime-offline-database),
-under the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/),
-and from nattadasu's [animeApi](https://github.com/nattadasu/animeApi). Show
-details, lists and schedules come from AniList; Yoru is not affiliated with
-AniList or MyAnimeList.
+Where Yoru's anime information comes from (Yoru isn't affiliated with any of them):
+
+- [AniList](https://anilist.co): show details, lists and schedules
+- MyAnimeList, through [Jikan](https://jikan.moe) and [Tenrai](https://tenrai.org): episode
+  titles, filler and recap flags, cast and staff
+- [TheTVDB](https://thetvdb.com) and [AniDB](https://anidb.net), through ani.zip: episode numbering
+  and pictures
+- [AniSkip](https://aniskip.com): opening and ending times, and where you share yours
+- [SeaDex](https://seadex.moe): the best release of a show
+- [TRaSH Guides](https://trash-guides.info), under the MIT License: release group grades
+- [AniFiller](https://github.com/AniraTeam/AniFiller) and [Anime Filler List](https://www.animefillerlist.com):
+  filler episodes
+- manami-project's [anime-offline-database](https://github.com/manami-project/anime-offline-database),
+  under the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/): anime names and
+  the links between sites' ids
+- nattadasu's [animeApi](https://github.com/nattadasu/animeApi): the links between sites' ids
 
 ## Layout
 
@@ -277,6 +300,7 @@ internal/
   engine          that engine behind a loopback API: sessions, streams, limits
   torrent         client for that API: add, select, stream
   transcode       ffmpeg, HLS, subtitle and font extraction
+  skipfind        openings and endings found in the sound episodes share
   player          mpv over JSON IPC, Anime4K shader chains
   library         the domain: playback, sync, scanning, notifications
   store           every SQL statement

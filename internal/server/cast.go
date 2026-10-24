@@ -39,7 +39,13 @@ func (s *Server) castLink(w http.ResponseWriter, r *http.Request) {
 	}
 	// ?burn=<track>: that track drawn into the picture, shifted by ?delay=, in a session of its own.
 	target, note := session, ""
-	if track := r.URL.Query().Get("burn"); track != "" {
+	if raw := r.URL.Query().Get("burn"); raw != "" {
+		// A number, as a track is: the rest of its way names files on disk.
+		track, err := strconv.Atoi(raw)
+		if err != nil || track < 0 {
+			send(w, http.StatusBadRequest, map[string]any{"error": "invalid subtitle track"})
+			return
+		}
 		delay, _ := strconv.ParseFloat(r.URL.Query().Get("delay"), 64)
 		burned, err := s.burnedSession(r.Context(), session, track, delay)
 		switch {
@@ -87,7 +93,7 @@ var errStillArriving = errors.New("the episode is still downloading")
 
 // burnedSession opens the episode with one subtitle track drawn in, shifted by delay seconds. The track must be
 // whole: lines still to download would be missing from the picture for good.
-func (s *Server) burnedSession(ctx context.Context, session *transcode.Session, track string, delay float64) (*transcode.Session, error) {
+func (s *Server) burnedSession(ctx context.Context, session *transcode.Session, track int, delay float64) (*transcode.Session, error) {
 	if s.subtitles == nil {
 		return nil, errors.New("subtitles unavailable")
 	}
@@ -96,14 +102,14 @@ func (s *Server) burnedSession(ctx context.Context, session *transcode.Session, 
 	}
 	req := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
 	req.SetPathValue("id", session.ID)
-	req.SetPathValue("track", track)
+	req.SetPathValue("track", strconv.Itoa(track))
 	rec := httptest.NewRecorder()
 	s.streamSubtitle(rec, req)
 	if rec.Code != http.StatusOK {
-		return nil, fmt.Errorf("subtitle track %s: HTTP %d", track, rec.Code)
+		return nil, fmt.Errorf("subtitle track %d: HTTP %d", track, rec.Code)
 	}
 	// Shifted by the player's delay and written as ASS, whatever the track was.
-	file := filepath.Join(session.Dir(), fmt.Sprintf("cast-%s.ass", track))
+	file := filepath.Join(session.Dir(), fmt.Sprintf("cast-%d.ass", track))
 	cmd := proc.Hide(exec.CommandContext(ctx, s.cfg.Tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
 		"-itsoffset", fmt.Sprintf("%.3f", delay), "-i", "pipe:0", "-c:s", "ass", file))
 	cmd.Stdin = bytes.NewReader(rec.Body.Bytes())
@@ -116,7 +122,7 @@ func (s *Server) burnedSession(ctx context.Context, session *transcode.Session, 
 		fonts = filepath.Join(session.Dir(), "fonts")
 	}
 	// Per track and delay: another choice is another picture.
-	id := fmt.Sprintf("%s-burn%s-%d", session.ID, track, int(math.Round(delay*10)))
+	id := fmt.Sprintf("%s-burn%d-%d", session.ID, track, int(math.Round(delay*10)))
 	return s.streams.OpenBurned(ctx, id, session.Source, local, transcode.Burn{Subtitles: file, Fonts: fonts})
 }
 
@@ -162,6 +168,7 @@ func (s *Server) castFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this cast link has expired; cast again from Yoru", http.StatusForbidden)
 		return
 	}
+	defer s.serving()()
 	r.SetPathValue("id", strings.TrimPrefix(g.Source, castPrefix))
 	file := r.PathValue("file")
 	switch {

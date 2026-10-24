@@ -147,37 +147,6 @@ func TestDeviceWaitsUntilTheHostAccepts(t *testing.T) {
 	}
 }
 
-// A phone paired under kuro stays paired and approved: its cookies move to Yoru's names on its first visit.
-func TestKuroCookiesCarryOver(t *testing.T) {
-	h := approvalHarness(t, approvalOnce)
-	d := newDevice(t, h)
-	d.get("/?token=s3cret", true)
-	id := h.devices(t)[0]["id"].(string)
-	h.host(t, "POST", "/api/access/devices/"+id, `{"status":"approved"}`)
-
-	// The same phone, holding what kuro set.
-	old := &device{h: h, t: t, ua: d.ua, cookies: map[string]string{
-		legacyAccessCookie: d.cookies[accessCookie], legacyDeviceCookie: d.cookies[deviceCookie],
-	}}
-	if res := old.get("/api/health", false); res.StatusCode != http.StatusOK {
-		t.Fatalf("with kuro's cookies: %d, want 200", res.StatusCode)
-	}
-	if old.cookies[accessCookie] != d.cookies[accessCookie] || old.cookies[deviceCookie] != d.cookies[deviceCookie] {
-		t.Errorf("cookies now %v, want the same values under Yoru's names", old.cookies)
-	}
-	for _, name := range []string{legacyAccessCookie, legacyDeviceCookie} {
-		if _, left := old.cookies[name]; left {
-			t.Errorf("%s was left behind", name)
-		}
-	}
-	if list := h.devices(t); len(list) != 1 {
-		t.Errorf("the phone was asked about again: %v", list)
-	}
-	if res := old.get("/api/health", false); res.StatusCode != http.StatusOK {
-		t.Fatalf("on Yoru's cookies: %d, want 200", res.StatusCode)
-	}
-}
-
 func TestDeclinedDeviceStaysOutAndDoesNotAskAgain(t *testing.T) {
 	h := approvalHarness(t, approvalOnce)
 	d := newDevice(t, h)

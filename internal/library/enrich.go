@@ -11,6 +11,7 @@ import (
 
 	"yoru/internal/anilist"
 	"yoru/internal/metadata"
+	"yoru/internal/score"
 	"yoru/internal/store"
 )
 
@@ -26,6 +27,8 @@ type Enricher struct {
 	stilling map[int]struct{}
 	cast     map[int]castEntry
 	extra    map[int]extraEntry
+	// When AniSkip was last asked about an episode: the player asks every few seconds while a search runs.
+	skipsAsked map[[2]int]time.Time
 	// One page lists every show the filler site covers, so it is worth keeping.
 	fillerShows   map[string]string
 	fillerShowsAt time.Time
@@ -38,6 +41,8 @@ func NewEnricher(s *store.Store, m *metadata.Client, log *slog.Logger) *Enricher
 		stilling: map[int]struct{}{},
 		cast:     map[int]castEntry{},
 		extra:    map[int]extraEntry{},
+
+		skipsAsked: map[[2]int]time.Time{},
 	}
 }
 
@@ -420,6 +425,15 @@ func (e *Enricher) Skips(ctx context.Context, animeID, episode int, durationSeco
 	if durationSeconds <= 0 {
 		return nil
 	}
+	// Its answer is saved, so asking again soon only repeats it.
+	key := [2]int{animeID, episode}
+	e.mu.Lock()
+	if time.Since(e.skipsAsked[key]) < skipsAskEvery {
+		e.mu.Unlock()
+		return nil
+	}
+	e.skipsAsked[key] = time.Now()
+	e.mu.Unlock()
 
 	skips, err := e.meta.Skips(ctx, malID, episode, durationSeconds)
 	if err != nil || len(skips) == 0 {
@@ -431,6 +445,7 @@ func (e *Enricher) Skips(ctx context.Context, animeID, episode int, durationSeco
 const (
 	fillerRefresh = 7 * 24 * time.Hour
 	seadexRefresh = 3 * 24 * time.Hour
+	skipsAskEvery = 10 * time.Minute
 
 	// Long enough to cap repeated opens at ~one request a day, short enough that a
 	// still added the morning after broadcast shows by evening.
@@ -457,6 +472,46 @@ func (e *Enricher) SeaDex(ctx context.Context, force bool) (int, error) {
 	}
 	e.log.Info("seadex mirrored", "releases", n)
 	return n, e.store.MarkSource(ctx, "seadex", n)
+}
+
+// TRaSH's tier lists change a few times a year.
+const tiersRefresh = 7 * 24 * time.Hour
+
+// GroupTiers mirrors TRaSH Guides' anime group grades and hands them to the ranking.
+func (e *Enricher) GroupTiers(ctx context.Context, force bool) (int, error) {
+	if !force {
+		at, err := e.store.SourceRefreshedAt(ctx, "trash")
+		if err == nil && !at.IsZero() && time.Since(at) < tiersRefresh {
+			return 0, e.UseGroupTiers(ctx)
+		}
+	}
+	tiers, err := e.meta.GroupTiers(ctx)
+	if err != nil {
+		// The last list keeps ranking meanwhile.
+		return 0, errors.Join(err, e.UseGroupTiers(ctx))
+	}
+	if err := e.store.SaveGroupTiers(ctx, tiers); err != nil {
+		return 0, err
+	}
+	e.log.Info("release group tiers mirrored", "groups", len(tiers))
+	if err := e.store.MarkSource(ctx, "trash", len(tiers)); err != nil {
+		return 0, err
+	}
+	return len(tiers), e.UseGroupTiers(ctx)
+}
+
+// UseGroupTiers loads the saved grades into the ranking.
+func (e *Enricher) UseGroupTiers(ctx context.Context) error {
+	saved, err := e.store.GroupTiers(ctx)
+	if err != nil {
+		return err
+	}
+	tiers := make([]score.GroupTier, 0, len(saved))
+	for _, t := range saved {
+		tiers = append(tiers, score.NewGroupTier(t.Kind, t.Level, t.Name, t.Pattern))
+	}
+	score.SetGroupTiers(tiers)
+	return nil
 }
 
 // Fillers loads one dataset covering every show, so it refreshes on a timer rather than per anime.

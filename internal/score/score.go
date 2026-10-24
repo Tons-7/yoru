@@ -68,6 +68,10 @@ type Preferences struct {
 	MaxAutoBytes int64
 	AllowHi10P   bool
 	PreferGroups []string
+	// Never picked on their own: groups, words in the title, and with AvoidLQ TRaSH's low-quality groups.
+	AvoidGroups  []string
+	ExcludeTerms []string
+	AvoidLQ      bool
 	// "sub", "dub" or "either".
 	Audio string
 	// Raws carry no subtitles, so they are refused unless asked for by name.
@@ -138,9 +142,15 @@ type Candidate struct {
 	Torrent indexer.Torrent
 	Release parse.Release
 
-	// SeaDex's curated best (by AniList id) outweighs any heuristic.
+	// SeaDex's curated best (by AniList id) wins among releases of its resolution.
 	SeaDexBest  bool
 	SeaDexGroup bool
+	// SeaDexListed: SeaDex lists this exact release, best or not. With it, the curator's notes, comparison
+	// pages, and whether the curation is still open, for the picker.
+	SeaDexListed     bool     `json:",omitempty"`
+	SeaDexNotes      string   `json:",omitempty"`
+	SeaDexCompare    []string `json:",omitempty"`
+	SeaDexIncomplete bool     `json:",omitempty"`
 
 	// Episodes in the show, used to size a single episode inside a batch.
 	TotalEpisodes int
@@ -274,6 +284,10 @@ func better(a, b Result) bool {
 	if a.Confirmed != b.Confirmed {
 		return a.Confirmed
 	}
+	// Resolution first, every key below only within one; strict keys, so arrival order never matters.
+	if a.AutoPick && a.resRank != b.resRank {
+		return a.resRank > b.resRank
+	}
 	// An old film's single release is often one seeder; its series batch is the copy people keep.
 	if a.AutoPick && a.Film != nil && b.Film != nil && thin(a) != thin(b) {
 		return !thin(a)
@@ -281,21 +295,84 @@ func better(a, b Result) bool {
 	if a.AutoPick && a.Release.Batch != b.Release.Batch {
 		return !a.Release.Batch
 	}
-	// Strict keys, so arrival order never matters: SeaDex best, resolution, readable subs, playable, score.
 	if a.AutoPick && a.SeaDexBest != b.SeaDexBest {
 		return a.SeaDexBest
 	}
-	if a.AutoPick && a.resRank != b.resRank {
-		return a.resRank > b.resRank
-	}
-	// Quality first; within a resolution, subtitles the viewer cannot read lose whatever else they have.
+	// Subtitles the viewer cannot read lose whatever else they have.
 	if a.AutoPick && a.unreadable != b.unreadable {
 		return !a.unreadable
 	}
 	if a.AutoPick && a.Playable != b.Playable {
 		return a.Playable
 	}
+	// A group's fixed re-release (v2) beats its own v1, whose older, bigger swarm would win on score.
+	if a.AutoPick && a.Release.Version != b.Release.Version && sameRelease(a.Release, b.Release) {
+		return a.Release.Version > b.Release.Version
+	}
 	return a.Score > b.Score
+}
+
+// sameRelease: one group's release of the same episode or pack, so a version tells them apart.
+func sameRelease(a, b parse.Release) bool {
+	return a.Group != "" && strings.EqualFold(a.Group, b.Group) && a.Resolution == b.Resolution &&
+		a.Batch == b.Batch && a.Episode == b.Episode && a.EpisodeEnd == b.EpisodeEnd
+}
+
+// Ideal: nothing better is worth a wait: top resolution, and SeaDex's pick or a preferred group (any if none).
+func Ideal(r Result, prefs Preferences) bool {
+	top := 0.0
+	for _, t := range prefs.Ladder {
+		top = max(top, resolutionRank(t.Resolution, prefs))
+	}
+	if r.resRank < top {
+		return false
+	}
+	if r.SeaDexBest || len(prefs.PreferGroups) == 0 {
+		return true
+	}
+	for _, g := range prefs.PreferGroups {
+		if strings.EqualFold(g, r.Release.Group) {
+			return true
+		}
+	}
+	return false
+}
+
+// Wanted says what Ideal waits for: "SubsPlease or Erai-raws at 1080p", or "a 1080p release".
+func Wanted(prefs Preferences) string {
+	top, res := 0.0, ""
+	for _, t := range prefs.Ladder {
+		if rank := resolutionRank(t.Resolution, prefs); rank > top {
+			top, res = rank, t.Resolution
+		}
+	}
+	if len(prefs.PreferGroups) == 0 {
+		return strings.Join(strings.Fields("a "+res+" release"), " ")
+	}
+	groups := strings.Join(prefs.PreferGroups, " or ")
+	if res == "" {
+		return groups
+	}
+	return groups + " at " + res
+}
+
+// Fixes: r is the same group's fixed release (v2) of held, at its resolution.
+func Fixes(r Result, held parse.Release) bool {
+	return sameRelease(r.Release, held) && r.Release.Version > held.Version
+}
+
+// Better: r is the release a wait holds out for and the held copy isn't, so a swap is never for seeders alone.
+// The held copy is judged from ranked results, or absent there, from its name.
+func Better(r Result, heldHash string, held parse.Release, ranked []Result, prefs Preferences) bool {
+	if !Ideal(r, prefs) {
+		return false
+	}
+	for _, x := range ranked {
+		if strings.EqualFold(x.Torrent.InfoHash, heldHash) {
+			return !Ideal(x, prefs)
+		}
+	}
+	return !Ideal(Result{Candidate: Candidate{Release: held}, resRank: resolutionRank(held.Resolution, prefs)}, prefs)
 }
 
 // thin: counted at a handful of seeders, which streams badly. An unknown count isn't thin.
@@ -328,6 +405,9 @@ func evaluate(c Candidate, prefs Preferences) Result {
 		r.AutoPick = false
 		r.add("pasted magnet: plays only when picked")
 	}
+	if rel.Version >= 2 {
+		r.addf("v%d, the group's fixed release", rel.Version)
+	}
 
 	if !r.applyLadder(rel, prefs) {
 		// Unlabelled source or codec matches no tier, but its known resolution beats a lower one; it sits under
@@ -354,6 +434,7 @@ func evaluate(c Candidate, prefs Preferences) Result {
 			break
 		}
 	}
+	r.applyTiers(c)
 
 	r.applySubtitles(rel, prefs)
 
@@ -426,6 +507,9 @@ func (r *Result) applyLadder(rel parse.Release, prefs Preferences) bool {
 	}
 	return false
 }
+
+// ResolutionRank is res's place on the user's ladder, higher better; 0 for none named.
+func ResolutionRank(res string, prefs Preferences) float64 { return resolutionRank(res, prefs) }
 
 // Ranks by the user's ladder, not pixels, so an unasked 2160p can't win. A resolution takes its best place,
 // so an interleaved ladder can't put 720p over 1080p.

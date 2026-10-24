@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"log/slog"
 	"maps"
@@ -166,6 +167,102 @@ func TestForeignHostOnLoopbackStillNeedsTheToken(t *testing.T) {
 	}
 }
 
+// Through a proxy on this machine, however it's set up, devices need the token and never get host controls.
+func TestProxiedRequestsAreNotTheHost(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	h.server.token = "s3cret"
+	proxied := func(method, path string, mark func(*http.Request), header http.Header) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		req.RemoteAddr, req.Host = "127.0.0.1:5555", "127.0.0.1:4321"
+		maps.Copy(req.Header, header)
+		mark(req)
+		rec := httptest.NewRecorder()
+		h.handler.ServeHTTP(rec, req)
+		return rec
+	}
+	for name, mark := range map[string]func(*http.Request){
+		"X-Forwarded-For": func(r *http.Request) { r.Header.Set("X-Forwarded-For", "203.0.113.4") },
+		"Forwarded":       func(r *http.Request) { r.Header.Set("Forwarded", "for=203.0.113.4;proto=https") },
+		"Cloudflare":      func(r *http.Request) { r.Header.Set("Cf-Connecting-Ip", "203.0.113.4") },
+		"Via":             func(r *http.Request) { r.Header.Set("Via", "1.1 cache") },
+		"bare nginx":      func(r *http.Request) { r.Proto, r.ProtoMajor, r.ProtoMinor = "HTTP/1.0", 1, 0 },
+	} {
+		if rec := proxied("GET", "/api/access", mark, nil); rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), "s3cret") {
+			t.Errorf("%s: status %d without the token, want 401", name, rec.Code)
+		}
+		token := http.Header{"Authorization": {"Bearer s3cret"}}
+		if rec := proxied("POST", "/api/access/rotate", mark, token); rec.Code != http.StatusForbidden {
+			t.Errorf("%s: host-only route answered %d to a paired device, want 403", name, rec.Code)
+		}
+		if rec := proxied("GET", "/api/access", mark, token); !strings.Contains(rec.Body.String(), `"host":false`) {
+			t.Errorf("%s: a device through the proxy was told it is the host: %s", name, rec.Body.String())
+		}
+	}
+}
+
+// The host's own page says devices come through a proxy, and where it is reached from outside: an address
+// only a paired device's request gives, as a forged one would carry the token off in the link.
+func TestTheHostSeesItsProxy(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	h.server.token = "s3cret"
+	relay := func(site, token string) {
+		req := httptest.NewRequest("GET", "/api/health", nil)
+		req.RemoteAddr, req.Host = "127.0.0.1:5555", "127.0.0.1:4321"
+		req.Header.Set("X-Forwarded-For", "203.0.113.4")
+		req.Header.Set("X-Forwarded-Host", site)
+		req.Header.Set("X-Forwarded-Proto", "https")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		h.handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	seen := func() (p struct{ Client, Site string }) {
+		var body struct {
+			Proxy struct{ Client, Site string } `json:"proxy"`
+		}
+		if err := json.NewDecoder(h.from(t, "127.0.0.1:5555", "/api/access", nil).Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return body.Proxy
+	}
+
+	relay("evil.example", "")
+	if p := seen(); p.Client != "203.0.113.4" || p.Site != "" {
+		t.Errorf("without the token: proxy = %+v, want the client seen and no address", p)
+	}
+	relay("yoru.example.com", "s3cret")
+	if p := seen(); p.Site != "https://yoru.example.com" {
+		t.Errorf("proxy = %+v, want https://yoru.example.com from a paired device", p)
+	}
+}
+
+// A proxy's own address names no device; the client it names does, and only its own entry counts.
+func TestClientAddrThroughProxies(t *testing.T) {
+	for _, c := range []struct {
+		name, remote, want string
+		header             http.Header
+	}{
+		{"direct", "192.168.1.50:5555", "192.168.1.50", nil},
+		{"nearest entry", "127.0.0.1:1", "203.0.113.4", http.Header{"X-Forwarded-For": {"6.6.6.6, 203.0.113.4"}}},
+		{"last header", "127.0.0.1:1", "203.0.113.4", http.Header{"X-Forwarded-For": {"6.6.6.6", "203.0.113.4"}}},
+		// The proxy appends X-Forwarded-For; an X-Real-Ip beside it may be the client's own, passed through.
+		{"appended entry first", "127.0.0.1:1", "203.0.113.4", http.Header{"X-Real-Ip": {"10.9.9.9"}, "X-Forwarded-For": {"203.0.113.4"}}},
+		{"real ip alone", "127.0.0.1:1", "198.51.100.7", http.Header{"X-Real-Ip": {"198.51.100.7"}}},
+		{"forwarded v6", "127.0.0.1:1", "2001:db8::1", http.Header{"Forwarded": {`for="[2001:db8::1]:4711";proto=https`}}},
+		{"names none", "127.0.0.1:1", "", http.Header{"Via": {"1.1 nginx"}}},
+		{"remote proxy names none", "192.168.1.9:1", "192.168.1.9", http.Header{"Via": {"1.1 nas"}}},
+		// A LAN device naming another address would slip a deny kept for its own.
+		{"forged from the LAN", "192.168.1.9:1", "192.168.1.9", http.Header{"X-Real-Ip": {"10.9.9.9"}}},
+	} {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = c.remote
+		maps.Copy(req.Header, c.header)
+		if got := clientAddr(req); got != c.want {
+			t.Errorf("%s: clientAddr = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 // The source reaches ffmpeg as -i, so only the two shapes /api/play hands out
 // may be accepted; anything else is a fetch or a file read of the caller's choosing.
 func TestStreamOpenRejectsForeignSources(t *testing.T) {
@@ -307,6 +404,7 @@ func TestHostOnlyRoutesRefusePairedDevices(t *testing.T) {
 		{"POST", "/api/access/approval", `{}`},
 		{"GET", "/api/access/https", ""},
 		{"POST", "/api/access/https", `{}`},
+		{"POST", "/api/access/https/check", ""},
 		{"POST", "/api/access/rotate", ""},
 		{"GET", "/api/access/firewall", ""},
 		{"POST", "/api/access/firewall", ""},
@@ -316,6 +414,8 @@ func TestHostOnlyRoutesRefusePairedDevices(t *testing.T) {
 		{"POST", "/api/app/exit", ""},
 		{"POST", "/api/app/show", ""},
 		{"GET", "/api/app/activity", ""},
+		{"GET", "/api/app/startup", ""},
+		{"POST", "/api/app/startup", `{"on":true}`},
 		{"GET", "/api/log", ""},
 		{"POST", "/api/log/folder", ""},
 	} {

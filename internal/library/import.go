@@ -143,7 +143,7 @@ func toAnime(m anilist.Media) store.Anime {
 		a.NextEpisode = &m.NextAiring.Episode
 		a.NextAiringAt = &m.NextAiring.AiringAt
 	}
-	// Finished shows only, the ones served from it; without the trending count, or every fetch rewrites the row.
+	// Finished shows only, the ones served from it; no trending count, or every fetch rewrites the row.
 	if m.Status != nil && (*m.Status == "FINISHED" || *m.Status == "CANCELLED") {
 		kept := m
 		kept.Trending = nil

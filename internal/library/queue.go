@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"yoru/internal/disk"
 	"yoru/internal/score"
 	"yoru/internal/store"
 	"yoru/internal/torrent"
@@ -37,6 +38,57 @@ type Downloader struct {
 	arrived func(ctx context.Context, session string) bool
 	// Paused as a whole from the downloads list: nothing starts until it is resumed. Kept across restarts.
 	paused bool
+	// The downloads folder, whose drive must have room for the queue to start one; empty doesn't look.
+	dir string
+	// The room left while that is too little, so the list says why nothing starts; 0 otherwise.
+	short      int64
+	shortDrive string
+}
+
+// MinFree is the room the queue keeps on the downloads drive: below it the queue waits, rather than fail each.
+const MinFree = 2 << 30
+
+// freeSpace is the drive's answer; a var so tests can fill a drive.
+var freeSpace = disk.Free
+
+// WithRoom has the queue wait while the drive holding dir is nearly full.
+func (d *Downloader) WithRoom(dir string) *Downloader { d.dir = dir; return d }
+
+// Short is the room left on the downloads drive while the queue waits for more, else 0.
+func (d *Downloader) Short() (free int64, drive string) {
+	if d == nil {
+		return 0, ""
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.short, d.shortDrive
+}
+
+// roomy reports enough room to start a download, noting the shortfall for the list when there isn't.
+func (d *Downloader) roomy() bool {
+	if d.dir == "" {
+		return true
+	}
+	free, drive, err := freeSpace(d.dir)
+	if err != nil {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	was := d.short
+	if free >= MinFree {
+		d.short = 0
+		if was > 0 {
+			d.log.Info("room on the downloads drive again; the queue carries on", "free", free)
+		}
+		return true
+	}
+	// Never 0, which reads as "not short".
+	d.short, d.shortDrive = max(free, 1), drive
+	if was == 0 {
+		d.log.Warn("downloads drive nearly full; the queue waits for room", "free", free, "drive", drive)
+	}
+	return false
 }
 
 // WhenArrived sets how the queue learns that an episode being watched has fully downloaded.
@@ -387,7 +439,7 @@ func (d *Downloader) Run(ctx context.Context) {
 
 	for {
 		d.releaseArrived(ctx)
-		worked := !d.held() && d.step(ctx)
+		worked := !d.held() && d.roomy() && d.step(ctx)
 		if ctx.Err() != nil {
 			return
 		}

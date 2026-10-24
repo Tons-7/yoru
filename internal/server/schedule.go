@@ -52,6 +52,10 @@ type scheduleItem struct {
 	Progress   int     `json:"progress"`
 	Behind     int     `json:"behind"`
 	Watched    bool    `json:"watched"`
+	// Out: on the list, aired, and a release already found or held, from what Yoru knows, no search made.
+	Out bool `json:"out"`
+	// DelayedFrom is when this episode was due before AniList moved it later, unix seconds.
+	DelayedFrom int64 `json:"delayedFrom,omitempty"`
 
 	// A late-night broadcast's Japanese date, which fansub sites quote, can differ from the viewer's.
 	JSTWeekday string `json:"jstWeekday"`
@@ -80,6 +84,8 @@ func midnight(t time.Time, offsetMinutes int) time.Time {
 
 // groupByDay splits entries into count local days (empties too), by the client's UTC offset.
 func groupByDay(items []scheduleItem, offsetMinutes int, start int64, count int) []scheduleDay {
+	// The handler takes 1 to 28 days; held here too, as it sizes an allocation.
+	count = min(max(count, 0), 28)
 	zone := zoneFor(offsetMinutes)
 	today := time.Now().In(zone).Format("2006-01-02")
 
@@ -191,6 +197,12 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		item.Watched = listed && progress >= e.Episode
+		if listed && !item.Watched && int64(e.AiringAt) <= time.Now().Unix() {
+			item.Out = s.store.EpisodeFetched(r.Context(), e.MediaID, e.Episode) || s.store.HeldEpisode(r.Context(), e.MediaID, e.Episode)
+		}
+		if d, ok := s.store.ShowDelay(r.Context(), e.MediaID); ok && d.Episode == e.Episode {
+			item.DelayedFrom = d.WasAt
+		}
 
 		items = append(items, item)
 	}

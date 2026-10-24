@@ -42,15 +42,18 @@ const CHECKS = [
   ['fs-autonext-check.mjs'],
   ['fullscreen-check.mjs'],
   ['home-rails-check.mjs', {}, ALONE],
+  ['host-check.mjs', {}, ALONE],
   ['hover-panel-check.mjs', {}, ALONE],
   ['list-state-check.mjs', {}, ALONE],
   ['lossless-audio-check.mjs'],
   ['no-transcoder-check.mjs', { BIN_ONLY: 'none' }],
+  ['notices-check.mjs', {}, ALONE],
   ['over-budget-note-check.mjs'],
   ['pip-check.mjs'],
   // Real sites would compete with the local swarm's.
   ['prefetch-check.mjs', { YORU_EXTRA_CONFIG: '' }, ALONE],
   ['related-check.mjs', {}, ALONE],
+  ['releases-check.mjs', {}, ALONE],
   ['saved-copy-check.mjs', {}, ALONE],
   ['seek-spinner-check.mjs'],
   ['segmented-scroll-check.mjs'],
@@ -58,6 +61,7 @@ const CHECKS = [
   ['setup-transcoder-check.mjs', { BIN_ONLY: 'ffmpeg' }],
   ['shortcuts-check.mjs'],
   ['sites-check.mjs'],
+  ['skips-check.mjs'],
   ['show-groups-check.mjs'],
   ['starting-note-check.mjs'],
   ['studio-check.mjs', {}, ALONE],
@@ -68,6 +72,7 @@ const CHECKS = [
   ['ui-shared-check.mjs'],
   ['unconvertible-check.mjs'],
   ['vlc-check.mjs'],
+  ['watching-check.mjs'],
   ['wifi-drop-check.mjs'],
   ['exit-log-check.mjs'],
   ['sound-check.mjs'],
@@ -134,8 +139,6 @@ if (!built) {
 
 // The updater end to end on two real builds; its own ports, so it never meets a lane.
 if (built && !only.length) await step('self-update', 'node scripts/update-check.mjs', webDir)
-// While releases still carry kuro-named zips (package.ps1), the last kuro must reach Yoru through them.
-if (built && !only.length) await step('self-update from kuro', 'node scripts/update-kuro-check.mjs', webDir)
 
 if (built) {
   console.log(`\n▶ ${checks.length} checks (logs: ${logs})`)

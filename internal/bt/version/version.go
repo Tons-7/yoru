@@ -4,8 +4,7 @@ package version
 var (
 	// DefaultExtendedHandshakeClientVersion is the client name peers see in the extension handshake.
 	DefaultExtendedHandshakeClientVersion = "Yoru"
-	// DefaultBep20Prefix starts Yoru's peer IDs (-KU0001- as kuro); bump it when Yoru changes in a way other
-	// peers could care about.
+	// DefaultBep20Prefix starts Yoru's peer IDs; bump it when a change matters to other peers.
 	DefaultBep20Prefix = "-YR0001-"
 	// DefaultHttpUserAgent is sent to HTTP trackers and web seeds.
 	DefaultHttpUserAgent = "Yoru"

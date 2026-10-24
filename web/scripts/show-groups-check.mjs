@@ -28,8 +28,8 @@ const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 160)))
 
 await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
-const open = page.getByRole('button', { name: /Prefer a release group/ })
-check(await until(() => open.isVisible()), 'the series page offers a per-show group')
+const open = page.getByRole('button', { name: /Release groups for this show/ })
+check(await until(() => open.isVisible()), 'the series page offers per-show groups')
 await open.click()
 
 const field = page.getByLabel('Prefer for this show')
@@ -57,13 +57,28 @@ check(
   'and the show resolves to its own',
 )
 
+// Avoided groups sit beside them, stored the same way.
+const avoid = page.getByLabel('Avoid for this show')
+check(await avoid.isVisible(), 'with a field for groups to avoid')
+await avoid.fill('BadGroup')
+await avoid.blur()
+check(
+  await until(async () => (await prefs(ANIME)).overrides?.['release.avoid_groups'] === '["BadGroup"]'),
+  'avoided groups are stored for this show',
+)
+
 await page.reload({ waitUntil: 'domcontentloaded' })
 check(await until(() => page.getByLabel('Prefer for this show').inputValue().then((v) => v === 'SubsPlease, Erai-raws')), 'it survives a reload')
 
-await page.getByRole('button', { name: 'Clear' }).click()
+await page.getByRole('button', { name: 'Clear' }).first().click()
 check(
   await until(async () => !(await prefs(ANIME)).overrides?.['release.prefer_groups']),
   'Clear removes the override',
+)
+await page.getByRole('button', { name: 'Clear' }).first().click()
+check(
+  await until(async () => !(await prefs(ANIME)).overrides?.['release.avoid_groups']),
+  'and the avoided ones too',
 )
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))

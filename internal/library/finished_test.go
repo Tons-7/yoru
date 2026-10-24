@@ -105,6 +105,61 @@ func TestOnlyFinishedShowsKeepTheirAnswer(t *testing.T) {
 	}
 }
 
+// A sequel found later than the first discovery, to a show on the list, is told of a single time; one to a show
+// off the list, or found by the first discovery, isn't.
+func TestANewSeasonOfAShowOnTheListIsAnnounced(t *testing.T) {
+	f := &fakeCatalogue{
+		status: map[int]string{100: "FINISHED", 200: "FINISHED", 900: "NOT_YET_RELEASED", 901: "NOT_YET_RELEASED"},
+		edges: map[int][][2]any{900: {{"PREQUEL", 100}}, 100: {{"SEQUEL", 900}},
+			901: {{"PREQUEL", 200}}, 200: {{"SEQUEL", 901}}},
+	}
+	st, _, al := catalogueStore(t, f)
+	ctx := context.Background()
+	if _, err := NewImporter(st, al, discard()).Hydrate(ctx, []int{100, 200}); err != nil {
+		t.Fatal(err)
+	}
+	completed := "COMPLETED"
+	if _, err := st.ImportList(ctx, nil, []store.Entry{{ID: 1, AnimeID: 100, Status: &completed}}, store.ImportMerge); err != nil {
+		t.Fatal(err)
+	}
+
+	served := "anilist\tmyanimelist\n100\t0\n200\t0\n"
+	sources := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/animeapi" {
+			io.WriteString(w, served)
+			return
+		}
+		http.Error(w, "gone", http.StatusNotFound)
+	}))
+	t.Cleanup(sources.Close)
+	fetch := corpus.NewFetcher()
+	fetch.SetURL("manami", sources.URL+"/manami")
+	fetch.SetURL("animeapi", sources.URL+"/animeapi")
+	ing := NewIngester(st, fetch, al, discard())
+	ing.Relations = NewRelations(st, al, discard())
+
+	// The first discovery: nothing it finds is news.
+	ing.Run(ctx, true)
+	served += "900\t0\n901\t0\n"
+	ing.Run(ctx, true)
+	ing.Run(ctx, true)
+
+	items, err := st.Notifications(ctx, false, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seasons []store.Notification
+	for _, n := range items {
+		if n.Kind == store.NotifySeason {
+			seasons = append(seasons, n)
+		}
+	}
+	if len(seasons) != 1 || *seasons[0].AnimeID != 900 || !strings.HasPrefix(seasons[0].Title, "Show 900") ||
+		!strings.Contains(seasons[0].Body, "Follows Show 100") {
+		t.Fatalf("season notifications = %+v, want one for the sequel of the show on the list", seasons)
+	}
+}
+
 // A new season discovered today that continues a saved show joins that show's seasons the same day.
 func TestANewSeasonJoinsTheSavedShowTheDayItIsFound(t *testing.T) {
 	f := &fakeCatalogue{

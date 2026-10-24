@@ -100,6 +100,8 @@ export function SchedulePage() {
                 const badges = (
                   <>
                     {isNext && <Badge tone="accent">Next</Badge>}
+                    {item.out && <Badge tone="accent">Out</Badge>}
+                    {item.delayedFrom ? <Badge tone="warning">Delayed</Badge> : null}
                     {item.watched && <Badge tone="success">Watched</Badge>}
                     {item.behind > 0 && <Badge tone="accent">{item.behind} behind</Badge>}
                     {item.onList && !item.watched && item.behind === 0 && <Badge>On list</Badge>}
@@ -166,6 +168,9 @@ export function SchedulePage() {
                           Episode {item.episode}
                           {/* Late-night broadcasts are a different weekday in Japan, as groups label them. */}
                           {item.jstWeekday !== active.weekday && ` · ${item.jstWeekday} JST`}
+                          {item.delayedFrom
+                            ? ` · was due ${new Date(item.delayedFrom * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+                            : ''}
                         </p>
                         {/* On a phone the badges go under the title, which keeps the row's width. */}
                         <div className="mt-1 flex flex-wrap items-center gap-1.5 sm:hidden">{badges}</div>

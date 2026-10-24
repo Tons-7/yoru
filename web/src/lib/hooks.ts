@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
+/** A button's last answer, kept while it's asked again: a new run starts empty, so its words would blink back. */
+export function useHeldData<T>(mutation: { data?: T; isPending: boolean }): T | undefined {
+  const [last, setLast] = useState(mutation.data)
+  if (mutation.data !== undefined && mutation.data !== last) setLast(mutation.data)
+  return mutation.data ?? (mutation.isPending ? last : undefined)
+}
+
 /** A page whose last item went: back to the last page that still has some, not a false "nothing here". */
 export function useClampPage(empty: boolean, page: number, total: number | undefined, perPage: number, onPage: (page: number) => void) {
   useEffect(() => {

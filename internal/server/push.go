@@ -64,7 +64,7 @@ func (s *Server) pushSubscribe(w http.ResponseWriter, r *http.Request) {
 	sub := store.PushSubscription{
 		Endpoint: body.Endpoint, Origin: requestOrigin(r),
 		P256dh: base64.RawURLEncoding.EncodeToString(p256dh), Auth: base64.RawURLEncoding.EncodeToString(auth),
-		Paired: !isLoopback(r.RemoteAddr) || !loopbackHost(r.Host),
+		Paired: !fromHost(r),
 	}
 	// Who asked, so declining or removing the device stops its alerts too.
 	sub.Device = requestDevice(r)
@@ -134,7 +134,23 @@ func requestOrigin(r *http.Request) string {
 
 // ReleaseAlert is the push for a notification, or false for one that belongs only to the open app.
 func ReleaseAlert(ctx context.Context, st *store.Store, n store.Notification) (push.Alert, bool) {
-	if (n.Kind != store.NotifyRelease && n.Kind != store.NotifyAiring) || n.AnimeID == nil {
+	if n.AnimeID == nil {
+		return push.Alert{}, false
+	}
+	switch n.Kind {
+	case store.NotifyRelease, store.NotifyAiring:
+	case store.NotifyDelay, store.NotifySeason:
+		// About the show, not an episode to play: they open its page, and their title names it.
+		unread, _ := st.UnreadCount(ctx)
+		a := push.Alert{
+			Title: n.Title, Body: n.Body, Tag: fmt.Sprintf("yoru-%d", n.ID),
+			Path: fmt.Sprintf("/anime/%d", *n.AnimeID), Image: st.BannerOf(ctx, *n.AnimeID), Badge: unread,
+		}
+		if n.Kind == store.NotifySeason {
+			a.Actions, a.AnimeID = []string{"follow", "plan"}, *n.AnimeID
+		}
+		return a, true
+	default:
 		return push.Alert{}, false
 	}
 	episode := 1
@@ -145,9 +161,16 @@ func ReleaseAlert(ctx context.Context, st *store.Store, n store.Notification) (p
 	if title == "" {
 		title = "Yoru"
 	}
+	unread, _ := st.UnreadCount(ctx)
 	// The tag and page an open tab's own alert uses, so the two show as one.
-	return push.Alert{
+	a := push.Alert{
 		Title: title, Body: n.Title, Tag: fmt.Sprintf("yoru-%d", n.ID),
-		Path: fmt.Sprintf("/watch/%d/%d", *n.AnimeID, episode),
-	}, true
+		Path:  fmt.Sprintf("/watch/%d/%d", *n.AnimeID, episode),
+		Image: st.BannerOf(ctx, *n.AnimeID), Badge: unread,
+	}
+	// A release can be downloaded or lined up from the alert itself; an airing one has nothing to fetch yet.
+	if n.Kind == store.NotifyRelease {
+		a.Actions, a.AnimeID, a.Episode = []string{"download", "upnext"}, *n.AnimeID, episode
+	}
+	return a, true
 }

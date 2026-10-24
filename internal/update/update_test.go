@@ -30,7 +30,7 @@ import (
 	"yoru/internal/store"
 )
 
-// --no-window is forwarded, never added, so a windowed kuro reopens its UI.
+// --no-window is forwarded, never added, so a windowed Yoru reopens its UI.
 func TestRelaunchForwardsTheWindowChoice(t *testing.T) {
 	for _, tc := range []struct {
 		current []string
@@ -49,7 +49,7 @@ func TestRelaunchForwardsTheWindowChoice(t *testing.T) {
 
 // With the child's output on NUL, a handover that failed took the app away without a word.
 func TestRelaunchKeepsTheOutputItWasStartedWith(t *testing.T) {
-	cmd := relaunchCmd(filepath.Join(t.TempDir(), config.ExeName("kuro")))
+	cmd := relaunchCmd(filepath.Join(t.TempDir(), config.ExeName("yoru")))
 
 	if cmd.Stdout != os.Stdout {
 		t.Errorf("stdout = %v, want the parent's", cmd.Stdout)
@@ -193,12 +193,12 @@ func fakeTamperedRelease(t *testing.T, version string, exeBody []byte, sums, tru
 	return srv
 }
 
-// A release signed by any other key is not kuro's, whatever its checksums say.
+// A release signed by any other key is not Yoru's, whatever its checksums say.
 func TestApplyRefusesAReleaseSignedByAStranger(t *testing.T) {
 	setVersion(t, "2026.08.24")
 	st := testStore(t)
 	gh := fakeGitHubSigned(t, "2026.08.27", []byte("new binary"), true, false)
-	exe := filepath.Join(t.TempDir(), config.ExeName("kuro"))
+	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
 	os.WriteFile(exe, []byte("old binary"), 0o755)
 	u := newUpdater(t, st, gh, exe)
 	u.launch = func(string) error { return nil }
@@ -357,7 +357,7 @@ func TestCheckNotifiesOncePerVersion(t *testing.T) {
 	setVersion(t, "2026.08.24")
 	st := testStore(t)
 	gh := fakeGitHub(t, "2026.08.27", []byte("new"), true)
-	u := newUpdater(t, st, gh, filepath.Join(t.TempDir(), "kuro.exe"))
+	u := newUpdater(t, st, gh, filepath.Join(t.TempDir(), "yoru.exe"))
 	ctx := context.Background()
 
 	for range 2 {
@@ -380,7 +380,7 @@ func TestDevBuildNeverSeesAnUpdate(t *testing.T) {
 	setVersion(t, "dev")
 	st := testStore(t)
 	gh := fakeGitHub(t, "2026.08.27", []byte("new"), true)
-	u := newUpdater(t, st, gh, filepath.Join(t.TempDir(), "kuro.exe"))
+	u := newUpdater(t, st, gh, filepath.Join(t.TempDir(), "yoru.exe"))
 
 	got, err := u.Check(context.Background())
 	if err != nil || got.Available {
@@ -396,7 +396,7 @@ func TestApplySwapsTheExecutableAndHandsOver(t *testing.T) {
 	st := testStore(t)
 	gh := fakeGitHub(t, "2026.08.27", []byte("new binary"), true)
 
-	exe := filepath.Join(t.TempDir(), config.ExeName("kuro"))
+	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
 	os.WriteFile(exe, []byte("old binary"), 0o755)
 
 	var launched string
@@ -440,7 +440,7 @@ func TestApplyRefusesAnUnverifiableArchive(t *testing.T) {
 	st := testStore(t)
 	gh := fakeGitHub(t, "2026.08.27", []byte("new"), false)
 
-	exe := filepath.Join(t.TempDir(), config.ExeName("kuro"))
+	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
 	os.WriteFile(exe, []byte("old"), 0o755)
 	u := newUpdater(t, st, gh, exe).WithRestart(func() { t.Error("restarted on an unverified update") })
 	u.launch = func(string) error { t.Error("launched an unverified update"); return nil }
@@ -467,7 +467,7 @@ func TestApplyRestoresTheOldBinaryWhenTheNewOneWontStart(t *testing.T) {
 	st := testStore(t)
 	gh := fakeGitHub(t, "2026.08.27", []byte("new binary"), true)
 
-	exe := filepath.Join(t.TempDir(), config.ExeName("kuro"))
+	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
 	os.WriteFile(exe, []byte("old binary"), 0o755)
 	u := newUpdater(t, st, gh, exe).WithRestart(func() { t.Error("restarted after a failed launch") })
 	u.launch = func(string) error { return errors.New("blocked by antivirus") }
@@ -485,67 +485,30 @@ func TestApplyRestoresTheOldBinaryWhenTheNewOneWontStart(t *testing.T) {
 	}
 }
 
-// The old updater installs the first Yoru as kuro.exe; it renames itself on start, and a later start leaves it.
-func TestTakeNameAfterTheRename(t *testing.T) {
-	dir := t.TempDir()
-	kuro, yoru := filepath.Join(dir, config.ExeName("kuro")), filepath.Join(dir, config.ExeName("yoru"))
-	os.WriteFile(kuro, []byte("new code"), 0o755)
+// A new version failing to start hands back to the one kept as .old; once one serves, the leftovers go.
+func TestRollbackThenCleanup(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
+	os.WriteFile(exe, []byte("new, failing"), 0o755)
+	os.WriteFile(exe+".old", []byte("old"), 0o755)
 
-	if got := TakeName(kuro); got != yoru {
-		t.Fatalf("now %s, want %s", got, yoru)
+	if err := Rollback(exe); err != nil {
+		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(yoru); string(b) != "new code" {
-		t.Errorf("yoru.exe holds %q", b)
+	if b, _ := os.ReadFile(exe); string(b) != "old" {
+		t.Errorf("yoru.exe holds %q, want the old version", b)
 	}
-	if _, err := os.Stat(kuro); err == nil {
-		t.Error("kuro.exe is still there")
-	}
-	if got := TakeName(yoru); got != yoru {
-		t.Errorf("an already renamed one moved to %s", got)
-	}
-
-	// A yoru.exe of the user's own (a fresh download beside the old one) is never replaced.
-	os.WriteFile(kuro, []byte("other"), 0o755)
-	if got := TakeName(kuro); got != kuro {
-		t.Errorf("renamed over an existing yoru.exe: %s", got)
-	}
-	if b, _ := os.ReadFile(yoru); string(b) != "new code" {
-		t.Errorf("yoru.exe was replaced with %q", b)
-	}
-}
-
-// The first Yoru failing to start hands back to the version before it, which waits as kuro.exe.old.
-func TestRollbackAcrossTheRename(t *testing.T) {
-	dir := t.TempDir()
-	kuro, yoru := filepath.Join(dir, config.ExeName("kuro")), filepath.Join(dir, config.ExeName("yoru"))
-	os.WriteFile(yoru, []byte("new, failing"), 0o755)
-	os.WriteFile(kuro+".old", []byte("old"), 0o755)
-
-	back, err := Rollback(yoru)
-	if err != nil || back != kuro {
-		t.Fatalf("rollback to %q (%v), want %s", back, err, kuro)
-	}
-	if b, _ := os.ReadFile(kuro); string(b) != "old" {
-		t.Errorf("kuro.exe holds %q, want the old version", b)
-	}
-	if b, _ := os.ReadFile(yoru + ".failed"); string(b) != "new, failing" {
+	if b, _ := os.ReadFile(exe + ".failed"); string(b) != "new, failing" {
 		t.Errorf("the failed one kept as %q", b)
 	}
-
-	// Serving under the new name later, the kuro-named leftovers go.
-	os.WriteFile(yoru, []byte("fixed"), 0o755)
-	os.WriteFile(kuro+".old", []byte("old"), 0o755)
-	Cleanup(yoru)
-	for _, left := range []string{kuro + ".old", yoru + ".failed"} {
-		if _, err := os.Stat(left); err == nil {
-			t.Errorf("%s left behind", filepath.Base(left))
-		}
+	Cleanup(exe)
+	if _, err := os.Stat(exe + ".failed"); err == nil {
+		t.Error("yoru.exe.failed left behind")
 	}
 }
 
 func TestSwapRestoresTheOldBinaryWhenTheNewOneCannotMoveIn(t *testing.T) {
 	dir := t.TempDir()
-	exe := filepath.Join(dir, "kuro.exe")
+	exe := filepath.Join(dir, "yoru.exe")
 	os.WriteFile(exe, []byte("old"), 0o755)
 
 	if err := swap(exe, filepath.Join(dir, "missing.new")); err == nil {
@@ -561,7 +524,7 @@ func TestApplyTwiceStartsOneDownload(t *testing.T) {
 	setVersion(t, "2026.08.24")
 	st := testStore(t)
 	gh := fakeGitHub(t, "2026.08.27", []byte("new binary"), true)
-	exe := filepath.Join(t.TempDir(), config.ExeName("kuro"))
+	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
 	os.WriteFile(exe, []byte("old binary"), 0o755)
 
 	var restarts atomic.Int32

@@ -35,7 +35,7 @@ func TestMpvEOFFollowsThePlayedShareRule(t *testing.T) {
 		}
 		pl.events <- player.Event{Kind: player.EventEnd, Reason: "eof"}
 		close(pl.events)
-		p.track(pl, 9, 1, 1, p.trackGen.Load())
+		p.track(pl, 9, 1, 1, p.trackGen.Load(), 0)
 
 		progress, _ := st.ListProgress(ctx)
 		return progress[9]

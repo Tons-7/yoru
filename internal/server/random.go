@@ -124,6 +124,9 @@ func (s *Server) anime(w http.ResponseWriter, r *http.Request) {
 	if b, err := s.store.Bookmark(r.Context(), id); err == nil {
 		body["bookmark"] = b
 	}
+	if f, err := s.store.FollowOf(r.Context(), id); err == nil {
+		body["notify"] = f
+	}
 
 	// An episode left part way is what "continue" should mean, ahead of the
 	// tracker's count — which a jump to the end can have advanced already.
@@ -236,6 +239,9 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 	}
 	if m.IDMal != nil {
 		body["malId"] = *m.IDMal
+	}
+	if d, ok := s.store.ShowDelay(r.Context(), id); ok {
+		body["delay"] = map[string]any{"episode": d.Episode, "wasAt": d.WasAt, "nowAt": d.NowAt}
 	}
 	return body, true, false
 }

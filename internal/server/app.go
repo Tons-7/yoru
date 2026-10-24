@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +12,8 @@ import (
 	"time"
 
 	"yoru/internal/config"
+	"yoru/internal/shortcut"
+	"yoru/internal/tray"
 )
 
 // appExit ends Yoru, answering first: stopping closes the server under the request.
@@ -26,6 +27,33 @@ func (s *Server) appExit(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(200 * time.Millisecond)
 		s.exit()
 	}()
+}
+
+// appStartup says whether Yoru starts in the tray when the user signs in; a POST turns that on or off.
+func (s *Server) appStartup(w http.ResponseWriter, r *http.Request) {
+	exe, err := os.Executable()
+	if err != nil {
+		s.fail(w, "find Yoru's program", err)
+		return
+	}
+	if r.Method == http.MethodPost {
+		var body struct {
+			On bool `json:"on"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if err := shortcut.SetAtSignIn(exe, body.On); err != nil {
+			s.fail(w, "start at sign-in", err)
+			return
+		}
+	}
+	on, err := shortcut.AtSignIn(exe)
+	if err != nil {
+		s.fail(w, "start at sign-in", err)
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"on": on, "tray": tray.Available})
 }
 
 // watching is another device playing through this Yoru, from its progress reports.
@@ -59,11 +87,7 @@ func watcherKey(r *http.Request) string {
 	if id := requestDevice(r); id != "" {
 		return "device " + id
 	}
-	addr, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		addr = r.RemoteAddr
-	}
-	return addr + " " + r.UserAgent()
+	return clientAddr(r) + " " + r.UserAgent()
 }
 
 // appActivity is what exiting would stop on other devices: who is playing what. Downloads the page knows.

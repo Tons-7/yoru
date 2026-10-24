@@ -173,12 +173,10 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusOK, map[string]any{"dataDir": dir, "copied": false, "restart": false})
 		return
 	}
-	// Opening another history instead of carrying this one is asked, not assumed; kuro's counts too.
+	// Opening another history instead of carrying this one is asked, not assumed.
 	existing := ""
-	for _, name := range []string{config.Name, config.Legacy} {
-		if p := filepath.Join(dir, name+".db"); fileExists(p) && existing == "" {
-			existing = p
-		}
+	if p := filepath.Join(dir, config.Name+".db"); fileExists(p) {
+		existing = p
 	}
 	if info, err := os.Stat(existing); existing != "" && err == nil && !body.UseExisting {
 		send(w, http.StatusConflict, map[string]any{
