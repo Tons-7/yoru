@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"strconv"
 	"sync/atomic"
@@ -23,6 +22,9 @@ const (
 	opFrame     = 1
 	opClose     = 2
 )
+
+// maxPayload is the largest frame body sent; Discord's own limit is far above a presence.
+const maxPayload = 64 << 10
 
 // conn is one connection to the Discord app.
 type conn struct {
@@ -86,8 +88,8 @@ func (c *conn) write(op uint32, payload any) error {
 	if err != nil {
 		return err
 	}
-	// The frame states its length in 32 bits.
-	if uint64(len(body)) > math.MaxUint32-8 {
+	// A presence is a few hundred bytes; the bound keeps the frame's 32-bit length and its allocation honest.
+	if len(body) > maxPayload {
 		return fmt.Errorf("discord: payload of %d bytes is too large", len(body))
 	}
 	frame := make([]byte, 8, 8+len(body))

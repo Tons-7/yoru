@@ -93,7 +93,7 @@ func (w *Watcher) Poll(ctx context.Context) (WatchReport, error) {
 		// player, downloaded when out without auto-downloading the rest.
 		notifyOn, wanted := notifyOn, 0
 		if p, err := w.store.Prefs(ctx, f.AnimeID); err == nil {
-			notifyOn, wanted = p.Bool("notify.enabled"), int(p.Int64("autodownload.want"))
+			notifyOn, wanted = p.Bool("notify.enabled"), p.Int("autodownload.want")
 		}
 		if !notifyOn && !auto && wanted == 0 {
 			continue
@@ -295,7 +295,7 @@ func (w *Watcher) asked(ctx context.Context, animeID int) int {
 	if err != nil {
 		return 0
 	}
-	return int(p.Int64("autodownload.want"))
+	return p.Int("autodownload.want")
 }
 
 // waitFor is how long the show's auto-download holds a new episode for a better release; 0 takes the first.

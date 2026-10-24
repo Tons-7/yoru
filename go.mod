@@ -9,7 +9,7 @@ require (
 	filippo.io/edwards25519 v1.2.0
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Microsoft/go-winio v0.6.4
-	github.com/RoaringBitmap/roaring/v2 v2.29.0
+	github.com/RoaringBitmap/roaring/v2 v2.30.0
 	github.com/anacrolix/btree v0.1.1
 	github.com/anacrolix/chansync v0.8.0
 	github.com/anacrolix/envpprof v1.6.0
@@ -54,7 +54,7 @@ require (
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
 	golang.org/x/time v0.16.0
-	modernc.org/sqlite v1.60.1
+	modernc.org/sqlite v1.61.0
 )
 
 require (

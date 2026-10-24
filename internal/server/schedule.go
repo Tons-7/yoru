@@ -85,7 +85,11 @@ func midnight(t time.Time, offsetMinutes int) time.Time {
 // groupByDay splits entries into count local days (empties too), by the client's UTC offset.
 func groupByDay(items []scheduleItem, offsetMinutes int, start int64, count int) []scheduleDay {
 	// The handler takes 1 to 28 days; held here too, as it sizes an allocation.
-	count = min(max(count, 0), 28)
+	if count < 0 {
+		count = 0
+	} else if count > 28 {
+		count = 28
+	}
 	zone := zoneFor(offsetMinutes)
 	today := time.Now().In(zone).Format("2006-01-02")
 
