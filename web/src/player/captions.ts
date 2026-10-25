@@ -71,6 +71,9 @@ export function useNativeCaptions(
     const fill = async () => {
       try {
         const res = await fetch(url)
+        // The session is gone; so is the player, shortly. Any other failure keeps what is shown and asks again.
+        if (stop || res.status === 404) return
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const body = await res.text()
         if (stop) return
         cues.current = assCues(body)

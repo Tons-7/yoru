@@ -63,15 +63,23 @@ func (s *Server) castLink(w http.ResponseWriter, r *http.Request) {
 	}
 	// Unless burned in, the TV gets an any-browser session: it may not decode this copy (HEVC) or want its cap.
 	if plan := session.CurrentPlan(); target == session && (plan.ForDevice || plan.MaxRate > 0) {
-		tv, err := s.streams.OpenFor(r.Context(), transcode.BaseID(session.ID)+"-cast", session.Source,
-			s.readable(r.Context(), session), nil, want)
+		// The episode's own any-browser session when one plays alike, rather than a third pass of the same plan;
+		// else one of the TV's own, as its track and sound must not change another device's.
+		id := transcode.BaseID(session.ID) + "-cast"
+		if base, ok := s.streams.Get(transcode.BaseID(session.ID)); ok && want == (transcode.Want{}) &&
+			base.Source == session.Source && base.AudioTrack() == session.AudioTrack() && base.Sound() == session.Sound() {
+			id = base.ID
+		}
+		tv, err := s.streams.OpenFor(r.Context(), id, session.Source, s.readable(r.Context(), session), nil, want)
 		if err != nil {
 			s.fail(w, "open stream for the TV", err)
 			return
 		}
 		s.heldOnce(tv)
-		tv.SetAudioTrack(session.AudioTrack())
-		tv.SetSound(session.Sound())
+		if tv.ID != transcode.BaseID(session.ID) {
+			tv.SetAudioTrack(session.AudioTrack())
+			tv.SetSound(session.Sound())
+		}
 		session, target = tv, tv
 	}
 

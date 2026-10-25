@@ -83,6 +83,8 @@ check(await until(() => page.getByText('Installed.', { exact: true }).isVisible(
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 const video = page.locator('video').first()
 check(await until(() => video.evaluate((v) => v.readyState >= 2), 60_000), 'the episode loads')
+// Played, not just loaded: an episode's start waits for its subtitles to draw.
+await until(() => video.evaluate((v) => !v.paused && v.currentTime > 0.2), 30_000)
 const vbox = await video.boundingBox()
 const at = (fx, fy = 0.5) => [vbox.x + vbox.width * fx, vbox.y + vbox.height * fy]
 const state = () => video.evaluate((v) => ({ paused: v.paused, time: v.currentTime, rate: v.playbackRate, cls: v.className }))

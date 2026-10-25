@@ -219,7 +219,8 @@ var toneMaps = map[string]string{
 func (s *Session) pictureFilters() []string {
 	var f []string
 	if s.Plan.Deinterlace {
-		f = append(f, "bwdif=mode=send_frame")
+		// Only frames flagged interlaced: PAFF/MBAFF streams mix in progressive ones, which pass untouched.
+		f = append(f, "bwdif=mode=send_frame:deint=interlaced")
 	}
 	if tm := toneMaps[s.toneMapper]; s.Plan.ToneMap && tm != "" {
 		f = append(f, tm)

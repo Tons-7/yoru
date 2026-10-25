@@ -117,6 +117,21 @@ func TestVariantsArePerPlan(t *testing.T) {
 	}
 }
 
+// HDR is converted only by an ffmpeg that can tone-map; without one (or before it is found) it is sent as it is.
+func TestHDRConvertsOnlyWithAToneMap(t *testing.T) {
+	hdr := &MediaInfo{Video: &Stream{Codec: "hevc", BitDepth: 10, Transfer: "smpte2084"}, Audio: []Stream{{Codec: "aac", Channels: 2}}}
+	caps := ParseCaps("hevc-10")
+	if p := planOf(plannable(hdr, "libplacebo"), "", 0, sound.Options{}, caps, Want{}, false); p.VideoCopy || !p.ToneMap {
+		t.Errorf("with a tone map, to an SDR screen: %+v", p)
+	}
+	if p := planOf(plannable(hdr, ""), "", 0, sound.Options{}, caps, Want{}, false); !p.VideoCopy || p.ToneMap {
+		t.Errorf("without one: %+v", p)
+	}
+	if !hdr.Video.HDR() {
+		t.Error("planning without a tone map changed the file's own info")
+	}
+}
+
 // Encoder options: animation tuning for x264, the trial's set for the GPU encoder only, HEVC tagged for Safari.
 func TestEncoderOptions(t *testing.T) {
 	tuned := map[string][]string{"h264_nvenc": {"-spatial-aq", "1"}}

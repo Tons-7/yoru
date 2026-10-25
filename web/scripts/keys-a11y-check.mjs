@@ -29,6 +29,11 @@ await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 const video = page.locator('video').first()
 await video.waitFor({ timeout: 30_000 })
 await page.waitForFunction(() => (document.querySelector('video')?.readyState ?? 0) >= 2, null, { timeout: 30_000 }).catch(() => {})
+// Played, not just loaded: an episode's start waits for its subtitles to draw.
+await page.waitForFunction(() => {
+  const v = document.querySelector('video')
+  return !!v && !v.paused && v.currentTime > 0.2
+}, null, { timeout: 30_000 }).catch(() => {})
 await page.locator('body').click({ position: { x: 5, y: 400 } })
 const state = () => video.evaluate((v) => ({ paused: v.paused, time: v.currentTime, rate: v.playbackRate, duration: v.duration }))
 // What a screen reader hears: the player's live regions.

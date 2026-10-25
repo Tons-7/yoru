@@ -1,7 +1,7 @@
 // Builds, then runs a browser check (player-check.mjs by default) on a throwaway Yoru, and tears it down.
 // Env: PORT=4399 (own scratch), YORU_ANIME=id, SKIP_BUILD=1, KEEP=1, BIN_ONLY=a,b|none, ANILIST_LIVE=1.
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync, existsSync, openSync } from 'node:fs'
+import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, openSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -131,7 +131,32 @@ ${cues.join('\n')}
   makeMarkerEpisode()
   makePictureEpisode()
   if (process.env.YORU_HEVC === '1') makeHevcEpisode()
+  if (process.env.YORU_FONTS === '1') makeFontEpisode()
   return out
+}
+
+// Episode 7: episode 3's markers, a line at the top in Comic Sans MS throughout, and 23 fonts attached, as a
+// MultiSub release carries, for subs-start-check.
+function makeFontEpisode() {
+  const dir = process.env.WINDIR ? join(process.env.WINDIR, 'Fonts') : ''
+  const fonts = ['arial', 'arialbd', 'ariali', 'arialbi', 'verdana', 'verdanab', 'verdanai', 'verdanaz', 'trebuc',
+    'trebucbd', 'trebucit', 'trebucbi', 'times', 'timesbd', 'timesi', 'timesbi', 'georgia', 'georgiab', 'georgiai',
+    'georgiaz', 'tahoma', 'tahomabd', 'comic'].map((f) => join(dir, `${f}.ttf`))
+  if (!dir || !fonts.every((f) => existsSync(f))) throw new Error('subs-start-check needs the Windows fonts to attach')
+  const ass = readFileSync(join(scratch, 'markers.ass'), 'utf8')
+    .replace(/^(Style: Default.*)$/m, '$1\nStyle: Words,Comic Sans MS,56,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,8,0,0,40,1')
+    .concat('Dialogue: 0,0:00:00.00,0:03:00.00,Words,,0,0,0,,Yoru font check\n')
+  const assPath = join(scratch, 'fonts.ass')
+  writeFileSync(assPath, ass)
+  run(ffmpeg, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-i', join(lib, 'Yoru Test Show - 03.mkv'),
+    '-i', assPath,
+    '-map', '0:v', '-map', '0:a', '-map', '1:s', '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'ass',
+    '-metadata:s:s:0', 'language=eng', '-disposition:s:0', 'default',
+    ...fonts.flatMap((f, i) => ['-attach', f, `-metadata:s:t:${i}`, 'mimetype=application/x-truetype-font']),
+    join(lib, 'Yoru Test Show - 07.mkv'),
+  ])
 }
 
 // Episodes 5 (HEVC 10-bit, 5.1 AC-3) and 6 (Hi10P, AAC), as the best releases come, for decode-check.

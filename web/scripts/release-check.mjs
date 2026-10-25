@@ -47,6 +47,7 @@ const CHECKS = [
   ['keys-a11y-check.mjs'],
   ['phone-check.mjs'],
   ['subtitles-check.mjs'],
+  ['subs-start-check.mjs', { YORU_FONTS: '1' }],
   ['decode-check.mjs', { YORU_HEVC: '1' }],
   ['network-check.mjs'],
   ['list-state-check.mjs', {}, ALONE],

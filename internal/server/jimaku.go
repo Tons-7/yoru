@@ -93,9 +93,18 @@ func (s *Server) jimakuListFor(ctx context.Context, animeID, episode int) ([]jim
 
 // buildOnce makes path when it isn't there yet, one ask at a time: a second waits, then finds it made.
 func (s *Server) buildOnce(path string, make func(part string) error) error {
-	mu, _ := s.building.LoadOrStore(path, &sync.Mutex{})
-	mu.(*sync.Mutex).Lock()
-	defer mu.(*sync.Mutex).Unlock()
+	var mu *sync.Mutex
+	for {
+		held, _ := s.building.LoadOrStore(path, &sync.Mutex{})
+		mu = held.(*sync.Mutex)
+		mu.Lock()
+		// SessionGone dropped it before the lock: a later caller would build beside this one under a new lock.
+		if now, ok := s.building.Load(path); ok && now == held {
+			break
+		}
+		mu.Unlock()
+	}
+	defer mu.Unlock()
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	}
@@ -130,8 +139,9 @@ func (s *Server) streamJimaku(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]entry, len(files))
 	for i, f := range files {
-		// Numbered by the file too, so a picked track stays the same file when a fresh listing reorders.
-		n, _ := strconv.ParseInt(jimakuName(f)[:6], 16, 32)
+		// Numbered by the file too, so a picked track stays the same file when a fresh listing reorders; 48 bits,
+		// as two files sharing a number would pick each other.
+		n, _ := strconv.ParseInt(jimakuName(f)[:12], 16, 64)
 		out[i] = entry{Index: int(n), Name: f.Name, URL: fmt.Sprintf("/api/stream/%s/jimaku/%s", session.ID, jimakuName(f))}
 	}
 	send(w, http.StatusOK, map[string]any{"files": out})
@@ -150,18 +160,28 @@ func (s *Server) streamJimakuFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	animeID, episode, idOK := parseSessionID(session.ID)
-	if !idOK {
+	name := r.PathValue("n")
+	if _, err := hex.DecodeString(name); !idOK || err != nil || len(name) != 16 {
 		http.NotFound(w, r)
 		return
 	}
+	// Converted already: served as it is, with no listing to ask Jimaku for (busy, or the key gone since).
+	out := filepath.Join(session.Dir(), "jimaku-"+name+".ass")
+	if _, err := os.Stat(out); err == nil {
+		s.serveJimakuTrack(w, out)
+		return
+	}
 	files, err := s.jimakuListFor(r.Context(), animeID, episode)
-	at := slices.IndexFunc(files, func(f jimaku.File) bool { return jimakuName(f) == r.PathValue("n") })
-	if err != nil || at < 0 {
+	if err != nil {
+		send(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	at := slices.IndexFunc(files, func(f jimaku.File) bool { return jimakuName(f) == name })
+	if at < 0 {
 		http.NotFound(w, r)
 		return
 	}
 	file := files[at]
-	out := filepath.Join(session.Dir(), "jimaku-"+jimakuName(file)+".ass")
 	var fetchErr error
 	err = s.buildOnce(out, func(part string) error {
 		key, _ := s.store.Setting(r.Context(), jimakuKey)
@@ -191,7 +211,11 @@ func (s *Server) streamJimakuFile(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "jimaku file", err)
 		return
 	}
-	track, err := os.ReadFile(out)
+	s.serveJimakuTrack(w, out)
+}
+
+func (s *Server) serveJimakuTrack(w http.ResponseWriter, path string) {
+	track, err := os.ReadFile(path)
 	if err != nil {
 		s.fail(w, "jimaku file", err)
 		return

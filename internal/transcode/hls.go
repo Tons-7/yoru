@@ -283,14 +283,14 @@ func (m *Manager) OpenBurned(ctx context.Context, id, source, probeSource string
 
 func (m *Manager) open(ctx context.Context, id, source, probeSource string, burn *Burn, caps *Caps, want Want) (*Session, error) {
 	m.mu.Lock()
-	// One encoder throughout, so the id below always names this plan, whatever detection does meanwhile.
-	encoder := m.encoder
+	// One encoder and tone map throughout, so the id below always names this plan, whatever detection does meanwhile.
+	encoder, toneMapper := m.encoder, m.toneMapper
 	// Another device's session of this file already probed it; this device's plan picks the session.
 	var info *MediaInfo
 	sibling := m.sibling(id, source)
 	if sibling != nil {
 		info = sibling.Info
-		id = variantID(id, info, encoder, caps, want)
+		id = variantID(id, plannable(info, toneMapper), encoder, caps, want)
 	}
 	if s, ok := m.sessions[id]; ok && s.Source == source {
 		s.touch()
@@ -325,7 +325,7 @@ func (m *Manager) open(ctx context.Context, id, source, probeSource string, burn
 		if err != nil {
 			return nil, err
 		}
-		id = variantID(id, info, encoder, caps, want)
+		id = variantID(id, plannable(info, toneMapper), encoder, caps, want)
 	}
 
 	// A folder of its own: a reopen of the same episode (another release, another track) overlapping this
@@ -347,7 +347,7 @@ func (m *Manager) open(ctx context.Context, id, source, probeSource string, burn
 	}
 	m.mu.Unlock()
 
-	plan := planOf(info, encoder, 0, sound.Options{}, caps, want, burn != nil)
+	plan := planOf(plannable(info, toneMapper), encoder, 0, sound.Options{}, caps, want, burn != nil)
 	if burn != nil {
 		if err := burn.into(dir); err != nil {
 			os.RemoveAll(dir)
@@ -381,7 +381,8 @@ func (m *Manager) open(ctx context.Context, id, source, probeSource string, burn
 		caps:       caps,
 		want:       want,
 	}
-	s.tuned, s.toneMapper = m.tools()
+	s.tuned, _ = m.tools()
+	s.toneMapper = toneMapper
 	if burn != nil {
 		s.burnPictures, s.burnDelay = burn.Pictures, burn.Delay
 	}
@@ -949,7 +950,7 @@ func (s *Session) Speed() float64 {
 
 // replan remakes the plan for the session's track, sound and device; under s.mu.
 func (s *Session) replan() {
-	s.Plan = planOf(s.Info, s.encoder, s.audioTrack, s.sound, s.caps, s.want, s.burned)
+	s.Plan = planOf(plannable(s.Info, s.toneMapper), s.encoder, s.audioTrack, s.sound, s.caps, s.want, s.burned)
 }
 
 // CurrentPlan is the plan as it stands: a software fallback rewrites it while

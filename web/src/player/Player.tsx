@@ -153,6 +153,8 @@ interface Persisted {
 const VOLUME_NOTICE = 'volume'
 const SUB_SCALES = [0.75, 0.9, 1, 1.15, 1.3, 1.5]
 const DELAY_STEP = 0.1
+// The longest an episode's first frame waits for its subtitles, ms.
+const SUBTITLE_WAIT = 5000
 // Tracks from outside the file take indexes no stream has: a loaded file, and Jimaku's n at JIMAKU_TRACK - n.
 const OWN_TRACK = -1
 const JIMAKU_TRACK = -100
@@ -528,7 +530,9 @@ export function Player({
   useEffect(() => () => blobs.current.forEach((url) => URL.revokeObjectURL(url)), [])
   // Picture in picture moves the player to another document, so the subtitle canvas is rebuilt there.
   const subLook = useMemo(() => ({ scale: subScale, delay: subDelay, preset: lookPreset }), [subScale, subDelay, lookPreset])
-  useSubtitles(video, subtitleStream, track, fonts, pip.active, subLook, (problem) => showNotice(problem, 6000))
+  const subtitlesReady = useSubtitles(video, subtitleStream, track, fonts, pip.active, subLook, (problem) =>
+    showNotice(problem, 6000),
+  )
   // The system's floating window and an iPhone's fullscreen show only text tracks.
   const videoPip = useVideoPiP(video)
   const systemFullscreen = useSystemFullscreen(video)
@@ -578,24 +582,61 @@ export function Player({
     .join('|')
   // Chosen again when the audio changes language: a switch to the dub takes the dialogue subtitles away.
   const audioLanguage = stream?.audio?.[audioTrack]?.language ?? ''
+  // The track list the choice below was made for: until then, "no track" only means not chosen yet.
+  const [chosenFor, setChosenFor] = useState<string>()
   useEffect(() => {
     // Text before pictures of the same language: pictures wait for the whole download.
     const tracks = [...(stream?.subtitles ?? [])].sort((a, b) => Number(!!a.pictures) - Number(!!b.pictures))
     setTrack(tracks.length ? (chooseWithDub(tracks, subLanguages ?? ['en'], audioLanguage, withDub)?.index ?? null) : null)
+    setChosenFor(trackList)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trackList, audioLanguage, withDub])
+
+  // An episode can open on dialogue, so its first frame waits for the subtitles to draw; never for long.
+  const [subtitleWaitOver, setSubtitleWaitOver] = useState<string>()
+  useEffect(() => {
+    if (!stream?.id) return
+    const id = stream.id
+    const timer = window.setTimeout(() => setSubtitleWaitOver(id), SUBTITLE_WAIT)
+    return () => clearTimeout(timer)
+  }, [stream?.id])
+  // Latched per stream: a track switched later never pauses what is playing.
+  const [subtitlesFor, setSubtitlesFor] = useState<string>()
+  const subtitlesForRef = useRef(subtitlesFor)
+  subtitlesForRef.current = subtitlesFor
+  const subtitlesDrawable = chosenFor === trackList && subtitlesReady
+  useEffect(() => {
+    if (stream?.id && (subtitlesDrawable || subtitleWaitOver === stream.id)) setSubtitlesFor(stream.id)
+  }, [stream?.id, subtitlesDrawable, subtitleWaitOver])
+  const subtitlesSettled = !!stream?.id && subtitlesFor === stream.id
+  // Played by hand meanwhile: the wait is over, and a pause after that is the viewer's to keep.
+  const playedByHand = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!video || !stream?.id) return
+    const id = stream.id
+    const onPlay = () => {
+      if (subtitlesForRef.current === id) return
+      playedByHand.current = id
+      setSubtitlesFor(id)
+    }
+    video.addEventListener('play', onPlay)
+    return () => video.removeEventListener('play', onPlay)
+  }, [video, stream?.id])
 
   // The reused element's autoplay fires once; a ref, so flipping it mid-episode can't undo a pause.
   const autoPlayRef = useRef(autoPlay)
   autoPlayRef.current = autoPlay
+  const holdingStart = autoPlay && !!stream?.id && !subtitlesSettled
   useEffect(() => {
-    if (!video || !stream?.id || !autoPlayRef.current) return
+    if (!video || !stream?.id || !autoPlayRef.current || !subtitlesSettled || playedByHand.current === stream.id) return
     const start = () => void video.play().catch(() => {})
     // Straight away; waiting on canplay left the next episode still for seconds.
     start()
+    // Asked again only if it couldn't play yet: a canplay left armed fired on the next seek, playing a pause.
+    if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return
     video.addEventListener('canplay', start, { once: true })
     return () => video.removeEventListener('canplay', start)
-  }, [video, stream?.id])
+  }, [video, stream?.id, subtitlesSettled])
 
   const reportRef = useRef(onProgress)
   reportRef.current = onProgress
@@ -1277,7 +1318,7 @@ export function Player({
       <video
         ref={setVideo}
         playsInline
-        autoPlay={autoPlay}
+        autoPlay={autoPlay && subtitlesSettled}
         className={cx('size-full', fill && 'object-cover', corners)}
         {...surface}
         onPlay={() => {
@@ -1330,10 +1371,11 @@ export function Player({
         {stalledLong ? 'Buffering' : ''}
       </p>
 
-      {(waiting || !stream) && !error && !lostError && (
+      {(waiting || !stream || holdingStart) && !error && !lostError && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center">
           <div className="text-center">
             <Spinner className="mx-auto size-8" />
+            {stream && holdingStart && !waiting && <p className="mt-3 text-sm text-base-300">Loading subtitles…</p>}
             {/* No stream yet: still resolving, so the stall copy below doesn't apply. */}
             {!stream && (
               <>

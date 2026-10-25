@@ -405,6 +405,18 @@ func planOf(info *MediaInfo, encoder string, track int, snd sound.Options, caps 
 	return plan
 }
 
+// plannable is info as planned with this ffmpeg's tone map; with none (or none found yet) HDR goes as it is,
+// as an encode would look no better than the copy.
+func plannable(info *MediaInfo, toneMapper string) *MediaInfo {
+	if toneMapper != "" || info.Video == nil || !info.Video.HDR() {
+		return info
+	}
+	shown, v := *info, *info.Video
+	v.Transfer, v.DVProfile = "", 0
+	shown.Video = &v
+	return &shown
+}
+
 // planFor judges the track that will be sent, under the sound asked, for a device's caps or any browser (nil).
 func planFor(info *MediaInfo, encoder string, track int, snd sound.Options, caps *Caps) Plan {
 	return planWith(info, encoder, track, snd, caps, Want{})

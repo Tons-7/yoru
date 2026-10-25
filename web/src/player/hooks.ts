@@ -407,17 +407,18 @@ type ASSStyle = Awaited<ReturnType<JASSUB['renderer']['getStyles']>>[number]
 // Signs and songs are typeset to the picture; only dialogue is resized.
 const TYPESET_STYLE = /sign|song|kara|title|logo|note|insert|\b(op|ed)\b/i
 
-/** Renders ASS subtitles with JASSUB, as native tracks lose the styling and embedded fonts. */
+/** Renders ASS subtitles with JASSUB, as native tracks lose the styling and embedded fonts; true once it can draw. */
 export function useSubtitles(
   video: HTMLVideoElement | null,
   stream: StreamInfo | undefined,
   trackIndex: number | null,
-  fonts: string[] = [],
+  /** The episode's fonts, null until the server has said which. */
+  fonts: string[] | null = [],
   rebuild?: unknown,
   look: SubtitleLook = { scale: 1, delay: 0 },
   /** Why a track can't show yet, in words for the viewer. */
   onProblem?: (message: string) => void,
-) {
+): boolean {
   const instance = useRef<JASSUB | null>(null)
   const pictures = useRef<PgsRenderer | null>(null)
   // The last instance's teardown, which the next one waits for.
@@ -428,8 +429,35 @@ export function useSubtitles(
   const restyle = useRef<(() => Promise<void>) | null>(null)
   const repaint = useRef<(() => void) | null>(null)
 
-  // Identity, not contents, is what re-ran this effect.
-  const fontKey = fonts.join('|')
+  // Late fonts join the running renderer: rebuilding for them blanked an episode's opening lines.
+  const fontsRef = useRef<string[]>([])
+  fontsRef.current = fonts ?? []
+  const fontsKnown = useRef(false)
+  fontsKnown.current = fonts !== null
+  const fontKey = fonts?.join('|') ?? null
+  const fontsIn = useRef(new Set<string>())
+  const fontsLoading = useRef<Promise<unknown>>(Promise.resolve())
+  // What the running renderer draws ("stream|track"), and what it has its track and every font for.
+  const drawing = useRef('')
+  const [readyFor, setReadyFor] = useState('')
+
+  // Hands the renderer the fonts it lacks; ready once all of the episode's are known and in.
+  const catchUp = useEffectEvent(async () => {
+    const r = instance.current
+    const drawn = drawing.current
+    if (!r || !drawn) return
+    const fresh = fontsRef.current.filter((url) => !fontsIn.current.has(url))
+    for (const url of fresh) fontsIn.current.add(url)
+    if (fresh.length) fontsLoading.current = Promise.all([fontsLoading.current, r.renderer?.addFonts(fresh).catch(() => {})])
+    await fontsLoading.current
+    if (instance.current !== r) return
+    // JASSUB doesn't redraw for a font it was given.
+    if (fresh.length) repaint.current?.()
+    if (fontsKnown.current) setReadyFor(drawn)
+  })
+  useEffect(() => {
+    void catchUp().catch(() => {})
+  }, [fontKey])
 
   // A fullscreen transition leaves the canvas opaque over the video: black
   // picture, controls and audio fine. It belongs to a worker, so rebuild it.
@@ -470,6 +498,9 @@ export function useSubtitles(
 
       // No dimensions yet, no canvas; the listeners above rerun this once they arrive.
       if (!video.videoWidth || !video.videoHeight) return
+      const drawn = `${stream.id}|${track.index}`
+      // Nothing more is coming for this track (it failed, or the problem was said): don't wait on it.
+      const settle = () => !cancelled && setReadyFor(drawn)
 
       // The track, or null once its problem is said; pictures still downloading (409) are asked for again.
       const load = async (what: string): Promise<Response | null> => {
@@ -480,6 +511,7 @@ export function useSubtitles(
             const error = res ? ((await res.json().catch(() => null)) as { error?: string } | null)?.error : null
             onProblem?.(error ?? `Couldn't load ${what}`)
             said = true
+            settle()
           }
           if (res?.status !== 409) return null
         }
@@ -488,7 +520,7 @@ export function useSubtitles(
 
       if (track.pictures) {
         const res = await load('these picture subtitles')
-        if (!res || cancelled) return
+        if (!res || cancelled) return settle()
         const { PgsRenderer } = await import('libpgs')
         const data = await res.arrayBuffer()
         if (cancelled) return
@@ -500,18 +532,20 @@ export function useSubtitles(
           pgs.renderAtTimestamp(-1)
           pgs.renderAtTimestamp(video.currentTime + pgs.timeOffset)
         }
-        return
+        return settle()
       }
 
       const { default: Renderer } = await import('jassub')
       // A whole track is read here and handed over as text, so a failure (Jimaku busy, a key gone) is said.
       const whole = track.whole ? await load('these subtitles').then((r) => r?.text() ?? null) : undefined
-      if (cancelled || whole === null) return
+      if (cancelled || whole === null) return settle()
 
+      // No fonts here: JASSUB fetches every one before the track, which a slow link waited seconds on.
+      fontsIn.current = new Set()
+      fontsLoading.current = Promise.resolve()
       const renderer = new Renderer({
         video,
         ...(whole === undefined ? { subUrl: track.url } : { subContent: whole }),
-        fonts,
         workerUrl: jassubWorkerUrl,
         wasmUrl: jassubWasmUrl,
         modernWasmUrl: jassubModernWasmUrl,
@@ -579,6 +613,8 @@ export function useSubtitles(
       }
       resync()
       void restyle.current().catch(() => {})
+      drawing.current = drawn
+      void catchUp().catch(() => {})
 
       if (!track.whole) {
         void keepFilling(renderer, track.url, video, () => cancelled, () => {
@@ -594,13 +630,14 @@ export function useSubtitles(
       detach?.()
       restyle.current = null
       repaint.current = null
+      drawing.current = ''
       destroying.current = instance.current ? Promise.resolve(instance.current.destroy()) : undefined
       instance.current = null
       pictures.current?.dispose()
       pictures.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [video, stream, trackIndex, fontKey, rebuild, surface])
+  }, [video, stream, trackIndex, rebuild, surface])
 
   useEffect(() => {
     if (pictures.current) pictures.current.timeOffset = -look.delay
@@ -612,6 +649,9 @@ export function useSubtitles(
   useEffect(() => {
     void restyle.current?.().catch(() => {})
   }, [look.scale, look.preset])
+
+  const track = trackIndex === null ? undefined : stream?.subtitles?.find((t) => t.index === trackIndex)
+  return !stream || !track || readyFor === `${stream.id}|${track.index}`
 }
 
 function cueCount(ass: string): number {
@@ -738,22 +778,29 @@ async function keepFilling(
   }
 }
 
-/** Fonts arrive after the stream opens; a new generation (rebuilt session) asks for them again. */
-export function useEmbeddedFonts(fontsUrl?: string, generation = 0) {
-  const [fonts, setFonts] = useState<string[]>([])
-  const lastUrl = useRef(fontsUrl)
+/** Fonts arrive after the stream opens, null until the server says; a new generation (rebuilt session) asks again. */
+export function useEmbeddedFonts(fontsUrl?: string, generation = 0): string[] | null {
+  // Kept with the URL it answers, so a new episode's fonts read as unknown again.
+  const [answer, setAnswer] = useState<{ url: string; fonts: string[] }>()
 
   useEffect(() => {
-    // A fresh [] rebuilds the renderer, so only a new episode starts from none.
-    if (lastUrl.current !== fontsUrl) setFonts((prev) => (prev.length === 0 ? prev : []))
-    lastUrl.current = fontsUrl
     if (!fontsUrl) return
+    // Same list: keep the identity, so nothing is added again.
+    const answered = (fonts: string[]) =>
+      setAnswer((prev) =>
+        prev?.url === fontsUrl && prev.fonts.join('|') === fonts.join('|') ? prev : { url: fontsUrl, fonts },
+      )
 
     let cancelled = false
     let attempts = 0
 
     const poll = async () => {
-      if (cancelled || attempts++ > 40) return
+      if (cancelled) return
+      // Given up: none, so the episode's start stops waiting on them.
+      if (attempts++ > 40) {
+        setAnswer((prev) => (prev?.url === fontsUrl ? prev : { url: fontsUrl, fonts: [] }))
+        return
+      }
       try {
         const res = await fetch(fontsUrl, { credentials: 'same-origin' })
         const body = (await res.json()) as {
@@ -762,15 +809,14 @@ export function useEmbeddedFonts(fontsUrl?: string, generation = 0) {
         }
         if (cancelled) return
         if (body.ready) {
-          const next = body.fonts.map((f) => f.url)
-          // Same list: keep the identity so the renderer is not rebuilt.
-          setFonts((prev) => (prev.join('|') === next.join('|') ? prev : next))
+          answered(body.fonts.map((f) => f.url))
           return
         }
       } catch {
         // A failed poll is not worth surfacing; the default font is readable.
       }
-      window.setTimeout(poll, 2000)
+      // Quick at first: an episode's first lines wait on this answer.
+      window.setTimeout(poll, Math.min(2000, 250 * 2 ** (attempts - 1)))
     }
 
     void poll()
@@ -779,8 +825,12 @@ export function useEmbeddedFonts(fontsUrl?: string, generation = 0) {
     }
   }, [fontsUrl, generation])
 
-  return fonts
+  // None offered is a known none.
+  if (!fontsUrl) return NO_FONTS
+  return answer?.url === fontsUrl ? answer.fonts : null
 }
+
+const NO_FONTS: string[] = []
 
 /** What an AniSkip range is: op and mixed-op open, ed and mixed-ed end, recap is its own. */
 export type SkipName = 'opening' | 'ending' | 'recap' | 'preview' | 'eyecatch' | 'chapter'
