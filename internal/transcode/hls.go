@@ -64,6 +64,13 @@ type Session struct {
 	audioPref  string
 	// What is done to the audio on the way out; see voice.go.
 	sound sound.Options
+	// What the opening device decodes (nil: any browser) and wants of the picture; see caps.go.
+	caps *Caps
+	want Want
+	// tuned: per hardware encoder, the quality options its trial took (see Tuning).
+	tuned map[string][]string
+	// toneMapper: the HDR tone map this ffmpeg runs (see ToneMapper); "" for none.
+	toneMapper string
 	// Set once the session is released, so a late waiter's restart branch does
 	// not relaunch ffmpeg into a directory that is being torn down.
 	closed bool
@@ -75,8 +82,10 @@ type Session struct {
 	fellBack bool
 	// A process beside each pass writes subtitle lines as they are read.
 	liveSubs bool
-	// burned: each pass draws burn.ass (with fonts/) into the picture.
-	burned bool
+	// burned: each pass draws burn.ass (with fonts/) into the picture, or lays over burnPictures' track.
+	burned       bool
+	burnPictures int
+	burnDelay    float64
 	// The last pass to end on its own: its subtitle process may still be finishing.
 	finished *run
 	// ended: the last pass to finish, its cut tail dropped if it stopped short, so every file it left is whole.
@@ -136,12 +145,14 @@ func (r *run) wrote(path string) bool {
 type SeekHook func(sessionID string, fraction float64)
 
 type Manager struct {
-	ffmpeg  string
-	prober  *Prober
-	root    string
-	encoder string
-	onSeek  SeekHook
-	onIdle  func(id string)
+	ffmpeg     string
+	prober     *Prober
+	root       string
+	encoder    string
+	tuned      map[string][]string
+	toneMapper string
+	onSeek     SeekHook
+	onIdle     func(id string)
 	// Bytes of a session's source that have arrived; nil when nothing can say.
 	arriving func(ctx context.Context, id string) int64
 	log      *slog.Logger
@@ -246,23 +257,41 @@ func (m *Manager) Open(ctx context.Context, id, source string) (*Session, error)
 
 // OpenProbing probes a torrent from disk but encodes through the engine, whose reads move the window.
 func (m *Manager) OpenProbing(ctx context.Context, id, source, probeSource string) (*Session, error) {
-	return m.open(ctx, id, source, probeSource, nil)
+	return m.open(ctx, id, source, probeSource, nil, nil, Want{})
 }
 
-// Burn is subtitles drawn into the picture: an ASS or SRT file and the fonts it names.
+// OpenFor is OpenProbing for a device that said what it decodes and wants: its plan may be another session.
+func (m *Manager) OpenFor(ctx context.Context, id, source, probeSource string, caps *Caps, want Want) (*Session, error) {
+	return m.open(ctx, id, source, probeSource, nil, caps, want)
+}
+
+// Burn is subtitles drawn into the picture: an ASS or SRT file and the fonts it names, or a picture track.
 type Burn struct {
 	Subtitles string
 	Fonts     string // a folder, or "" for the system's
+	// Pictures is a PGS track of the source itself, by stream index, laid over the picture; 0 for none.
+	Pictures int
+	// Delay shifts the pictures that many seconds later, as the player's subtitle delay does.
+	Delay float64
 }
 
 // OpenBurned is a session whose video always re-encodes with the subtitles drawn in, for a TV that can't draw
 // styled ones itself. Its own id: the browser's session of the episode stays as it is.
-func (m *Manager) OpenBurned(ctx context.Context, id, source, probeSource string, burn Burn) (*Session, error) {
-	return m.open(ctx, id, source, probeSource, &burn)
+func (m *Manager) OpenBurned(ctx context.Context, id, source, probeSource string, burn Burn, want Want) (*Session, error) {
+	return m.open(ctx, id, source, probeSource, &burn, nil, want)
 }
 
-func (m *Manager) open(ctx context.Context, id, source, probeSource string, burn *Burn) (*Session, error) {
+func (m *Manager) open(ctx context.Context, id, source, probeSource string, burn *Burn, caps *Caps, want Want) (*Session, error) {
 	m.mu.Lock()
+	// One encoder throughout, so the id below always names this plan, whatever detection does meanwhile.
+	encoder := m.encoder
+	// Another device's session of this file already probed it; this device's plan picks the session.
+	var info *MediaInfo
+	sibling := m.sibling(id, source)
+	if sibling != nil {
+		info = sibling.Info
+		id = variantID(id, info, encoder, caps, want)
+	}
 	if s, ok := m.sessions[id]; ok && s.Source == source {
 		s.touch()
 		s.mu.Lock()
@@ -271,29 +300,32 @@ func (m *Manager) open(ctx context.Context, id, source, probeSource string, burn
 		m.mu.Unlock()
 		return s, nil
 	}
-	_, replacing := m.sessions[id]
+	stale := m.otherSources(id, source)
 	m.mu.Unlock()
 
-	// Same episode from another release: the old encoder would run on orphaned.
-	if replacing {
-		m.discard(id)
+	// Same episode from another release: the old encoders would run on orphaned.
+	for _, old := range stale {
+		m.discard(old)
 	}
 
-	var info *MediaInfo
-	var err error
-	probed := "source"
-	if probeSource == source {
-		info, err = m.probeWhileArriving(ctx, id, source)
-	} else if info, err = m.prober.Probe(ctx, probeSource); err == nil {
-		probed = "disk"
-	} else {
-		m.log.Warn("probe from disk failed, reading through the engine",
-			"session", id, "err", err)
-		info, err = m.probeWhileArriving(ctx, id, source)
-		probed = "engine"
-	}
-	if err != nil {
-		return nil, err
+	probed := "session"
+	if info == nil {
+		var err error
+		if probeSource == source {
+			info, err = m.probeWhileArriving(ctx, id, source)
+			probed = "source"
+		} else if info, err = m.prober.Probe(ctx, probeSource); err == nil {
+			probed = "disk"
+		} else {
+			m.log.Warn("probe from disk failed, reading through the engine",
+				"session", id, "err", err)
+			info, err = m.probeWhileArriving(ctx, id, source)
+			probed = "engine"
+		}
+		if err != nil {
+			return nil, err
+		}
+		id = variantID(id, info, encoder, caps, want)
 	}
 
 	// A folder of its own: a reopen of the same episode (another release, another track) overlapping this
@@ -315,20 +347,20 @@ func (m *Manager) open(ctx context.Context, id, source, probeSource string, burn
 	}
 	m.mu.Unlock()
 
-	encoder := m.currentEncoder()
-	plan := PlanFor(info, encoder)
+	plan := planOf(info, encoder, 0, sound.Options{}, caps, want, burn != nil)
 	if burn != nil {
-		// Drawn in, the picture changes, so it is encoded even where it could be copied.
 		if err := burn.into(dir); err != nil {
 			os.RemoveAll(dir)
 			return nil, err
 		}
-		plan.VideoCopy = false
-		plan.VideoCodec = orDefault(encoder, "libx264")
-		plan.Reason = strings.TrimPrefix(plan.Reason+"; subtitles drawn in", "; ")
 	}
 	// From disk when the file is there: through the engine, the index's pieces would be fetched first.
-	starts := m.indexKeyframes(ctx, id, probeSource, info, plan)
+	var starts []float64
+	if sibling != nil && sibling.starts != nil && plan.VideoCopy {
+		starts = sibling.starts
+	} else {
+		starts = m.indexKeyframes(ctx, id, probeSource, info, plan)
+	}
 	segments := segmentCount(info.Duration)
 	if starts != nil {
 		segments = len(starts)
@@ -346,6 +378,12 @@ func (m *Manager) open(ctx context.Context, id, source, probeSource string, burn
 		refs:       1,
 		liveSubs:   burn == nil && liveSubtitlesWanted(source),
 		burned:     burn != nil,
+		caps:       caps,
+		want:       want,
+	}
+	s.tuned, s.toneMapper = m.tools()
+	if burn != nil {
+		s.burnPictures, s.burnDelay = burn.Pictures, burn.Delay
 	}
 
 	m.mu.Lock()
@@ -391,6 +429,34 @@ func (m *Manager) SetEncoder(encoder string) {
 	m.encoder = encoder
 }
 
+// SetTuning gives new sessions the quality options a trial found this encoder takes (see Tuning).
+func (m *Manager) SetTuning(encoder string, tuning []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tuned = map[string][]string{encoder: tuning}
+}
+
+// SetToneMapper names the HDR tone map this ffmpeg runs (see ToneMapper).
+func (m *Manager) SetToneMapper(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.toneMapper = name
+}
+
+// Converter names what converts now: the encoder, and the HDR tone map ("" none).
+func (m *Manager) Converter() (encoder, toneMapper string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.encoder, m.toneMapper
+}
+
+// tools are what startup's trials found: the encoder's tuning and the tone map.
+func (m *Manager) tools() (map[string][]string, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.tuned, m.toneMapper
+}
+
 // softwareOnly is told that a session's hardware encoder died before its first
 // segment. Later sessions go straight to software rather than failing the same way.
 func (m *Manager) softwareOnly(codec string) {
@@ -402,6 +468,44 @@ func (m *Manager) softwareOnly(codec string) {
 	m.log.Warn("hardware encoder abandoned for this run",
 		"encoder", codec, "using", softwareEncoder)
 	m.encoder = softwareEncoder
+}
+
+// sibling: the episode's open session on this source, whose probe and index another device reuses; under m.mu.
+func (m *Manager) sibling(id, source string) *Session {
+	base := BaseID(id)
+	for sid, s := range m.sessions {
+		if s.Source == source && BaseID(sid) == base {
+			return s
+		}
+	}
+	return nil
+}
+
+// otherSources are the episode's sessions on another release; under m.mu.
+func (m *Manager) otherSources(id, source string) []string {
+	base := BaseID(id)
+	var out []string
+	for sid, s := range m.sessions {
+		if s.Source != source && BaseID(sid) == base {
+			out = append(out, sid)
+		}
+	}
+	return out
+}
+
+// Episode is an open session of the episode the id names, its own or any device's or TV's variant of it.
+func (m *Manager) Episode(id string) (*Session, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.sessions[id]; ok {
+		return s, true
+	}
+	for sid, s := range m.sessions {
+		if BaseID(sid) == id {
+			return s, true
+		}
+	}
+	return nil, false
 }
 
 func (m *Manager) Get(id string) (*Session, bool) {
@@ -420,6 +524,13 @@ func (m *Manager) Peek(id string) (*Session, bool) {
 	defer m.mu.Unlock()
 	s, ok := m.sessions[id]
 	return s, ok
+}
+
+// Holders is how many opens hold the session.
+func (s *Session) Holders() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refs
 }
 
 // Close releases one hold and reports the last; stopping the download belongs behind a true.
@@ -611,6 +722,13 @@ func (s *Session) Dir() string { return s.dir }
 
 // DirPrefix starts the folder of every session of an episode, past and present.
 func (m *Manager) DirPrefix(id string) string { return filepath.Join(m.root, "hls", id+"-") }
+
+// Owns: path is (in) a folder of session id, past or present (hls/<id>-<n>); never a variant's (<id>-dev…).
+func (m *Manager) Owns(id, path string) bool {
+	rest, ok := strings.CutPrefix(path, m.DirPrefix(id))
+	digits := strings.IndexFunc(rest, func(r rune) bool { return r < '0' || r > '9' })
+	return ok && rest != "" && digits != 0 && (digits < 0 || os.IsPathSeparator(rest[digits]))
+}
 
 // Prestart launches the encoder at a segment not on disk if nothing runs, and
 // returns at once. It never moves a running pass; only the player's requests do.
@@ -812,6 +930,26 @@ func (s *Session) running() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.run != nil
+}
+
+// Speed: the running pass's pace (× real time) from segments it wrote itself; 0 if none or just begun.
+func (s *Session) Speed() float64 {
+	s.advanceHead()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.run == nil || s.headTo < s.headFrom {
+		return 0
+	}
+	elapsed := time.Since(s.run.began).Seconds()
+	if elapsed < 2 {
+		return 0
+	}
+	return (s.segmentStart(s.headTo+1) - s.segmentStart(s.headFrom)) / elapsed
+}
+
+// replan remakes the plan for the session's track, sound and device; under s.mu.
+func (s *Session) replan() {
+	s.Plan = planOf(s.Info, s.encoder, s.audioTrack, s.sound, s.caps, s.want, s.burned)
 }
 
 // CurrentPlan is the plan as it stands: a software fallback rewrites it while

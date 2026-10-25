@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { appleTouchDevice } from '../lib/install'
 
 // Google Cast: the Web Sender SDK sends the episode to a Chromecast, whose Default Media Receiver plays
 // Yoru's own HLS through a link signed for the session. Only on an HTTPS or localhost page.
@@ -49,6 +50,7 @@ interface ChromeCast {
     GenericMediaMetadata: Ctor
     LoadRequest: new (info: unknown) => Record<string, unknown>
     Track: new (id: number, type: string) => Record<string, unknown>
+    TextTrackStyle: Ctor
     TrackType: { TEXT: string }
     TextTrackType: { SUBTITLES: string }
     StreamType: { BUFFERED: string }
@@ -61,10 +63,7 @@ const sdk = () =>
   window as unknown as { cast?: { framework: CastFramework }; chrome?: { cast?: ChromeCast }; __onGCastApiAvailable?: (ok: boolean) => void }
 
 /** An iPhone or iPad: no browser there can cast, so nothing about it is offered. */
-export function castImpossible(): boolean {
-  const ua = navigator.userAgent
-  return /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)
-}
+export const castImpossible = appleTouchDevice
 
 /** Brave keeps casting behind a switch of its own, which the needs list names. */
 export const isBrave = () => 'brave' in navigator
@@ -115,6 +114,8 @@ export interface CastMedia {
   subtitles: Array<{ url: string; language?: string; title?: string }>
   /** Position in subtitles of the track to show, if any. */
   subtitleTrack?: number
+  /** How the TV draws them: TextTrackStyle's fields (see subLook.ts). */
+  textStyle?: Record<string, unknown>
 }
 
 export type CastPhase = 'none' | 'idle' | 'connecting' | 'connected'
@@ -213,6 +214,7 @@ export function useCast() {
       track.language = s.language || 'und'
       return track
     })
+    if (media.textStyle) info.textTrackStyle = Object.assign(new m.TextTrackStyle(), media.textStyle)
     const request = new m.LoadRequest(info)
     request.currentTime = media.startAt
     request.autoplay = true

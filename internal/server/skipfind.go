@@ -58,10 +58,14 @@ func (s *Server) findSkips(ctx context.Context, animeID, episode int, parts []st
 	}
 	ffmpeg := s.cfg.Tool("ffmpeg")
 	prober := transcode.NewProber(s.cfg.Tool("ffprobe"))
+	probed := map[string]*transcode.MediaInfo{}
 	window := func(path, part string) (start float64, items []uint32, err error) {
-		info, err := prober.Probe(ctx, path)
-		if err != nil {
-			return 0, nil, err
+		info, ok := probed[path]
+		if !ok {
+			if info, err = prober.Probe(ctx, path); err != nil {
+				return 0, nil, err
+			}
+			probed[path] = info
 		}
 		start, length := 0.0, min(skipfind.OpeningWindow, info.Duration*0.45)
 		if part == "ed" {
@@ -73,8 +77,10 @@ func (s *Server) findSkips(ctx context.Context, animeID, episode int, parts []st
 	at := func(start float64, from, to int) (float64, float64) {
 		return start + float64(from)*skipfind.Point, start + float64(to)*skipfind.Point
 	}
-	save := func(ep int, part string, from, to float64) {
+	// Lined up with the music's edges as a mark is: a match's ends fall where the sound stops matching.
+	save := func(ep int, path, part string, from, to float64) {
 		r := player.SkipRange{Kind: part, Start: from, End: to, Source: "found"}
+		s.snapEdges(ctx, path, probed[path].Chapters, &r)
 		if err := s.store.SaveOwnSkip(ctx, animeID, ep, r); err != nil {
 			s.log.Warn("save found skip", "anime", animeID, "episode", ep, "err", err)
 		}
@@ -89,7 +95,7 @@ func (s *Server) findSkips(ctx context.Context, animeID, episode int, parts []st
 		if kept, ok := s.store.SkipPrint(ctx, animeID, part); ok {
 			if m, ok := skipfind.Covers(kept, items); ok {
 				from, to := at(start, m.BStart, m.BEnd)
-				save(episode, part, from, to)
+				save(episode, path, part, from, to)
 				s.log.Info("skip found from the show's print", "anime", animeID, "episode", episode, "part", part)
 				continue
 			}
@@ -111,9 +117,9 @@ func (s *Server) findSkips(ctx context.Context, animeID, episode int, parts []st
 				continue
 			}
 			from, to := at(start, m.AStart, m.AEnd)
-			save(episode, part, from, to)
+			save(episode, path, part, from, to)
 			from, to = at(oStart, m.BStart, m.BEnd)
-			save(episode+d, part, from, to)
+			save(episode+d, other, part, from, to)
 			if err := s.store.SaveSkipPrint(ctx, animeID, part, items[m.AStart:m.AEnd]); err != nil {
 				s.log.Warn("keep skip print", "anime", animeID, "err", err)
 			}

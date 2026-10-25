@@ -126,7 +126,7 @@ await page.route('**/api/download/episodes', (route) => {
   return route.fulfill({ json: { queued: 0 } })
 })
 await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
-const all = page.getByRole('button', { name: /^Download (all \d+|1 episode)$/ })
+const all = page.getByRole('button', { name: /^Download (all \d+|1 episode|\d+ unwatched)$/ })
 if (await until(() => all.isVisible(), 30_000)) {
   await all.click()
   check(await until(() => page.getByRole('button', { name: 'Download anyway' }).isVisible()), 'Download all asks first when it won\'t fit')

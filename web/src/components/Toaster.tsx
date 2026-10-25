@@ -26,7 +26,7 @@ export function Toaster() {
     <div
       aria-live="polite"
       // Bottom-left from sm up: the device access requests hold the bottom-right corner.
-      className="pointer-events-none fixed right-4 bottom-4 z-[90] flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2 sm:right-auto sm:left-4"
+      className="pointer-events-none fixed right-4 bottom-4 z-[90] flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2 max-sm:bottom-[calc(4.5rem+env(safe-area-inset-bottom))] sm:right-auto sm:left-4"
     >
       {toasts.map((t) => (
         <div

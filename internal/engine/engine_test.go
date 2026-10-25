@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -111,7 +110,6 @@ type fixture struct {
 	content map[string][]byte
 	cache   string
 	session string
-	legacy  []string
 	peer    *net.TCPAddr
 }
 
@@ -133,7 +131,7 @@ func newFixture(t *testing.T, seed ...func(*bt.ClientConfig)) *fixture {
 
 func (f *fixture) start(t *testing.T) {
 	t.Helper()
-	e, err := New(Options{CacheDir: f.cache, SessionDir: f.session, LegacySessions: f.legacy},
+	e, err := New(Options{CacheDir: f.cache, SessionDir: f.session},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -416,87 +414,6 @@ func TestRestartKeepsTheSession(t *testing.T) {
 		if !d.Files[0].Included || d.Files[1].Included {
 			t.Fatalf("selection lost: %+v", d.Files)
 		}
-	}
-}
-
-// rqbit's downloads carry over without a refetch; a session outside the cache is read and left alone.
-func TestCarriesOverRqbitDownloads(t *testing.T) {
-	seedDir := t.TempDir()
-	mi, content := makePack(t, seedDir)
-	cache, legacy := t.TempDir(), t.TempDir()
-	missing := filepath.Join(cache, "rqbit-session")
-
-	// rqbit's episode 1 in the cache, with the start of episode 2 its last piece spills into.
-	pack := filepath.Join(cache, "Show Pack")
-	os.MkdirAll(pack, 0o755)
-	os.WriteFile(filepath.Join(pack, "Show - 01.mkv"), content["Show - 01.mkv"], 0o644)
-	os.WriteFile(filepath.Join(pack, "Show - 02.mkv"), content["Show - 02.mkv"][:64<<10], 0o644)
-	info, _ := mi.UnmarshalInfo()
-	hash := mi.HashInfoBytes().HexString()
-	var buf bytes.Buffer
-	mi.Write(&buf)
-	os.WriteFile(filepath.Join(legacy, hash+".torrent"), buf.Bytes(), 0o644)
-	doc, _ := json.Marshal(map[string]any{"torrents": map[string]any{
-		"0": map[string]any{"info_hash": hash, "output_folder": pack, "only_files": []int{0}, "is_paused": false},
-		// A damaged record is skipped, not fatal.
-		"1": map[string]any{"info_hash": "not-hex", "output_folder": pack, "only_files": []int{0}},
-	}})
-	os.WriteFile(filepath.Join(legacy, "session.json"), doc, 0o644)
-
-	f := &fixture{cache: cache, session: t.TempDir(), legacy: []string{missing, legacy},
-		peer: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}}
-	f.start(t)
-	c := ctx(t)
-	live, err := f.client.Live(c)
-	if err != nil || len(live) != 1 {
-		t.Fatalf("carried over: %v %v", live, err)
-	}
-	id := live[hash]
-	if err := f.client.WaitLive(c, id, 20*time.Second); err != nil {
-		t.Fatal(err)
-	}
-	s, _ := f.client.Stats(c, id)
-	if !s.Finished || s.TotalBytes != info.Files[0].Length {
-		t.Fatalf("carried-over episode not recognised as complete: %+v", s)
-	}
-	if _, err := os.Stat(filepath.Join(legacy, "session.json")); err != nil {
-		t.Error("rqbit's session was touched")
-	}
-}
-
-// The old rqbit session, in the cache, goes once the engine's holds it all.
-func TestImportedSessionInTheCacheIsRemoved(t *testing.T) {
-	seedDir := t.TempDir()
-	mi, content := makePack(t, seedDir)
-	cache := t.TempDir()
-	legacy := filepath.Join(cache, "rqbit-session")
-	os.MkdirAll(legacy, 0o755)
-
-	pack := filepath.Join(cache, "Show Pack")
-	os.MkdirAll(pack, 0o755)
-	os.WriteFile(filepath.Join(pack, "Show - 01.mkv"), content["Show - 01.mkv"], 0o644)
-	hash := mi.HashInfoBytes().HexString()
-	var buf bytes.Buffer
-	mi.Write(&buf)
-	os.WriteFile(filepath.Join(legacy, hash+".torrent"), buf.Bytes(), 0o644)
-	doc, _ := json.Marshal(map[string]any{"torrents": map[string]any{
-		"0": map[string]any{"info_hash": hash, "output_folder": pack, "only_files": []int{0}},
-	}})
-	os.WriteFile(filepath.Join(legacy, "session.json"), doc, 0o644)
-
-	session := t.TempDir()
-	f := &fixture{cache: cache, session: session, legacy: []string{legacy},
-		peer: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}}
-	f.start(t)
-	live, err := f.client.Live(ctx(t))
-	if err != nil || len(live) != 1 {
-		t.Fatalf("carried over: %v %v", live, err)
-	}
-	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
-		t.Errorf("the imported session is still there: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(session, hash+".torrent")); err != nil {
-		t.Errorf("metainfo not kept: %v", err)
 	}
 }
 

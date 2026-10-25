@@ -59,21 +59,22 @@ func (s *Subtitles) lockFor(path string) *sync.Mutex {
 // Forget drops what is remembered about a closed session's folder, or both maps
 // grow by every track of every episode for the life of the process.
 func (s *Subtitles) Forget(dir string) {
-	s.ForgetPrefix(filepath.Clean(dir) + string(filepath.Separator))
+	inside := filepath.Clean(dir) + string(filepath.Separator)
+	s.ForgetOwned(func(path string) bool { return strings.HasPrefix(path, inside) })
 }
 
-// ForgetPrefix is Forget for every path starting with prefix, such as all of one episode's session folders.
-func (s *Subtitles) ForgetPrefix(prefix string) {
+// ForgetOwned is Forget for every path owned says yes to, such as all of one session's folders.
+func (s *Subtitles) ForgetOwned(owned func(path string) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for path := range s.done {
-		if strings.HasPrefix(path, prefix) {
+		if owned(path) {
 			delete(s.done, path)
 		}
 	}
 	for path, m := range s.busy {
 		// One in use keeps its lock; the next Forget takes it.
-		if strings.HasPrefix(path, prefix) && m.TryLock() {
+		if owned(path) && m.TryLock() {
 			m.Unlock()
 			delete(s.busy, path)
 		}
@@ -88,6 +89,8 @@ type Track struct {
 	Default  bool   `json:"default"`
 	Forced   bool   `json:"forced"`
 	URL      string `json:"url"`
+	// Pictures: a PGS track, its URL a .sup file rather than ASS text.
+	Pictures bool `json:"pictures,omitempty"`
 }
 
 type FontFile struct {
@@ -428,3 +431,16 @@ func subtitleExt(codec string) string {
 
 // Renderable reports whether the browser renderer can draw the track.
 func Renderable(codec string) bool { return isTextSubtitle(codec) }
+
+// PictureSubtitle: a PGS track, which the browser draws with libpgs and a TV gets laid over the picture.
+func PictureSubtitle(codec string) bool { return codec == "hdmv_pgs_subtitle" || codec == "pgssub" }
+
+// SubtitleCodec is the codec of the subtitle track at stream index, "" when there is none.
+func (m *MediaInfo) SubtitleCodec(index int) string {
+	for _, s := range m.Subtitles {
+		if s.Index == index {
+			return s.Codec
+		}
+	}
+	return ""
+}

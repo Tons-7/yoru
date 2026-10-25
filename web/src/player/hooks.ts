@@ -6,7 +6,13 @@ import type JASSUB from 'jassub'
 import jassubWorkerUrl from './subtitle-worker?worker&url'
 import jassubWasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url'
 import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
+import type { PgsRenderer } from 'libpgs'
+import pgsWorkerUrl from 'libpgs/dist/libpgs.worker.js?url'
 import type { SkipRange, StreamInfo, SubtitleTrack } from '../lib/api'
+import { restyle as restyleASS, type SubLook } from './subLook'
+
+// hls.js's details for a codec the browser won't take at all.
+const REFUSED_CODEC = new Set<string>(['bufferAddCodecError', 'bufferIncompatibleCodecsError', 'manifestIncompatibleCodecsError'])
 
 /** Attaches HLS with hls.js wherever it runs (Chrome's own HLS hides errors); native only without MSE. */
 export function useHlsSource(
@@ -14,6 +20,8 @@ export function useHlsSource(
   playlist?: string,
   startAt = 0,
   onGone?: () => void,
+  /** A decode failure; true when it is handled (reopened converted), so no error is shown. */
+  onUndecodable?: () => boolean,
 ) {
   // Tagged with what it was about: the last episode's error never sits over the next one's search.
   const [failure, setFailure] = useState<{
@@ -30,6 +38,7 @@ export function useHlsSource(
   // Read at attach time, not tracked: a resume update mid-episode must not tear the player down.
   const readStart = useEffectEvent(() => startAt)
   const gone = useEffectEvent(() => onGone?.())
+  const undecodable = useEffectEvent(() => !!onUndecodable?.())
 
   useEffect(() => {
     if (!video || !playlist) return
@@ -46,11 +55,9 @@ export function useHlsSource(
     const onMediaError = () => {
       if (!native) return
       const code = video.error?.code
-      setError(
-        code === MediaError.MEDIA_ERR_DECODE || code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
-          ? "This device can't decode this release."
-          : 'Playback failed',
-      )
+      const decode = code === MediaError.MEDIA_ERR_DECODE || code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+      if (decode && undecodable()) return
+      setError(decode ? "This device can't decode this release." : 'Playback failed')
     }
     video.addEventListener('error', onMediaError)
     // A seek takes hls.js out of its ended state; it says so again once it reaches the end.
@@ -116,6 +123,11 @@ export function useHlsSource(
           setError("Yoru couldn't convert this release to play here. Try another release, or mpv.", true)
           return
         }
+        // A codec refused outright, even one track of two (the picture would play silent): no recovery helps.
+        if (REFUSED_CODEC.has(data.details) && undecodable()) {
+          instance.stopLoad()
+          return
+        }
         if (!data.fatal) return
         switch (data.type) {
           case HlsCtor.ErrorTypes.NETWORK_ERROR:
@@ -135,6 +147,10 @@ export function useHlsSource(
             recoveries = now - recoveredAt < 10_000 ? recoveries + 1 : 1
             recoveredAt = now
             if (recoveries > 2) {
+              if (undecodable()) {
+                instance.stopLoad()
+                break
+              }
               setError("This browser can't decode this release. Try mpv, or another release.")
               break
             }
@@ -290,6 +306,55 @@ export function useKeepAlive(
   }, [video, playlist])
 }
 
+// A stall counts once it lasts this long, and this many within the window make a slow link.
+const STALL_COUNTS = 2_000
+const SLOW_STALLS = 2
+const SLOW_WINDOW = 90_000
+
+/** Tells onSlow when playback keeps stalling while it plays on: not the first buffering, nor a seek's. */
+export function useSlowLink(video: HTMLVideoElement | null, onSlow?: () => void) {
+  const slow = useEffectEvent(() => onSlow?.())
+  const watching = !!onSlow
+  useEffect(() => {
+    if (!video || !watching) return
+    let since = 0
+    let stalls: number[] = []
+    let seeking = false
+    const waiting = () => {
+      // Startup and seeks wait for data on any link.
+      if (!seeking && video.currentTime > 10) since = Date.now()
+    }
+    const resumed = () => {
+      const now = Date.now()
+      if (since && now - since >= STALL_COUNTS) {
+        stalls = [...stalls.filter((at) => now - at < SLOW_WINDOW), now]
+        if (stalls.length >= SLOW_STALLS) {
+          stalls = []
+          slow()
+        }
+      }
+      since = 0
+    }
+    const seek = () => {
+      seeking = true
+      since = 0
+    }
+    const sought = () => {
+      seeking = false
+    }
+    video.addEventListener('waiting', waiting)
+    video.addEventListener('playing', resumed)
+    video.addEventListener('seeking', seek)
+    video.addEventListener('seeked', sought)
+    return () => {
+      video.removeEventListener('waiting', waiting)
+      video.removeEventListener('playing', resumed)
+      video.removeEventListener('seeking', seek)
+      video.removeEventListener('seeked', sought)
+    }
+  }, [video, watching])
+}
+
 /** Pokes a clock stopped with data buffered ahead (tiny seek, then recovery); no buffer is a slow encoder. */
 export function useStallWatchdog(video: HTMLVideoElement | null, hls: RefObject<Hls | null>) {
   useEffect(() => {
@@ -333,6 +398,8 @@ export interface SubtitleLook {
   scale: number
   /** Seconds the subtitles show late; negative shows them early. */
   delay: number
+  /** How dialogue is drawn over the file's own styling (see subLook.ts). */
+  preset?: SubLook
 }
 
 type ASSStyle = Awaited<ReturnType<JASSUB['renderer']['getStyles']>>[number]
@@ -348,8 +415,11 @@ export function useSubtitles(
   fonts: string[] = [],
   rebuild?: unknown,
   look: SubtitleLook = { scale: 1, delay: 0 },
+  /** Why a track can't show yet, in words for the viewer. */
+  onProblem?: (message: string) => void,
 ) {
   const instance = useRef<JASSUB | null>(null)
+  const pictures = useRef<PgsRenderer | null>(null)
   // The last instance's teardown, which the next one waits for.
   const destroying = useRef<Promise<unknown> | undefined>(undefined)
   const lookRef = useRef(look)
@@ -401,12 +471,46 @@ export function useSubtitles(
       // No dimensions yet, no canvas; the listeners above rerun this once they arrive.
       if (!video.videoWidth || !video.videoHeight) return
 
+      // The track, or null once its problem is said; pictures still downloading (409) are asked for again.
+      const load = async (what: string): Promise<Response | null> => {
+        for (let said = false; !cancelled; await new Promise((r) => setTimeout(r, 30_000))) {
+          const res = await fetch(track.url).catch(() => null)
+          if (cancelled || res?.ok) return res
+          if (!said) {
+            const error = res ? ((await res.json().catch(() => null)) as { error?: string } | null)?.error : null
+            onProblem?.(error ?? `Couldn't load ${what}`)
+            said = true
+          }
+          if (res?.status !== 409) return null
+        }
+        return null
+      }
+
+      if (track.pictures) {
+        const res = await load('these picture subtitles')
+        if (!res || cancelled) return
+        const { PgsRenderer } = await import('libpgs')
+        const data = await res.arrayBuffer()
+        if (cancelled) return
+        const pgs = new PgsRenderer({ video, workerUrl: pgsWorkerUrl, timeOffset: -lookRef.current.delay })
+        pictures.current = pgs
+        await pgs.loadFromBuffer(data).catch(() => onProblem?.("Couldn't read these picture subtitles"))
+        // libpgs never draws the first set (it starts as "last drawn") nor on a paused video: drawn here.
+        if (!cancelled) {
+          pgs.renderAtTimestamp(-1)
+          pgs.renderAtTimestamp(video.currentTime + pgs.timeOffset)
+        }
+        return
+      }
+
       const { default: Renderer } = await import('jassub')
-      if (cancelled) return
+      // A whole track is read here and handed over as text, so a failure (Jimaku busy, a key gone) is said.
+      const whole = track.whole ? await load('these subtitles').then((r) => r?.text() ?? null) : undefined
+      if (cancelled || whole === null) return
 
       const renderer = new Renderer({
         video,
-        subUrl: track.url,
+        ...(whole === undefined ? { subUrl: track.url } : { subContent: whole }),
         fonts,
         workerUrl: jassubWorkerUrl,
         wasmUrl: jassubWasmUrl,
@@ -453,31 +557,36 @@ export function useSubtitles(
       }
       repaint.current = resync
 
-      // Scaled from the file's own sizes, reread after each refresh so steps never compound.
+      // Made over from the file's own styles, reread after each refresh so steps never compound.
       let originals: ASSStyle[] | null = null
-      let applied = 1
+      // Nothing applied yet: the first pass sets the styles, which also draws a paused picture's line.
+      let applied = ''
       restyle.current = async () => {
-        const scale = lookRef.current.scale
-        if (scale === applied || cancelled) return
+        const { scale, preset = '' } = lookRef.current
+        if (`${scale}|${preset}` === applied || cancelled) return
         const worker = renderer.renderer
         originals ??= await worker.getStyles()
         if (!originals.length) originals = null
         await Promise.all(
           (originals ?? []).map((s, i) =>
-            TYPESET_STYLE.test(s.Name) ? undefined : worker.setStyle({ ...s, FontSize: s.FontSize * scale }, i),
+            TYPESET_STYLE.test(s.Name) ? undefined : worker.setStyle(restyleASS({ ...s, FontSize: s.FontSize * scale }, preset), i),
           ),
         )
-        applied = scale
+        applied = `${scale}|${preset}`
         resync()
+        // A font loads as its line is first drawn, and JASSUB doesn't redraw then: a paused picture is redrawn.
+        for (const ms of [300, 1500]) setTimeout(() => !cancelled && video.paused && resync(), ms)
       }
       resync()
       void restyle.current().catch(() => {})
 
-      void keepFilling(renderer, track.url, video, () => cancelled, () => {
-        originals = null
-        applied = 1
-        void restyle.current?.().catch(() => {})
-      }).catch(() => {})
+      if (!track.whole) {
+        void keepFilling(renderer, track.url, video, () => cancelled, () => {
+          originals = null
+          applied = '1|'
+          void restyle.current?.().catch(() => {})
+        }).catch(() => {})
+      }
     })()
 
     return () => {
@@ -487,11 +596,14 @@ export function useSubtitles(
       repaint.current = null
       destroying.current = instance.current ? Promise.resolve(instance.current.destroy()) : undefined
       instance.current = null
+      pictures.current?.dispose()
+      pictures.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video, stream, trackIndex, fontKey, rebuild, surface])
 
   useEffect(() => {
+    if (pictures.current) pictures.current.timeOffset = -look.delay
     if (!instance.current) return
     instance.current.timeOffset = -look.delay
     repaint.current?.()
@@ -499,7 +611,7 @@ export function useSubtitles(
 
   useEffect(() => {
     void restyle.current?.().catch(() => {})
-  }, [look.scale])
+  }, [look.scale, look.preset])
 }
 
 function cueCount(ass: string): number {
@@ -881,6 +993,60 @@ export function useDocumentPiP(container: HTMLElement | null) {
   return { supported, active, toggle, window: win }
 }
 
+type WebkitVideo = HTMLVideoElement & {
+  webkitSetPresentationMode?: (mode: 'inline' | 'picture-in-picture' | 'fullscreen') => void
+  webkitPresentationMode?: string
+}
+
+/** The video alone in the system's floating window (phones, Safari); subtitles go as its text track. */
+export function useVideoPiP(video: HTMLVideoElement | null) {
+  const [active, setActive] = useState(false)
+  const v = video as WebkitVideo | null
+  const supported =
+    !!v && ((document.pictureInPictureEnabled && !v.disablePictureInPicture) || typeof v.webkitSetPresentationMode === 'function')
+  useEffect(() => {
+    if (!v) return
+    const on = () => setActive(true)
+    const off = () => setActive(false)
+    const mode = () => setActive(v.webkitPresentationMode === 'picture-in-picture')
+    v.addEventListener('enterpictureinpicture', on)
+    v.addEventListener('leavepictureinpicture', off)
+    v.addEventListener('webkitpresentationmodechanged', mode)
+    return () => {
+      v.removeEventListener('enterpictureinpicture', on)
+      v.removeEventListener('leavepictureinpicture', off)
+      v.removeEventListener('webkitpresentationmodechanged', mode)
+    }
+  }, [v])
+  const toggle = async () => {
+    if (!v) return
+    if (document.pictureInPictureElement) return document.exitPictureInPicture().catch(() => {})
+    if (document.pictureInPictureEnabled && v.requestPictureInPicture) {
+      await v.requestPictureInPicture().catch(() => {})
+      return
+    }
+    v.webkitSetPresentationMode?.(v.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture')
+  }
+  return { supported, active, toggle }
+}
+
+/** An iPhone's fullscreen: the system's own player, which shows only the video's text tracks. */
+export function useSystemFullscreen(video: HTMLVideoElement | null) {
+  const [active, setActive] = useState(false)
+  useEffect(() => {
+    if (!video) return
+    const on = () => setActive(true)
+    const off = () => setActive(false)
+    video.addEventListener('webkitbeginfullscreen', on)
+    video.addEventListener('webkitendfullscreen', off)
+    return () => {
+      video.removeEventListener('webkitbeginfullscreen', on)
+      video.removeEventListener('webkitendfullscreen', off)
+    }
+  }, [video])
+  return active
+}
+
 // Small enough to sit over other windows (a third of the screen at most), shaped like the video.
 const pipMinWidth = 320
 const pipMaxWidth = 800
@@ -899,7 +1065,7 @@ function pipSize(container: HTMLElement) {
   return { width, height: Math.round(width / ratio) }
 }
 
-/** The scrub preview sheet, once ffmpeg has finished laying it out. */
+/** The scrub preview sheet, once ffmpeg has laid it out. */
 export interface Sheet {
   ready: boolean
   interval: number
@@ -909,9 +1075,13 @@ export interface Sheet {
   width: number
   height: number
   url: string
+  /** A downloading file's sheet so far: have holds a 1 for each tile there, version counts them. */
+  partial?: boolean
+  have?: string
+  version?: number
 }
 
-/** Asks for the preview sheet, polling while it is built; it needs the whole file. */
+/** Asks for the preview sheet, polling while it is built and while a downloading file's fills in. */
 export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null): Sheet | undefined {
   // Tagged with its stream, so another episode never shows this one's sheet while it asks for its own.
   const [found, setFound] = useState<{ stream: string; sheet: Sheet }>()
@@ -937,12 +1107,12 @@ export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null
 
         if (body.ready) {
           // Each release of an episode has the same URL; stamped, the browser can't paint the last one's sheet.
-          const url = `/api/stream/${streamId}/thumbs.jpg?at=${opened}`
-          setFound({ stream: streamId, sheet: { ...body, url } })
-          return
+          const url = `/api/stream/${streamId}/thumbs.jpg?at=${opened}&v=${body.partial ? (body.version ?? 0) : 'whole'}`
+          // The same answer again keeps the sheet as it is, so the image isn't fetched anew.
+          setFound((was) => (was?.stream === streamId && was.sheet.url === url ? was : { stream: streamId, sheet: { ...body, url } }))
+          if (!body.partial) return
         }
-        // The sheet is only built once the file is whole, which for a torrent
-        // can be well into the episode; keep asking for as long as it plays.
+        // Asked for as long as it plays: tiles come as the file downloads, the whole sheet once it has.
         timer = window.setTimeout(ask, 15_000)
       } catch {
         // A preview is a nicety; failing to get one is not worth reporting.

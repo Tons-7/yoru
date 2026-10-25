@@ -86,7 +86,7 @@ func TestAudioTrackDrivesArgsAndPlan(t *testing.T) {
 	}
 
 	s.audioTrack = 1
-	s.Plan = planFor(info, "libx264", 1, sound.Options{})
+	s.Plan = planFor(info, "libx264", 1, sound.Options{}, nil)
 	if !strings.Contains(strings.Join(s.args(&run{}), " "), "0:a:1?") {
 		t.Error("switched track is mapped")
 	}

@@ -18,6 +18,7 @@ import (
 	"yoru/internal/config"
 	"yoru/internal/deps"
 	"yoru/internal/indexer"
+	"yoru/internal/jimaku"
 	"yoru/internal/jobs"
 	"yoru/internal/library"
 	"yoru/internal/mal"
@@ -87,6 +88,14 @@ type Server struct {
 	findMu    sync.Mutex
 	finding   map[int]bool
 	findTried map[string]time.Time
+
+	// Japanese subtitles from jimaku.cc, and each episode's last listing of them (jimaku.go).
+	jimaku      *jimaku.Client
+	jimakuMu    sync.Mutex
+	jimakuFiles map[string]jimakuListing
+
+	// A lock per file built on request (a PGS track, a Jimaku file), so two asks don't write one file at once.
+	building sync.Map
 
 	// Version lookups in flight, so a polling setup page cannot stack them.
 	latestMu   sync.Mutex
@@ -201,6 +210,8 @@ func New(d Deps) *Server {
 		finding:     map[int]bool{},
 		findTried:   map[string]time.Time{},
 		deriving:    map[int]struct{}{},
+		jimaku:      jimaku.New(),
+		jimakuFiles: map[string]jimakuListing{},
 	}
 	s.downloader.WhenArrived(s.watchedArrived)
 	return s
@@ -279,6 +290,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/setup/install/{name}", hostOnly(s.installComponent))
 	mux.HandleFunc("POST /api/setup/data-dir", hostOnly(s.setDataDir))
 	mux.HandleFunc("GET /api/update", s.updateStatus)
+	mux.HandleFunc("GET /api/update/since", s.updatedSince)
 	mux.HandleFunc("POST /api/update/check", s.updateCheck)
 	mux.HandleFunc("POST /api/update/apply", hostOnly(s.updateApply))
 	mux.HandleFunc("GET /api/auth/login", hostOnly(s.authLogin))
@@ -348,6 +360,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/stream/{id}/init.mp4", s.streamInit)
 	mux.HandleFunc("GET /api/stream/{id}/{segment}", s.streamSegment)
 	mux.HandleFunc("GET /api/stream/{id}/subtitle/{track}", s.streamSubtitle)
+	mux.HandleFunc("GET /api/stream/{id}/pgs/{track}", s.streamPictureSubtitle)
+	mux.HandleFunc("GET /api/stream/{id}/jimaku", s.streamJimaku)
+	mux.HandleFunc("GET /api/stream/{id}/jimaku/{n}", s.streamJimakuFile)
+	mux.HandleFunc("GET /api/jimaku", s.jimakuState)
+	mux.HandleFunc("POST /api/jimaku/key", s.setJimakuKey)
 	mux.HandleFunc("GET /api/stream/{id}/fonts", s.streamFonts)
 	mux.HandleFunc("GET /api/stream/{id}/thumbnails", s.streamThumbnails)
 	mux.HandleFunc("GET /api/stream/{id}/thumbs.jpg", s.streamThumbSheet)

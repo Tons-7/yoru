@@ -79,6 +79,16 @@ const (
 	limiter = "alimiter=limit=0.98:level=0:latency=1"
 )
 
+// The fold-down's weights: dialogue (centre) at the fronts' level, not -ac 2's -3 dB; rears -3 dB; sum 1.
+const front, rear = 0.369, 0.262
+
+// Stereo folds surround down to two channels by those weights; LFE dropped, as -ac 2 drops it.
+var Stereo = "aformat=channel_layouts=5.1," + fold(front)
+
+func fold(centre float64) string {
+	return fmt.Sprintf("pan=stereo|FL=%.3f*FL+%.3f*FC+%.3f*BL|FR=%.3f*FR+%.3f*FC+%.3f*BR", front, centre, rear, front, centre, rear)
+}
+
 // Chain is the ffmpeg filter graph for that many channels, ending in stereo; "" when nothing is asked.
 func Chain(o Options, channels int) string {
 	o = Normalized(o)
@@ -112,12 +122,10 @@ func Chain(o Options, channels int) string {
 		}
 	default:
 		if gain, ok := voiceLevels[o.Voice]; ok {
-			// ffmpeg's own fold-down is 0.414 front, 0.293 centre and rear; only the centre moves.
-			centre := 0.293 * math.Pow(10, gain/20)
-			parts = append(parts, "aformat=channel_layouts=5.1", presence+":c=FC",
-				fmt.Sprintf("pan=stereo|FL=0.414*FL+%.3f*FC+0.293*BL|FR=0.414*FR+%.3f*FC+0.293*BR", centre, centre))
+			// Stereo's fold with only the centre moved.
+			parts = append(parts, "aformat=channel_layouts=5.1", presence+":c=FC", fold(front*math.Pow(10, gain/20)))
 		} else {
-			parts = append(parts, "aformat=channel_layouts=stereo")
+			parts = append(parts, Stereo)
 		}
 	}
 	if o.Night {

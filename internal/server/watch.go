@@ -126,7 +126,7 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.streams != nil {
-		if _, live := s.streams.Get(sessionID(body.AnimeID, body.Episode)); live {
+		if _, live := s.streams.Episode(sessionID(body.AnimeID, body.Episode)); live {
 			send(w, http.StatusOK, map[string]any{"preparing": false})
 			return
 		}
@@ -223,7 +223,7 @@ func (s *Server) chapterSkips(animeID, episode int, names []string) []player.Ski
 	if s.streams == nil {
 		return nil
 	}
-	session, ok := s.streams.Get(sessionID(animeID, episode))
+	session, ok := s.streams.Episode(sessionID(animeID, episode))
 	if !ok || session.Info == nil {
 		return nil
 	}

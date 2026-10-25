@@ -23,12 +23,10 @@ import (
 )
 
 type Options struct {
-	// CacheDir holds downloads as rqbit did: CacheDir/<name>, or CacheDir/<name>/<path> for a pack.
+	// CacheDir holds downloads: CacheDir/<name>, or CacheDir/<name>/<path> for a pack.
 	CacheDir string
 	// SessionDir keeps the torrent list, their metainfo and piece completion.
 	SessionDir string
-	// LegacySessions are rqbit sessions; the first found is imported once (deleted only if inside CacheDir).
-	LegacySessions []string
 
 	ListenPort  int
 	PeerLimit   int

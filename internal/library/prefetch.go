@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"yoru/internal/indexer"
+	"yoru/internal/parse"
 	"yoru/internal/score"
 	"yoru/internal/store"
 	"yoru/internal/torrent"
@@ -867,6 +869,7 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 		}
 	}
 	if added == nil {
+		byHash := false
 		found, err := p.finder.Find(ctx, Request{
 			AnimeID: animeID, Episode: episode, Season: season, Prefs: prefs,
 		})
@@ -878,12 +881,22 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 			results = slices.DeleteFunc(slices.Clone(results), func(r score.Result) bool {
 				return !strings.EqualFold(r.Torrent.InfoHash, pick)
 			})
+			// A picked hash no search lists (a SeaDex batch): fetched by hash, its file found as in any pack.
 			if len(results) == 0 {
-				return 0, false, fmt.Errorf("release %s not found", pick)
+				byHash = true
+				results = []score.Result{{Candidate: score.Candidate{
+					Torrent: indexer.Torrent{InfoHash: strings.ToLower(pick), Indexer: "nyaa"},
+					Release: parse.Release{Batch: true},
+					Episode: episode,
+					Numbers: fileNumbers(ctx, p.store, animeID, episode),
+				}}}
 			}
 		}
 		if err := addFirst(results); err != nil {
 			return 0, false, err
+		}
+		if added == nil && byHash {
+			return 0, false, fmt.Errorf("release %s not found: no search lists it, and by its hash: %w", pick, lastErr)
 		}
 		if added == nil {
 			return 0, false, lastErr

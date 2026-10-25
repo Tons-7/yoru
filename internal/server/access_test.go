@@ -36,6 +36,18 @@ func (h *harness) from(t *testing.T, addr, target string, header http.Header) *h
 	return rec.Result()
 }
 
+// Away is a public address off this machine's own networks: never the LAN, loopback, or a link's own.
+func TestAwayFromHome(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"192.168.1.20": false, "10.0.0.5": false, "127.0.0.1": false, "::1": false, "fe80::1": false, "fd00::5": false,
+		"8.8.8.8": true, "2001:4860:4860::8888": true, "": false, "nonsense": false,
+	} {
+		if got := awayFromHome(addr); got != want {
+			t.Errorf("%q away = %v, want %v", addr, got, want)
+		}
+	}
+}
+
 func TestLoopbackNeedsNoToken(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"

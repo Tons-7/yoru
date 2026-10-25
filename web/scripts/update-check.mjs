@@ -44,7 +44,8 @@ const api = async (path, init) => {
 const post = (path, body) => api(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
 
 // ---------------------------------------------------------------- build
-const scratch = join(tmpdir(), `yoru-update-${process.pid}`)
+// One fixed folder: Windows Firewall adds rules for each new program path that listens, and alerts each time.
+const scratch = join(tmpdir(), 'yoru-update-check')
 rmSync(scratch, { recursive: true, force: true })
 const root = join(scratch, 'app')
 const data = join(scratch, 'data')
@@ -159,7 +160,7 @@ writeFileSync(join(root, 'config.toml'), `addr = "127.0.0.1:${PORT}"\n\n[torrent
 const env = {
   ...process.env,
   YORU_ROOT: root,
-  // APPDATA too: the engine imports rqbit's per-user session when it has none.
+  // APPDATA too, so nothing of this user's own is read.
   LOCALAPPDATA: data,
   APPDATA: data,
   YORU_UPDATE_API: ghBase(),

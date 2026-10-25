@@ -118,9 +118,10 @@ check((await toggle('Show One').count()) === 0, 'one download left: the show is 
 check((await toggle('Show One Season 2').count()) === 1, 'the other season is untouched')
 
 // Pausing one download lets the next in line start, so stopping everything is its own control.
-check((await page.getByRole('status').count()) === 0, 'no paused notice while the queue runs')
+// In the page itself: the layout's own status region (what a screen reader hears of a new page) is always there.
+const notice = page.locator('main').getByRole('status')
+check((await notice.count()) === 0, 'no paused notice while the queue runs')
 await page.getByRole('button', { name: 'Pause all' }).click()
-const notice = page.getByRole('status')
 check(await notice.waitFor({ timeout: 8000 }).then(() => true, () => false), 'pause all says downloads are paused')
 check(queueCalls.join(' | ') === 'pause', 'pause all pauses the queue, not one download', queueCalls.join(' | '))
 check((await page.getByRole('button', { name: 'Resume downloads' }).count()) === 1, 'the button turns into resume')

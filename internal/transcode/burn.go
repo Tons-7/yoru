@@ -17,8 +17,11 @@ func burnName(subtitles string) string {
 	return "burn.ass"
 }
 
-// into copies the subtitles and their fonts into a session's folder.
+// into copies the subtitles and their fonts into a session's folder; a picture track is the source's own.
 func (b Burn) into(dir string) error {
+	if b.Pictures > 0 {
+		return nil
+	}
 	if err := copyInto(b.Subtitles, filepath.Join(dir, burnName(b.Subtitles))); err != nil {
 		return fmt.Errorf("subtitles to draw in: %w", err)
 	}
@@ -57,6 +60,17 @@ func copyInto(from, to string) error {
 		return err
 	}
 	return out.Close()
+}
+
+// pictureOverlay lays a PGS track over the video once chain has run on it, delayed, scaled to the frame.
+func pictureOverlay(track int, delay float64, chain string) string {
+	picture := "[0:v:0]"
+	if chain != "" {
+		picture = "[pic]"
+		chain = "[0:v:0]" + chain + "[pic];"
+	}
+	return fmt.Sprintf("%s[0:%d]setpts=PTS+%.3f/TB[sub];[sub]%sscale2ref[s][base];[base][s]overlay=eof_action=pass[v]",
+		chain, track, delay, picture)
 }
 
 // burnFilter draws the session's subtitles in, from its folder (each pass runs there).

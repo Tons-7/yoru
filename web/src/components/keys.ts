@@ -28,30 +28,10 @@ export interface Shortcut {
   does: string
 }
 
-export const SHORTCUTS: { where: string; items: Shortcut[] }[] = [
-  {
-    where: 'While watching',
-    items: [
-      { keys: ['Space', 'K'], does: 'Play or pause' },
-      { keys: ['←', '→'], does: 'Back or forward 5 seconds' },
-      { keys: ['J', 'L'], does: 'Back or forward 10 seconds' },
-      { keys: ['S'], does: 'Skip the opening or ending, while the button shows' },
-      { keys: ['N'], does: 'Next episode' },
-      { keys: ['Shift', 'P'], does: 'Previous episode' },
-      { keys: ['↑', '↓'], does: 'Volume up or down' },
-      { keys: ['M'], does: 'Mute' },
-      { keys: ['V'], does: 'Voice boost: off, medium, high' },
-      { keys: ['F'], does: 'Fullscreen' },
-      { keys: ['Z', 'X'], does: 'Subtitles earlier or later' },
-    ],
-  },
-  {
-    where: 'Anywhere',
-    items: [
-      { keys: ['/'], does: 'Search' },
-      { keys: ['D'], does: 'Show or hide downloads' },
-      { keys: ['?'], does: 'Show or hide this list' },
-      { keys: ['Esc'], does: 'Close a panel or dialog' },
-    ],
-  },
+/** Keys every page answers, which stay as they are; the player's own are in lib/keymap. */
+export const PAGE_SHORTCUTS: Shortcut[] = [
+  { keys: ['/'], does: 'Search' },
+  { keys: ['D'], does: 'Show or hide downloads' },
+  { keys: ['?'], does: 'Show or hide this list' },
+  { keys: ['Esc'], does: 'Close a panel or dialog' },
 ]

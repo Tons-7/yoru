@@ -295,6 +295,8 @@ export interface PlaySession {
   localPath?: string
   startAt: number
   player: string
+  /** The file's bytes, what playing it as it is costs a data plan. */
+  size?: number
 }
 
 /** One release the finder ranked for an episode; the manual picker's row. */
@@ -358,6 +360,10 @@ export interface SubtitleTrack {
   language?: string
   url: string
   default?: boolean
+  /** PGS: the url is a .sup file of pictures, drawn by libpgs. */
+  pictures?: boolean
+  /** Whole as it is (a file of this device's, or Jimaku's): asked for once, not again as it grows. */
+  whole?: boolean
 }
 
 export interface AudioTrack {
@@ -384,6 +390,10 @@ export interface StreamHealth {
   peers: number
   complete: boolean
   slow: boolean
+  /** The converter's pace against real time, while it runs. */
+  speed?: number
+  /** How much of the file is on disk. */
+  percent?: number
 }
 
 export type VoiceLevel = 'off' | 'medium' | 'high'
@@ -416,8 +426,35 @@ export interface StreamInfo {
   id: string
   playlist: string
   duration: number
-  plan?: { videoCopy?: boolean; audioCopy?: boolean }
-  video?: unknown
+  /** What the server does on the way out: the codecs it converts to when not copying, and why. */
+  plan?: {
+    videoCopy?: boolean
+    audioCopy?: boolean
+    videoCodec?: string
+    audioCodec?: string
+    reason?: string
+    /** A converted track's channels: 2, up to 6 for surround speakers; absent keeps the source's. */
+    channels?: number
+    /** Something is copied only because this device said it decodes it. */
+    forDevice?: boolean
+    /** Picture changes: HDR tone-mapped, deinterlaced, flashing softened, a cap (height, bits a second). */
+    toneMap?: boolean
+    deinterlace?: boolean
+    soften?: boolean
+    height?: number
+    maxRate?: number
+  }
+  video?: {
+    codec?: string
+    profile?: string
+    width?: number
+    height?: number
+    bitDepth?: number
+    /** smpte2084 is HDR10, arib-std-b67 HLG. */
+    transfer?: string
+    fieldOrder?: string
+    dvProfile?: number
+  }
   audio?: AudioTrack[]
   /** Position in `audio` of the track being sent. */
   audioTrack?: number
@@ -439,6 +476,13 @@ export interface SkipRange {
   source?: string
   /** AniSkip's id, for a vote on it. */
   id?: string
+}
+
+/** A saved mark, as the server lined it up: with the file's chapters, the song's sound, or as given (""). */
+export interface SkipMarkResult {
+  start: number
+  end: number
+  snapped: '' | 'chapters' | 'sound'
 }
 
 export const LIST_STATUSES = [

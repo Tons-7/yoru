@@ -269,6 +269,10 @@ func (i *Ingester) announceSeason(ctx context.Context, m anilist.RelatedMedia) {
 		if err != nil || !seasonNews[entry.Status] || i.store.Notified(ctx, store.NotifySeason, m.ID) {
 			continue
 		}
+		// Alerts off, for that show or everywhere: no bell either, as for a delay.
+		if p, err := i.store.Prefs(ctx, e.Node.ID); err == nil && !p.Bool("notify.enabled") {
+			continue
+		}
 		rec, _ := i.store.CorpusRecord(ctx, m.ID)
 		title := cmp.Or(i.store.ShownTitle(ctx, m.ID), rec.Primary)
 		if title == "" {

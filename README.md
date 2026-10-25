@@ -32,7 +32,16 @@ a browser player and one config file.
   the player becoming its remote; until casting can start, the button lists what
   is missing (the TV must reach Yoru, so access from other devices goes on).
   Subtitles go as plain text, or drawn into the picture with their fonts.
-- **Sub or dub**, chosen per show, with subtitle delay and size controls.
+- **Sends each device what it can play.** HEVC, 10-bit, AV1 and E-AC-3 go as
+  they are wherever the device decodes them, and are converted only where it
+  can't. HDR is tone-mapped for ordinary screens, interlaced sources are
+  deinterlaced, and 5.1 reaches surround speakers as 5.1.
+- **Careful with a phone's data.** On mobile data it asks first, with the
+  episode's size, and offers data saver; each device can stream on Wi-Fi only,
+  or at a quality of its own.
+- **Sub or dub**, chosen per show, with subtitle delay and size controls, a look
+  of your own (outlined, yellow or boxed), Blu-ray picture subtitles, your own
+  subtitle files, and Japanese subtitles from Jimaku.
 - **Knows 34,000+ anime**, including the ~11,700 that exist on MyAnimeList but
   not AniList.
 - **Marks filler and recap episodes**, so a rewatch can skip them.
@@ -66,9 +75,13 @@ a browser player and one config file.
   drive downloads wait for room, and episodes that aired while Yoru was off are
   caught up.
 - **Player comforts:** picture-in-picture, media keys and the lock screen,
-  keyboard shortcuts, thumbnails on the seek bar, and sound options such as
-  clearer voices and night mode. Speed, the sleep timer and skip times are in
-  the player's ⚙ menu.
+  keyboard shortcuts you can change, thumbnails on the seek bar (even while
+  downloading), and sound options such as clearer voices and night mode. Speed,
+  quality, the sleep timer and skip times are in the player's ⚙ menu, and
+  Playback info says what is sent and why. On a phone: tabs along the bottom,
+  touch gestures in the player, and an Install button.
+- **Works with a keyboard and screen reader**, respects high-contrast mode, and
+  can soften sudden bright flashes (off by default; not a guarantee).
 - **Looks after the PC it runs on:** starts with Windows in the tray if you
   want, and keeps the PC awake while another device watches or a download runs.
 - **Leaves room on your connection**, with an optional download speed limit,

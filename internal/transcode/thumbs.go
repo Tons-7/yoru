@@ -25,14 +25,17 @@ type Thumbnails struct {
 	running map[string]struct{}
 	// failed: when a sheet last failed, so the player polling every 15 s does not restart ffmpeg each time.
 	failed map[string]time.Time
+	// Downloading files' sheets so far, by directory (see thumbs_partial.go).
+	partials map[string]*partial
 }
 
 func NewThumbnails(ffmpeg string, log *slog.Logger) *Thumbnails {
 	return &Thumbnails{
-		ffmpeg:  absolute(ffmpeg),
-		log:     log,
-		running: map[string]struct{}{},
-		failed:  map[string]time.Time{},
+		ffmpeg:   absolute(ffmpeg),
+		log:      log,
+		running:  map[string]struct{}{},
+		failed:   map[string]time.Time{},
+		partials: map[string]*partial{},
 	}
 }
 
@@ -46,6 +49,10 @@ type Sheet struct {
 	Count    int     `json:"count"`
 	Width    int     `json:"width"`
 	Height   int     `json:"height"`
+	// A downloading file's sheet so far: Have marks each tile there with a 1, Version counts them.
+	Partial bool   `json:"partial,omitempty"`
+	Have    string `json:"have,omitempty"`
+	Version int    `json:"version,omitempty"`
 }
 
 const (
@@ -53,7 +60,7 @@ const (
 	thumbWidth = 160
 	// About this many frames whatever the length, so episodes and films both scrub well.
 	thumbTarget = 144
-	// A sheet needs the whole episode, so only a complete file gets one.
+	// The longest a pass may take: a whole sheet walks the episode.
 	thumbDeadline = 5 * time.Minute
 	// A failed sheet is tried again this much later, not on the next poll.
 	thumbRetry = time.Hour
@@ -109,10 +116,23 @@ func (t *Thumbnails) Read(dir string, duration float64, aspect float64) (Sheet, 
 	plan.Height = tileHeight(aspect)
 
 	if _, err := os.Stat(sheetPath(dir)); err != nil {
+		if have := readPartial(dir); len(have) == plan.Count {
+			plan.Ready, plan.Partial, plan.Have, plan.Version = true, true, have, strings.Count(have, "1")
+		}
 		return plan, false
 	}
 	plan.Ready = true
 	return plan, true
+}
+
+// SheetFile is the sheet to serve: the whole one, else a downloading file's so far, "" with neither.
+func SheetFile(dir string) string {
+	for _, path := range []string{sheetPath(dir), partialSheet(dir)} {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
 }
 
 // tileHeight keeps the video's shape, rounded even as the encoder refuses odd dimensions.
@@ -178,6 +198,7 @@ func (t *Thumbnails) Generate(source, dir string, duration, aspect float64) {
 			t.log.Warn("scrub previews", "err", err)
 			return
 		}
+		t.dropPartial(dir)
 		t.log.Info("scrub previews ready",
 			"frames", plan.Count, "took", time.Since(started).Round(time.Second))
 	}()

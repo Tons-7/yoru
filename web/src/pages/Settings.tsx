@@ -6,6 +6,7 @@ import {
   useDeferredValue,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -35,6 +36,12 @@ import { ReleaseNotesList, type Notes } from '../components/ReleaseNotes'
 import { SitesEditor } from '../components/SitesEditor'
 import { WhereThingsGo } from '../components/WhereThingsGo'
 import { WaitSelect } from '../components/WaitSelect'
+import { SHOW_SHORTCUTS } from '../components/keys'
+import { install, INSTALL_HELP, useInstall } from '../lib/install'
+import { SUB_LOOKS } from '../player/subLook'
+import { ON_MOBILE, QUALITIES, setDeviceQuality, setOnMobile, useNetwork, type OnMobile, type Quality } from '../player/network'
+import { ENCODERS } from '../player/encoders'
+import { SEEN_KEY, useNewSettings } from '../lib/whatsNew'
 import { ReleasePicker } from '../components/ReleasePicker'
 import { DESKTOP_NOTIFY_KEY, desktopNotifyWanted } from '../lib/notifications'
 import { disablePush, enablePush, pushState, testPush, type PushState } from '../lib/push'
@@ -59,6 +66,8 @@ import { copyText } from '../lib/downloads'
 
 // The id is what ?tab= says; the label is what a person reads.
 const TABS = [
+  // Only after an update brought settings (see whatsNew.ts).
+  { id: 'New', label: 'New' },
   { id: 'Playback', label: 'Playback' },
   { id: 'Language', label: 'Language & display' },
   { id: 'Sound', label: 'Sound & picture' },
@@ -82,8 +91,11 @@ export function Settings() {
   const connected = params.get('connected')
   const wanted = params.get('tab')
   const renamed = wanted ? RENAMED[wanted] : undefined
+  const fresh = useNewSettings()
+  const tabs = TABS.filter((t) => t.id !== 'New' || fresh.rows.length + fresh.changes.length > 0)
   // The URL holds the tab: a reload keeps it, and a link to another one always switches.
-  const tab: Tab = isTab(wanted) ? wanted : (renamed ?? (connected ? 'Accounts' : 'Playback'))
+  const asked: Tab = isTab(wanted) ? wanted : (renamed ?? (connected ? 'Accounts' : 'Playback'))
+  const tab: Tab = tabs.some((t) => t.id === asked) ? asked : 'Playback'
   // So does the search (?q=), so a link can open on the setting it is about. The field keeps its own text:
   // a router update lands in a transition, a keystroke behind, which moved the caret and dropped letters.
   const [text, setText] = useState(params.get('q') ?? '')
@@ -155,15 +167,15 @@ export function Settings() {
         <>
           {/* Beside the settings on a desktop; on a phone a menu, as a strip hid the last tabs off-screen. */}
           <Select value={tab} onChange={(v) => setTab(v as Tab)} aria-label="Settings section" className="lg:hidden">
-            {TABS.map((t) => (
+            {tabs.map((t) => (
               <option key={t.id} value={t.id}>
-                {t.label}
+                {t.id === 'New' && fresh.unseen ? 'New ●' : t.label}
               </option>
             ))}
           </Select>
 
           <div className="flex gap-6">
-            <SideTabs tab={tab} onChange={setTab} />
+            <SideTabs tab={tab} tabs={tabs} unseen={fresh.unseen} onChange={setTab} />
             <div className="animate-fade-in w-full max-w-[47rem] min-w-0">
               <TabBody tab={tab} />
             </div>
@@ -176,6 +188,8 @@ export function Settings() {
 
 function TabBody({ tab }: { tab: Tab }) {
   switch (tab) {
+    case 'New':
+      return <NewSettings />
     case 'Playback':
       return <PlaybackTab />
     case 'Language':
@@ -203,6 +217,8 @@ function TabBody({ tab }: { tab: Tab }) {
 
 // The search: lower-cased words, every one of which a setting's words must hold.
 const SearchQuery = createContext('')
+// The New tab: the labels of the rows it keeps.
+const OnlyRows = createContext<Set<string> | null>(null)
 // The section's own title matched, so all of it shows.
 const SectionMatched = createContext(false)
 
@@ -224,7 +240,7 @@ const SearchResults = memo(function SearchResults({
   return (
     <SearchQuery.Provider value={query}>
       <div className="animate-fade-in mx-auto max-w-[47rem] space-y-6 [&:not(:has([data-shown])):not(:has([data-loading]))>[data-empty]]:block">
-        {TABS.map((t) => (
+        {TABS.filter((t) => t.id !== 'New').map((t) => (
           <div key={t.id} className="space-y-3 [&:not(:has([data-shown]))]:hidden">
             <button
               onClick={() => onOpen(t.id)}
@@ -249,11 +265,11 @@ const SearchResults = memo(function SearchResults({
   )
 })
 
-function SideTabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
+function SideTabs({ tab, tabs, unseen, onChange }: { tab: Tab; tabs: readonly (typeof TABS)[number][]; unseen: boolean; onChange: (t: Tab) => void }) {
   return (
     // Stays beside a long tab instead of scrolling away with its top.
     <div role="tablist" className="sticky top-20 hidden w-44 shrink-0 flex-col gap-0.5 self-start lg:flex">
-      {TABS.map((t) => (
+      {tabs.map((t) => (
         <button
           key={t.id}
           role="tab"
@@ -268,14 +284,53 @@ function SideTabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
         >
           <TabIcon tab={t.id} />
           {t.label}
+          {t.id === 'New' && unseen && <span aria-label="not seen yet" className="ml-auto size-2 rounded-full bg-accent-400" />}
         </button>
       ))}
     </div>
   )
 }
 
+// What this update added to Settings, as the real controls, and what changed with no setting of its own.
+function NewSettings() {
+  const fresh = useNewSettings()
+  const setPref = useSetPref()
+  const rows = useMemo(() => new Set(fresh.rows.map((r) => r.label)), [fresh.rows])
+  return (
+    <div className="space-y-4">
+      <Section title={`Since ${fresh.from}`} hint="New and changed in the updates since the version you had. Tweak them here or in their own tabs.">
+        {fresh.changes.map((c) => (
+          <div key={c.what} data-row className="py-3">
+            <p className="text-sm text-base-100">{c.what}</p>
+            <p className="mt-0.5 text-xs text-base-500">
+              Before: {c.before} · Now: {c.now}
+            </p>
+          </div>
+        ))}
+        <div data-row className="py-3">
+          <Button size="sm" disabled={!fresh.unseen} onClick={() => setPref.mutate({ key: SEEN_KEY, value: fresh.current })}>
+            {fresh.unseen ? 'Seen them' : 'Seen'}
+          </Button>
+        </div>
+      </Section>
+      <OnlyRows.Provider value={rows}>
+        {TABS.filter((t) => t.id !== 'New').map((t) => (
+          <div key={t.id} className="space-y-3 [&:not(:has([data-shown]))]:hidden">
+            <p className="flex items-center gap-2 text-sm font-medium text-base-300">
+              <TabIcon tab={t.id} />
+              {t.label}
+            </p>
+            <TabBody tab={t.id} />
+          </div>
+        ))}
+      </OnlyRows.Provider>
+    </div>
+  )
+}
+
 // One line icon per tab, drawn as the app's other glyphs are (24 grid, 1.6 stroke).
 const TAB_ICONS: Record<Tab, ReactNode> = {
+  New: <path d="M12 3.5 13.8 9l5.7.1-4.6 3.4 1.7 5.5L12 14.7 7.4 18l1.7-5.5-4.6-3.4 5.7-.1L12 3.5Z" strokeLinejoin="round" />,
   Playback: <path d="M8.5 5.5v13l10-6.5-10-6.5Z" strokeLinejoin="round" />,
   Language: (
     <>
@@ -345,8 +400,9 @@ function TabIcon({ tab }: { tab: Tab }) {
 function Section({ title, hint, keywords, children }: { title: string; hint?: string; keywords?: string; children: ReactNode }) {
   const query = useContext(SearchQuery)
   const tabMatched = useContext(SectionMatched)
-  // Searching, an unmatched section keeps only its matching rows, and goes when none is left.
-  const all = !query || tabMatched || matches(query, title, hint, keywords)
+  const only = useContext(OnlyRows)
+  // Searching (or in New), an unmatched section keeps only its matching rows, and goes when none is left.
+  const all = only ? false : !query || tabMatched || matches(query, title, hint, keywords)
   return (
     <section
       data-shown={query && all ? '' : undefined}
@@ -382,18 +438,22 @@ function Row({
 }) {
   const query = useContext(SearchQuery)
   const all = useContext(SectionMatched)
-  const shown = !query || all || matches(query, label, hint, keywords)
+  const only = useContext(OnlyRows)
+  const shown = only ? only.has(label) : !query || all || matches(query, label, hint, keywords)
   return (
     // Wraps on a narrow screen rather than clipping buttons off the edge.
     <div
       data-row
-      data-shown={query && shown ? '' : undefined}
+      data-shown={(query || only) && shown ? '' : undefined}
       hidden={!shown}
       className={cx('flex flex-wrap justify-between gap-x-5 gap-y-2 py-3', stacked ? 'flex-col' : 'items-center')}
     >
       {/* basis-48 is a width beside the control; in a stacked (column) row it became a 12rem height. */}
       <div className={cx('min-w-0', !stacked && 'flex-1 basis-48')}>
-        <p className="text-sm text-base-100">{label}</p>
+        <p className="text-sm text-base-100">
+          {label}
+          {only && <span className="ml-2 rounded bg-accent-500/20 px-1.5 py-0.5 text-[11px] font-medium text-accent-200">New</span>}
+        </p>
         {hint && <p className="mt-0.5 text-xs leading-relaxed text-base-500">{hint}</p>}
       </div>
       {/* One track so the right edge doesn't zigzag (not on a phone, where it leaves the label). */}
@@ -644,6 +704,15 @@ function PlaybackTab() {
           </Select>
         </Row>
         <VLCNote />
+        <Row
+          label="Keyboard shortcuts"
+          hint="Change the player's keys, or keep them to the player so a screen reader's own keys work elsewhere. Kept on this device."
+          keywords="keys hotkeys keyboard accessibility screen reader"
+        >
+          <Button size="sm" onClick={() => window.dispatchEvent(new Event(SHOW_SHORTCUTS))}>
+            Change keys
+          </Button>
+        </Row>
       </Section>
 
       <CastingSection f={f} />
@@ -671,6 +740,20 @@ function LanguageTab() {
         </Row>
         <SubtitleLanguages f={f} />
         <SubtitlesWithDub f={f} />
+        <Row
+          label="Subtitle look"
+          hint="For dialogue; signs and songs stay as made. Also on a TV, and in mpv for plain-text subtitles."
+          keywords="subs captions style colour color outline box yellow readable"
+        >
+          <Select value={f.value('subtitle.look')} onChange={(v) => f.set('subtitle.look', v)}>
+            {SUB_LOOKS.map((l) => (
+              <option key={l.value} value={l.value}>
+                {l.label}
+              </option>
+            ))}
+          </Select>
+        </Row>
+        <JimakuKey />
         <Row label="Show titles as" keywords="english romaji names">
           <Select
             value={f.value('display.titles')}
@@ -777,6 +860,23 @@ function SoundTab() {
             ))}
           </Select>
         </Row>
+        <Row
+          label="Soften flashing"
+          hint="Dims sudden bright flashes, on every device and in mpv. Not a guarantee against photosensitive epilepsy. Episodes are converted while it's on."
+          keywords="photosensitive epilepsy seizure flash strobe"
+        >
+          <Switch on={f.get('playback.soften_flashing')} onChange={(v) => f.set('playback.soften_flashing', String(v))} />
+        </Row>
+        <Row
+          label="Hardware decoding"
+          hint="mpv only. Decodes on the graphics card where mpv knows it works; off if the picture glitches."
+          keywords="hwdec gpu"
+        >
+          <Switch on={f.get('playback.mpv_hwdec')} onChange={(v) => f.set('playback.mpv_hwdec', String(v))} />
+        </Row>
+        <Row label="Smooth banding" hint="mpv only. Evens out stepped gradients in skies and shadows." keywords="deband">
+          <Switch on={f.get('playback.mpv_deband')} onChange={(v) => f.set('playback.mpv_deband', String(v))} />
+        </Row>
       </Section>
     </div>
   )
@@ -870,6 +970,57 @@ function SubtitleLanguages({ f }: { f: ReturnType<typeof useFlag> }) {
             </button>
           )
         })}
+      </div>
+    </Row>
+  )
+}
+
+/** Japanese subtitles from jimaku.cc with the viewer's key, kept secret: only whether one is set shows. */
+function JimakuKey() {
+  const qc = useQueryClient()
+  const state = useQuery({ queryKey: ['jimaku'], queryFn: () => api.get<{ set: boolean }>('/api/jimaku') })
+  const [key, setKey] = useState('')
+  const save = useMutation({
+    meta: { inline: true },
+    mutationFn: (value: string) => api.post<{ set: boolean }>('/api/jimaku/key', { key: value }),
+    onSuccess: (res) => {
+      qc.setQueryData(['jimaku'], res)
+      setKey('')
+    },
+  })
+  const set = state.data?.set
+  return (
+    <Row
+      label="Jimaku (Japanese subtitles)"
+      hint={
+        save.isError
+          ? (save.error as Error).message
+          : set
+            ? "Set. The player's subtitles menu lists jimaku.cc's files for each episode."
+            : 'Paste an API key from your account page on jimaku.cc to list its Japanese subtitles in the player.'
+      }
+      keywords="japanese subtitles jimaku learning immersion api key"
+    >
+      <div className="flex flex-wrap justify-end gap-2">
+        {set ? (
+          <Button size="sm" onClick={() => save.mutate('')} disabled={save.isPending}>
+            {save.isPending ? 'Removing…' : 'Remove key'}
+          </Button>
+        ) : (
+          <>
+            <TextInput
+              type="password"
+              aria-label="Jimaku API key"
+              placeholder="API key"
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              className="w-48"
+            />
+            <Button size="sm" onClick={() => save.mutate(key)} disabled={!key.trim() || save.isPending}>
+              {save.isPending ? 'Checking…' : 'Save'}
+            </Button>
+          </>
+        )}
       </div>
     </Row>
   )
@@ -2252,6 +2403,15 @@ function NotificationsTab() {
 }
 
 function DevicesTab() {
+  return (
+    <div className="space-y-4">
+      <DevicesAccess />
+      <ThisDeviceStreaming />
+    </div>
+  )
+}
+
+function DevicesAccess() {
   const qc = useQueryClient()
   const access = useAccess()
   const proxy = access.data?.host ? access.data.proxy : undefined
@@ -2317,11 +2477,46 @@ function DevicesTab() {
           </div>
         </div>
       )}
+      {/* Whatever device this is: the phone that installs is rarely the computer Yoru runs on. */}
+      <InstallHere />
       {proxy && <ProxyRow proxy={proxy} token={access.data?.token ?? ''} />}
       {access.data?.reachable && access.data.host && <FirewallPanel />}
       {(access.data?.reachable || proxy) && access.data?.host && <DeviceApproval />}
       {access.data?.reachable && access.data.host && <InstallAsApp />}
       {(access.data?.reachable || proxy) && access.data?.host && <RevokeDevices />}
+    </Section>
+  )
+}
+
+// Kept on this device, as phones and laptops want different things away from home.
+function ThisDeviceStreaming() {
+  const net = useNetwork()
+  // Only some browsers say they're on mobile data; elsewhere the rule follows being away from home.
+  const knows = net.cellular !== null
+  return (
+    <Section title="This device" hint="Streaming here, away from the computer Yoru runs on." keywords="mobile data cellular quality wifi saver">
+      <Row
+        label="On mobile data"
+        hint={`Ask first shows the episode's size before it plays. ${
+          knows ? '' : "This device doesn't say when it's on mobile data, so this applies whenever it's away from home."
+        }`}
+      >
+        <Select value={net.onMobile} onChange={(v) => setOnMobile(v as OnMobile)}>
+          {ON_MOBILE.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </Select>
+      </Row>
+      <Row
+        label="Streaming quality"
+        hint="Auto changes nothing at home; away, it lowers a connection that can't keep up. Downloads keep their quality."
+      >
+        <Select value={net.quality} onChange={(v) => setDeviceQuality(v as Quality)}>
+          {QUALITIES.map((q) => (
+            <option key={q.value} value={q.value}>{q.label}</option>
+          ))}
+        </Select>
+      </Row>
     </Section>
   )
 }
@@ -2354,6 +2549,21 @@ interface HTTPSStatus {
   expires?: number
   /** This network's DNS answers the name with this PC's address; absent until asked. */
   atHome?: boolean
+}
+
+// The device this page is on: one tap where the browser offers it, else what to do there.
+function InstallHere() {
+  const state = useInstall()
+  const [said, setSaid] = useState('')
+  return (
+    <Row label="Install on this device" hint={said || (state === 'ready' ? 'Opens in its own window, with its own icon.' : INSTALL_HELP[state])}>
+      {state === 'ready' && (
+        <Button size="sm" onClick={() => void install().then((yes) => setSaid(yes ? 'Installed.' : 'Not installed; ask again any time.'))}>
+          Install Yoru
+        </Button>
+      )}
+    </Row>
+  )
 }
 
 // A phone only installs Yoru as an app over HTTPS: a free DuckDNS name and a certificate Yoru fetches for it.
@@ -3051,10 +3261,31 @@ function ComponentsSection() {
           </Row>
         )
       })}
+      {setup.data.encoder && <ConvertingRow encoder={setup.data.encoder} toneMapper={setup.data.toneMapper ?? ''} />}
       {install.isError && (
         <p className="px-3 pb-2 text-xs text-recap">{(install.error as Error).message}</p>
       )}
     </Section>
+  )
+}
+
+// What converts the episodes a device can't play as they are, and what's missing when it's the processor alone.
+function ConvertingRow({ encoder, toneMapper }: { encoder: string; toneMapper: string }) {
+  const software = encoder === 'libx264'
+  const hdr = { libplacebo: 'on the graphics card', zscale: 'on the processor' }[toneMapper]
+  return (
+    <Row
+      label="Converting"
+      keywords="encoder gpu hdr"
+      hint={[
+        software
+          ? 'No graphics card encoder works here, so the processor converts: slower, and seeking waits longer.'
+          : 'On the graphics card.',
+        hdr ? `HDR is tone-mapped ${hdr}.` : "HDR can't be tone-mapped with this ffmpeg.",
+      ].join(' ')}
+    >
+      <span className="text-sm text-base-300">{ENCODERS[encoder] ?? encoder}</span>
+    </Row>
   )
 }
 

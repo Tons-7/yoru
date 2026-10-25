@@ -1,15 +1,37 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { airTime, cx, relativeTime } from '../lib/format'
-import { useStoredFlag } from '../lib/hooks'
+import { useMediaQuery, useStoredFlag } from '../lib/hooks'
 import { useNow, useSchedule } from '../lib/queries'
-import { Badge, Empty, ErrorState, FilterToggle, PageHeader, RefreshFailed, Skeleton } from '../components/ui'
+import { Badge, Empty, ErrorState, FilterToggle, PageHeader, RefreshFailed, Segmented, Skeleton } from '../components/ui'
+import { RecentPage } from './Recent'
 
 function dayLabel(date: string) {
   return new Date(`${date}T00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
+// On a phone Recently released is a tab here: the tab bar has room for five places, not six.
 export function SchedulePage() {
+  const wide = useMediaQuery('(min-width: 40rem)')
+  const [params, setParams] = useSearchParams()
+  if (wide) return <Airing />
+  const recent = params.get('view') === 'recent'
+  return (
+    <div className="space-y-4">
+      <Segmented
+        options={[
+          { value: 'airing', label: 'Airing' },
+          { value: 'recent', label: 'Recently released' },
+        ]}
+        value={recent ? 'recent' : 'airing'}
+        onChange={(v) => setParams(v === 'recent' ? { view: 'recent' } : {}, { replace: true })}
+      />
+      {recent ? <RecentPage /> : <Airing />}
+    </div>
+  )
+}
+
+function Airing() {
   const [mine, setMine] = useStoredFlag('yoru.schedule.mine')
   const { data, isPending, isError, error, refetch } = useSchedule(7, mine)
 

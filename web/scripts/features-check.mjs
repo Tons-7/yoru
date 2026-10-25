@@ -604,8 +604,8 @@ const android = await browser.newContext({
 })
 const ap = await android.newPage()
 await ap.goto(`${BASE}/watch/${ANIME}/9`, { waitUntil: 'domcontentloaded' })
-const openInApp = ap.getByRole('button', { name: 'Open in app' })
-check(await until(() => openInApp.isVisible(), 60_000), 'open in app is offered')
+const openInApp = ap.getByRole('button', { name: 'Open or save' })
+check(await until(() => openInApp.isVisible(), 60_000), 'open or save is offered')
 await openInApp.click()
 const chooser = ap.getByRole('link', { name: 'Choose an app' })
 check(await until(() => chooser.isVisible(), 15_000), 'android gets one link to its app chooser')
@@ -618,6 +618,10 @@ check(
   'the link plays from its first byte, ranged',
   String(firstBytes.status),
 )
+const saveHref = (await ap.getByRole('link', { name: 'Save to this device' }).getAttribute('href')) ?? ''
+const saved = await fetch(saveHref, { headers: { Range: 'bytes=0-15' } })
+check(/^attachment; filename=/.test(saved.headers.get('content-disposition') ?? ''), 'Save to this device downloads the file',
+  `${saved.status} ${saved.headers.get('content-disposition')}`)
 await android.close()
 
 // ---------------------------------------------------------------- up next list

@@ -1,6 +1,10 @@
 package server
 
-import "net/http"
+import (
+	"net/http"
+
+	"yoru/internal/update"
+)
 
 func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request) {
 	if s.updater == nil {
@@ -8,6 +12,15 @@ func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	send(w, http.StatusOK, s.updater.Status())
+}
+
+// updatedSince: the running version and the one it replaced, for Settings' New tab; any build answers.
+func (s *Server) updatedSince(w http.ResponseWriter, r *http.Request) {
+	out := map[string]any{"current": update.Version}
+	if s.updater != nil {
+		out["updatedFrom"] = s.updater.Status().UpdatedFrom
+	}
+	send(w, http.StatusOK, out)
 }
 
 func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {

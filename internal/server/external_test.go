@@ -75,6 +75,14 @@ func TestPlayerAppLinks(t *testing.T) {
 	if code, body := app(link.EscapedPath(), http.Header{"Range": {"bytes=4-7"}}); code != http.StatusPartialContent || body != "4567" {
 		t.Errorf("seek: HTTP %d %q", code, body)
 	}
+	// Save to this device: the same link, as a file of the episode's name.
+	saved := h.from(t, "192.168.1.60:5555", link.EscapedPath()+"?download=1", nil)
+	if got := saved.Header.Get("Content-Disposition"); got != `attachment; filename="Show - 03.mkv"` {
+		t.Errorf("saved: Content-Disposition %q", got)
+	}
+	if played := h.from(t, "192.168.1.60:5555", link.EscapedPath(), nil); played.Header.Get("Content-Disposition") != "" {
+		t.Errorf("played: Content-Disposition %q, want none", played.Header.Get("Content-Disposition"))
+	}
 	grantPart := strings.Split(link.Path, "/")[2]
 	tampered := strings.Replace(link.EscapedPath(), grantPart, grantPart[:len(grantPart)-2]+"xx", 1)
 	if code, _ := app(tampered, nil); code != http.StatusForbidden {
@@ -133,5 +141,9 @@ func TestPlayerAppLinksRelayTheEngine(t *testing.T) {
 	}
 	if len(leaked) > 0 {
 		t.Errorf("the engine was sent %v", leaked)
+	}
+	saved := h.from(t, "192.168.1.60:5555", link.EscapedPath()+"?download=1", nil)
+	if got := saved.Header.Get("Content-Disposition"); got != `attachment; filename="Show - 04.mkv"` {
+		t.Errorf("saved from the engine: Content-Disposition %q", got)
 	}
 }

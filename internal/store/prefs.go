@@ -44,6 +44,11 @@ var Defaults = map[string]string{
 	"playback.anime4k":      "false",
 	"playback.anime4k_mode": "A",
 	"playback.anime4k_size": "M",
+	// mpv: decoding on the GPU where mpv knows it safe; banding smoothed off, as it softens fine detail too.
+	"playback.mpv_hwdec":  "true",
+	"playback.mpv_deband": "false",
+	// Bright flashes dimmed while converting (ffmpeg's photosensitivity); no guarantee, so off until asked.
+	"playback.soften_flashing": "false",
 	// Search for the next episode's release while this one plays, so Next doesn't wait.
 	"playback.prepare_next": "true",
 
@@ -56,10 +61,14 @@ var Defaults = map[string]string{
 	"subtitle.with_dub": "signs",
 	// Per show only: {"group","delay"}, a subtitle delay kept for that show's releases from one group.
 	"subtitle.delay": "",
+	// How dialogue looks: "" as the file made it, "outline", "yellow" or "box" (signs keep theirs).
+	"subtitle.look": "",
 	// Casting: subtitles drawn into the picture (look and signs kept, video re-encoded) over plain text.
 	"cast.burn_subtitles": "false",
 
 	"display.titles": TitleEnglish,
+	// The version whose new settings were seen in Settings' New tab, which marks Settings until then.
+	"settings.new_seen": "",
 	// How the app window opens: fullscreen or maximized. Takes effect next launch.
 	"window.mode": "fullscreen",
 	// Closing the window: Yoru exits ("exit"), or keeps running in the tray ("tray").

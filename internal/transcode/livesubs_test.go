@@ -331,7 +331,7 @@ func TestFLACConversionKeepsSurround(t *testing.T) {
 	if got := args(6); got != "-c:a flac" {
 		t.Errorf("5.1: %q, want the channels left alone", got)
 	}
-	if got := args(8); got != "-c:a flac -ac 6" {
+	if got := args(8); got != "-ac 6 -c:a flac" {
 		t.Errorf("7.1: %q, want it folded to 5.1", got)
 	}
 }

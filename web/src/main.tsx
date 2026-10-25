@@ -8,6 +8,7 @@ import { Toaster } from './components/Toaster'
 import { toast } from './lib/toast'
 import { desktopNotifyWanted } from './lib/notifications'
 import { registerWorker } from './lib/push'
+import { listenForInstall, runningInstalled } from './lib/install'
 
 const client = new QueryClient({
   // A failed action says so, unless meta.inline shows it beside the control instead.
@@ -47,9 +48,8 @@ window.addEventListener('vite:preloadError', (e) => {
 })
 
 // Registered each start, so an update takes over: for alerts, and the installed app's "can't reach" page.
-const installed =
-  matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true
-if (desktopNotifyWanted() || installed) void registerWorker()?.catch(() => {})
+if (desktopNotifyWanted() || runningInstalled()) void registerWorker()?.catch(() => {})
+listenForInstall()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

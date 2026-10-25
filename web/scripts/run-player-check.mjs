@@ -29,7 +29,7 @@ const root = join(scratch, 'root')
 const appdata = join(scratch, 'appdata')
 const isolated = {
   YORU_ROOT: root,
-  // APPDATA too: the engine imports rqbit's per-user session when it has none.
+  // APPDATA too, so nothing of this user's own is read.
   LOCALAPPDATA: appdata,
   APPDATA: appdata,
   YORU_NO_WINDOW: '1',
@@ -129,7 +129,70 @@ ${cues.join('\n')}
     out,
   ])
   makeMarkerEpisode()
+  makePictureEpisode()
+  if (process.env.YORU_HEVC === '1') makeHevcEpisode()
   return out
+}
+
+// Episodes 5 (HEVC 10-bit, 5.1 AC-3) and 6 (Hi10P, AAC), as the best releases come, for decode-check.
+function makeHevcEpisode() {
+  const source = ['-y', '-hide_banner', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=24:duration=180',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=180']
+  run(ffmpeg, [...source,
+    '-c:v', 'libx265', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p10le', '-b:v', '1200k',
+    '-x265-params', 'log-level=error:keyint=48',
+    '-c:a', 'ac3', '-ac', '6', '-b:a', '384k',
+    join(lib, 'Yoru Test Show - 05.mkv'),
+  ])
+  run(ffmpeg, [...source,
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p10le', '-b:v', '1200k', '-g', '48',
+    '-c:a', 'aac',
+    join(lib, 'Yoru Test Show - 06.mkv'),
+  ])
+}
+
+// Episode 4's subtitles are PGS pictures (a white box, 5 s to 175 s), written here: ffmpeg can't encode PGS.
+function makePictureEpisode() {
+  const seg = (type, seconds, data) => {
+    const head = Buffer.alloc(13)
+    head.write('PG', 0, 'latin1')
+    head.writeUInt32BE(Math.round(seconds * 90000), 2)
+    head.writeUInt8(type, 10)
+    head.writeUInt16BE(data.length, 11)
+    return Buffer.concat([head, data])
+  }
+  const [W, H, x, y, w, h] = [1280, 720, 490, 600, 300, 60]
+  const u16 = (n) => [n >> 8, n & 255]
+  const display = (seconds, number, show) => {
+    const pcs = Buffer.from([...u16(W), ...u16(H), 0x10, ...u16(number), show ? 0x80 : 0, 0, 0, show ? 1 : 0,
+      ...(show ? [0, 0, 0, 0, ...u16(x), ...u16(y)] : [])])
+    const wds = Buffer.from([1, 0, ...u16(x), ...u16(y), ...u16(w), ...u16(h)])
+    const parts = [seg(0x16, seconds, pcs), seg(0x17, seconds, wds)]
+    if (show) {
+      // Palette entry 1: white (Y 235, Cr 128, Cb 128), opaque. Each line: w pixels of it, then end of line.
+      parts.push(seg(0x14, seconds, Buffer.from([0, 0, 1, 235, 128, 128, 255])))
+      const line = [0, 0xc0 | (w >> 8), w & 255, 1, 0, 0]
+      const rle = Buffer.from(Array.from({ length: h }, () => line).flat())
+      const size = rle.length + 4
+      parts.push(seg(0x15, seconds, Buffer.concat([Buffer.from([0, 0, 0, 0xc0, size >> 16, (size >> 8) & 255, size & 255, ...u16(w), ...u16(h)]), rle])))
+    }
+    parts.push(seg(0x80, seconds, Buffer.alloc(0)))
+    return Buffer.concat(parts)
+  }
+  const sup = join(scratch, 'boxes.sup')
+  writeFileSync(sup, Buffer.concat([display(5, 0, true), display(175, 1, false)]))
+  run(ffmpeg, [
+    '-y', '-hide_banner', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=24:duration=180',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=180',
+    '-i', sup,
+    '-map', '0:v', '-map', '1:a', '-map', '2:s',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-g', '48',
+    '-c:a', 'aac', '-c:s', 'copy',
+    '-metadata:s:s:0', 'language=eng', '-disposition:s:0', 'default',
+    join(lib, 'Yoru Test Show - 04.mkv'),
+  ])
 }
 
 // Episode 3's subtitles: cue i is a block at x = 40 + 12i from 2i to 2i+1.9s, readable against the clock.

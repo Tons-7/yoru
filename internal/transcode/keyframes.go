@@ -54,6 +54,77 @@ func keyframesOf(ctx context.Context, source string) ([]float64, error) {
 }
 
 func matroskaKeyframes(r io.ReaderAt, size int64) ([]float64, error) {
+	top, err := matroskaTop(r, size)
+	if err != nil {
+		return nil, err
+	}
+	track := uint64(0)
+	if at, ok := top.where[mkvTracks]; ok {
+		if body, err := readBody(r, at, maxMetaBytes); err == nil {
+			for _, entry := range children(body, mkvTrackEntry) {
+				var number, kind uint64
+				for _, f := range fields(entry) {
+					switch f.id {
+					case mkvTrackNumber:
+						number = uintOf(f.data)
+					case mkvTrackType:
+						kind = uintOf(f.data)
+					}
+				}
+				if kind == 1 && number > 0 {
+					track = number
+					break
+				}
+			}
+		}
+	}
+	at, ok := top.where[mkvCues]
+	if !ok || track == 0 {
+		return nil, errNoIndex
+	}
+	body, err := readBody(r, at, maxCueBytes)
+	if err != nil {
+		return nil, errNoIndex
+	}
+
+	var times []float64
+	for _, point := range children(body, mkvCuePoint) {
+		var when uint64
+		video := false
+		for _, f := range fields(point) {
+			switch f.id {
+			case mkvCueTime:
+				when = uintOf(f.data)
+			case mkvCuePositions:
+				for _, p := range fields(f.data) {
+					if p.id == mkvCueTrack && uintOf(p.data) == track {
+						video = true
+					}
+				}
+			}
+		}
+		if video {
+			times = append(times, float64(when)*float64(top.scale)/1e9)
+		}
+	}
+	if len(times) < 2 {
+		return nil, errNoIndex
+	}
+	slices.Sort(times)
+	return slices.Compact(times), nil
+}
+
+// mkvTop is a Matroska file's layout before its first Cluster.
+type mkvTop struct {
+	// ebmlEnd: where the EBML header ends; seg: where the Segment's body starts.
+	ebmlEnd, seg, segEnd int64
+	// where: each top-level element's offset, from the SeekHead and the elements before the first Cluster.
+	where map[uint64]int64
+	// Nanoseconds per timestamp tick.
+	scale uint64
+}
+
+func matroskaTop(r io.ReaderAt, size int64) (*mkvTop, error) {
 	id, ebmlLen, n, err := elementAt(r, 0)
 	if err != nil || id != mkvEBML {
 		return nil, errNoIndex
@@ -128,60 +199,7 @@ func matroskaKeyframes(r io.ReaderAt, size int64) ([]float64, error) {
 			}
 		}
 	}
-	track := uint64(0)
-	if at, ok := where[mkvTracks]; ok {
-		if body, err := readBody(r, at, maxMetaBytes); err == nil {
-			for _, entry := range children(body, mkvTrackEntry) {
-				var number, kind uint64
-				for _, f := range fields(entry) {
-					switch f.id {
-					case mkvTrackNumber:
-						number = uintOf(f.data)
-					case mkvTrackType:
-						kind = uintOf(f.data)
-					}
-				}
-				if kind == 1 && number > 0 {
-					track = number
-					break
-				}
-			}
-		}
-	}
-	at, ok := where[mkvCues]
-	if !ok || track == 0 {
-		return nil, errNoIndex
-	}
-	body, err := readBody(r, at, maxCueBytes)
-	if err != nil {
-		return nil, errNoIndex
-	}
-
-	var times []float64
-	for _, point := range children(body, mkvCuePoint) {
-		var when uint64
-		video := false
-		for _, f := range fields(point) {
-			switch f.id {
-			case mkvCueTime:
-				when = uintOf(f.data)
-			case mkvCuePositions:
-				for _, p := range fields(f.data) {
-					if p.id == mkvCueTrack && uintOf(p.data) == track {
-						video = true
-					}
-				}
-			}
-		}
-		if video {
-			times = append(times, float64(when)*float64(scale)/1e9)
-		}
-	}
-	if len(times) < 2 {
-		return nil, errNoIndex
-	}
-	slices.Sort(times)
-	return slices.Compact(times), nil
+	return &mkvTop{ebmlEnd: n + ebmlLen, seg: seg, segEnd: segEnd, where: where, scale: scale}, nil
 }
 
 type field struct {

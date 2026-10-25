@@ -24,7 +24,7 @@ func TestVoiceForcesAnEncodeAndShapesTheFilterByLayout(t *testing.T) {
 	}
 
 	s.sound = sound.Options{Voice: "medium"}
-	s.Plan = planFor(stereo, "libx264", 0, sound.Options{Voice: "medium"})
+	s.Plan = planFor(stereo, "libx264", 0, sound.Options{Voice: "medium"}, nil)
 	args := strings.Join(s.args(&run{}), " ")
 	if s.Plan.AudioCopy || s.Plan.AudioCodec != "aac" || s.Plan.Sound.Voice != "medium" {
 		t.Errorf("plan = %+v, want an aac encode with the lift", s.Plan)
@@ -34,17 +34,17 @@ func TestVoiceForcesAnEncodeAndShapesTheFilterByLayout(t *testing.T) {
 	}
 
 	surround := &MediaInfo{Video: &Stream{Codec: "h264", BitDepth: 8}, Audio: []Stream{{Codec: "truehd", Channels: 6}}}
-	s = &Session{Info: surround, encoder: "libx264", sound: sound.Options{Voice: "high"}, Plan: planFor(surround, "libx264", 0, sound.Options{Voice: "high"})}
+	s = &Session{Info: surround, encoder: "libx264", sound: sound.Options{Voice: "high"}, Plan: planFor(surround, "libx264", 0, sound.Options{Voice: "high"}, nil)}
 	args = strings.Join(s.args(&run{}), " ")
 	if s.Plan.AudioCodec != "flac" {
 		t.Errorf("a lossless source stays lossless under the lift: %+v", s.Plan)
 	}
-	if !strings.Contains(args, "pan=stereo|FL=0.414*FL+1.166*FC") || strings.Contains(args, "dialoguenhance") {
+	if !strings.Contains(args, "pan=stereo|FL=0.369*FL+1.469*FC") || strings.Contains(args, "dialoguenhance") {
 		t.Errorf("surround args = %s", args)
 	}
 
 	mono := &MediaInfo{Audio: []Stream{{Codec: "aac", Channels: 1}}}
-	s = &Session{Info: mono, sound: sound.Options{Voice: "medium"}, Plan: planFor(mono, "", 0, sound.Options{Voice: "medium"})}
+	s = &Session{Info: mono, sound: sound.Options{Voice: "medium"}, Plan: planFor(mono, "", 0, sound.Options{Voice: "medium"}, nil)}
 	if f := s.soundFilter(); strings.Contains(f, "pan=") || strings.Contains(f, "dialoguenhance") {
 		t.Errorf("mono has nothing to lift the voice over: %s", f)
 	}

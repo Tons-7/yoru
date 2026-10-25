@@ -11,10 +11,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"yoru/internal/proc"
 	"yoru/internal/sound"
 )
 
@@ -51,7 +54,37 @@ type Options struct {
 	SubLanguages []string
 	// Sound is what to do to the audio: dialogue lift, night mode, headphones, mono.
 	Sound sound.Options
-	Extra []string
+	// SubLook is the settings' subtitle look ("", "outline", "yellow", "box"); see SubtitleLookArgs.
+	SubLook string
+	// SoftwareDecode turns off mpv's GPU decoding, which it otherwise uses where it's known safe.
+	SoftwareDecode bool
+	// Deband smooths the banding of flat gradients, which the high-quality profile no longer does.
+	Deband bool
+	// Soften dims sudden bright flashes (ffmpeg's photosensitivity filter).
+	Soften bool
+	Extra  []string
+}
+
+// SubtitleLookArgs: a look for mpv's text subtitles (ASS keeps its own), named as this mpv names its options.
+func SubtitleLookArgs(look string, takes func(option string) bool) []string {
+	if look == "box" && !takes("sub-border-style") {
+		look = "outline"
+	}
+	edge := "border"
+	if takes("sub-outline-color") {
+		edge = "outline"
+	}
+	switch look {
+	case "outline", "yellow":
+		color := "#FFFFFF"
+		if look == "yellow" {
+			color = "#FFFF00"
+		}
+		return []string{"--sub-color=" + color, "--sub-" + edge + "-color=#000000", "--sub-" + edge + "-size=3", "--sub-shadow-offset=1"}
+	case "box":
+		return []string{"--sub-color=#FFFFFF", "--sub-border-style=background-box", "--sub-back-color=#99000000"}
+	}
+	return nil
 }
 
 // AudioLanguages is mpv's --alang list for a preference, empty when either track will do.
@@ -113,6 +146,52 @@ type MPV struct {
 
 	opts     Options
 	lastSkip float64
+
+	// The options and profiles this mpv has: an older one refuses newer ones and won't start.
+	listMu            sync.Mutex
+	options, profiles string
+}
+
+// Warm reads what this mpv takes in the background, so the first Play doesn't wait on it.
+func (m *MPV) Warm() {
+	go func() {
+		m.takes("")
+		m.profile()
+	}()
+}
+
+// takes says whether this mpv has an option; a build that won't list them is taken at its word for none.
+func (m *MPV) takes(option string) bool {
+	return strings.Contains(m.listing(&m.options, "--list-options"), "--"+option+" ")
+}
+
+// listing is mpv's answer to arg, kept once given; none (mpv not installed yet) is asked again next time.
+func (m *MPV) listing(kept *string, arg string) string {
+	m.listMu.Lock()
+	defer m.listMu.Unlock()
+	if *kept == "" {
+		*kept = m.ask(arg)
+	}
+	return *kept
+}
+
+// profile is the first of these profiles this mpv has (high-quality came in 0.37, gpu-hq is older), or "".
+func (m *MPV) profile(names ...string) string {
+	listed := strings.Fields(m.listing(&m.profiles, "--profile=help"))
+	for _, name := range names {
+		if slices.Contains(listed, name) {
+			return name
+		}
+	}
+	return ""
+}
+
+// ask runs mpv for a listing, given up after a while: a hung build mustn't hold up playing.
+func (m *MPV) ask(arg string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, _ := proc.Hide(exec.CommandContext(ctx, m.binary, "--no-config", arg)).Output()
+	return string(out)
 }
 
 func New(binary, socket string, log *slog.Logger) *MPV {
@@ -180,9 +259,28 @@ func (m *MPV) Play(ctx context.Context, opts Options) error {
 		args = append(args, "--slang="+slang)
 	}
 	args = append(args, sound.MPVArgs(opts.Sound)...)
+	args = append(args, SubtitleLookArgs(opts.SubLook, m.takes)...)
+	// auto-safe: mpv's own list of GPU decoders that don't break playback; HEVC 10-bit off the CPU.
+	switch {
+	case opts.SoftwareDecode:
+	case opts.Soften:
+		// The flash filter works on frames in memory, which the copy-back decoders hand over.
+		args = append(args, "--hwdec=auto-copy-safe")
+	default:
+		args = append(args, "--hwdec=auto-safe")
+	}
+	if opts.Soften {
+		args = append(args, "--vf=lavfi=[format=rgb24,photosensitivity]")
+	}
+	if opts.Deband {
+		args = append(args, "--deband=yes")
+	}
 	if opts.Anime4K {
-		// gpu-next runs the shader chain well; gpu-hq only raises the scaling defaults.
-		args = append(args, "--profile=gpu-hq", "--vo=gpu-next")
+		// gpu-next runs the shader chain well; the profile only raises the scaling defaults.
+		if p := m.profile("high-quality", "gpu-hq"); p != "" {
+			args = append(args, "--profile="+p)
+		}
+		args = append(args, "--vo=gpu-next")
 		args = append(args, m.anime4kArgs(opts.Anime4KMode, opts.Anime4KSize)...)
 	}
 	args = append(args, opts.Extra...)

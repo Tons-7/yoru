@@ -57,7 +57,7 @@ func TestEverySoundOptionEncodes(t *testing.T) {
 					s := liveSession(false)
 					s.Info.Audio = []Stream{{Codec: source, Channels: channels}}
 					s.sound = sound.Normalized(opts)
-					s.Plan = planFor(s.Info, s.encoder, 0, s.sound)
+					s.Plan = planFor(s.Info, s.encoder, 0, s.sound, nil)
 					file := filepath.Join(t.TempDir(), "out.mka")
 					args := append([]string{"-hide_banner", "-loglevel", "error", "-y", "-i", clips[channels], "-map", "0:a"},
 						s.audioArgs()...)

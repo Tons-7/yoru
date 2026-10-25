@@ -34,7 +34,7 @@ writeFileSync(
 
 const appdata = join(scratch, 'appdata')
 const app = spawn(exe, ['--no-window'], {
-  // APPDATA too: the engine imports rqbit's per-user session when it has none.
+  // APPDATA too, so nothing of this user's own is read.
   env: { ...process.env, YORU_ROOT: root, LOCALAPPDATA: appdata, APPDATA: appdata, YORU_NO_WINDOW: '1' },
   stdio: 'ignore',
 })

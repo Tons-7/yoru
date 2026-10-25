@@ -82,6 +82,7 @@ if (!sheet) {
   process.exit(1)
 }
 check(sheet.count > 1 && sheet.interval > 0 && sheet.columns > 0, 'sheet has several tiles', `${sheet.count} tiles every ${sheet.interval}s`)
+check(!sheet.partial, 'a complete file gets the whole sheet, not a partial one', JSON.stringify(sheet))
 
 // Every tile's mean brightness, read from the sheet the player will use.
 const tiles = await page.evaluate(async ({ url, sheet }) => {
@@ -149,6 +150,29 @@ check(positions.length === 3 && positions.every((p) => Math.abs(p.width - sheet.
 // The very end of the bar must still land on a real frame.
 const last = await previewAt(1)
 check(!!last && last.position === `-${((sheet.count - 1) % sheet.columns) * sheet.width}px -${Math.floor((sheet.count - 1) / sheet.columns) * sheet.height}px`, 'end of the bar shows the last tile', JSON.stringify(last))
+
+// ---------------------------------------------------------------- a downloading file's sheet so far
+// Its first half on disk: a picture there, the time alone over the rest.
+const half = Math.floor(sheet.count / 2)
+await page.route(`**/api/stream/${sid}/thumbnails`, (route) =>
+  route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ ...sheet, partial: true, have: '1'.repeat(half) + '0'.repeat(sheet.count - half), version: half }),
+  }),
+)
+const sheetUrls = []
+page.on('request', (r) => r.url().includes('/thumbs.jpg') && sheetUrls.push(r.url()))
+await page.reload({ waitUntil: 'domcontentloaded' })
+await page.waitForFunction(() => (document.querySelector('video')?.currentTime ?? 0) > 1, null, { timeout: 30_000 }).catch(() => {})
+await page.mouse.move(640, 400)
+await bar.waitFor({ timeout: 10_000 })
+const early = await previewAt(0.2)
+check(!!early, 'partial sheet: a downloaded part shows its tile', JSON.stringify(early))
+const late = await previewAt(0.8)
+const lateLabel = await page.evaluate(() => [...document.querySelectorAll('p')].map((p) => p.textContent).find((t) => /^\d+:\d\d/.test(t ?? '')) ?? '')
+check(!late && /\d+:\d\d/.test(lateLabel), 'partial sheet: a part not downloaded shows the time alone', `${JSON.stringify(late)} ${lateLabel}`)
+check(sheetUrls.some((u) => u.includes(`v=${half}`)), 'partial sheet URL names its version, so a fuller one is fetched anew', sheetUrls.join(' '))
+await page.unroute(`**/api/stream/${sid}/thumbnails`)
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 await browser.close()

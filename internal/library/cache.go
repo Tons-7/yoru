@@ -1001,11 +1001,8 @@ func (c *Cache) adopt(ctx context.Context) error {
 	return nil
 }
 
-// EngineSessionDirName holds the engine's torrents; SessionDirName is rqbit's, imported once.
-const (
-	SessionDirName       = torrent.LegacySessionDir
-	EngineSessionDirName = torrent.EngineSessionDir
-)
+// EngineSessionDirName holds the engine's torrents.
+const EngineSessionDirName = torrent.EngineSessionDir
 
 type Orphan struct {
 	Name  string `json:"name"`

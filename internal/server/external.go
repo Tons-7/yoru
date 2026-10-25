@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -115,6 +116,12 @@ func (s *Server) externalStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.serving()()
+	// ?download=1 is Save to this device: a file under the link's name, not played in the tab.
+	save := func(h http.Header) {
+		if r.URL.Query().Get("download") == "1" {
+			h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": r.PathValue("name")}))
+		}
+	}
 	if p, ok := s.localSource(r.Context(), g.Source); ok {
 		f, err := os.Open(p)
 		if err != nil {
@@ -122,6 +129,7 @@ func (s *Server) externalStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer f.Close()
+		save(w.Header())
 		http.ServeContent(w, r, filepath.Base(p), time.Time{}, f)
 		return
 	}
@@ -130,13 +138,19 @@ func (s *Server) externalStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target, _ := url.Parse(g.Source)
-	proxy := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
-		pr.Out.URL = target
-		pr.Out.Host = target.Host
-		// The engine turns away anything that looks like a web page.
-		for _, h := range []string{"Origin", "Referer", "Cookie", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest"} {
-			pr.Out.Header.Del(h)
-		}
-	}}
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.Out.URL = target
+			pr.Out.Host = target.Host
+			// The engine turns away anything that looks like a web page.
+			for _, h := range []string{"Origin", "Referer", "Cookie", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest"} {
+				pr.Out.Header.Del(h)
+			}
+		},
+		ModifyResponse: func(res *http.Response) error {
+			save(res.Header)
+			return nil
+		},
+	}
 	proxy.ServeHTTP(w, r)
 }

@@ -105,8 +105,7 @@ func TestOnlyFinishedShowsKeepTheirAnswer(t *testing.T) {
 	}
 }
 
-// A sequel found later than the first discovery, to a show on the list, is told of a single time; one to a show
-// off the list, or found by the first discovery, isn't.
+// A later-found sequel of a show on the list is told once; not off the list, at first discovery, or alerts off.
 func TestANewSeasonOfAShowOnTheListIsAnnounced(t *testing.T) {
 	f := &fakeCatalogue{
 		status: map[int]string{100: "FINISHED", 200: "FINISHED", 900: "NOT_YET_RELEASED", 901: "NOT_YET_RELEASED"},
@@ -119,7 +118,11 @@ func TestANewSeasonOfAShowOnTheListIsAnnounced(t *testing.T) {
 		t.Fatal(err)
 	}
 	completed := "COMPLETED"
-	if _, err := st.ImportList(ctx, nil, []store.Entry{{ID: 1, AnimeID: 100, Status: &completed}}, store.ImportMerge); err != nil {
+	entries := []store.Entry{{ID: 1, AnimeID: 100, Status: &completed}, {ID: 2, AnimeID: 200, Status: &completed}}
+	if _, err := st.ImportList(ctx, nil, entries, store.ImportMerge); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetAnimePref(ctx, 200, "notify.enabled", "false"); err != nil {
 		t.Fatal(err)
 	}
 

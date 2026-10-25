@@ -24,6 +24,7 @@
     "anime4k-webgpu": "^1.0.0",
     "hls.js": "^1.7.3",
     "jassub": "^2.5.23",
+    "libpgs": "0.9.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.4"

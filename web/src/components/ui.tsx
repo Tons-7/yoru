@@ -164,6 +164,8 @@ export function ConfirmInline({
       className="contents"
       onKeyDown={(e) => {
         if (e.key !== 'Escape') return
+        // Esc is also a close request (Back's CloseWatcher), which only preventDefault keeps from the menu.
+        e.preventDefault()
         e.stopPropagation()
         onCancel()
       }}
@@ -400,9 +402,16 @@ export function Segmented<T extends string>({
   )
 }
 
-export function ProgressBar({ value, className }: { value: number; className?: string }) {
+export function ProgressBar({ value, className, label }: { value: number; className?: string; label?: string }) {
   return (
-    <div className={cx('h-1 w-full overflow-hidden rounded-full bg-base-800', className)}>
+    <div
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(Math.min(100, Math.max(0, value)))}
+      className={cx('h-1 w-full overflow-hidden rounded-full bg-base-800', className)}
+    >
       <div
         className="h-full rounded-full bg-gradient-to-r from-accent-500 to-accent-400 transition-[width] duration-300"
         style={{ width: `${Math.min(100, Math.max(0, value))}%` }}

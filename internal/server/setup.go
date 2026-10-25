@@ -154,6 +154,9 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	if s.deps != nil {
 		body["progress"] = s.deps.Status()
 	}
+	if s.streams != nil {
+		body["encoder"], body["toneMapper"] = s.streams.Converter()
+	}
 	send(w, http.StatusOK, body)
 }
 

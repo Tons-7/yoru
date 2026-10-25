@@ -42,6 +42,7 @@ var allowed = map[string][]string{
 	// The share of an episode that counts as watching it, or where its ending starts.
 	"sync.progress_at":  {"0.8", "0.85", "0.9", "0.95", store.EndingThreshold},
 	"subtitle.with_dub": {"signs", "off", "same"},
+	"subtitle.look":     {"outline", "yellow", "box"},
 	// Hours auto-download holds a new episode for a preferred group or a higher resolution; 0 takes the first.
 	"autodownload.wait_hours": {"0", "1", "3", "6", "12"},
 }

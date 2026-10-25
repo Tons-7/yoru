@@ -39,7 +39,7 @@ export function Anime4KDialog({
   onDevice: (choice: DeviceUpscale) => void
 }) {
   const close = useCallback(() => onClose(), [onClose])
-  const panel = useDismiss<HTMLDivElement>(close)
+  const panel = useDismiss<HTMLDivElement>(close, open)
   useModalFocus(panel, open)
 
   if (!open) return null

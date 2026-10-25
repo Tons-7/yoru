@@ -13,6 +13,7 @@ import (
 	"yoru/internal/score"
 	"yoru/internal/store"
 	"yoru/internal/torrent"
+	"yoru/internal/transcode"
 )
 
 // Downloader works the queue one episode at a time across shows: several at once all finish later.
@@ -281,7 +282,7 @@ func (d *Downloader) Hold(sessionID string) {
 
 	// If the queue is already fetching the watched episode, that download *is* the
 	// buffering; stopping it would stall playback reading from it.
-	if current.session() == sessionID {
+	if current.session() == transcode.BaseID(sessionID) {
 		return
 	}
 
@@ -298,7 +299,7 @@ func (d *Downloader) Downloading(sessionID string) bool {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.current != nil && d.current.session() == sessionID
+	return d.current != nil && d.current.session() == transcode.BaseID(sessionID)
 }
 
 // Release gives the queue back once nothing is watching.

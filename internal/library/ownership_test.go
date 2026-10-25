@@ -99,7 +99,7 @@ func TestOrphansKeepsEverythingOnRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.MkdirAll(filepath.Join(c.dir, SessionDirName), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(c.dir, EngineSessionDirName), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -117,7 +117,7 @@ func TestOrphansKeepsEverythingOnRecord(t *testing.T) {
 	if _, err := c.Orphans(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string]bool{"recorded.mkv": true, "live.mkv": true, "stray.mkv": false, SessionDirName: true} {
+	for name, want := range map[string]bool{"recorded.mkv": true, "live.mkv": true, "stray.mkv": false, EngineSessionDirName: true} {
 		_, err := os.Stat(filepath.Join(c.dir, name))
 		if (err == nil) != want {
 			t.Errorf("%s present = %v, want %v", name, err == nil, want)

@@ -2,6 +2,8 @@ package server
 
 import (
 	"log/slog"
+	"path/filepath"
+	"sync"
 	"testing"
 
 	"yoru/internal/config"
@@ -14,11 +16,20 @@ func TestSessionGoneForgetsOnlyItsFonts(t *testing.T) {
 	h.server.streams = transcode.NewManager("ffmpeg", "ffprobe", t.TempDir(), "libx264", slog.New(slog.DiscardHandler))
 	mine, replaced := h.server.streams.DirPrefix("1-2")+"7", h.server.streams.DirPrefix("1-2")+"3"
 	other := h.server.streams.DirPrefix("1-20") + "4"
+	device := h.server.streams.DirPrefix("1-2-dev0a1b2c3d") + "5"
 	h.server.fonts[mine] = []transcode.FontFile{}
 	h.server.fonts[other] = []transcode.FontFile{}
+	h.server.fonts[device] = []transcode.FontFile{}
 	h.server.fontJobs[replaced] = struct{}{}
+	h.server.building.Store(filepath.Join(mine, "jimaku-1.ass"), &sync.Mutex{})
 
 	h.server.SessionGone("1-2")
+	if _, ok := h.server.fonts[device]; !ok {
+		t.Error("a device's own session of the episode lost its fonts with the episode's")
+	}
+	if _, ok := h.server.building.Load(filepath.Join(mine, "jimaku-1.ass")); ok {
+		t.Error("the closed session's build locks are still held")
+	}
 	if _, ok := h.server.fonts[mine]; ok {
 		t.Error("the closed session's fonts are still listed")
 	}

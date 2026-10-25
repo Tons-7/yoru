@@ -38,7 +38,7 @@ func (s *Session) SetSound(o sound.Options) bool {
 		return false
 	}
 	s.sound = o
-	s.Plan = planFor(s.Info, s.encoder, s.audioTrack, o)
+	s.replan()
 	s.headFrom, s.headTo = -1, -1
 	// Another plan: what failed on every pass may not now.
 	s.barren, s.broken = 0, nil

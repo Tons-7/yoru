@@ -153,6 +153,8 @@ type Session struct {
 	LocalPath string  `json:"localPath,omitempty"`
 	StartAt   float64 `json:"startAt"`
 	Player    string  `json:"player"`
+	// Size is the file's bytes, what playing it as it is costs a phone's data plan.
+	Size int64 `json:"size,omitempty"`
 }
 
 // Start resolves a release, hands it to the torrent engine, waits until it can
@@ -233,6 +235,7 @@ func (p *Playback) Start(ctx context.Context, req PlayRequest) (*Session, error)
 		Source:    "torrent",
 		StartAt:   resume,
 		Player:    "browser",
+		Size:      file.Length,
 	}
 
 	if req.External {
@@ -278,6 +281,7 @@ func (p *Playback) startLocal(ctx context.Context, req PlayRequest) (*Session, b
 		LocalPath: f.Path,
 		StartAt:   resume,
 		Player:    "browser",
+		Size:      f.Size,
 	}
 
 	if req.External {
@@ -393,6 +397,7 @@ func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, boo
 		Source:    "torrent",
 		StartAt:   resume,
 		Player:    "browser",
+		Size:      rec.TotalSize,
 	}
 
 	if req.External {
@@ -1132,6 +1137,10 @@ func (p *Playback) launch(ctx context.Context, req PlayRequest, s *Session) erro
 		Headphones: prefs.Bool("playback.headphones"), Mono: prefs.Bool("playback.mono"),
 		Boost: prefs.String("playback.boost"),
 	}
+	opts.SubLook = prefs.String("subtitle.look")
+	opts.SoftwareDecode = !prefs.Bool("playback.mpv_hwdec")
+	opts.Deband = prefs.Bool("playback.mpv_deband")
+	opts.Soften = prefs.Bool("playback.soften_flashing")
 
 	// mpv only auto-skips from these, so they have to be resolved here. Every range becomes a chapter;
 	// only the kinds Settings ask for are skipped, as the browser player does.

@@ -594,6 +594,9 @@ export interface SetupProgress {
 export interface SetupState {
   components: SetupComponent[]
   ready: boolean
+  /** What converts episodes the browser can't play as they are: the encoder, and the HDR tone map ("" none). */
+  encoder?: string
+  toneMapper?: string
   /** Torrent sites searched, saved in the app or config.toml's. None ship with Yoru. */
   indexers: number
   /** Sites skipped, with the reason. */
@@ -640,6 +643,8 @@ export interface AccessState {
   canSwitch: boolean
   /** This page runs on the machine Yoru runs on. */
   host: boolean
+  /** This device reaches Yoru from outside the home network. */
+  away?: boolean
   /** Host only: the last request a proxy on this machine passed on, and where it's reached from outside. */
   proxy?: { seen: number; client: string; site: string }
 }

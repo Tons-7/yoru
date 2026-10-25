@@ -17,10 +17,11 @@ import (
 	"yoru/internal/transcode"
 )
 
-// A drawn-in copy's id names its episode, so resume, queue holds and suspends treat it as that episode.
+// A drawn-in copy's id or a device's plan names its episode, so resume, holds and suspends treat it as that.
 func TestBurnedSessionIDsNameTheirEpisode(t *testing.T) {
 	for id, want := range map[string][2]int{
 		"127230-3": {127230, 3}, "127230-3-burn2-0": {127230, 3}, "127230-3-burn2--15": {127230, 3}, "-55-7-burn0-5": {-55, 7},
+		"127230-3-dev0a1b2c3d": {127230, 3}, "127230-3-dev0a1b2c3d-burn1-0": {127230, 3},
 	} {
 		if a, e, ok := parseSessionID(id); !ok || a != want[0] || e != want[1] {
 			t.Errorf("%s: %d %d %v, want %v", id, a, e, ok, want)

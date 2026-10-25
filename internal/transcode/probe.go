@@ -30,6 +30,24 @@ type Stream struct {
 	Title    string `json:"title"`
 	Default  bool   `json:"default"`
 	Forced   bool   `json:"forced"`
+	// The picture's transfer (smpte2084: HDR10, arib-std-b67: HLG), field order and Dolby Vision profile.
+	Transfer   string `json:"transfer,omitempty"`
+	FieldOrder string `json:"fieldOrder,omitempty"`
+	DVProfile  int    `json:"dvProfile,omitempty"`
+}
+
+// HDR: a picture made for HDR screens, grey and washed out on any other unless tone-mapped.
+func (s Stream) HDR() bool {
+	return s.Transfer == "smpte2084" || s.Transfer == "arib-std-b67" || s.DVProfile > 0
+}
+
+// Interlaced: fields woven into each frame (DVD-era sources), combed on any progressive screen.
+func (s Stream) Interlaced() bool {
+	switch s.FieldOrder {
+	case "tt", "bb", "tb", "bt":
+		return true
+	}
+	return false
 }
 
 type Attachment struct {
@@ -116,15 +134,21 @@ type ffprobeOutput struct {
 		FormatName string `json:"format_name"`
 	} `json:"format"`
 	Streams []struct {
-		Index       int    `json:"index"`
-		CodecName   string `json:"codec_name"`
-		CodecType   string `json:"codec_type"`
-		Profile     string `json:"profile"`
-		Width       int    `json:"width"`
-		Height      int    `json:"height"`
-		Channels    int    `json:"channels"`
-		PixFmt      string `json:"pix_fmt"`
-		BitsPerRaw  string `json:"bits_per_raw_sample"`
+		Index      int    `json:"index"`
+		CodecName  string `json:"codec_name"`
+		CodecType  string `json:"codec_type"`
+		Profile    string `json:"profile"`
+		Width      int    `json:"width"`
+		Height     int    `json:"height"`
+		Channels   int    `json:"channels"`
+		PixFmt     string `json:"pix_fmt"`
+		BitsPerRaw string `json:"bits_per_raw_sample"`
+		Transfer   string `json:"color_transfer"`
+		FieldOrder string `json:"field_order"`
+		SideData   []struct {
+			Type      string `json:"side_data_type"`
+			DVProfile int    `json:"dv_profile"`
+		} `json:"side_data_list"`
 		Duration    string `json:"duration"`
 		Disposition struct {
 			Default  int `json:"default"`
@@ -225,6 +249,14 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 			Default:  s.Disposition.Default == 1,
 			Forced:   s.Disposition.Forced == 1,
 			BitDepth: bitDepth(s.PixFmt, s.BitsPerRaw),
+		}
+		if s.CodecType == "video" {
+			stream.Transfer, stream.FieldOrder = s.Transfer, s.FieldOrder
+			for _, d := range s.SideData {
+				if d.DVProfile > 0 {
+					stream.DVProfile = d.DVProfile
+				}
+			}
 		}
 
 		switch s.CodecType {
@@ -341,6 +373,16 @@ type Plan struct {
 	AudioCopy  bool   `json:"audioCopy"`
 	VideoCodec string `json:"videoCodec"`
 	AudioCodec string `json:"audioCodec"`
+	// Channels: a converted track's channel count, 2 or 6; 0 keeps the source's (FLAC up to 5.1).
+	Channels int `json:"channels,omitempty"`
+	// ForDevice: copies what any browser's plan converts, as this device said it decodes it.
+	ForDevice bool `json:"forDevice,omitempty"`
+	// Picture changes, each forcing an encode: tone map, deinterlace, soften, a cap (height, bits/s).
+	ToneMap     bool `json:"toneMap,omitempty"`
+	Deinterlace bool `json:"deinterlace,omitempty"`
+	Soften      bool `json:"soften,omitempty"`
+	Height      int  `json:"height,omitempty"`
+	MaxRate     int  `json:"maxRate,omitempty"`
 	// Sound is what is done to the audio on the way out; anything at all forces an audio re-encode.
 	Sound  sound.Options `json:"sound"`
 	Reason string        `json:"reason"`
@@ -349,23 +391,68 @@ type Plan struct {
 // Chromium decodes H.264 and AAC everywhere; HEVC needs a platform extension
 // and 10-bit H.264 has no hardware decoder, so neither can be relied on.
 func PlanFor(info *MediaInfo, encoder string) Plan {
-	return planFor(info, encoder, 0, sound.Options{})
+	return planFor(info, encoder, 0, sound.Options{}, nil)
 }
 
-// planFor judges the audio track that will actually be sent, under what is asked of the sound.
-func planFor(info *MediaInfo, encoder string, track int, snd sound.Options) Plan {
+// planOf: a session's plan; drawn-in subtitles change the picture, so it is always encoded.
+func planOf(info *MediaInfo, encoder string, track int, snd sound.Options, caps *Caps, want Want, burned bool) Plan {
+	plan := planWith(info, encoder, track, snd, caps, want)
+	if burned {
+		plan.VideoCopy = false
+		plan.VideoCodec = orDefault(encoder, "libx264")
+		plan.Reason = strings.TrimPrefix(plan.Reason+"; subtitles drawn in", "; ")
+	}
+	return plan
+}
+
+// planFor judges the track that will be sent, under the sound asked, for a device's caps or any browser (nil).
+func planFor(info *MediaInfo, encoder string, track int, snd sound.Options, caps *Caps) Plan {
+	return planWith(info, encoder, track, snd, caps, Want{})
+}
+
+// planWith is planFor under what the viewer wants of the picture.
+func planWith(info *MediaInfo, encoder string, track int, snd sound.Options, caps *Caps, want Want) Plan {
 	plan := Plan{VideoCopy: true, AudioCopy: true, Sound: sound.Normalized(snd)}
 	var reasons []string
 
 	switch v := info.Video; {
 	case v == nil:
+	case caps != nil:
+		plan.VideoCopy = caps.Decodes(v.Codec, v.BitDepth)
 	case v.Codec == "h264" && v.BitDepth <= 8:
 	case v.Codec == "vp9", v.Codec == "av1":
 		// Chromium decodes both natively.
 	default:
 		plan.VideoCopy = false
+	}
+	if !plan.VideoCopy {
+		reasons = append(reasons, fmt.Sprintf("video %s %d-bit", info.Video.Codec, info.Video.BitDepth))
+	}
+	if v := info.Video; v != nil {
+		plan.Deinterlace = v.Interlaced()
+		plan.Soften = want.Soften
+		// A picture already under the cap is sent as it is.
+		if want.Height > 0 && (v.Height > want.Height || info.Bitrate > int64(want.Rate)*5/4) {
+			plan.Height, plan.MaxRate = min(v.Height, want.Height), want.Rate
+		}
+		// HDR stays only uncoded to an HDR screen; Dolby Vision 5 (no HDR10 under it) shows green and purple.
+		encoded := !plan.VideoCopy || plan.Deinterlace || plan.Soften || plan.MaxRate > 0
+		plan.ToneMap = v.HDR() && (encoded || caps == nil || !caps.HDR) || v.DVProfile == 5
+		for _, change := range []struct {
+			on   bool
+			what string
+		}{
+			{plan.ToneMap, "HDR for this screen"}, {plan.Deinterlace, "interlacing"}, {plan.Soften, "softened flashing"},
+			{plan.MaxRate > 0, fmt.Sprintf("a %dp cap", plan.Height)},
+		} {
+			if change.on {
+				plan.VideoCopy = false
+				reasons = append(reasons, change.what)
+			}
+		}
+	}
+	if !plan.VideoCopy {
 		plan.VideoCodec = orDefault(encoder, "libx264")
-		reasons = append(reasons, fmt.Sprintf("video %s %d-bit", v.Codec, v.BitDepth))
 	}
 
 	if track < 0 || track >= len(info.Audio) {
@@ -373,11 +460,21 @@ func planFor(info *MediaInfo, encoder string, track int, snd sound.Options) Plan
 	}
 	if len(info.Audio) > 0 {
 		a := info.Audio[track]
-		// Not Vorbis: browsers take it only in WebM, and these segments are fMP4.
-		switch a.Codec {
-		case "aac", "mp3", "opus", "flac":
-		default:
+		if caps != nil {
+			plan.AudioCopy = caps.Decodes(a.Codec, 0)
+		} else {
+			// Not Vorbis: browsers take it only in WebM, and these segments are fMP4.
+			switch a.Codec {
+			case "aac", "mp3", "opus", "flac":
+			default:
+				plan.AudioCopy = false
+			}
+		}
+		// Under a cap, lossless sound would outweigh the picture.
+		if want.Rate > 0 && (a.Codec == "flac" || lossless(a)) {
 			plan.AudioCopy = false
+		}
+		if !plan.AudioCopy {
 			reasons = append(reasons, "audio "+a.Codec)
 		}
 		// The sound is shaped while encoding, so a track that could have been copied is encoded too.
@@ -387,10 +484,11 @@ func planFor(info *MediaInfo, encoder string, track int, snd sound.Options) Plan
 		}
 		if !plan.AudioCopy {
 			plan.AudioCodec = "aac"
-			// Lossless in, lossless out: FLAC is the lossless format every browser plays.
-			if lossless(a) {
+			// Lossless stays lossless as FLAC, where the device plays it (a device may say it doesn't).
+			if lossless(a) && want.Rate == 0 && (caps == nil || caps.Decodes("flac", 0)) {
 				plan.AudioCodec = "flac"
 			}
+			plan.Channels = channelsOut(a, plan.AudioCodec, plan.Sound.Any() || want.Rate > 0, caps)
 		}
 	}
 
@@ -399,7 +497,24 @@ func planFor(info *MediaInfo, encoder string, track int, snd sound.Options) Plan
 	} else {
 		plan.Reason = "remux only"
 	}
+	if caps != nil {
+		anyBrowser := planFor(info, encoder, track, snd, nil)
+		plan.ForDevice = plan.VideoCopy && !anyBrowser.VideoCopy || plan.AudioCopy && !anyBrowser.AudioCopy
+	}
 	return plan
+}
+
+// channelsOut: 5.1 for surround speakers, else stereo (as shaped sound is); lossless keeps its own if unsaid.
+func channelsOut(a Stream, codec string, shaped bool, caps *Caps) int {
+	switch {
+	case shaped:
+		return 2
+	case caps != nil && caps.Channels >= 6 && a.Channels > 2:
+		return 6
+	case codec == "flac" && (caps == nil || caps.Channels == 0):
+		return 0
+	}
+	return 2
 }
 
 // lossless reports an audio track that holds the sound exactly, which a lossy re-encode would throw away.

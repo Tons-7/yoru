@@ -6,6 +6,7 @@ import { cx } from '../lib/format'
 import { toast } from '../lib/toast'
 import { useDismiss, useModalFocus } from '../lib/hooks'
 import { buttonClass } from '../lib/ui'
+import { appleTouchDevice } from '../lib/install'
 
 interface ExternalLink {
   url: string
@@ -26,8 +27,7 @@ function appLinks(link: ExternalLink): { label: string; href: string }[] {
       },
     ]
   }
-  // iPads say Macintosh; touch gives them away.
-  if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1)) {
+  if (appleTouchDevice()) {
     const url = encodeURIComponent(link.url)
     return [
       { label: 'VLC', href: `vlc-x-callback://x-callback-url/stream?url=${url}` },
@@ -40,7 +40,7 @@ function appLinks(link: ExternalLink): { label: string; href: string }[] {
 /** Hands the episode's own file to a video app: VLC and mpv draw its subtitles as made, signs and all. */
 export function OpenInApp({ source, open, onClose }: { source: string; open: boolean; onClose: () => void }) {
   const close = useCallback(() => onClose(), [onClose])
-  const panel = useDismiss<HTMLDivElement>(close)
+  const panel = useDismiss<HTMLDivElement>(close, open)
   useModalFocus(panel, open)
   // Made when the sheet opens, so each choice is a plain link the tap follows (a phone won't hand off else).
   // Fresh every time: a restart of Yoru ends every link made before it.
@@ -66,15 +66,15 @@ export function OpenInApp({ source, open, onClose }: { source: string; open: boo
         ref={panel}
         role="dialog"
         aria-modal="true"
-        aria-label="Open in another app"
+        aria-label="Open or save"
         className="animate-fade-in relative w-full max-w-md rounded-t-xl border border-base-800 bg-base-900 p-4 shadow-2xl sm:rounded-xl"
       >
         <div className="mb-3 flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-base font-semibold text-white">Open in another app</h2>
+            <h2 className="text-base font-semibold text-white">Open or save</h2>
             <p className="mt-0.5 text-xs text-base-500">
-              Plays the original file, subtitles and all. The link works for 12 hours. Another app can't tell Yoru how
-              far you got, so mark the episode watched when you're done.
+              Plays the original file, subtitles and all, or keeps a copy to watch without Yoru. The link works for 12
+              hours. Another app can't tell Yoru how far you got, so mark the episode watched when you're done.
             </p>
           </div>
           <button
@@ -117,6 +117,20 @@ export function OpenInApp({ source, open, onClose }: { source: string; open: boo
             {apps.length === 0 && (
               <p className="text-xs text-base-500">Paste it into VLC or mpv on any device that can reach this Yoru.</p>
             )}
+            {/* A copy to watch without Yoru: into the device's downloads, or VLC's own list. */}
+            <div className="flex gap-2 pt-1">
+              <a href={`${link.data.url}?download=1`} download={link.data.name} className={cx(buttonClass(), 'flex min-h-11 flex-1')}>
+                Save to this device
+              </a>
+              {appleTouchDevice() && (
+                <a
+                  href={`vlc-x-callback://x-callback-url/download?url=${encodeURIComponent(`${link.data.url}?download=1`)}&filename=${encodeURIComponent(link.data.name)}`}
+                  className={cx(buttonClass(), 'flex min-h-11 flex-1')}
+                >
+                  Save to VLC
+                </a>
+              )}
+            </div>
           </div>
         )}
       </div>

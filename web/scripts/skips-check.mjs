@@ -67,7 +67,12 @@ await until(async () => {
 }, 60_000)
 check(!!found && Math.abs(found.start - 45) < 2.5 && Math.abs(found.end - 105) < 3.5, 'the opening is found in the shared sound',
   JSON.stringify(found))
-const seven = ((await skipsOf(7)).ranges ?? []).find((r) => r.kind === 'op')
+// Saved just after the first, each lined up with the music on its way.
+let seven
+await until(async () => {
+  seven = ((await skipsOf(7)).ranges ?? []).find((r) => r.kind === 'op')
+  return !!seven
+}, 15_000)
 check(!!seven && Math.abs(seven.start - 20) < 2.5, 'and in the episode it was compared with', JSON.stringify(seven))
 
 const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] })
@@ -134,10 +139,28 @@ await menu.getByRole('menuitemradio', { name: 'Mark where it ends' }).click()
 const mark = (await marked).postDataJSON()
 check(mark.kind === 'ed' && Math.round(mark.start) === 120 && Math.round(mark.end) === 140, 'a marked ending is kept', JSON.stringify(mark))
 check(await until(() => menu.getByText('Yours', { exact: true }).isVisible()), 'and listed as yours')
+check(await until(() => menu.getByText(/^Ending saved · 2:\d\d–2:\d\d/).isVisible()), 'the menu says what was saved', await menu.innerText())
 await page.screenshot({ path: `${SHOTS}/skips-menu.png` })
 await menu.getByRole('menuitemradio', { name: 'Forget my marks' }).click()
 check(await until(async () => !((await skipsOf(8)).ranges ?? []).some((r) => r.source === 'marked')), 'Forget my marks drops it')
 await page.keyboard.press('Escape')
+
+// The same with [ and ]: late in the episode it's the ending, and ] saves it.
+const late = await video.evaluate((v) => Math.round(v.duration * 0.7))
+await video.evaluate((v, at) => (v.currentTime = at), late)
+await page.locator('body').click({ position: { x: 5, y: 400 } })
+await page.keyboard.press('[')
+// .first(): the notice on screen, then the same words for a screen reader.
+check(await until(() => page.getByText(/^Ending starts at .* · \] where it ends/).first().isVisible()), '[ starts an ending mark and says how to finish it')
+await video.evaluate((v, at) => (v.currentTime = at), late + 30)
+const keyed = page.waitForRequest((r) => r.url().endsWith('/api/episode/skips/mark'))
+await page.keyboard.press(']')
+const keyMark = (await keyed).postDataJSON()
+check(keyMark.kind === 'ed' && Math.abs(keyMark.start - late) < 1 && Math.abs(keyMark.end - late - 30) < 1, '] saves it', JSON.stringify(keyMark))
+check(await until(() => page.getByText(/^Ending saved · /).first().isVisible()), 'and the player says it was saved')
+await page.keyboard.press(']')
+check(await until(() => page.getByText(/^\[ first, where the opening or ending starts/).first().isVisible()), '] with nothing begun says to press [ first')
+await api('/api/episode/skips/forget', { animeId: ANIME, episode: 8 })
 
 // AniSkip's own time: "Wrong skip" votes it down; a skip left standing votes it up.
 await page.route(`**/api/episode/skips?anime=${ANIME}&episode=8*`, (r) =>

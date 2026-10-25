@@ -26,10 +26,10 @@ func TestChainFollowsTheLayout(t *testing.T) {
 		t.Errorf("stereo high = %s", high)
 	}
 	surround := Chain(Options{Voice: "high"}, 6)
-	if !strings.HasPrefix(surround, "aformat=channel_layouts=5.1,") || !strings.Contains(surround, "FL=0.414*FL+1.166*FC+0.293*BL") || strings.Contains(surround, "dialoguenhance") {
+	if !strings.HasPrefix(surround, "aformat=channel_layouts=5.1,") || !strings.Contains(surround, "FL=0.369*FL+1.469*FC+0.262*BL") || strings.Contains(surround, "dialoguenhance") {
 		t.Errorf("surround high = %s", surround)
 	}
-	if eight := Chain(Options{Voice: "medium"}, 8); !strings.Contains(eight, "0.585*FC") {
+	if eight := Chain(Options{Voice: "medium"}, 8); !strings.Contains(eight, "0.736*FC") {
 		t.Errorf("7.1 is folded to 5.1 first and lifted the same: %s", eight)
 	}
 	if m := Chain(Options{Voice: "medium"}, 1); strings.Contains(m, "pan=") || strings.Contains(m, "dialoguenhance") || !strings.Contains(m, "equalizer") {
@@ -51,7 +51,7 @@ func TestTheOtherEffectsStackInOrder(t *testing.T) {
 		t.Error("the fold to mono comes after the compressor")
 	}
 	// Without the voice, a surround track is still folded down before the rest.
-	if c := Chain(Options{Night: true}, 6); !strings.HasPrefix(c, "aformat=channel_layouts=stereo,acompressor") {
+	if c := Chain(Options{Night: true}, 6); !strings.HasPrefix(c, Stereo+",acompressor") {
 		t.Errorf("surround night = %s", c)
 	}
 	if c := Chain(Options{Headphones: true}, 2); c != headphones+","+limiter {

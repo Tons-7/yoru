@@ -235,3 +235,15 @@ func waitPosition(t *testing.T, p *MPV, within time.Duration) {
 		}
 	}
 }
+
+// The quality profile is the newest this mpv has; an unknown one is left out rather than failing the start.
+func TestMPVProfileIsProbed(t *testing.T) {
+	mpv, _ := binaries(t)
+	p := newPlayer(t, mpv)
+	if got := p.profile("high-quality", "gpu-hq"); got != "high-quality" {
+		t.Errorf("profile = %q, want high-quality", got)
+	}
+	if got := p.profile("no-such-profile"); got != "" {
+		t.Errorf("unknown profile = %q", got)
+	}
+}

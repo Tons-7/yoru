@@ -9,6 +9,7 @@ import {
   type Episode,
   type FollowState,
   type PlaySession,
+  type SkipMarkResult,
   type SkipRange,
   SOUND_PREFS,
   type SoundOptions,
@@ -19,6 +20,7 @@ import {
 import { bytes, cx, relativeTime } from '../lib/format'
 import {
   refreshDownloads,
+  useAccess,
   useDownloads,
   useEpisodes,
   useFranchise,
@@ -42,6 +44,10 @@ import { getSleep, noteAutoStart, noteInput, setSleep, unattendedRun, useSleep, 
 
 type AudioChoice = 'sub' | 'dub' | 'either'
 import { Player } from '../player/Player'
+import { deviceCaps } from '../player/decode'
+import { cellular, LOWER, SAVER, setOnMobile, setSitting, stepBytes, streamChoice, useNetwork } from '../player/network'
+import { MobileDataCard, NetworkNote } from '../components/MobileData'
+import { SUB_LOOKS, type SubLook } from '../player/subLook'
 import {
   autoTier,
   deviceUpscale,
@@ -156,13 +162,39 @@ export function Watch() {
     }),
     [soundOptions, setSoundMutate],
   )
+  // A copy this device said it plays but couldn't: that source opens converted from then on.
+  const [convertAll, setConvertAll] = useState<string | null>(null)
+  const strict = !!source && convertAll === source
+  // This device's quality: its step, the mobile-data rule (or its card), or Auto's step down for a slow link.
+  const net = useNetwork()
+  // Nothing opens until the server says where this device is; unanswered counts as away, safer for data.
+  const access = useAccess()
+  const away = access.data ? !!access.data.away : access.isError
+  const [stepped, setStepped] = useState<{ source: string; step: string } | null>(null)
+  const choice = streamChoice(net, away, stepped && stepped.source === source ? stepped.step : undefined)
+  // A reopen mid-episode (quality, converting) picks up where the picture was, this source's place only.
+  const lastPosition = useRef<{ source?: string; at: number }>({ at: 0 })
+  const [resumeAt, setResumeAt] = useState<{ source?: string; at: number } | null>(null)
+  const reopenHere = () => {
+    if (lastPosition.current.source === source) setResumeAt({ source, at: lastPosition.current.at })
+  }
+  // A note answered or closed stays away for its source.
+  const [noteClosed, setNoteClosed] = useState<string | null>(null)
+  const lastStep = useRef(choice.step)
+  useEffect(() => {
+    const here = lastPosition.current
+    if (lastStep.current !== choice.step && here.source === source && here.at > 0) setResumeAt({ source, at: here.at })
+    lastStep.current = choice.step
+  }, [choice.step, source])
   const stream = useQuery({
-    enabled: !!source,
-    queryKey: ['stream', id, ep, source, wantAudio],
+    enabled: !!source && !choice.card && !access.isPending,
+    queryKey: ['stream', id, ep, source, wantAudio, strict, choice.step],
     // Aborted when superseded: an abandoned open would otherwise pin and hold its episode when it lands.
-    queryFn: ({ signal }) =>
+    queryFn: async ({ signal }) =>
       api.post<StreamInfo>(
-        `/api/stream/open${query({ id, episode: ep, source, audio: wantAudio, ...soundAtOpen.current })}`,
+        `/api/stream/open${query({
+          id, episode: ep, source, audio: wantAudio, caps: await deviceCaps(strict), quality: choice.step, ...soundAtOpen.current,
+        })}`,
         undefined,
         signal,
       ),
@@ -200,8 +232,11 @@ export function Watch() {
     () => ({
       mark: (kind: 'op' | 'ed', start: number, end: number) =>
         api
-          .post('/api/episode/skips/mark', { animeId: id, episode: ep, kind, start, end, duration: episodeLength })
-          .then(() => refetchSkips()),
+          .post<SkipMarkResult>('/api/episode/skips/mark', { animeId: id, episode: ep, kind, start, end, duration: episodeLength })
+          .then((saved) => {
+            void refetchSkips()
+            return saved
+          }),
       forget: () => void api.post('/api/episode/skips/forget', { animeId: id, episode: ep }).then(() => refetchSkips()),
     }),
     [id, ep, episodeLength, refetchSkips],
@@ -303,6 +338,7 @@ export function Watch() {
 
   const reportProgress = useCallback(
     (position: number, duration: number, played: number, final: boolean, paused: boolean) => {
+      lastPosition.current = { source, at: position }
       const body = { animeId: id, episode: ep, position, duration, played, paused, final }
       // sendBeacon survives the tab closing, which a fetch does not.
       if (!final) return beacon('/api/progress', body)
@@ -318,7 +354,7 @@ export function Watch() {
         })
         .catch(() => {})
     },
-    [id, ep, qc],
+    [id, ep, qc, source],
   )
 
   const nextPath = fromList
@@ -368,6 +404,8 @@ export function Watch() {
       setPrefMutate({ animeId: id, key: 'subtitle.delay', value: delay === 0 ? '' : JSON.stringify({ group, delay }) }),
     [id, group, setPrefMutate],
   )
+  // Everywhere, not per show: a look is the viewer's eyes, not the release's.
+  const setSubLook = useCallback((look: SubLook) => setPrefMutate({ key: 'subtitle.look', value: look }), [setPrefMutate])
   // The aired episode before this one, filler or not: going back is to rewatch, not to follow the list.
   const previous = [...list].reverse().find((e) => e.number < ep && !isUnaired(e, now))
   const previousPath = previous ? `/watch/${id}/${previous.number}` : undefined
@@ -461,6 +499,57 @@ export function Watch() {
     await refetchStream({ throwOnError: true })
   }, [refetchPlay, refetchStream, source])
 
+  // Copying more than H.264 and AAC or MP3, a stream may hold what this device claimed but can't decode.
+  const opened = stream.data
+  const sent = opened?.audio?.[opened.audioTrack ?? 0]
+  const copiesMore =
+    (!!opened?.plan?.videoCopy && !(opened.video?.codec === 'h264' && (opened.video.bitDepth ?? 8) <= 8)) ||
+    (!!opened?.plan?.audioCopy && !['aac', 'mp3'].includes(sent?.codec ?? 'aac'))
+  const convertInstead = useCallback(() => {
+    if (!copiesMore || strict || !source) return false
+    if (lastPosition.current.source === source) setResumeAt({ source, at: lastPosition.current.at })
+    setConvertAll(source)
+    return true
+  }, [copiesMore, strict, source])
+
+  // Auto, away from home: a link that keeps stalling steps down a quality; "Back to original" keeps it there.
+  const [keepOriginal, setKeepOriginal] = useState<string | null>(null)
+  const slowLink =
+    net.quality === 'auto' && away && !choice.card && keepOriginal !== source && LOWER[choice.step ?? 'original']
+      ? () => {
+          reopenHere()
+          setStepped({ source: source!, step: LOWER[choice.step ?? 'original']! })
+          setNoteClosed(null)
+        }
+      : undefined
+  const networkNote =
+    choice.card && stream.data && noteClosed !== source ? (
+      // Onto mobile data mid-episode: it keeps playing, data saver a tap away.
+      <NetworkNote
+        text={cellular() ? 'Now on mobile data' : 'Now away from home'}
+        action="Data saver"
+        onAction={() => {
+          reopenHere()
+          setSitting('saver')
+        }}
+        onClose={() => {
+          setNoteClosed(source ?? null)
+          setSitting('full')
+        }}
+      />
+    ) : stepped && stepped.source === source && noteClosed !== source ? (
+      <NetworkNote
+        text={`${stepped.step}p: the connection couldn't keep up`}
+        action="Back to original"
+        onAction={() => {
+          reopenHere()
+          setStepped(null)
+          setKeepOriginal(source ?? null)
+        }}
+        onClose={() => setNoteClosed(source ?? null)}
+      />
+    ) : null
+
   // Releasing the transcode session frees an ffmpeg process; leaving it to the
   // idle reaper keeps a CPU busy for a minute after leaving the page.
   useEffect(() => {
@@ -543,7 +632,7 @@ export function Watch() {
                 <Player
                   stream={stream.data}
                   starting={startingNote}
-                  startAt={play.data?.startAt ?? 0}
+                  startAt={resumeAt && resumeAt.source === source ? resumeAt.at : (play.data?.startAt ?? 0)}
                   skips={skips.data?.ranges ?? []}
                   autoSkip={autoSkip}
                   onSkipVote={skips.data?.share ? voteSkip : undefined}
@@ -553,6 +642,8 @@ export function Watch() {
                   withDub={(['signs', 'off', 'same'] as const).find((v) => v === effective['subtitle.with_dub']) ?? 'signs'}
                   keptDelay={keptDelay}
                   onKeepDelay={group ? keepDelay : undefined}
+                  subLook={SUB_LOOKS.find((l) => l.value === effective['subtitle.look'])?.value ?? ''}
+                  onSubLook={setSubLook}
                   upscale={upscaling}
                   sound={soundProp}
                   title={showTitle}
@@ -566,11 +657,25 @@ export function Watch() {
                   onResume={clearEnded}
                   onEndStuck={(detail) => note('end-stuck', detail)}
                   onSessionLost={recoverSession}
+                  onUndecodable={convertInstead}
+                  onSlowLink={slowLink}
                   onPickRelease={() => setPicking(true)}
                   castBurn={flag('cast.burn_subtitles')}
                   // Inside the player, or fullscreen hides it; failures too, unless the player can recover.
-                  overlay={
-                    play.isError && !stream.data ? (
+                  overlay={<>
+                    {networkNote}
+                    {choice.card && !stream.data && !play.isError ? (
+                      <MobileDataCard
+                        card={choice.card}
+                        original={play.data?.size}
+                        saver={stepBytes(SAVER, current?.duration || (current?.runtime ?? 24) * 60)}
+                        onPlay={(how, remember) => {
+                          if (remember) setOnMobile(how)
+                          setSitting(how)
+                        }}
+                        onCancel={() => navigate(`/anime/${id}`)}
+                      />
+                    ) : play.isError && !stream.data ? (
                       <NoRelease
                         inPlayer
                         message={(play.error as Error).message}
@@ -651,8 +756,8 @@ export function Watch() {
                         alerting={!!detail.data?.notify?.on}
                         onClose={() => clearEnded('cancel')}
                       />
-                    ) : null
-                  }
+                    ) : null}
+                  </>}
                 />
               )}
             </div>
@@ -692,7 +797,7 @@ export function Watch() {
                     {held ? 'Downloaded' : download.isSuccess ? 'Queued' : 'Download'}
                   </Button>
 
-                  {source && <Button onClick={() => setInApp(true)}>Open in app</Button>}
+                  {source && <Button onClick={() => setInApp(true)}>Open or save</Button>}
 
                   {hasNext && (
                     <Button

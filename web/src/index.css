@@ -92,6 +92,8 @@
     color-scheme: dark;
     /* The scrollbar's width is always reserved, or pages shift sideways between short and long. */
     scrollbar-gutter: stable;
+    /* What focus or a link scrolls to clears the sticky header (4rem), with a little room. */
+    scroll-padding-top: 5rem;
   }
 
   body {
@@ -197,6 +199,44 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* Asked for more contrast: small print a step lighter. */
+@media (prefers-contrast: more) {
+  :root {
+    --color-base-600: #8891a5;
+    --color-base-500: #b3bbcc;
+    --color-base-400: #c8cfdc;
+  }
+}
+
+/* High contrast themes drop backgrounds and box-shadow rings: focus and chosen states need outlines. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight !important;
+    outline-offset: 2px;
+  }
+  [aria-selected='true'],
+  [aria-checked='true'],
+  [aria-pressed='true'],
+  [aria-current='page'] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+  /* Bars that are only a filled colour: kept, in the theme's own colours. */
+  [role='progressbar'],
+  [data-scrub-track] {
+    border: 1px solid CanvasText;
+  }
+  [role='progressbar'] > *,
+  [data-played] {
+    forced-color-adjust: none;
+    background: Highlight !important;
+  }
+  [data-loaded] {
+    forced-color-adjust: none;
+    background: GrayText !important;
   }
 }
 

@@ -31,6 +31,23 @@ func TestHandPickedReleaseIsRecordedAsManual(t *testing.T) {
 	}
 }
 
+// A picked hash the episode's search doesn't list (a SeaDex batch) is fetched by hash, not failed as missing.
+func TestPickedReleaseOutsideTheSearchIsFetchedByItsHash(t *testing.T) {
+	const batch = "dddddddddddddddddddddddddddddddddddddddd"
+	engine := newFakeEngine()
+	engine.finished[batch] = true
+	play, pref, _ := pipeline(t, engine, frieren(ep1Hash, 1))
+	ctx := context.Background()
+
+	if err := pref.DownloadRelease(ctx, 1, 1, 1, score.DefaultPreferences(), time.Second, batch); err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	rec, ok, _ := play.store.TorrentForEpisode(ctx, 1, "1")
+	if !ok || rec.InfoHash != batch || !rec.Manual {
+		t.Fatalf("recorded %+v, want the chosen batch, by its hash", rec)
+	}
+}
+
 // A fetch's claim on its torrent ends with the fetch, so adoption resumes for one left unrecorded.
 func TestClaimEndsWithTheFetch(t *testing.T) {
 	_, pref, _ := pipeline(t, newFakeEngine())

@@ -484,7 +484,8 @@ function RowMenu({
             aria-label={`${title} in Up next`}
             onKeyDown={(e) => {
               if (e.key !== 'Escape') return
-              // Only the menu: the sheet around it stays.
+              // Only the menu: the sheet around it stays, Esc's close request included.
+              e.preventDefault()
               e.stopPropagation()
               setOpen(false)
               trigger.current?.focus()

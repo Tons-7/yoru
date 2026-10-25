@@ -15,7 +15,10 @@ export function AccessRequests() {
   if (!waiting.length) return null
 
   return createPortal(
-    <div className="fixed right-4 bottom-4 z-[90] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2" role="alert">
+    <div
+      className="fixed right-4 bottom-4 z-[90] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2 max-sm:bottom-[calc(4.5rem+env(safe-area-inset-bottom))]"
+      role="alert"
+    >
       {waiting.slice(0, 3).map((d) => (
         <div key={d.id} className="rounded-xl border border-white/10 bg-base-900 p-4 shadow-2xl">
           <p className="text-sm font-semibold text-white">A device wants to use Yoru</p>

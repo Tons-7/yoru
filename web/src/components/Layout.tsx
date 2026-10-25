@@ -23,6 +23,8 @@ import {
   useTrackers,
   type Download,
 } from '../lib/queries'
+import { BottomTabs } from './BottomTabs'
+import { install, useInstall } from '../lib/install'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Unpaired } from './Unpaired'
 import { AccessRequests } from './AccessRequests'
@@ -31,7 +33,8 @@ import { SHOW_SHORTCUTS } from './keys'
 import { NotificationPanel } from './NotificationPanel'
 import { Shortcuts } from './Shortcuts'
 import { SavedCopyNotice } from './SavedCopyNotice'
-import { useDebounced, useDismiss, useMediaQuery, useModalFocus } from '../lib/hooks'
+import { menuItems, useDebounced, useDismiss, useMediaQuery, useModalFocus, walkMenu } from '../lib/hooks'
+import { useNewSettings } from '../lib/whatsNew'
 
 const TABS = [
   { to: '/', label: 'Home', end: true },
@@ -44,6 +47,8 @@ const TABS = [
 export function Layout() {
   // The watch page sets its own width, so the player runs edge to edge on a phone.
   const fullBleed = useMatch('/watch/:animeId/:episode') !== null
+  // Tailwind's sm: below it the main places are tabs along the bottom.
+  const wide = useMediaQuery('(min-width: 40rem)')
 
   // Keyed on the path so each page animates in. Short enough that navigation
   // still feels immediate; the point is to show that something changed.
@@ -58,6 +63,30 @@ export function Layout() {
     if (navigation !== 'POP') window.scrollTo(0, 0)
   }, [pathname, navigation])
 
+  // A new page's heading takes focus and is said aloud; not on first load, nor between episodes (player keys).
+  const main = useRef<HTMLElement>(null)
+  const [arrived, setArrived] = useState('')
+  const firstPage = useRef(true)
+  useEffect(() => {
+    if (firstPage.current) {
+      firstPage.current = false
+      return
+    }
+    // After the page's first paint, when its heading and title are there.
+    const timer = window.setTimeout(() => {
+      // Never out of a box being typed in or an open dialog.
+      if (document.activeElement?.closest('input, textarea, select, [contenteditable], [role=dialog]')) return
+      const h1 = main.current?.querySelector<HTMLElement>('h1')
+      const heading = h1 ?? main.current
+      if (!heading) return
+      if (h1) h1.tabIndex = -1
+      heading.focus({ preventScroll: true })
+      // The heading names the page; the title may still be the last page's while its data loads.
+      setArrived(h1?.textContent?.trim() || document.title)
+    }, 150)
+    return () => window.clearTimeout(timer)
+  }, [pageKey])
+
   // A fresh install goes to setup once, not on every route, or a local-only install reaches nothing.
   const setup = useSetup()
   const navigate = useNavigate()
@@ -71,15 +100,34 @@ export function Layout() {
 
   return (
     <div className="min-h-dvh">
+      {/* The first stop for Tab: past the header's dozen controls to the page. */}
+      <a
+        href="#main"
+        onClick={(e) => {
+          e.preventDefault()
+          main.current?.focus()
+        }}
+        className="sr-only z-[60] rounded-lg bg-accent-500 px-3 py-2 text-sm font-medium text-white focus:not-sr-only focus:fixed focus:top-2 focus:left-2"
+      >
+        Skip to content
+      </a>
+      <p role="status" className="sr-only">
+        {arrived}
+      </p>
       <Header />
       {/* Outside the per-page main: Back remounted them, and the pairing overlay vanished with its state. */}
       <Unpaired />
       <AccessRequests />
       <main
+        ref={main}
         key={pageKey}
+        id="main"
+        tabIndex={-1}
         className={cx(
-          'mx-auto w-full animate-enter',
+          'mx-auto w-full animate-enter outline-none',
           fullBleed ? 'pb-8' : 'max-w-[1600px] px-4 pt-4 pb-16 sm:px-6',
+          // Clear of the tab bar on a phone.
+          'max-sm:pb-[calc(5rem+env(safe-area-inset-bottom))]',
         )}
       >
         {/* Keyed by page, so leaving a broken one clears it. */}
@@ -87,6 +135,7 @@ export function Layout() {
           <Outlet />
         </ErrorBoundary>
       </main>
+      {!wide && <BottomTabs />}
     </div>
   )
 }
@@ -144,10 +193,6 @@ function Header() {
         <Shortcuts />
       </div>
 
-      {/* Below sm the links get their own row; beside search they push the rest off-screen. */}
-      <nav className="no-scrollbar mx-4 mb-2 flex items-center gap-0.5 overflow-x-auto rounded-full bg-base-800 p-1 ring-1 ring-white/5 sm:hidden">
-        <Tabs />
-      </nav>
       <SavedCopyNotice />
     </header>
   )
@@ -213,8 +258,7 @@ function Tabs() {
           end={tab.end}
           className={({ isActive }) =>
             cx(
-              // Phone: shared evenly so all five fit.
-              'shrink-0 rounded-full px-3 py-1.5 text-sm transition-colors max-sm:flex-1 max-sm:px-2 max-sm:text-center',
+              'shrink-0 rounded-full px-3 py-1.5 text-sm transition-colors',
               isActive
                 ? 'bg-base-700 text-white shadow-card ring-1 ring-white/10'
                 : 'text-base-300 hover:bg-base-850 hover:text-white',
@@ -472,26 +516,12 @@ function ProfileMenu() {
   const signedIn = trackers.filter((t) => t.connected)
   const user = signedIn.find((t) => t.user)?.user
   const attention = trackers.some((t) => t.reconnect)
+  // An update brought settings not looked at yet: Settings opens on them.
+  const fresh = useNewSettings().unseen
 
   useEffect(() => {
     if (open && byKey.current) menuItems(menu.current)[0]?.focus()
   }, [open])
-
-  // Arrow keys walk the items in reading order, Home and End jump to either end.
-  const onMenuKey = (e: React.KeyboardEvent) => {
-    const all = menuItems(menu.current)
-    const at = all.indexOf(document.activeElement as HTMLElement)
-    const moves: Record<string, number | undefined> = {
-      ArrowDown: at + 1,
-      ArrowUp: Math.max(at, 0) - 1,
-      Home: 0,
-      End: -1,
-    }
-    const to = moves[e.key]
-    if (to === undefined || all.length === 0) return
-    e.preventDefault()
-    all[(to + all.length) % all.length].focus()
-  }
 
   return (
     <div className="relative shrink-0" ref={ref}>
@@ -518,8 +548,13 @@ function ProfileMenu() {
         )}
       >
         {user ? <Initial name={user} /> : <UserIcon />}
-        {attention && (
-          <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-amber-400 ring-2 ring-base-950" />
+        {(attention || fresh) && (
+          <span
+            className={cx(
+              'absolute -top-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-base-950',
+              attention ? 'bg-amber-400' : 'bg-accent-400',
+            )}
+          />
         )}
       </button>
 
@@ -528,7 +563,7 @@ function ProfileMenu() {
           ref={menu}
           role="menu"
           aria-label="Profile"
-          onKeyDown={onMenuKey}
+          onKeyDown={walkMenu}
           className="absolute right-0 z-50 mt-2.5 w-80 max-w-[calc(100vw-1rem)] origin-top-right animate-rise overflow-hidden rounded-2xl border border-base-750 bg-base-850/95 p-2 shadow-lift backdrop-blur-xl"
         >
           <Link
@@ -559,18 +594,22 @@ function ProfileMenu() {
           <ListShortcuts close={close} />
           <div className="my-2 h-px bg-base-750" />
 
-          {MENU_ITEMS.map((item) => (
-            <NavLink
-              key={item.to}
-              role="menuitem"
-              to={item.to}
-              onClick={close}
-              className={({ isActive }) => cx(menuRow, isActive ? 'bg-base-800 text-white' : 'text-base-200')}
-            >
-              <span className={iconChip}>{item.icon}</span>
-              {item.label}
-            </NavLink>
-          ))}
+          {MENU_ITEMS.map((item) => {
+            const news = fresh && item.to === '/settings'
+            return (
+              <NavLink
+                key={item.to}
+                role="menuitem"
+                to={news ? '/settings?tab=New' : item.to}
+                onClick={close}
+                className={({ isActive }) => cx(menuRow, isActive ? 'bg-base-800 text-white' : 'text-base-200')}
+              >
+                <span className={iconChip}>{item.icon}</span>
+                {item.label}
+                {news && <span className="ml-auto rounded bg-accent-500/20 px-1.5 py-0.5 text-[11px] font-medium text-accent-200">New</span>}
+              </NavLink>
+            )
+          })}
           {/* Not on a phone, which has no keys to press. */}
           <button
             type="button"
@@ -589,6 +628,7 @@ function ProfileMenu() {
               ?
             </kbd>
           </button>
+          <InstallItem close={close} />
           <ExitItem
             onAsk={(stops) => {
               close()
@@ -600,6 +640,39 @@ function ProfileMenu() {
       {/* Outside the menu: a click in it would close the menu, and a dialog inside with it. */}
       {exitAsk && <ExitDialog stops={exitAsk} onClose={() => setExitAsk(null)} />}
     </div>
+  )
+}
+
+/** Install Yoru as an app: at once where the browser offers it, else to Settings, which says how. */
+function InstallItem({ close }: { close: () => void }) {
+  const state = useInstall()
+  const navigate = useNavigate()
+  if (state === 'installed') return null
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={() => {
+        close()
+        if (state === 'ready') void install()
+        else navigate('/settings?tab=Devices')
+      }}
+      className={cx(menuRow, 'w-full text-left text-base-200')}
+    >
+      <span className={iconChip}>
+        <InstallIcon />
+      </span>
+      Install Yoru
+    </button>
+  )
+}
+
+function InstallIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <rect x="6" y="2.5" width="12" height="19" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M12 7v7m0 0 3-3m-3 3-3-3" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   )
 }
 
@@ -766,10 +839,6 @@ function PowerIcon() {
     </svg>
   )
 }
-
-// The visible items: Keyboard shortcuts is hidden on a phone.
-const menuItems = (menu: HTMLElement | null) =>
-  [...(menu?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])].filter((el) => el.offsetParent !== null)
 
 const menuRow =
   'group flex items-center gap-3 rounded-lg px-2 py-1.5 text-sm transition-colors hover:bg-base-800 hover:text-white focus-visible:bg-base-800 focus-visible:text-white focus-visible:outline-hidden pointer-coarse:py-2'

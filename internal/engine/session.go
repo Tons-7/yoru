@@ -14,18 +14,16 @@ import (
 
 	"yoru/internal/bt"
 	"yoru/internal/bt/metainfo"
-
-	"yoru/internal/torrent"
 )
 
-// record is one torrent in session.json, with rqbit's field names so its session reads too.
+// record is one torrent in session.json; its field names (rqbit's once) stay, so saved sessions read.
 type record struct {
 	InfoHash     string   `json:"info_hash"`
 	Trackers     []string `json:"trackers,omitempty"`
 	OutputFolder string   `json:"output_folder,omitempty"`
 	OnlyFiles    []int    `json:"only_files"`
 	Paused       bool     `json:"is_paused"`
-	// Verify: data came from elsewhere (rqbit), so completion is unknown until hashed.
+	// Verify: completion is unknown until the data on disk is hashed.
 	Verify bool `json:"verify,omitempty"`
 	// Top is the file or folder name the data lives under, when not the torrent's own.
 	Top string `json:"top,omitempty"`
@@ -126,9 +124,8 @@ func writeAtomic(path string, body []byte) error {
 	return os.Rename(path+".tmp", path)
 }
 
-// restore re-adds the saved torrents; on first run it imports rqbit's.
+// restore re-adds the saved torrents; on a first run there are none.
 func (e *Engine) restore() error {
-	var imported string
 	e.mu.Lock()
 	carry := e.carry
 	e.carry = nil
@@ -139,13 +136,6 @@ func (e *Engine) restore() error {
 	}
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		doc, imported, err = e.importLegacy()
-		if err != nil {
-			return err
-		}
-		if imported != "" {
-			e.log.Info("carried over downloads from rqbit", "torrents", len(doc.Torrents), "from", imported)
-		}
 	case err != nil:
 		// Held or refused by the OS (an antivirus, a backup tool): the file is likely fine, and a rebuild
 		// would lose every torrent's trackers, names and selection. Not starting now, the next try reads it.
@@ -205,15 +195,6 @@ func (e *Engine) restore() error {
 		go e.resume(en)
 	}
 	e.saveSession()
-
-	// Ours now holds everything it had, metainfo included.
-	if imported != "" && torrent.Within(e.opts.CacheDir, imported) {
-		if _, err := os.Stat(sessionFile(e.opts.SessionDir)); err == nil {
-			if err := os.RemoveAll(imported); err != nil {
-				e.log.Warn("remove rqbit's session", "err", err)
-			}
-		}
-	}
 	return nil
 }
 
@@ -321,46 +302,4 @@ func readSession(dir string) (sessionDoc, error) {
 		return doc, err
 	}
 	return doc, json.Unmarshal(body, &doc)
-}
-
-// importLegacy reads the first rqbit session found: its torrents in the cache,
-// their selection and metainfo. It returns the session's directory.
-func (e *Engine) importLegacy() (sessionDoc, string, error) {
-	var out sessionDoc
-	for _, dir := range e.opts.LegacySessions {
-		if dir == "" {
-			continue
-		}
-		body, err := os.ReadFile(sessionFile(dir))
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		var legacy struct {
-			Torrents map[string]record `json:"torrents"`
-		}
-		if err == nil {
-			err = json.Unmarshal(body, &legacy)
-		}
-		// One unreadable old session must not leave the engine starting empty; the next one may do.
-		if err != nil {
-			e.log.Warn("skipping an unreadable rqbit session", "dir", dir, "err", err)
-			continue
-		}
-		for _, r := range legacy.Torrents {
-			if r.InfoHash == "" || !torrent.Within(e.opts.CacheDir, r.OutputFolder) {
-				continue
-			}
-			name := strings.ToLower(r.InfoHash) + ".torrent"
-			if mi, err := os.ReadFile(filepath.Join(dir, name)); err == nil {
-				if err := writeAtomic(filepath.Join(e.opts.SessionDir, name), mi); err != nil {
-					return out, "", err
-				}
-			}
-			r.Verify = true
-			out.Torrents = append(out.Torrents, r)
-		}
-		slices.SortFunc(out.Torrents, func(a, b record) int { return strings.Compare(a.InfoHash, b.InfoHash) })
-		return out, dir, nil
-	}
-	return out, "", nil
 }

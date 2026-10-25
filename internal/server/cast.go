@@ -39,6 +39,8 @@ func (s *Server) castLink(w http.ResponseWriter, r *http.Request) {
 	}
 	// ?burn=<track>: that track drawn into the picture, shifted by ?delay=, in a session of its own.
 	target, note := session, ""
+	animeID, _, _ := parseSessionID(session.ID)
+	want := s.streamWant(r.Context(), animeID, "")
 	if raw := r.URL.Query().Get("burn"); raw != "" {
 		// A number, as a track is: the rest of its way names files on disk.
 		track, err := strconv.Atoi(raw)
@@ -47,7 +49,7 @@ func (s *Server) castLink(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		delay, _ := strconv.ParseFloat(r.URL.Query().Get("delay"), 64)
-		burned, err := s.burnedSession(r.Context(), session, track, delay)
+		burned, err := s.burnedSession(r.Context(), session, track, delay, want)
 		switch {
 		case errors.Is(err, errStillArriving):
 			note = "Subtitles go as text this time: drawing them in needs the whole episode downloaded."
@@ -55,8 +57,22 @@ func (s *Server) castLink(w http.ResponseWriter, r *http.Request) {
 			s.log.Warn("cast with subtitles drawn in", "session", session.ID, "err", err)
 			note = "Subtitles go as text: drawing them in failed."
 		default:
+			s.heldOnce(burned)
 			target = burned
 		}
+	}
+	// Unless burned in, the TV gets an any-browser session: it may not decode this copy (HEVC) or want its cap.
+	if plan := session.CurrentPlan(); target == session && (plan.ForDevice || plan.MaxRate > 0) {
+		tv, err := s.streams.OpenFor(r.Context(), transcode.BaseID(session.ID)+"-cast", session.Source,
+			s.readable(r.Context(), session), nil, want)
+		if err != nil {
+			s.fail(w, "open stream for the TV", err)
+			return
+		}
+		s.heldOnce(tv)
+		tv.SetAudioTrack(session.AudioTrack())
+		tv.SetSound(session.Sound())
+		session, target = tv, tv
 	}
 
 	base := requestOrigin(r)
@@ -91,9 +107,25 @@ func (s *Server) castLink(w http.ResponseWriter, r *http.Request) {
 
 var errStillArriving = errors.New("the episode is still downloading")
 
+// heldOnce keeps one hold on a TV's session however often Cast is pressed; nothing closes it but the reaper.
+func (s *Server) heldOnce(tv *transcode.Session) {
+	if tv.Holders() > 1 {
+		s.streams.Close(tv.ID)
+	}
+}
+
 // burnedSession opens the episode with one subtitle track drawn in, shifted by delay seconds. The track must be
 // whole: lines still to download would be missing from the picture for good.
-func (s *Server) burnedSession(ctx context.Context, session *transcode.Session, track int, delay float64) (*transcode.Session, error) {
+func (s *Server) burnedSession(ctx context.Context, session *transcode.Session, track int, delay float64, want transcode.Want) (*transcode.Session, error) {
+	// Per track, delay and softening: another choice is another picture.
+	id := fmt.Sprintf("%s-burn%d-%d", transcode.BaseID(session.ID), track, int(math.Round(delay*10)))
+	if want.Soften {
+		id += "-soft"
+	}
+	// Pictures are laid over from the episode itself as it is read, each arriving with its stretch of picture.
+	if transcode.PictureSubtitle(session.Info.SubtitleCodec(track)) {
+		return s.streams.OpenBurned(ctx, id, session.Source, s.readable(ctx, session), transcode.Burn{Pictures: track, Delay: delay}, want)
+	}
 	if s.subtitles == nil {
 		return nil, errors.New("subtitles unavailable")
 	}
@@ -121,9 +153,7 @@ func (s *Server) burnedSession(ctx context.Context, session *transcode.Session, 
 	if s.waitFonts(ctx, session) {
 		fonts = filepath.Join(session.Dir(), "fonts")
 	}
-	// Per track and delay: another choice is another picture.
-	id := fmt.Sprintf("%s-burn%d-%d", session.ID, track, int(math.Round(delay*10)))
-	return s.streams.OpenBurned(ctx, id, session.Source, local, transcode.Burn{Subtitles: file, Fonts: fonts})
+	return s.streams.OpenBurned(ctx, id, session.Source, local, transcode.Burn{Subtitles: file, Fonts: fonts}, want)
 }
 
 // waitFonts waits for the session's fonts from the one extraction its folder runs at a time (the browser's

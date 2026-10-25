@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
   api,
   type AudioTrack,
+  type SkipMarkResult,
   type SkipRange,
   type StreamHealth,
   type StreamInfo,
@@ -21,10 +22,13 @@ import { refreshDownloads, useAccess, useNow, useSpeedUnit } from '../lib/querie
 import { SHOW_SHORTCUTS } from '../components/keys'
 import { PlayIcon } from '../components/PosterCard'
 import { Spinner } from '../components/ui'
-import { useDismiss, useMediaQuery, useRoomAbove } from '../lib/hooks'
+import { menuItems, useDismiss, useMediaQuery, useMenuButton, useRoomAbove, walkMenu } from '../lib/hooks'
 import { buttonClass } from '../lib/ui'
+import { copyText } from '../lib/downloads'
+import { actionFor, keyHint, keyScope, useKeymap, type KeyAction } from '../lib/keymap'
 import { getSleep, noteInput, setSleep, useSleep, type Sleep } from '../lib/watching'
 import { useAnime4K, type UpscaleTier } from './anime4k'
+import { useTouchGestures } from './gestures'
 import { castImpossible, isBrave, useCast, type CastPhase, type CastSdk } from './cast'
 import {
   SKIPPED_GUARD,
@@ -37,19 +41,34 @@ import {
   useHlsSource,
   useKeepAlive,
   useSeekRecovery,
+  useSlowLink,
   useStallWatchdog,
   useSubtitles,
+  useSystemFullscreen,
   useThumbnails,
+  useVideoPiP,
   type AutoSkip,
   type Sheet,
 } from './hooks'
+import { useNativeCaptions } from './captions'
+import { QUALITIES, setDeviceQuality, useNetwork } from './network'
+import { ENCODERS } from './encoders'
+import { readSubtitleFile } from './ownSubs'
+import { castStyle, SUB_LOOKS, subLookLabel, type SubLook } from './subLook'
 
 // An iPhone has no element fullscreen, only the video's own.
 function toggleFullscreen(shell: HTMLElement | null, video: HTMLVideoElement | null) {
   if (document.fullscreenElement) {
     void document.exitFullscreen().catch(() => {})
   } else if (shell?.requestFullscreen) {
-    void shell.requestFullscreen().catch(() => {})
+    // A wide picture turns the phone sideways; a browser that can't lock (a desktop's) says no, which is fine.
+    void shell
+      .requestFullscreen()
+      .then(() => {
+        const o = screen.orientation as ScreenOrientation & { lock?: (to: string) => Promise<void> }
+        if (video && video.videoWidth > video.videoHeight) return o?.lock?.('landscape')
+      })
+      .catch(() => {})
   } else {
     ;(video as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null)?.webkitEnterFullscreen?.()
   }
@@ -134,6 +153,16 @@ interface Persisted {
 const VOLUME_NOTICE = 'volume'
 const SUB_SCALES = [0.75, 0.9, 1, 1.15, 1.3, 1.5]
 const DELAY_STEP = 0.1
+// Tracks from outside the file take indexes no stream has: a loaded file, and Jimaku's n at JIMAKU_TRACK - n.
+const OWN_TRACK = -1
+const JIMAKU_TRACK = -100
+const NO_TRACKS: SubtitleTrack[] = []
+
+interface JimakuFile {
+  index: number
+  name: string
+  url: string
+}
 
 function delayLabel(d: number): string {
   return d === 0 ? '0.0 s' : `${d > 0 ? '+' : ''}${d.toFixed(1)} s`
@@ -163,12 +192,15 @@ export interface PlayerProps {
   /** AniSkip hears whether its times were right; absent unless sharing with it is on. */
   onSkipVote?: (id: string, up: boolean) => void
   /** Keeps the viewer's own opening or ending for this episode, or forgets them. */
-  skipMarks?: { mark: (kind: 'op' | 'ed', start: number, end: number) => Promise<unknown>; forget: () => void }
+  skipMarks?: { mark: (kind: 'op' | 'ed', start: number, end: number) => Promise<SkipMarkResult>; forget: () => void }
   autoPlay: boolean
   /** Subtitle languages in preference order, from settings. */
   subLanguages?: string[]
   /** What shows with a dub in one of those languages: signs and songs only, nothing, or as with sub. */
   withDub?: 'signs' | 'off' | 'same'
+  /** How dialogue is drawn, from settings; onSubLook changes it there. */
+  subLook?: SubLook
+  onSubLook?: (look: SubLook) => void
   /** A subtitle delay kept for this show's releases from the playing one's group. */
   keptDelay?: number
   /** Keeps a delay for the rest of the show; absent when the release names no group. */
@@ -195,6 +227,10 @@ export interface PlayerProps {
   onEndStuck?: (detail: Record<string, unknown>) => void
   /** The server no longer knows the stream; reopen it under the same URLs. */
   onSessionLost?: () => Promise<unknown>
+  /** This device can't decode what was copied for it; true when it reopens converted. */
+  onUndecodable?: () => boolean
+  /** The stream keeps stalling for want of bandwidth; present only where a lower quality may be taken. */
+  onSlowLink?: () => void
   /** Opens the release picker, offered when this release won't play. */
   onPickRelease?: () => void
   /** Drawn inside the player, so it survives fullscreen and picture in picture. */
@@ -216,6 +252,8 @@ export function Player({
   withDub = 'signs',
   keptDelay,
   onKeepDelay,
+  subLook: lookPreset = '',
+  onSubLook,
   upscale,
   sound,
   title,
@@ -228,6 +266,8 @@ export function Player({
   onResume,
   onEndStuck,
   onSessionLost,
+  onUndecodable,
+  onSlowLink,
   onPickRelease,
   overlay,
   castBurn = false,
@@ -252,6 +292,8 @@ export function Player({
   const [volume, setVolume] = useState(1)
   const [muted, setMuted] = useState(false)
   const [rate, setRate] = useState(() => loadPersisted().rate ?? 1)
+  // The 10-second key held: 2× until let go, the chosen speed kept for after.
+  const fast = useRef(false)
   const [controlsVisible, setControlsVisible] = useState(true)
   // A key changed something with nothing else on screen; say where it landed.
   const [notice, setNotice] = useState<string | null>(null)
@@ -298,8 +340,10 @@ export function Player({
     const saved = loadPersisted()
     if (typeof saved.volume === 'number') video.volume = Math.min(1, Math.max(0, saved.volume))
     if (typeof saved.muted === 'boolean') video.muted = saved.muted
+    // A held L's 2× outlasts the seek and buffering it set off.
     const apply = () => {
-      if (video.playbackRate !== rate) video.playbackRate = rate
+      const want = fast.current ? 2 : rate
+      if (video.playbackRate !== want) video.playbackRate = want
     }
     apply()
     for (const ev of ['loadstart', 'loadedmetadata', 'canplay']) video.addEventListener(ev, apply)
@@ -414,7 +458,12 @@ export function Player({
   const recovering = useRef(false)
   const recover = useCallback(() => recoverRef.current(), [])
 
-  const { error, final, hls, streamEnded } = useHlsSource(video, playlist, resumeAt, recover)
+  const undecodable = useCallback(() => {
+    if (!onUndecodable?.()) return false
+    showNotice("This device couldn't play the original, so it's converted instead", 6000)
+    return true
+  }, [onUndecodable, showNotice])
+  const { error, final, hls, streamEnded } = useHlsSource(video, playlist, resumeAt, recover, undecodable)
   useKeepAlive(video, playlist, recover)
   recoverRef.current = () => {
     if (recovering.current || !onSessionLost) return
@@ -447,11 +496,61 @@ export function Player({
   }
   useSeekRecovery(video, hls)
   useStallWatchdog(video, hls)
+  useSlowLink(video, onSlowLink)
   const fonts = useEmbeddedFonts(stream?.fontsUrl, epoch)
   const pip = useDocumentPiP(host)
+  // Tracks from outside the file, for this episode only: one loaded from this device, and Jimaku's.
+  const [extras, setExtras] = useState<{ stream?: string; tracks: SubtitleTrack[] }>({ tracks: [] })
+  const extraTracks = extras.stream === stream?.id ? extras.tracks : NO_TRACKS
+  const subtitleStream = useMemo(
+    () => (stream && extraTracks.length ? { ...stream, subtitles: [...stream.subtitles, ...extraTracks] } : stream),
+    [stream, extraTracks],
+  )
+  const subtitleTracks = subtitleStream?.subtitles ?? NO_TRACKS
+  const addTrack = useCallback(
+    (t: SubtitleTrack) => {
+      if (!stream?.id) return
+      setExtras((prev) => {
+        const kept = prev.stream === stream.id ? prev.tracks : []
+        return { stream: stream.id, tracks: [...kept.filter((old) => old.index !== t.index), t] }
+      })
+      setTrack(t.index)
+    },
+    [stream?.id],
+  )
+  // A loaded file stays in memory until its blob: URL is revoked: when replaced, its episode gone, unmounted.
+  const blobs = useRef(new Set<string>())
+  useEffect(() => {
+    const live = new Set(extraTracks.map((t) => t.url).filter((url) => url.startsWith('blob:')))
+    for (const url of blobs.current) if (!live.has(url)) URL.revokeObjectURL(url)
+    blobs.current = live
+  }, [extraTracks])
+  useEffect(() => () => blobs.current.forEach((url) => URL.revokeObjectURL(url)), [])
   // Picture in picture moves the player to another document, so the subtitle canvas is rebuilt there.
-  const subLook = useMemo(() => ({ scale: subScale, delay: subDelay }), [subScale, subDelay])
-  useSubtitles(video, stream, track, fonts, pip.active, subLook)
+  const subLook = useMemo(() => ({ scale: subScale, delay: subDelay, preset: lookPreset }), [subScale, subDelay, lookPreset])
+  useSubtitles(video, subtitleStream, track, fonts, pip.active, subLook, (problem) => showNotice(problem, 6000))
+  // The system's floating window and an iPhone's fullscreen show only text tracks.
+  const videoPip = useVideoPiP(video)
+  const systemFullscreen = useSystemFullscreen(video)
+  useNativeCaptions(
+    video,
+    subtitleTracks.find((t) => t.index === track && !t.pictures),
+    videoPip.active || systemFullscreen,
+    subDelay,
+  )
+  const loadOwnFile = useCallback(
+    async (file: File) => {
+      try {
+        const ass = await readSubtitleFile(file)
+        addTrack({ index: OWN_TRACK, title: file.name, url: URL.createObjectURL(new Blob([ass])), whole: true })
+        showNotice(`Subtitles: ${file.name}`)
+      } catch (e) {
+        showNotice(e instanceof Error ? e.message : "Couldn't read that file", 6000)
+      }
+    },
+    [addTrack, showNotice],
+  )
+  const jimakuSet = useQuery({ queryKey: ['jimaku'], queryFn: () => api.get<{ set: boolean }>('/api/jimaku') }).data?.set
   // A skip of AniSkip's left standing is a vote that it was right.
   const autoSkipped = useAutoSkip(video, skips, autoSkip, (r) => {
     if (r.source === 'aniskip' && r.id) onSkipVote?.(r.id, true)
@@ -480,7 +579,8 @@ export function Player({
   // Chosen again when the audio changes language: a switch to the dub takes the dialogue subtitles away.
   const audioLanguage = stream?.audio?.[audioTrack]?.language ?? ''
   useEffect(() => {
-    const tracks = stream?.subtitles ?? []
+    // Text before pictures of the same language: pictures wait for the whole download.
+    const tracks = [...(stream?.subtitles ?? [])].sort((a, b) => Number(!!a.pictures) - Number(!!b.pictures))
     setTrack(tracks.length ? (chooseWithDub(tracks, subLanguages ?? ['en'], audioLanguage, withDub)?.index ?? null) : null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trackList, audioLanguage, withDub])
@@ -571,26 +671,30 @@ export function Player({
     // A failed try's words must not sit over the cast that works.
     setNotice(null)
     try {
-      // Drawn in, the TV gets the track shown here, with this episode's delay.
-      const burn = castBurn && track != null ? `?burn=${track}&delay=${subDelay}` : ''
+      // Drawn in, the TV gets the track shown here, with this episode's delay; pictures it can't draw itself.
+      const chosen = stream.subtitles.find((t) => t.index === track)
+      const burn = chosen && (castBurn || chosen.pictures) ? `?burn=${track}&delay=${subDelay}` : ''
       const link = await api.post<{
         url: string
         subtitles: Array<{ index: number; language?: string; title?: string; url: string }>
         note?: string
       }>(`/api/stream/${stream.id}/cast${burn}`)
       if (link.note) showNotice(link.note, 6000)
+      // A file from this device or Jimaku's lives in this page; the TV can't fetch it.
+      else if (track != null && !chosen) showNotice("The TV shows the episode's own subtitles; loaded ones stay here", 6000)
       const shown = track == null ? -1 : link.subtitles.findIndex((s) => s.index === track)
       video.pause()
       await startCast({
         key: stream.id, url: link.url, title: title ?? '', subtitle, artwork, startAt: video.currentTime,
         subtitles: link.subtitles, subtitleTrack: shown >= 0 ? shown : undefined,
+        textStyle: castStyle(lookPreset, subScale),
       })
     } catch (e) {
       // Closing Chrome's device list rejects with "cancel": nothing went wrong.
       const message = e instanceof Error ? e.message : String(e)
       if (!/cancel/i.test(message)) showNotice(`Couldn't cast: ${message}`, 6000)
     }
-  }, [stream?.id, video, track, title, subtitle, artwork, startCast, showNotice, castBurn, subDelay])
+  }, [stream, video, track, title, subtitle, artwork, startCast, showNotice, castBurn, subDelay, lookPreset, subScale])
   useEffect(() => {
     if (casting) video?.pause()
   }, [casting, video])
@@ -846,19 +950,25 @@ export function Player({
 
   // Hide the controls while playing, but never while paused: a paused player with no controls looks broken.
   const hideTimer = useRef<number | undefined>(undefined)
-  // A panel being read, as casting's needs: the bar it opened from stays.
-  const held = useRef(false)
+  // What keeps the bar up while playing: a panel being read (Cast's needs, a menu).
+  const held = useRef(new Set<string>())
   const nudge = useCallback(() => {
     setControlsVisible(true)
     window.clearTimeout(hideTimer.current)
     hideTimer.current = window.setTimeout(() => {
-      if (!video?.paused && !held.current) setControlsVisible(false)
+      if (!video?.paused && held.current.size === 0) setControlsVisible(false)
     }, 2600)
   }, [video])
-  const holdControls = useCallback((on: boolean) => {
-    held.current = on
-    if (!on) nudge()
-  }, [nudge])
+  const holdControls = useCallback(
+    (why: string, on: boolean) => {
+      if (on) held.current.add(why)
+      else held.current.delete(why)
+      if (!on) nudge()
+    },
+    [nudge],
+  )
+  const holdForCast = useCallback((on: boolean) => holdControls('cast', on), [holdControls])
+  const holdForMenu = useCallback((on: boolean) => holdControls('menu', on), [holdControls])
 
   const activeSkip = skips.find((r) => time >= r.start && time < r.end)
   const offered = autoSkipped.skipped
@@ -869,6 +979,161 @@ export function Player({
     video.currentTime = activeSkip.end
     noteSkip(activeSkip)
   }, [video, activeSkip, noteSkip])
+
+  const stepRate = useCallback(
+    (by: number) => {
+      const at = SPEEDS.indexOf(rate)
+      const next = SPEEDS[Math.min(SPEEDS.length - 1, Math.max(0, (at < 0 ? SPEEDS.indexOf(1) : at) + by))]
+      changeRate(next)
+      showNotice(`Speed ${next === 1 ? 'normal' : `${next}×`}`)
+    },
+    [rate, changeRate, showNotice],
+  )
+  // A frame of the usual 23.976 fps; stepping plays nothing, so the episode pauses first.
+  const stepFrame = useCallback(
+    (by: number) => {
+      if (!video) return
+      if (!video.paused) video.pause()
+      video.currentTime = Math.max(0, video.currentTime + by / 23.976)
+    },
+    [video],
+  )
+  const cycleSubtitles = useCallback(() => {
+    const tracks = subtitleTracks
+    if (tracks.length === 0) return
+    const at = tracks.findIndex((t) => t.index === track)
+    const next = at + 1 < tracks.length ? tracks[at + 1] : null
+    setTrack(next ? next.index : null)
+    showNotice(next ? `Subtitles: ${subtitleLabel(tracks, next)}` : 'Subtitles off')
+  }, [subtitleTracks, track, showNotice])
+  const [infoOpen, setInfoOpen] = useState(false)
+  const toggleInfo = useCallback(() => setInfoOpen((v) => !v), [])
+  // Rendered again when the shortcuts list changes a key, so the tooltips say the new one.
+  useKeymap()
+  const shownTrack = subtitleTracks.find((t) => t.index === track)
+  const subtitlesInfo = shownTrack
+    ? [
+        subtitleLabel(subtitleTracks, shownTrack),
+        shownTrack.pictures ? 'pictures (PGS)' : subLookLabel(lookPreset),
+        subDelay ? `${subDelay > 0 ? '+' : ''}${subDelay.toFixed(1)} s` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : 'Off'
+  const anime4kInfo = !upscale?.enabled
+    ? 'Off'
+    : {
+        off: 'Off',
+        starting: 'Starting',
+        on: `On · ${upscale.tier ?? 'full'} · mode ${upscale.mode ?? 'A'}`,
+        unsupported: 'Needs WebGPU, which this browser lacks',
+        failed: 'Stopped, the graphics device was lost',
+      }[upscaleState]
+  const holdFast = useCallback(
+    (on: boolean) => {
+      if (!video || fast.current === on) return
+      fast.current = on
+      video.playbackRate = on ? 2 : rate
+      if (on) showNotice('2× while held', 60_000)
+      else setNotice(null)
+    },
+    [video, rate, showNotice],
+  )
+
+  const [fullscreen, setFullscreen] = useState(false)
+  useEffect(() => {
+    const changed = () => setFullscreen(!!document.fullscreenElement)
+    document.addEventListener('fullscreenchange', changed)
+    return () => document.removeEventListener('fullscreenchange', changed)
+  }, [])
+  // Two fingers spread: the picture fills the screen, its edges cropped, as a phone's own player does.
+  const [fill, setFill] = useState(false)
+  const scrubFrom = useRef<number | null>(null)
+  const gestures = useTouchGestures(
+    {
+      hold: holdFast,
+      scrub: (seconds, done) => {
+        // No length yet (still loading, or a rebuilt session): nowhere to drag to.
+        if (!video || !(video.duration > 1)) return
+        scrubFrom.current ??= video.currentTime
+        const to = Math.min(Math.max(0, scrubFrom.current + seconds), (video.duration || 0) - 1)
+        if (done) {
+          if (seconds !== 0) video.currentTime = to
+          scrubFrom.current = null
+          return
+        }
+        showNotice(`${seconds < 0 ? '−' : '+'}${Math.abs(Math.round(seconds))} s · ${clockTime(to)}`, 1500)
+      },
+      pinch: (spread) => {
+        setFill(spread)
+        showNotice(spread ? 'Filling the screen' : 'Whole picture')
+      },
+      swipe: (down) => {
+        if (down) toggleFullscreen(shell.current, video)
+      },
+    },
+    // A sideways drag across the whole picture moves two minutes.
+    { fullscreen, secondsAcross: 120 },
+  )
+  const onSurfacePointerUp = (e: React.PointerEvent<HTMLElement>) => {
+    gestures.handlers.onPointerUp(e)
+    if (e.pointerType === 'touch' && gestures.used()) {
+      // The click a touch brings after it is the same gesture, done.
+      touchedAt.current = performance.now()
+      return
+    }
+    onSurfaceTouch(e)
+  }
+  const surface = {
+    onPointerDown: gestures.handlers.onPointerDown,
+    onPointerMove: gestures.handlers.onPointerMove,
+    onPointerCancel: gestures.handlers.onPointerCancel,
+    onPointerUp: onSurfacePointerUp,
+    onClick: onSurfaceClick,
+    // A held finger is 2×, not the browser's menu for the video.
+    onContextMenu: (e: React.MouseEvent) => gestures.touching() && e.preventDefault(),
+    // Vertical drags still scroll the page; in fullscreen there is none, and a drag down leaves it.
+    style: { touchAction: fullscreen ? 'none' : 'pan-y' },
+  } as const
+
+  // Outlives the menu, shut while playing to the part's end; tied to the marks, so a new episode starts clean.
+  const [marking, setMarking] = useState<(MarkFrom & { marks: unknown }) | null>(null)
+  const markFrom = marking?.marks === skipMarks ? marking : null
+  const setMarkFrom = useCallback(
+    (next: MarkFrom | null) => setMarking(next && { ...next, marks: skipMarks }),
+    [skipMarks],
+  )
+  const saveMark = useCallback(async () => {
+    if (!video || !markFrom || !skipMarks) return ''
+    const saved = await skipMarks.mark(markFrom.kind, markFrom.at, video.currentTime)
+    setMarking(null)
+    return markSaved(markFrom.kind, saved)
+  }, [video, markFrom, skipMarks])
+  const markingMenu = useMemo<Marking | undefined>(
+    () => skipMarks && { from: markFrom, setFrom: setMarkFrom, save: saveMark, forget: skipMarks.forget },
+    [skipMarks, markFrom, setMarkFrom, saveMark],
+  )
+  // [ in the first half is the opening's start, in the second the ending's; ] saves the part it began.
+  const markKey = useCallback(
+    (edge: 'start' | 'end') => {
+      if (!video || !Number.isFinite(video.duration)) return
+      if (edge === 'start') {
+        const kind = video.currentTime < video.duration / 2 ? 'op' : 'ed'
+        setMarkFrom({ kind, at: video.currentTime })
+        showNotice(`${partName(kind)} starts at ${clockTime(video.currentTime)} · ${keyHint('markEnd')} where it ends`, 4000)
+      } else if (!markFrom) {
+        showNotice(`${keyHint('markStart')} first, where the opening or ending starts`, 3000)
+      } else {
+        // Lining it up with the music can take a few seconds on a slow swarm.
+        showNotice('Saving…', 10_000)
+        saveMark().then(
+          (said) => showNotice(said, 5000),
+          (err: Error) => showNotice(`Couldn't save it: ${err.message}`, 5000),
+        )
+      }
+    },
+    [video, markFrom, setMarkFrom, saveMark, showNotice],
+  )
 
   useKeyboard({
     video,
@@ -884,6 +1149,12 @@ export function Player({
     cycleVoice: (stream?.audio?.length ?? 0) > 0 ? cycleVoice : undefined,
     next: hasNext ? goNext : undefined,
     previous: hasPrevious ? goPrevious : undefined,
+    stepRate,
+    stepFrame,
+    cycleSubtitles: subtitleTracks.length > 0 ? cycleSubtitles : undefined,
+    toggleInfo,
+    holdFast,
+    mark: skipMarks ? markKey : undefined,
   })
 
   // How long the picture has been stuck, so a slow swarm can say so rather than looking like a hang.
@@ -921,6 +1192,16 @@ export function Player({
     }
   }, [stream?.id, stalledLong, video])
 
+  const noticeText = notice === VOLUME_NOTICE ? (muted ? 'Muted' : `Volume ${Math.round(volume * 100)}%`) : (notice ?? '')
+  // Focus to Try again when the error shows, unless it would leave a box being typed in elsewhere.
+  const tryAgain = useRef<HTMLButtonElement>(null)
+  const failed = !!(error || lostError)
+  useEffect(() => {
+    const doc = shell.current?.ownerDocument
+    const at = doc?.activeElement
+    if (failed && (!at || at === doc.body || shell.current?.contains(at))) tryAgain.current?.focus()
+  }, [failed])
+
   const downloadInstead = async () => {
     const [animeId, episode] = (stream?.id ?? '').split('-').map(Number)
     if (!animeId || !episode) return
@@ -957,6 +1238,10 @@ export function Player({
   const body = (
     <div
       ref={shell}
+      // Focusable by a click, so keys kept to the player (see the shortcuts list) answer once it is chosen.
+      tabIndex={-1}
+      role="region"
+      aria-label="Video player"
       onMouseMove={nudge}
       onPointerDownCapture={(e) => {
         if (e.pointerType === 'touch') hiddenAtTouch.current = !controlsShown.current
@@ -967,7 +1252,7 @@ export function Player({
       className={cx(
         // Never clipped or isolated: clipping a composited video paints it black,
         // and a stacking context put the subtitle menu behind the header.
-        'group/player relative w-full bg-black select-none',
+        'group/player relative w-full bg-black outline-none select-none',
         // Filling the user-shaped floating window, or the 16:9 box leaves bands.
         pip.active ? 'h-full' : 'aspect-video',
         corners,
@@ -978,10 +1263,10 @@ export function Player({
       {upscale?.enabled && (
         <canvas
           ref={setCanvas}
-          onClick={onSurfaceClick}
-          onPointerUp={onSurfaceTouch}
+          {...surface}
           className={cx(
-            'absolute inset-0 size-full object-contain',
+            'absolute inset-0 size-full',
+            fill ? 'object-cover' : 'object-contain',
             corners,
             showUpscaled ? 'opacity-100' : 'pointer-events-none opacity-0',
           )}
@@ -993,9 +1278,8 @@ export function Player({
         ref={setVideo}
         playsInline
         autoPlay={autoPlay}
-        className={cx('size-full', corners)}
-        onClick={onSurfaceClick}
-        onPointerUp={onSurfaceTouch}
+        className={cx('size-full', fill && 'object-cover', corners)}
+        {...surface}
         onPlay={() => {
           setPlaying(true)
           if (getSleep().kind === 'fired') setSleep({ kind: 'off' })
@@ -1028,10 +1312,23 @@ export function Player({
       />
 
       {notice && (
-        <div className="pointer-events-none absolute top-6 left-1/2 -translate-x-1/2 rounded-full bg-base-950/75 px-3 py-1 text-sm font-medium text-white tabular-nums backdrop-blur-sm">
-          {notice !== VOLUME_NOTICE ? notice : muted ? 'Muted' : `Volume ${Math.round(volume * 100)}%`}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute top-6 left-1/2 -translate-x-1/2 rounded-full bg-base-950/75 px-3 py-1 text-sm font-medium text-white tabular-nums backdrop-blur-sm"
+        >
+          {noticeText}
         </div>
       )}
+      {/* Said by a screen reader as they change; mounted throughout, or the first change goes unheard. */}
+      <p role="status" className="sr-only">
+        {noticeText}
+      </p>
+      <p role="status" className="sr-only">
+        {activeSkip && !casting ? `${skipLabel(activeSkip.kind)} · ${keyHint('skip')} skips it` : ''}
+      </p>
+      <p role="status" className="sr-only">
+        {stalledLong ? 'Buffering' : ''}
+      </p>
 
       {(waiting || !stream) && !error && !lostError && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center">
@@ -1081,13 +1378,14 @@ export function Player({
       )}
 
       {(error || lostError) && (
-        <div className={cx('absolute inset-0 grid place-items-center bg-base-950/80 p-6 text-center', corners)}>
+        <div role="alert" className={cx('absolute inset-0 grid place-items-center bg-base-950/80 p-6 text-center', corners)}>
           <div>
             <p className="text-sm text-base-200">{error ?? lostError}</p>
             <div className="mt-3 flex flex-wrap justify-center gap-2">
               {/* The same release again only fails again when its conversion is what failed. */}
               {!(error && final) && (
                 <button
+                  ref={tryAgain}
                   onClick={() => {
                     if (error) {
                       // A fresh source from where it stopped, playing once it can; the hook clears the error.
@@ -1194,23 +1492,23 @@ export function Player({
 
         {/* Relative: on a phone a wide panel (Cast's) opens across the bar, not off its button's edge. */}
         <div className="relative mt-2 flex items-center gap-2 text-white">
-          <IconButton label={playing ? 'Pause' : 'Play'} hint="K" onClick={togglePlay}>
+          <IconButton label={playing ? 'Pause' : 'Play'} hint={keyHint('play')} onClick={togglePlay}>
             {playing ? <PauseIcon /> : <PlayIcon />}
           </IconButton>
 
           {/* Desktop only: on a phone double tap seeks and the hardware buttons set volume. */}
           <span className={cx('contents', !pip.active && 'max-sm:hidden')}>
-          <IconButton label="Back 10 seconds" hint="J" onClick={() => seekBy(-10)}>
+          <IconButton label="Back 10 seconds" hint={keyHint('back10')} onClick={() => seekBy(-10)}>
             <SeekIcon back />
           </IconButton>
-          <IconButton label="Forward 10 seconds" hint="L" onClick={() => seekBy(10)}>
+          <IconButton label="Forward 10 seconds" hint={keyHint('forward10')} onClick={() => seekBy(10)}>
             <SeekIcon />
           </IconButton>
           </span>
 
           {onPrevious && (
             <span className={cx('contents', !pip.active && 'max-sm:hidden')}>
-              <IconButton label="Previous episode" hint="Shift+P" onClick={onPrevious}>
+              <IconButton label="Previous episode" hint={keyHint('previous')} onClick={onPrevious}>
                 <span className="contents [&>svg]:rotate-180">
                   <NextIcon />
                 </span>
@@ -1218,7 +1516,7 @@ export function Player({
             </span>
           )}
           {onNext && (
-            <IconButton label="Next episode" hint="N" onClick={() => onNext('button')}>
+            <IconButton label="Next episode" hint={keyHint('next')} onClick={() => onNext('button')}>
               <NextIcon />
             </IconButton>
           )}
@@ -1239,6 +1537,8 @@ export function Player({
           <span className="ml-1 text-xs whitespace-nowrap tabular-nums text-white/80">
             {clockTime(time)}
             <span className="max-sm:hidden"> / {clockTime(duration)}</span>
+            {/* The part playing, which the bar shows only as amber. */}
+            {activeSkip && <span className="text-filler max-sm:hidden"> · {skipLabel(activeSkip.kind)}</span>}
           </span>
 
           <div className="ml-auto flex items-center gap-1">
@@ -1248,9 +1548,10 @@ export function Player({
               {soundMenu && <SoundPicker value={soundMenu.value} onChange={soundMenu.onChange} />}
             </span>
 
-            {(stream?.subtitles?.length ?? 0) > 0 && (
+            {/* Even with no track of its own: a file from this device, or Jimaku's, can be loaded. */}
+            {stream && (
               <SubtitlePicker
-                tracks={stream!.subtitles}
+                tracks={subtitleTracks}
                 value={track}
                 onChange={setTrack}
                 scale={subScale}
@@ -1259,6 +1560,17 @@ export function Player({
                 onDelay={setSubDelay}
                 keptDelay={keptDelay}
                 onKeepDelay={onKeepDelay}
+                look={onSubLook && { value: lookPreset, onChange: onSubLook }}
+                onLoadFile={(file) => void loadOwnFile(file)}
+                jimaku={
+                  jimakuSet
+                    ? {
+                        streamId: stream.id,
+                        onPick: (f) =>
+                          addTrack({ index: JIMAKU_TRACK - f.index, title: `Jimaku · ${f.name}`, url: f.url, whole: true }),
+                      }
+                    : undefined
+                }
               />
             )}
 
@@ -1278,10 +1590,11 @@ export function Player({
                   sleep={sleep}
                   skips={skips}
                   video={video}
-                  marks={skipMarks}
+                  marking={markingMenu}
                   audio={audioMenu}
                   sound={soundMenu}
-                  onOpen={holdControls}
+                  onOpen={holdForMenu}
+                  onInfo={toggleInfo}
                 />
                 {!castImpossible() && (
                   <CastButton
@@ -1291,17 +1604,23 @@ export function Player({
                     sdkState={castSdk}
                     onCast={() => void castTo()}
                     onStop={stopCast}
-                    onOpen={holdControls}
+                    onOpen={holdForCast}
                   />
                 )}
-                {pip.supported && (
+                {pip.supported ? (
                   <IconButton label="Picture in picture" onClick={() => void pip.toggle()}>
                     <PiPIcon />
                   </IconButton>
+                ) : (
+                  videoPip.supported && (
+                    <IconButton label="Picture in picture" onClick={() => void videoPip.toggle()}>
+                      <PiPIcon />
+                    </IconButton>
+                  )
                 )}
                 <IconButton
                   label="Fullscreen"
-                  hint="F"
+                  hint={keyHint('fullscreen')}
                   onClick={() => {
                     toggleFullscreen(shell.current, video)
                   }}
@@ -1340,6 +1659,18 @@ export function Player({
           </p>
         )}
       </div>
+
+      {infoOpen && !pip.active && (
+        <PlaybackInfo
+          stream={stream}
+          video={video}
+          hls={hls}
+          audioTrack={audioTrack}
+          subtitles={subtitlesInfo}
+          anime4k={anime4kInfo}
+          onClose={() => setInfoOpen(false)}
+        />
+      )}
 
       {casting && (
         <CastingPanel
@@ -1413,7 +1744,10 @@ function Scrubber({
       aria-valuemin={0}
       aria-valuemax={Math.round(duration)}
       aria-valuenow={Math.round(shown)}
-      aria-valuetext={`${clockTime(shown)} of ${clockTime(duration)}`}
+      aria-valuetext={[
+        `${clockTime(shown)} of ${clockTime(duration)}`,
+        ...skips.filter((r) => shown >= r.start && shown < r.end).map((r) => skipLabel(r.kind)),
+      ].join(', ')}
       onKeyDown={(e) => {
         if (duration <= 0) return
         const to =
@@ -1445,7 +1779,7 @@ function Scrubber({
         if (!dragging) setAt(null)
       }}
     >
-      <div className="absolute top-1/2 h-1 w-full -translate-y-1/2 overflow-hidden rounded-full bg-white/20">
+      <div data-scrub-track className="absolute top-1/2 h-1 w-full -translate-y-1/2 overflow-hidden rounded-full bg-white/20">
         {/* What is loaded and will play without waiting, lighter than the rest of the bar. */}
         {duration > 0 &&
           loaded.map(([from, to]) => (
@@ -1456,7 +1790,7 @@ function Scrubber({
               style={{ left: `${(from / duration) * 100}%`, width: `${((to - from) / duration) * 100}%` }}
             />
           ))}
-        <div className="relative h-full bg-accent-500" style={{ width: `${percent}%` }} />
+        <div data-played className="relative h-full bg-accent-500" style={{ width: `${percent}%` }} />
       </div>
 
       {/* Openings and endings in amber, so what is about to be skipped shows before the button. */}
@@ -1533,8 +1867,9 @@ function ScrubPreview({
   const inSkip = skips.find((r) => time >= r.start && time <= r.end)
 
   let tile: React.CSSProperties | undefined
-  if (ready && sheet) {
-    const index = Math.min(sheet.count - 1, Math.max(0, Math.floor(time / sheet.interval)))
+  const index = ready && sheet ? Math.min(sheet.count - 1, Math.max(0, Math.floor(time / sheet.interval))) : 0
+  // While the file downloads, only the parts on disk have a picture; the rest show the time alone.
+  if (ready && sheet && (!sheet.partial || sheet.have?.[index] === '1')) {
     const column = index % sheet.columns
     const row = Math.floor(index / sheet.columns)
     tile = {
@@ -1576,7 +1911,7 @@ function Volume({
 }) {
   return (
     <div className="group/vol flex items-center">
-      <IconButton label={muted ? 'Unmute' : 'Mute'} hint="M" onClick={onToggle}>
+      <IconButton label={muted ? 'Unmute' : 'Mute'} hint={keyHint('mute')} onClick={onToggle}>
         {muted || volume === 0 ? <MutedIcon /> : <VolumeIcon />}
       </IconButton>
       <input
@@ -1595,6 +1930,14 @@ function Volume({
 }
 
 /** A plain menu, as the OS paints a native select white over the dark player. */
+// Language first; the release's track name only when it tells two apart (Erai-raws calls all "CR").
+function subtitleLabel(tracks: StreamInfo['subtitles'], t: StreamInfo['subtitles'][number]): string {
+  const language = languageName(t.language)
+  if (!language) return t.title || `Track ${t.index + 1}`
+  if (t.title && tracks.filter((o) => languageName(o.language) === language).length > 1) return `${language} · ${t.title}`
+  return language
+}
+
 function SubtitlePicker({
   tracks,
   value,
@@ -1605,6 +1948,9 @@ function SubtitlePicker({
   onDelay,
   keptDelay,
   onKeepDelay,
+  look,
+  onLoadFile,
+  jimaku,
 }: {
   tracks: StreamInfo['subtitles']
   value: number | null
@@ -1617,30 +1963,36 @@ function SubtitlePicker({
   keptDelay?: number
   /** Keeps the delay for the rest of the show, from the same group; absent when nothing can say the group. */
   onKeepDelay?: (delay: number) => void
+  look?: { value: SubLook; onChange: (look: SubLook) => void }
+  onLoadFile: (file: File) => void
+  /** Jimaku's files for this episode, offered once a key is set. */
+  jimaku?: { streamId: string; onPick: (file: JimakuFile) => void }
 }) {
-  const [open, setOpen] = useState(false)
-  const close = useCallback(() => setOpen(false), [])
+  const { open, close, toggle, trigger, menu } = useMenuButton()
   const ref = useDismiss<HTMLDivElement>(close, open)
   const room = useRoomAbove(ref, open)
+  const picker = useRef<HTMLInputElement>(null)
+  const jimakuFiles = useQuery({
+    queryKey: ['jimaku-files', jimaku?.streamId],
+    queryFn: () => api.get<{ files: JimakuFile[] }>(`/api/stream/${jimaku!.streamId}/jimaku`),
+    enabled: open && !!jimaku,
+    staleTime: 10 * 60_000,
+    retry: false,
+  })
 
-  // Language first; the release's track name only when it tells two apart (Erai-raws calls all "CR").
-  const label = (t: StreamInfo['subtitles'][number]) => {
-    const language = languageName(t.language)
-    const sameLanguage = tracks.filter((o) => languageName(o.language) === language)
-    if (!language) return t.title || `Track ${t.index + 1}`
-    if (sameLanguage.length > 1 && t.title) return `${language} · ${t.title}`
-    return language
-  }
+  const label = (t: StreamInfo['subtitles'][number]) => subtitleLabel(tracks, t)
   const active = tracks.find((t) => t.index === value)
 
   return (
     <div className="relative" ref={ref}>
       <button
+        ref={trigger}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         title="Subtitles"
+        aria-label={`Subtitles: ${active ? label(active) : 'off'}`}
         className="flex h-9 items-center gap-1.5 rounded-md px-2.5 text-xs text-white/90 transition-colors hover:bg-white/15"
       >
         <CaptionIcon />
@@ -1650,7 +2002,10 @@ function SubtitlePicker({
 
       {open && (
         <div
+          ref={menu}
           role="menu"
+          aria-label="Subtitles"
+          onKeyDown={walkMenu}
           style={{ maxHeight: room }}
           className="absolute right-0 bottom-full z-50 mb-2 w-52 origin-bottom-right animate-rise overflow-y-auto rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60 scrollbar-thin"
         >
@@ -1668,7 +2023,47 @@ function SubtitlePicker({
                 {label(t)}
               </MenuRow>
             ))}
+            {jimaku && (
+              <>
+                <p className="px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wider text-base-500 uppercase">Jimaku · Japanese</p>
+                {jimakuFiles.isPending ? (
+                  <p className="px-3 py-1.5 text-xs text-base-400">Looking…</p>
+                ) : jimakuFiles.isError ? (
+                  <p className="px-3 py-1.5 text-xs text-recap">{(jimakuFiles.error as Error).message}</p>
+                ) : jimakuFiles.data.files.length === 0 ? (
+                  <p className="px-3 py-1.5 text-xs text-base-400">None for this episode</p>
+                ) : (
+                  jimakuFiles.data.files.map((f) => (
+                    <MenuRow key={f.index} selected={JIMAKU_TRACK - f.index === value} onClick={() => { jimaku.onPick(f); close() }}>
+                      <span className="break-all">{f.name}</span>
+                    </MenuRow>
+                  ))
+                )}
+              </>
+            )}
           </div>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => picker.current?.click()}
+            className="w-full border-t border-base-700 px-3 py-1.5 text-left text-sm text-base-200 hover:bg-base-750 pointer-coarse:py-3"
+          >
+            Load a subtitle file…
+          </button>
+          <input
+            ref={picker}
+            type="file"
+            accept=".ass,.ssa,.srt,.vtt"
+            hidden
+            onChange={(e) => {
+              const file = e.currentTarget.files?.[0]
+              e.currentTarget.value = ''
+              if (file) {
+                onLoadFile(file)
+                close()
+              }
+            }}
+          />
           {value !== null && (
             <div className="mt-1 border-t border-base-700 pt-1">
               <Stepper
@@ -1698,6 +2093,17 @@ function SubtitlePicker({
               )}
               {onKeepDelay && delay !== 0 && delay === keptDelay && (
                 <p className="px-3 py-1.5 text-xs text-base-500">Kept for this show and group</p>
+              )}
+              {/* Pictures are drawn as made; only text can be made over. */}
+              {look && !active?.pictures && (
+                <>
+                  <p className="px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wider text-base-500 uppercase">Look</p>
+                  {SUB_LOOKS.map((l) => (
+                    <MenuRow key={l.value} selected={look.value === l.value} onClick={() => look.onChange(l.value)}>
+                      {l.label}
+                    </MenuRow>
+                  ))}
+                </>
               )}
             </div>
           )}
@@ -1754,18 +2160,19 @@ function AudioPicker({
   value: number
   onChange: (index: number) => void
 }) {
-  const [open, setOpen] = useState(false)
-  const close = useCallback(() => setOpen(false), [])
+  const { open, close, toggle, trigger, menu } = useMenuButton()
   const ref = useDismiss<HTMLDivElement>(close, open)
 
   return (
     <div className="relative" ref={ref}>
       <button
+        ref={trigger}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         title="Audio"
+        aria-label={`Audio track: ${audioLabel(tracks, value)}`}
         className="flex h-9 items-center gap-1.5 rounded-md px-2.5 text-xs text-white/90 transition-colors hover:bg-white/15"
       >
         <SpeakerIcon />
@@ -1774,7 +2181,10 @@ function AudioPicker({
 
       {open && (
         <div
+          ref={menu}
           role="menu"
+          aria-label="Audio track"
+          onKeyDown={walkMenu}
           className="absolute right-0 bottom-full z-50 mb-2 max-h-64 w-44 origin-bottom-right animate-rise overflow-y-auto rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60 scrollbar-thin"
         >
           {tracks.map((_, i) => (
@@ -1819,8 +2229,7 @@ function soundSummary(s: SoundOptions): string {
 }
 
 function SoundPicker({ value, onChange }: { value: SoundOptions; onChange: (patch: Partial<SoundOptions>) => void }) {
-  const [open, setOpen] = useState(false)
-  const close = useCallback(() => setOpen(false), [])
+  const { open, close, toggle, trigger, menu } = useMenuButton()
   const ref = useDismiss<HTMLDivElement>(close, open)
   const room = useRoomAbove(ref, open)
   const summary = soundSummary(value)
@@ -1828,10 +2237,11 @@ function SoundPicker({ value, onChange }: { value: SoundOptions; onChange: (patc
   return (
     <div className="relative" ref={ref}>
       <button
+        ref={trigger}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         title="Sound: voice boost (V), night mode, headphones, mono, volume boost"
         aria-label={`Sound: ${summary}`}
         className={cx(
@@ -1845,7 +2255,10 @@ function SoundPicker({ value, onChange }: { value: SoundOptions; onChange: (patc
 
       {open && (
         <div
+          ref={menu}
           role="menu"
+          aria-label="Sound"
+          onKeyDown={walkMenu}
           style={{ maxHeight: room }}
           className="absolute right-0 bottom-full z-50 mb-2 w-52 origin-bottom-right animate-rise overflow-y-auto rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60 scrollbar-thin"
         >
@@ -1903,7 +2316,7 @@ const SKIP_SOURCES: Record<string, string> = {
 
 const SLEEP_MINUTES = [15, 30, 45, 60]
 
-type MenuView = 'main' | 'speed' | 'sleep' | 'skips' | 'audio' | 'sound'
+type MenuView = 'main' | 'speed' | 'sleep' | 'skips' | 'audio' | 'sound' | 'quality'
 
 // The player's settings listed with their values, each opening its own options in place.
 function PlayerMenu({
@@ -1912,27 +2325,36 @@ function PlayerMenu({
   sleep,
   skips,
   video,
-  marks,
+  marking,
   audio,
   sound,
   onOpen,
+  onInfo,
 }: {
   rate: number
   onRate: (rate: number) => void
   sleep: Sleep
   skips: SkipRange[]
   video: HTMLVideoElement | null
-  marks?: PlayerProps['skipMarks']
+  /** Absent where marks can't be kept. */
+  marking?: Marking
   audio?: { tracks: AudioTrack[]; value: number; onChange: (index: number) => void }
   sound?: { value: SoundOptions; onChange: (patch: Partial<SoundOptions>) => void }
   onOpen: (open: boolean) => void
+  onInfo: () => void
 }) {
-  const [open, setOpen] = useState(false)
+  const { open, close: shut, toggle, trigger, menu } = useMenuButton()
   const [view, setView] = useState<MenuView>('main')
+  const net = useNetwork()
   const close = useCallback(() => {
-    setOpen(false)
+    shut()
     setView('main')
-  }, [])
+  }, [shut])
+  // A list swapped for another takes focus with it, or a keyboard is left on nothing.
+  useEffect(() => {
+    const doc = menu.current?.ownerDocument
+    if (open && doc && (doc.activeElement === doc.body || !doc.activeElement)) menuItems(menu.current)[0]?.focus()
+  }, [open, view, menu])
   const ref = useDismiss<HTMLDivElement>(close, open)
   const room = useRoomAbove(ref, open)
   // A phone's player is too short for the list above its bar: there it is a sheet along the screen's bottom.
@@ -1941,10 +2363,9 @@ function PlayerMenu({
     onOpen(open)
     return () => onOpen(false)
   }, [open, onOpen])
-  // Outlives the menu, shut while playing to the part's end; tied to marks, so a new episode starts clean.
-  const [marking, setMarking] = useState<{ kind: 'op' | 'ed'; at: number; marks: unknown } | null>(null)
-  const from = marking?.marks === marks ? marking : null
-  const setFrom = (next: { kind: 'op' | 'ed'; at: number } | null) => setMarking(next && { ...next, marks })
+  const from = marking?.from ?? null
+  // A phone has no keys to name.
+  const coarse = useMediaQuery('(pointer: coarse)')
   // Rounded: the clock can be a few seconds behind.
   const now = useNow(15_000)
   const left = sleep.kind === 'at' ? Math.max(1, Math.round((sleep.at - now) / 60_000)) : 0
@@ -1964,12 +2385,13 @@ function PlayerMenu({
   return (
     <div className="relative" ref={ref}>
       <button
+        ref={trigger}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={label}
         title={label}
-        onClick={() => (open ? close() : setOpen(true))}
+        onClick={(e) => (open ? close() : toggle(e))}
         className={cx(
           'tap flex h-9 items-center gap-1 rounded-md px-2 text-xs tabular-nums transition-colors hover:bg-white/15',
           busy ? 'text-accent-300' : 'text-white/90',
@@ -1982,7 +2404,10 @@ function PlayerMenu({
       {open && !wide && <div aria-hidden className="fixed inset-0 z-50 bg-black/50" onClick={close} />}
       {open && (
         <div
+          ref={menu}
           role="menu"
+          aria-label="Player settings"
+          onKeyDown={walkMenu}
           style={{ maxHeight: wide ? room : '70vh' }}
           className={cx(
             'z-50 animate-rise overflow-y-auto border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60 scrollbar-thin',
@@ -1999,14 +2424,16 @@ function PlayerMenu({
               )}
               {!wide && sound && <MenuItem label="Sound" value={soundSummary(sound.value)} onClick={() => setView('sound')} />}
               <MenuItem label="Speed" value={rate === 1 ? 'Normal' : `${rate}×`} onClick={() => setView('speed')} />
+              <MenuItem label="Quality" value={QUALITIES.find((q) => q.value === net.quality)?.label ?? 'Auto'} onClick={() => setView('quality')} />
               <MenuItem label="Sleep timer" value={sleepValue} onClick={() => setView('sleep')} />
-              {marks && (
+              {marking && (
                 <MenuItem
                   label="Skip times"
                   value={from ? 'Marking' : skips.length ? `${skips.length} known` : 'None known'}
                   onClick={() => setView('skips')}
                 />
               )}
+              <MenuItem label="Playback info" value={coarse ? '' : keyHint('info')} onClick={() => (onInfo(), close())} />
               {/* Keys are for a keyboard; a phone has none. */}
               <div className="pointer-coarse:hidden">
                 <MenuItem label="Keyboard shortcuts" value="?" onClick={() => (window.dispatchEvent(new Event(SHOW_SHORTCUTS)), close())} />
@@ -2022,6 +2449,20 @@ function PlayerMenu({
                   {s === 1 ? 'Normal' : `${s}×`}
                 </MenuRow>
               ))}
+            </>
+          )}
+
+          {view === 'quality' && (
+            <>
+              <MenuBack label="Quality" onClick={() => setView('main')} />
+              {QUALITIES.map((q) => (
+                <MenuRow key={q.value} selected={q.value === net.quality} onClick={() => (setDeviceQuality(q.value), close())}>
+                  {q.label}
+                </MenuRow>
+              ))}
+              <p className="px-3 py-1.5 text-xs text-base-400">
+                This device only. Auto changes nothing at home; away, it lowers a connection that can't keep up.
+              </p>
             </>
           )}
 
@@ -2061,14 +2502,161 @@ function PlayerMenu({
             </>
           )}
 
-          {view === 'skips' && marks && (
+          {view === 'skips' && marking && (
             <>
               <MenuBack label="Skip times" onClick={() => setView('main')} />
-              <SkipTimesPanel skips={skips} video={video} marks={marks} from={from} setFrom={setFrom} />
+              <SkipTimesPanel skips={skips} video={video} marking={marking} />
             </>
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+const codecName = (codec?: string) => (codec === 'h264' ? 'H.264' : codec?.toUpperCase())
+
+// What the player and the server are doing with this episode, for a curious viewer or a bug report.
+function PlaybackInfo({
+  stream,
+  video,
+  hls,
+  audioTrack,
+  subtitles,
+  anime4k,
+  onClose,
+}: {
+  stream?: StreamInfo
+  video: HTMLVideoElement | null
+  hls: { current: { bandwidthEstimate: number } | null }
+  audioTrack: number
+  subtitles: string
+  anime4k: string
+  onClose: () => void
+}) {
+  // Each second for what the browser reports, every few for the server's side.
+  useNow(1000)
+  const unit = useSpeedUnit()
+  const panel = useRef<HTMLDivElement>(null)
+  const [health, setHealth] = useState<StreamHealth | null>(null)
+  const [copied, setCopied] = useState<string | null>(null)
+  const id = stream?.id
+  useEffect(() => {
+    if (!id) return
+    let stop = false
+    const poll = () =>
+      document.visibilityState === 'visible' &&
+      api
+        .get<StreamHealth>(`/api/stream/${id}/health`)
+        .then((h) => !stop && setHealth(h))
+        .catch(() => {})
+    void poll()
+    const timer = window.setInterval(() => void poll(), 3000)
+    return () => {
+      stop = true
+      window.clearInterval(timer)
+    }
+  }, [id])
+
+  const plan = stream?.plan
+  const v = stream?.video
+  const audio = stream?.audio?.[audioTrack]
+  const quality = video?.getVideoPlaybackQuality?.()
+  let ahead = 0
+  if (video) {
+    for (let i = 0; i < video.buffered.length; i++) {
+      if (video.buffered.start(i) <= video.currentTime + 0.5 && video.currentTime <= video.buffered.end(i)) {
+        ahead = video.buffered.end(i) - video.currentTime
+      }
+    }
+  }
+  const rows: [string, string][] = []
+  if (plan) {
+    const method = plan.videoCopy ? (plan.audioCopy ? 'Copied as it is' : 'Sound converted only') : 'Converting'
+    // The server's reason reads "re-encoding video hevc 10-bit and audio ac3".
+    const why = plan.reason?.replace(/^re-encoding /, '')
+    const detail = plan.videoCopy && plan.audioCopy ? (plan.forDevice ? 'this device decodes it' : '') : why
+    rows.push(['Method', detail ? `${method} · ${detail}` : method])
+    if (!plan.videoCopy && plan.videoCodec) {
+      rows.push(['Encoder', `${ENCODERS[plan.videoCodec] ?? plan.videoCodec} (${plan.videoCodec})`])
+    }
+  }
+  if (v) {
+    const range = v.dvProfile ? `Dolby Vision ${v.dvProfile}` : v.transfer === 'smpte2084' ? 'HDR10' : v.transfer === 'arib-std-b67' ? 'HLG' : ''
+    const picture = [
+      codecName(v.codec), v.profile, v.width && v.height ? `${v.width}×${v.height}` : '', v.bitDepth ? `${v.bitDepth}-bit` : '', range,
+      ['tt', 'bb', 'tb', 'bt'].includes(v.fieldOrder ?? '') ? 'interlaced' : '',
+    ]
+    const sound = audio ? [codecName(audio.codec), audio.channels ? `${audio.channels} ch` : ''] : []
+    rows.push(['Source', [...picture, ...sound].filter(Boolean).join(' · ')])
+  }
+  if (plan) {
+    const sentVideo = plan.videoCopy ? codecName(v?.codec) : 'H.264'
+    const layout = plan.channels === 2 ? 'stereo' : plan.channels ? `${plan.channels} ch` : ''
+    const sentAudio = plan.audioCopy ? codecName(audio?.codec) : `${codecName(plan.audioCodec ?? 'aac')} ${layout}`.trim()
+    rows.push(['Sent', [sentVideo, sentAudio].filter(Boolean).join(' · ')])
+    const changes = [
+      plan.toneMap && 'HDR tone-mapped', plan.deinterlace && 'deinterlaced', plan.soften && 'flashing softened',
+      plan.maxRate && `capped at ${plan.height}p, ${(plan.maxRate / 1e6).toFixed(1)} Mb/s`,
+    ].filter(Boolean)
+    if (changes.length) rows.push(['Picture', changes.join(' · ')])
+  }
+  if (health?.speed) rows.push(['Converter', `${health.speed.toFixed(1)}× real time`])
+  rows.push(['Buffered', `${Math.max(0, Math.round(ahead))} s ahead`])
+  if (quality) rows.push(['Dropped frames', `${quality.droppedVideoFrames} of ${quality.totalVideoFrames}`])
+  const estimate = hls.current?.bandwidthEstimate
+  if (estimate) rows.push(['Network', `${speed(estimate / 1e6, unit)} estimated`])
+  if (health) {
+    rows.push([
+      'Download',
+      health.complete
+        ? 'Whole file on disk'
+        : `${Math.round(health.percent ?? 0)}% on disk · ${speed(health.mbps, unit)} from ${health.peers} peer${health.peers === 1 ? '' : 's'}`,
+    ])
+  }
+  rows.push(['Anime4K', anime4k])
+  rows.push(['Subtitles', subtitles])
+
+  const copy = async () => {
+    const text = rows.map(([name, details]) => `${name}: ${details}`).join('\n')
+    // Inside the panel: in fullscreen only the player is on screen, and the fallback needs a visible field.
+    setCopied((await copyText(text, panel.current ?? undefined)) ? 'Copied' : "Couldn't copy")
+    window.setTimeout(() => setCopied(null), 2000)
+  }
+
+  return (
+    <div
+      ref={panel}
+      role="region"
+      aria-label="Playback info"
+      className="pointer-events-auto absolute top-20 left-4 z-30 max-h-[calc(100%-6rem)] w-80 max-w-[calc(100%-2rem)] overflow-y-auto rounded-lg bg-base-950/90 p-3 text-xs text-base-200 ring-1 ring-white/15 backdrop-blur-sm"
+    >
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-sm font-medium text-white">Playback info</p>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => void copy()}
+            className="rounded-md px-2 py-1 text-base-300 hover:bg-white/15 hover:text-white pointer-coarse:min-h-11"
+          >
+            {copied ?? 'Copy details'}
+          </button>
+          <button
+            onClick={onClose}
+            aria-label="Close playback info"
+            className="grid size-7 place-items-center rounded-md text-base-300 hover:bg-white/15 hover:text-white pointer-coarse:size-11"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+      <dl className="space-y-1">
+        {rows.map(([name, details]) => (
+          <div key={name} className="flex gap-2">
+            <dt className="w-28 shrink-0 text-base-400">{name}</dt>
+            <dd className="min-w-0 break-words tabular-nums">{details}</dd>
+          </div>
+        ))}
+      </dl>
     </div>
   )
 }
@@ -2101,35 +2689,42 @@ function MenuBack({ label, onClick }: { label: string; onClick: () => void }) {
   )
 }
 
+type MarkFrom = { kind: 'op' | 'ed'; at: number }
+
+/** A mark begun in the menu or with its key, finished in either. */
+interface Marking {
+  from: MarkFrom | null
+  setFrom: (from: MarkFrom | null) => void
+  /** Saves from where it began to now, and says what was kept. */
+  save: () => Promise<string>
+  forget: () => void
+}
+
+const partName = (kind: string) => (kind === 'op' ? 'Opening' : 'Ending')
+
+function markSaved(kind: string, saved: SkipMarkResult): string {
+  const lined = { chapters: ", lined up with the file's chapters", sound: ', lined up with the music', '': '' }
+  return `${partName(kind)} saved · ${clockTime(saved.start)}–${clockTime(saved.end)}${lined[saved.snapped] ?? ''}`
+}
+
 // The episode's skip times and where each came from, and marking an opening or ending at the current moment.
-function SkipTimesPanel({
-  skips,
-  video,
-  marks,
-  from,
-  setFrom,
-}: {
-  skips: SkipRange[]
-  video: HTMLVideoElement | null
-  marks: NonNullable<PlayerProps['skipMarks']>
-  from: { kind: 'op' | 'ed'; at: number } | null
-  setFrom: (from: { kind: 'op' | 'ed'; at: number } | null) => void
-}) {
-  const [error, setError] = useState<string | null>(null)
+function SkipTimesPanel({ skips, video, marking }: { skips: SkipRange[]; video: HTMLVideoElement | null; marking: Marking }) {
+  const [said, setSaid] = useState<{ text: string; error?: boolean } | null>(null)
   const ownMarks = skips.some((r) => r.source === 'marked')
+  const { from, setFrom } = marking
   const markStart = (kind: 'op' | 'ed') => {
     if (!video) return
     setFrom({ kind, at: video.currentTime })
-    setError(null)
+    setSaid(null)
   }
   const markEnd = () => {
-    if (!video || !from) return
-    marks.mark(from.kind, from.at, video.currentTime).then(
-      () => setFrom(null),
-      (e: Error) => setError(e.message),
+    setSaid({ text: 'Saving…' })
+    return marking.save().then(
+      (text) => setSaid(text ? { text } : null),
+      (e: Error) => setSaid({ text: e.message, error: true }),
     )
   }
-  const name = (kind: string) => (kind === 'op' ? 'opening' : 'ending')
+  const name = (kind: string) => partName(kind).toLowerCase()
 
   return (
     <>
@@ -2164,13 +2759,16 @@ function SkipTimesPanel({
               Mark where the ending starts
             </MenuRow>
             {ownMarks && (
-              <MenuRow selected={false} onClick={marks.forget}>
+              <MenuRow selected={false} onClick={marking.forget}>
                 Forget my marks
               </MenuRow>
             )}
           </>
         )}
-        {error && <p className="px-3 py-1 text-xs text-recap">{error}</p>}
+        {said && <p className={cx('px-3 py-1 text-xs', said.error ? 'text-recap' : 'text-base-300')}>{said.text}</p>}
+        <p className="px-3 py-1 text-xs text-base-500 pointer-coarse:hidden">
+          Or press {keyHint('markStart')} and {keyHint('markEnd')} as it plays. Marks move onto the music's edges.
+        </p>
       </div>
     </>
   )
@@ -2230,7 +2828,8 @@ function CaptionIcon() {
   )
 }
 
-const REPEATING_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'j', 'l', 'z', 'x'])
+// Held, a toggle would flip 30 times a second and Next skip episodes; seeks, volume and delay repeat.
+const REPEATING = new Set<KeyAction>(['back5', 'forward5', 'back10', 'volumeUp', 'volumeDown', 'subEarlier', 'subLater'])
 
 function useKeyboard({
   video,
@@ -2245,6 +2844,12 @@ function useKeyboard({
   cycleVoice,
   next,
   previous,
+  stepRate,
+  stepFrame,
+  cycleSubtitles,
+  toggleInfo,
+  holdFast,
+  mark,
 }: {
   video: HTMLVideoElement | null
   togglePlay: () => void
@@ -2254,16 +2859,24 @@ function useKeyboard({
   /** The picture-in-picture window, whose keys never reach this one. */
   extra: Window | null
   showVolume: () => void
-  /** z and x, as in mpv; absent while subtitles are off. */
+  /** Absent while subtitles are off. */
   shiftSubDelay?: (by: number) => void
-  /** s: skips the opening or ending on screen; absent when there is none. */
+  /** Skips the opening or ending on screen; absent when there is none. */
   skip?: () => void
-  /** v: off, medium, high, round again; absent before the stream is open. */
+  /** Off, medium, high, round again; absent before the stream is open. */
   cycleVoice?: () => void
-  /** n: the Next episode button's, absent while it doesn't show. */
+  /** The Next episode button's, absent while it doesn't show. */
   next?: () => void
-  /** Shift+P, as on YouTube: the episode before. */
   previous?: () => void
+  stepRate: (by: number) => void
+  stepFrame: (by: number) => void
+  /** Absent when the episode has no subtitles. */
+  cycleSubtitles?: () => void
+  toggleInfo: () => void
+  /** The 10-second key held: 2× until it's let go. */
+  holdFast: (on: boolean) => void
+  /** Absent where marks can't be kept. */
+  mark?: (edge: 'start' | 'end') => void
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -2273,87 +2886,122 @@ function useKeyboard({
       if (target?.closest('[role=dialog], [role=menu], [role=listbox], [data-portal-menu]')) return
       // Space on a button outside the player is that button's own.
       if (e.key === ' ' && target?.closest('button, a, [role=switch], [role=tab]') && !shell?.contains(target)) return
-      // Ctrl+F, Ctrl+L and the like belong to the browser.
-      if (e.ctrlKey || e.metaKey || e.altKey) return
-      // The page must not scroll while the arrows seek or change volume.
-      if (e.key.startsWith('Arrow')) e.preventDefault()
-      // Held, a toggle flipped 30 times a second and N skipped episodes; only seeks, volume and delay repeat.
-      if (e.repeat && !REPEATING_KEYS.has(e.key)) {
-        if (e.key === ' ') e.preventDefault()
+      // Ctrl+F and the like are the browser's; AltGr, read as Ctrl+Alt, types [ on many layouts.
+      if ((e.ctrlKey || e.metaKey || e.altKey) && !e.getModifierState('AltGraph')) return
+      // Asked of this device: single keys only while the player has focus, leaving a screen reader its own.
+      if (keyScope() === 'player' && !(target && shell?.contains(target))) return
+
+      const action = actionFor(e)
+      if (!action) {
+        // 0 to 9 jump to that tenth of the episode, as on YouTube; typed with Shift on AZERTY.
+        if (/^[0-9]$/.test(e.key) && video && Number.isFinite(video.duration)) {
+          video.currentTime = (video.duration * Number(e.key)) / 10
+          nudge()
+        }
         return
       }
+      // The page must not scroll while the arrows seek or change volume.
+      if (e.key.startsWith('Arrow') || e.key === ' ') e.preventDefault()
+      if (e.repeat) {
+        if (action === 'forward10') holdFast(true)
+        if (!REPEATING.has(action)) return
+      }
 
-      switch (e.key) {
-        case ' ':
-        case 'k':
-          e.preventDefault()
+      switch (action) {
+        case 'play':
           togglePlay()
           break
-        case 'ArrowLeft':
+        case 'back5':
           seekBy(-5)
           break
-        case 'ArrowRight':
+        case 'forward5':
           seekBy(5)
           break
-        case 'j':
+        case 'back10':
           seekBy(-10)
           break
-        case 'l':
+        case 'forward10':
           seekBy(10)
           break
-        case 'ArrowUp':
-          if (video) video.volume = Math.min(1, video.volume + 0.1)
+        case 'slower':
+        case 'faster':
+          stepRate(action === 'slower' ? -1 : 1)
+          break
+        case 'frameBack':
+        case 'frameForward':
+          stepFrame(action === 'frameBack' ? -1 : 1)
+          break
+        case 'volumeUp':
+        case 'volumeDown':
+          if (video) video.volume = Math.min(1, Math.max(0, video.volume + (action === 'volumeUp' ? 0.1 : -0.1)))
           showVolume()
           break
-        case 'ArrowDown':
-          if (video) video.volume = Math.max(0, video.volume - 0.1)
-          showVolume()
-          break
-        case 'm':
+        case 'mute':
           if (video) video.muted = !video.muted
           showVolume()
           break
-        case 'f':
+        case 'fullscreen':
           toggleFullscreen(shell, video)
           break
-        case 'z':
-        case 'x':
+        case 'subEarlier':
+        case 'subLater':
           if (!shiftSubDelay) return
-          shiftSubDelay(e.key === 'z' ? -DELAY_STEP : DELAY_STEP)
+          shiftSubDelay(action === 'subEarlier' ? -DELAY_STEP : DELAY_STEP)
           break
-        case 's':
+        case 'subtitles':
+          if (!cycleSubtitles) return
+          cycleSubtitles()
+          break
+        case 'skip':
           // The same as the button, so only while it shows.
           if (!skip) return
           skip()
           break
-        case 'v':
+        case 'voice':
           if (!cycleVoice) return
           cycleVoice()
           break
-        // Shift as well: N is YouTube's next.
-        case 'n':
-        case 'N':
+        case 'next':
           if (!next) return
           next()
           break
-        // Shift only: a plain p is nothing here.
-        case 'P':
+        case 'previous':
           if (!previous) return
           previous()
           break
-        default:
-          return
+        case 'info':
+          toggleInfo()
+          break
+        case 'markStart':
+        case 'markEnd':
+          if (!mark) return
+          mark(action === 'markStart' ? 'start' : 'end')
+          break
       }
       // Only for a key that did something.
       nudge()
     }
+    function onKeyUp(e: KeyboardEvent) {
+      if (actionFor(e) === 'forward10') holdFast(false)
+    }
+    // A key let go in another window sends no keyup here.
+    const release = () => holdFast(false)
     window.addEventListener('keydown', onKey)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', release)
     extra?.addEventListener('keydown', onKey)
+    extra?.addEventListener('keyup', onKeyUp)
+    extra?.addEventListener('blur', release)
     return () => {
       window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', release)
       extra?.removeEventListener('keydown', onKey)
+      extra?.removeEventListener('keyup', onKeyUp)
+      extra?.removeEventListener('blur', release)
     }
-  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skip, cycleVoice, next, previous])
+  }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skip, cycleVoice, next, previous,
+    stepRate, stepFrame, cycleSubtitles, toggleInfo, holdFast, mark])
 }
 
 function IconButton({

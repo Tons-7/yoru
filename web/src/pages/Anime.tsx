@@ -306,10 +306,11 @@ export function Anime() {
   const refreshQueue = () => refreshDownloads(qc)
 
   const clock = useNow()
-  // Exactly the aired episodes not on disk or in a library folder, as an airing show often has no total.
-  const toDownload = (episodes.data?.items ?? [])
-    .filter((e) => !isUnaired(e, clock) && !e.onDisk && !e.local)
-    .map((e) => e.number)
+  // Aired, not on disk or in a library folder: the unwatched, or all of them when all are watched (a rewatch).
+  const missing = (episodes.data?.items ?? []).filter((e) => !isUnaired(e, clock) && !e.onDisk && !e.local)
+  const unwatched = missing.filter((e) => !e.watched)
+  const toDownload = (unwatched.length ? unwatched : missing).map((e) => e.number)
+  const onlyUnwatched = toDownload.length < missing.length
   const downloadAll = useMutation({
     meta: { inline: true },
     mutationFn: () =>
@@ -569,7 +570,9 @@ export function Anime() {
                 >
                   {downloadAll.isPending
                     ? 'Queuing…'
-                    : `Download ${toDownload.length === 1 ? '1 episode' : `all ${toDownload.length}`}`}
+                    : onlyUnwatched
+                      ? `Download ${toDownload.length} unwatched`
+                      : `Download ${toDownload.length === 1 ? '1 episode' : `all ${toDownload.length}`}`}
                 </Button>
               ) : null}
             </div>

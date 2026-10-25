@@ -71,7 +71,7 @@ func (s *Server) downloadRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.streams != nil {
-		if _, live := s.streams.Get(sessionID(body.AnimeID, body.Episode)); live {
+		if _, live := s.streams.Episode(sessionID(body.AnimeID, body.Episode)); live {
 			send(w, http.StatusConflict, map[string]any{"error": "this episode is playing; choose its release from the player"})
 			return
 		}
@@ -230,7 +230,8 @@ func (s *Server) downloadQueue(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{"items": items, "waiting": waiting, "paused": s.downloader.Paused(),
 		"watching": s.downloader.Watching()}
-	if free, drive := s.downloader.Short(); free > 0 {
+	// Only with something waiting: a low drive with an empty queue holds nothing up.
+	if free, drive := s.downloader.Short(); free > 0 && len(waiting) > 0 {
 		out["short"] = map[string]any{"freeBytes": free, "drive": drive, "needBytes": library.MinFree}
 	}
 	send(w, http.StatusOK, out)

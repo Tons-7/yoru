@@ -18,7 +18,7 @@ var reservedDeviceNames = map[string]bool{
 	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true, "LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
 }
 
-// The engine's session folders in the cache: its own, and rqbit's from before, imported once.
+// The engine's session folder in the cache, and an old engine's (rqbit), never mistaken for a download.
 const (
 	EngineSessionDir = "engine-session"
 	LegacySessionDir = "rqbit-session"

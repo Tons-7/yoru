@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 /** A button's last answer, kept while it's asked again: a new run starts empty, so its words would blink back. */
 export function useHeldData<T>(mutation: { data?: T; isPending: boolean }): T | undefined {
@@ -75,6 +75,8 @@ export function useModalFocus<T extends HTMLElement>(ref: React.RefObject<T | nu
 // active: listening only while the menu is open, not for every closed one on the page.
 export function useDismiss<T extends HTMLElement>(onClose: () => void, active = true) {
   const ref = useRef<T>(null)
+  // The latest close, so a caller's new function doesn't rebuild the Back watcher, which would lose its place.
+  const close = useEffectEvent(onClose)
 
   useEffect(() => {
     if (!active) return
@@ -83,10 +85,10 @@ export function useDismiss<T extends HTMLElement>(onClose: () => void, active = 
       if (!ref.current || ref.current.contains(target)) return
       // A portal menu isn't inside the trigger, so without this a click on it reads as outside and closes it.
       if (target instanceof Element && target.closest('[data-portal-menu]')) return
-      onClose()
+      close()
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') close()
     }
     // A menu in the picture-in-picture window hears that window's clicks and keys too.
     const docs = new Set([document, ref.current?.ownerDocument ?? document])
@@ -95,16 +97,62 @@ export function useDismiss<T extends HTMLElement>(onClose: () => void, active = 
       doc.addEventListener('touchstart', onPointer)
       doc.addEventListener('keydown', onKey)
     }
+    // Android's Back closes what is open rather than leaving the page; Esc comes this way too, a second close.
+    const Watcher = (window as { CloseWatcher?: new () => { onclose: (() => void) | null; destroy: () => void } }).CloseWatcher
+    const back = Watcher ? new Watcher() : null
+    if (back) back.onclose = () => close()
     return () => {
+      back?.destroy()
       for (const doc of docs) {
         doc.removeEventListener('mousedown', onPointer)
         doc.removeEventListener('touchstart', onPointer)
         doc.removeEventListener('keydown', onKey)
       }
     }
-  }, [onClose, active])
+  }, [active])
 
   return ref
+}
+
+/** A menu's items as the keyboard walks them: the visible ones (a phone hides some), radios included. */
+export function menuItems(menu: HTMLElement | null): HTMLElement[] {
+  return [...(menu?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? [])].filter((el) => el.offsetParent !== null)
+}
+
+/** A menu's onKeyDown: arrows walk its items in reading order, Home and End jump to either end. */
+export function walkMenu(e: React.KeyboardEvent<HTMLElement>) {
+  const all = menuItems(e.currentTarget)
+  const at = all.indexOf(e.currentTarget.ownerDocument.activeElement as HTMLElement)
+  const moves: Record<string, number | undefined> = { ArrowDown: at + 1, ArrowUp: Math.max(at, 0) - 1, Home: 0, End: -1 }
+  const to = moves[e.key]
+  if (to === undefined || all.length === 0) return
+  e.preventDefault()
+  all[(to + all.length) % all.length].focus()
+}
+
+/** A menu button: opened from the keyboard its first item takes focus, and closing hands focus back. */
+export function useMenuButton() {
+  const [open, setOpen] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
+  // A click leaves focus on the button, as a mouse user expects.
+  const byKey = useRef(false)
+  const close = useCallback(() => {
+    if (menu.current?.contains(menu.current.ownerDocument.activeElement)) trigger.current?.focus()
+    setOpen(false)
+  }, [])
+  useEffect(() => {
+    if (open && byKey.current) menuItems(menu.current)[0]?.focus()
+  }, [open])
+  const toggle = useCallback(
+    (e: React.MouseEvent) => {
+      byKey.current = e.detail === 0
+      if (open) close()
+      else setOpen(true)
+    },
+    [open, close],
+  )
+  return { open, close, toggle, trigger, menu }
 }
 
 /** Where an open portal menu's trigger sits: measured on open, resize and scroll, never in render. */

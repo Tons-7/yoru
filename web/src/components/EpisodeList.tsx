@@ -722,6 +722,15 @@ function EpisodeRow({
     </div>
   )
 
+  // The row's link names the episode, so it says what the badges and dimming show too.
+  const stateWords = [
+    active ? 'playing' : upNext ? 'next' : '',
+    watched ? 'watched' : '',
+    resumeAt !== undefined ? `resume at ${clockTime(resumeAt)}` : '',
+    episode.onDisk ? 'downloaded' : episode.local ? 'in your library' : '',
+    listed ? 'in Up next' : '',
+  ].filter(Boolean)
+
   // A tick reaching past this episode, either way, asks first: auto-delete and the trackers follow it.
   const spans = watched ? unmarksTo !== undefined : marksFrom !== undefined
   // So does one that deletes the file at once ("right after watching"), which unticking doesn't bring back.
@@ -735,11 +744,19 @@ function EpisodeRow({
       ? `Mark ${marksFrom} to ${number} watched`
       : 'Mark watched'
 
-  // Outside the link, or the tick opens the player.
+  // Outside the link, or the tick opens the player. A failed tick says so in words, with the same press again.
   const tick =
     !unaired &&
     !onToggle &&
-    (confirming ? (
+    (mark.isError && !confirming ? (
+      <RetryButton
+        what="Couldn't mark"
+        why={(mark.error as Error).message}
+        pending={mark.isPending}
+        // The same ask again: the refresh after a failure can flip watched, and !watched would undo it.
+        onRetry={() => mark.mutate(mark.variables ?? !watched)}
+      />
+    ) : confirming ? (
       <span className="flex shrink-0 items-center gap-1">
         <ConfirmInline
           tone="accent"
@@ -763,14 +780,12 @@ function EpisodeRow({
         onClick={() => (spans || deletes ? setConfirming(true) : mark.mutate(!watched))}
         disabled={mark.isPending}
         aria-label={tickLabel}
-        title={mark.isError ? (mark.error as Error).message : tickLabel}
+        title={tickLabel}
         className={cx(
           'tap relative grid size-8 shrink-0 place-items-center rounded-full transition-colors',
-          mark.isError
-            ? 'text-recap'
-            : watched
-              ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
-              : 'text-base-500 ring-1 ring-base-700 hover:bg-base-800 hover:text-base-100',
+          watched
+            ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
+            : 'text-base-500 ring-1 ring-base-700 hover:bg-base-800 hover:text-base-100',
         )}
       >
         <WatchedTick />
@@ -795,21 +810,29 @@ function EpisodeRow({
     !unaired &&
     !onToggle &&
     !episode.onDisk &&
-    !episode.local && (
+    !episode.local &&
+    (fetch.isError ? (
+      <RetryButton
+        what="Couldn't queue"
+        why={(fetch.error as Error).message}
+        pending={fetch.isPending}
+        onRetry={() => fetch.mutate()}
+      />
+    ) : (
       <button
         type="button"
         onClick={() => fetch.mutate()}
         disabled={fetch.isPending || isQueued}
         aria-label={isQueued ? `Episode ${number} queued` : `Download episode ${number}`}
-        title={fetch.isError ? (fetch.error as Error).message : isQueued ? 'Queued' : 'Download'}
+        title={isQueued ? 'Queued' : 'Download'}
         className={cx(
           'tap relative grid size-8 shrink-0 place-items-center rounded-full transition-colors',
-          fetch.isError ? 'text-recap' : isQueued ? 'text-emerald-300' : 'text-base-500 ring-1 ring-base-700 hover:bg-base-800 hover:text-base-100',
+          isQueued ? 'text-emerald-300' : 'text-base-500 ring-1 ring-base-700 hover:bg-base-800 hover:text-base-100',
         )}
       >
         {isQueued ? <QueuedGlyph /> : <DownloadArrow />}
       </button>
-    )
+    ))
 
   // Not in the player's narrow list, where a fourth button squeezes titles away; the show page has room.
   const showSpoiler = hidden && !onToggle && !compact && (
@@ -887,7 +910,7 @@ function EpisodeRow({
           <Link
             to={`/watch/${animeId}/${episode.number}`}
             aria-current={active ? 'true' : undefined}
-            aria-label={hidden ? `Episode ${number}` : `Episode ${number}: ${title}`}
+            aria-label={[hidden ? `Episode ${number}` : `Episode ${number}: ${title}`, ...stateWords].join(', ')}
             className="flex min-w-0 flex-1 items-center gap-3"
           >
             {thumb}
@@ -900,6 +923,24 @@ function EpisodeRow({
         </div>
       )}
     </li>
+  )
+}
+
+/** A failed row action in words, with Retry; the server's reason on hover and for a screen reader. */
+function RetryButton({ what, why, pending, onRetry }: { what: string; why: string; pending: boolean; onRetry: () => void }) {
+  return (
+    <span role="alert" className="flex shrink-0 items-center gap-1 text-xs text-recap" title={why}>
+      <span className="max-sm:sr-only">{what}</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={pending}
+        aria-label={`${what}: ${why}. Retry`}
+        className="tap relative rounded-md px-2 py-1 font-medium text-white ring-1 ring-recap/60 transition-colors hover:bg-recap/15"
+      >
+        Retry
+      </button>
+    </span>
   )
 }
 

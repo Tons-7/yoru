@@ -445,6 +445,7 @@ func (s *Server) access(w http.ResponseWriter, r *http.Request) {
 		"urls":      s.accessURLs(),
 		"canSwitch": s.rebind != nil && host,
 		"host":      host,
+		"away":      awayFromHome(clientAddr(r)),
 	}
 	s.proxyMu.Lock()
 	if p := s.proxy; host && !p.at.IsZero() {
@@ -452,6 +453,29 @@ func (s *Server) access(w http.ResponseWriter, r *http.Request) {
 	}
 	s.proxyMu.Unlock()
 	send(w, http.StatusOK, out)
+}
+
+// awayFromHome: a device reaching Yoru from outside the home network, through the router (or a carrier's NAT).
+func awayFromHome(addr string) bool {
+	ip := net.ParseIP(addr)
+	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return false
+	}
+	return !onOwnNetwork(ip)
+}
+
+// onOwnNetwork: inside one of this machine's networks, as a phone at home is with its global IPv6 address.
+func onOwnNetwork(ip net.IP) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() && n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // listening is where the app is bound: the configured address unless the switch moved it.

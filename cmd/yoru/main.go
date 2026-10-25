@@ -18,7 +18,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,20 +89,14 @@ func newTorrentEngine(cfg config.Config, log *slog.Logger) (*engine.Engine, erro
 	if upload == 0 {
 		upload = 4 << 20 // enough to stay unchoked
 	}
-	// rqbit-era downloads: Yoru's own session for it, else the per-user one rqbit kept.
-	legacy := []string{filepath.Join(cfg.CacheDir, library.SessionDirName)}
-	if dir, err := os.UserConfigDir(); err == nil && runtime.GOOS == "windows" {
-		legacy = append(legacy, filepath.Join(dir, "rqbit", "session", "data"))
-	}
 	return engine.New(engine.Options{
-		CacheDir:       cfg.CacheDir,
-		SessionDir:     filepath.Join(cfg.CacheDir, library.EngineSessionDirName),
-		LegacySessions: legacy,
-		ListenPort:     cfg.Torrent.PeerPort(),
-		PeerLimit:      cfg.Torrent.PeerLimit,
-		UploadLimit:    upload,
-		DisableUPnP:    !cfg.Torrent.UPnPEnabled(),
-		AwaitLimits:    true,
+		CacheDir:    cfg.CacheDir,
+		SessionDir:  filepath.Join(cfg.CacheDir, library.EngineSessionDirName),
+		ListenPort:  cfg.Torrent.PeerPort(),
+		PeerLimit:   cfg.Torrent.PeerLimit,
+		UploadLimit: upload,
+		DisableUPnP: !cfg.Torrent.UPnPEnabled(),
+		AwaitLimits: true,
 	}, log)
 }
 
@@ -120,8 +113,9 @@ func debounce(wait time.Duration, fn func()) func() {
 	}
 }
 
-// Stream session ids are "<anime>-<episode>", built by the stream handler.
+// Stream session ids are "<anime>-<episode>", a device's or TV's variant suffixed (see transcode.BaseID).
 func parseStreamID(id string) (animeID, episode int, ok bool) {
+	id = transcode.BaseID(id)
 	dash := strings.LastIndexByte(id, '-')
 	if dash <= 0 {
 		return 0, 0, false
@@ -475,6 +469,7 @@ func run(log *slog.Logger, out *logSink) error {
 	}
 
 	mpv := player.New(cfg.Tool("mpv"), "", log)
+	mpv.Warm()
 	vlcBinary := player.ResolveVLC(cfg.VLCPath())
 	if want := cfg.VLCPath(); want != "" && vlcBinary == "" {
 		log.Warn("vlc_path does not exist", "path", want)
@@ -584,10 +579,14 @@ func run(log *slog.Logger, out *logSink) error {
 	// A working GPU encoder is preferred; probing takes trial encodes, so it runs after the window opens.
 	detectEncoder := func(ctx context.Context) {
 		encoder := transcode.DetectEncoder(ctx, cfg.Tool("ffmpeg"), log)
+		// In use at once; the tuning's trials (up to 30 s each) follow.
 		streams.SetEncoder(encoder)
+		tuning := transcode.Tuning(ctx, cfg.Tool("ffmpeg"), encoder)
+		streams.SetTuning(encoder, tuning)
+		streams.SetToneMapper(transcode.ToneMapper(ctx, cfg.Tool("ffmpeg")))
 		// Without a hardware encoder HEVC/10-bit stalls on seeks, so the finder prefers playable releases.
 		finder.WithHardwareTranscode(transcode.IsHardwareEncoder(encoder))
-		log.Info("video encoder", "encoder", encoder)
+		log.Info("video encoder", "encoder", encoder, "tuning", strings.Join(tuning, " "))
 	}
 	go detectEncoder(ctx)
 

@@ -71,7 +71,7 @@ const fakeSdk = `(() => {
     AutoJoinPolicy: { ORIGIN_SCOPED: 'origin_scoped' },
     Image: class { constructor(url) { this.url = url } },
     media: {
-      DEFAULT_MEDIA_RECEIVER_APP_ID: 'CC1AD845', MediaInfo, GenericMediaMetadata: Obj, LoadRequest, Track,
+      DEFAULT_MEDIA_RECEIVER_APP_ID: 'CC1AD845', MediaInfo, GenericMediaMetadata: Obj, LoadRequest, Track, TextTrackStyle: Obj,
       TrackType: { TEXT: 'TEXT' }, TextTrackType: { SUBTITLES: 'SUBTITLES' }, StreamType: { BUFFERED: 'BUFFERED' },
       HlsSegmentFormat: { FMP4: 'fmp4' }, HlsVideoSegmentFormat: { FMP4: 'fmp4' },
     },

@@ -15,7 +15,7 @@ func (s *Server) maybeReadyNext(ctx context.Context, animeID, episode int, posit
 	if s.playback == nil || s.streams == nil || duration <= 0 || duration-position > readyLead.Seconds() {
 		return
 	}
-	current, ok := s.streams.Peek(sessionID(animeID, episode))
+	current, ok := s.streams.Episode(sessionID(animeID, episode))
 	if !ok || !s.sourceComplete(ctx, current) {
 		return
 	}
