@@ -2,11 +2,21 @@ package firewall
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
+
+// Off Windows nothing fills the lists; sent, they are still lists, or Settings can't read them.
+func TestListsGoOutAsLists(t *testing.T) {
+	b, err := json.Marshal(Status{}.Lists())
+	if err != nil || !strings.Contains(string(b), `"networks":[]`) || !strings.Contains(string(b), `"program":[]`) {
+		t.Errorf("sent as %s (%v)", b, err)
+	}
+}
 
 // A phone gets in only when every network's profile is allowed and nothing blocks yoru.exe.
 func TestReachable(t *testing.T) {

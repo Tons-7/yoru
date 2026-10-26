@@ -57,6 +57,17 @@ func (s Status) Keep(keep func(Network) bool) Status {
 	return s
 }
 
+// Lists: empty, not nil; a nil list goes out as null, which crashed Settings (macOS and Linux fill neither).
+func (s Status) Lists() Status {
+	if s.Networks == nil {
+		s.Networks = []Network{}
+	}
+	if s.Program == nil {
+		s.Program = []Rule{}
+	}
+	return s
+}
+
 // Blocked reports a block rule for yoru.exe on a connected network's profile; it wins over every allow there.
 func (s Status) Blocked() bool {
 	for _, n := range s.Networks {

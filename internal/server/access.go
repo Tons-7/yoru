@@ -541,7 +541,7 @@ func (s *Server) firewallStatus(ctx context.Context) (firewall.Status, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	st, err := firewall.Check(ctx, port, exe)
-	return st.Keep(phoneNetwork), err
+	return st.Keep(phoneNetwork).Lists(), err
 }
 
 // phoneNetwork: a network a phone could be on, not a VPN's or a virtual machine's (often Public, by design).
@@ -625,7 +625,7 @@ func (s *Server) peersFirewall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	send(w, http.StatusOK, map[string]any{
-		"status":  st,
+		"status":  st.Lists(),
 		"port":    port,
 		"allowed": st.Reachable(),
 		"blocked": st.Blocked(),
