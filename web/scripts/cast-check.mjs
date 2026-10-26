@@ -29,6 +29,7 @@ const fakeSdk = `(() => {
   const fire = (t) => (listeners[t] ?? []).forEach((f) => f())
   let state = window.__castNoTV ? 'NO_DEVICES_AVAILABLE' : 'NOT_CONNECTED'
   window.__castFound = () => { state = 'NOT_CONNECTED'; fire('caststatechanged') }
+  window.__castLost = () => { state = 'NO_DEVICES_AVAILABLE'; fire('caststatechanged') }
   const player = { currentTime: 0, duration: 0, isPaused: true, isConnected: false }
   const session = {
     getCastDevice: () => ({ friendlyName: 'Living Room TV' }),
@@ -48,7 +49,15 @@ const fakeSdk = `(() => {
     setOptions: (o) => (window.__castOptions = o),
     getCastState: () => state,
     getCurrentSession: () => (state === 'CONNECTED' ? session : null),
-    requestSession: async () => { state = 'CONNECTED'; fire('caststatechanged') },
+    // Chrome's own list: it searches, and a TV picked connects; window.__castCancel closes it without one.
+    requestSession: async () => {
+      if (window.__castCancel) {
+        window.__castClosed = true
+        throw new Error('cancel')
+      }
+      state = 'CONNECTED'
+      fire('caststatechanged')
+    },
     endCurrentSession: () => { state = 'NOT_CONNECTED'; player.isConnected = false; fire('caststatechanged') },
     addEventListener: on, removeEventListener: off,
   }
@@ -169,7 +178,8 @@ try {
   check(/[?&]burn=\d+&delay=/.test(asked), 'with the setting on, the shown track is asked for drawn in, with its delay', asked)
   check(burned?.media?.contentId === `${BASE}/c/burned/playlist.m3u8` && (burned?.media?.tracks ?? []).length === 0,
     'and the TV gets the picture with them, no text track beside', JSON.stringify(burned?.media ?? {}).slice(0, 160))
-  await page.getByRole('button', { name: 'Stop casting', exact: true }).click().catch(() => {})
+  await page.getByRole('button', { name: 'Stop casting', exact: true }).click()
+  check(await until(async () => !(await panel.isVisible())), 'Stop casting hands the drawn-in cast back')
 
   // No TV about: the button stays, and says what it is looking for; one turning up makes it ready.
   await page.addInitScript(() => (window.__castNoTV = true))
@@ -183,9 +193,16 @@ try {
   await page.screenshot({ path: `${SHOTS}/cast-needs.png` })
   await page.setViewportSize({ width: 390, height: 844 })
   await sleep(400)
+  let box = await needs.boundingBox()
+  check(!!box && box.y >= 0, 'turned to a phone with the list open, it stays on screen', JSON.stringify(box))
+  // Opened on the phone itself, Look for TVs taller in it.
+  await page.keyboard.press('Escape')
+  await video.hover()
+  await castButton.click()
+  await sleep(400)
   await page.screenshot({ path: `${SHOTS}/cast-needs-phone.png` })
-  const box = await needs.boundingBox()
-  check(!!box && box.x >= 0 && box.x + box.width <= 390, 'on a phone the list fits the screen', JSON.stringify(box))
+  box = await needs.boundingBox()
+  check(!!box && box.x >= 0 && box.x + box.width <= 390 && box.y >= 0, 'on a phone the list fits the screen', JSON.stringify(box))
   // The bar's last button stays on screen beside Cast, with two audio tracks and subtitles in it too.
   for (const width of [390, 360]) {
     await page.setViewportSize({ width, height: 844 })
@@ -196,6 +213,30 @@ try {
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.evaluate(() => window.__castFound())
   check(await until(() => needs.getByRole('button', { name: 'Choose a TV' }).isVisible()), 'a TV turning up makes it ready to cast')
+
+  // Chrome on a Mac searches only once something asks (a friend's TV appeared only after YouTube's button did):
+  // Look for TVs opens Chrome's list. Closed without a pick, nothing goes to a TV.
+  await page.evaluate(() => window.__castLost())
+  asked = ''
+  await page.evaluate(() => {
+    window.__castLoaded = null
+    window.__castClosed = false
+    window.__castCancel = true
+  })
+  const look = () => need('A TV on this Wi-Fi').getByRole('button', { name: 'Look for TVs' })
+  check(await until(() => look().isVisible()), 'with none found, the list offers to look for TVs')
+  await look().click()
+  // Counted from the list closing, not the click: anything sent after it shows within this.
+  check(await until(() => page.evaluate(() => window.__castClosed), 5000), "Look for TVs opens Chrome's list")
+  const sentAnyway = await until(async () => asked !== '', 1500)
+  check(!sentAnyway && (await page.evaluate(() => !window.__castLoaded)), "closing Chrome's list without a TV sends nothing", asked)
+  // A TV picked there gets the episode.
+  await page.evaluate(() => (window.__castCancel = false))
+  await castButton.click()
+  await look().click()
+  check(await until(() => page.evaluate(() => !!window.__castLoaded), 8000), 'a TV picked from that list gets the episode')
+  await page.getByRole('button', { name: 'Stop casting', exact: true }).click()
+  check(await until(async () => !(await panel.isVisible())), 'and Stop casting hands it back')
 
   // A browser with casting turned off (Brave's Media Router): the button says how to turn it on.
   await page.unroute('https://www.gstatic.com/cv/js/sender/**')

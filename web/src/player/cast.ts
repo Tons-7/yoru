@@ -231,6 +231,22 @@ export function useCast() {
     setPlaying(media.key)
   }, [])
 
+  /** The TV connected, else Chrome's own list, which also makes it search (on a Mac it finds TVs only once
+   *  something asks); false when that list was closed without a pick. */
+  const connect = useCallback(async () => {
+    const ctx = sdk().cast?.framework.CastContext.getInstance()
+    if (!ctx) throw new Error('Casting is not available in this browser')
+    if (ctx.getCurrentSession()) return true
+    try {
+      await ctx.requestSession()
+    } catch (e) {
+      // "cancel": closed without a pick, nothing went wrong.
+      if (/cancel/i.test(e instanceof Error ? e.message : String(e))) return false
+      throw e
+    }
+    return !!ctx.getCurrentSession()
+  }, [])
+
   const stop = useCallback(() => sdk().cast?.framework.CastContext.getInstance().endCurrentSession(true), [])
   const playPause = useCallback(() => controller.current?.playOrPause(), [])
   const seek = useCallback((to: number) => {
@@ -239,5 +255,5 @@ export function useCast() {
     controller.current.seek()
   }, [])
 
-  return { phase, sdkState, device, remote, playing, start, stop, playPause, seek }
+  return { phase, sdkState, device, remote, playing, connect, start, stop, playPause, seek }
 }

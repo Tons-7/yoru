@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
@@ -704,13 +704,12 @@ export function Player({
   // Casting: the TV plays from Yoru itself through a link signed for this session; the video here waits, and
   // carries on where the TV was when casting stops.
   const { phase: castPhase, sdkState: castSdk, device: castDevice, remote, playing: castPlaying, start: startCast,
-    stop: stopCast, playPause: castPlayPause, seek: castSeek } = useCast()
+    connect: connectCast, stop: stopCast, playPause: castPlayPause, seek: castSeek } = useCast()
   // This stream on the TV, not just a session: another episode, or another page's, leaves this one alone.
   const casting = castPhase === 'connected' && !!stream?.id && castPlaying === stream.id
+  // Sends what plays here now to the TV connected.
   const castTo = useCallback(async () => {
     if (!stream?.id || !video) return
-    // A failed try's words must not sit over the cast that works.
-    setNotice(null)
     try {
       // Drawn in, the TV gets the track shown here, with this episode's delay; pictures it can't draw itself.
       const chosen = stream.subtitles.find((t) => t.index === track)
@@ -736,6 +735,21 @@ export function Player({
       if (!/cancel/i.test(message)) showNotice(`Couldn't cast: ${message}`, 6000)
     }
   }, [stream, video, track, title, subtitle, artwork, startCast, showNotice, castBurn, subDelay, lookPreset, subScale])
+  // Read once a TV is picked, not when the list opened: it may stay open while the episode moves on.
+  const castToRef = useRef(castTo)
+  castToRef.current = castTo
+  // The TV first: a list closed without a pick leaves the episode playing here, with nothing asked of Yoru.
+  const chooseTV = useCallback(async () => {
+    // A failed try's words must not sit over the cast that works.
+    setNotice(null)
+    try {
+      if (!(await connectCast())) return
+    } catch (e) {
+      showNotice(`Couldn't cast: ${e instanceof Error ? e.message : String(e)}`, 6000)
+      return
+    }
+    await castToRef.current()
+  }, [connectCast, showNotice])
   useEffect(() => {
     if (casting) video?.pause()
   }, [casting, video])
@@ -1587,7 +1601,7 @@ export function Player({
             {/* Not in the floating window, and on a phone in the settings menu instead. */}
             <span className="contents max-sm:hidden">
               {audioMenu && <AudioPicker tracks={audioMenu.tracks} value={audioMenu.value} onChange={audioMenu.onChange} />}
-              {soundMenu && <SoundPicker value={soundMenu.value} onChange={soundMenu.onChange} />}
+              {soundMenu && <SoundPicker value={soundMenu.value} onChange={soundMenu.onChange} win={pip.window ?? undefined} />}
             </span>
 
             {/* Even with no track of its own: a file from this device, or Jimaku's, can be loaded. */}
@@ -1613,6 +1627,7 @@ export function Player({
                       }
                     : undefined
                 }
+                win={pip.window ?? undefined}
               />
             )}
 
@@ -1644,7 +1659,7 @@ export function Player({
                     device={castDevice}
                     phase={castPhase}
                     sdkState={castSdk}
-                    onCast={() => void castTo()}
+                    onCast={() => void chooseTV()}
                     onStop={stopCast}
                     onOpen={holdForCast}
                   />
@@ -1993,6 +2008,7 @@ function SubtitlePicker({
   look,
   onLoadFile,
   jimaku,
+  win,
 }: {
   tracks: StreamInfo['subtitles']
   value: number | null
@@ -2009,10 +2025,12 @@ function SubtitlePicker({
   onLoadFile: (file: File) => void
   /** Jimaku's files for this episode, offered once a key is set. */
   jimaku?: { streamId: string; onPick: (file: JimakuFile) => void }
+  /** The window the player is in: picture in picture's once moved there. */
+  win?: Window
 }) {
   const { open, close, toggle, trigger, menu } = useMenuButton()
   const ref = useDismiss<HTMLDivElement>(close, open)
-  const room = useRoomAbove(ref, open)
+  const room = useRoomAbove(ref, open, win)
   const picker = useRef<HTMLInputElement>(null)
   const jimakuFiles = useQuery({
     queryKey: ['jimaku-files', jimaku?.streamId],
@@ -2270,10 +2288,19 @@ function soundSummary(s: SoundOptions): string {
   return on.length ? on.join(', ') : 'Default'
 }
 
-function SoundPicker({ value, onChange }: { value: SoundOptions; onChange: (patch: Partial<SoundOptions>) => void }) {
+function SoundPicker({
+  value,
+  onChange,
+  win,
+}: {
+  value: SoundOptions
+  onChange: (patch: Partial<SoundOptions>) => void
+  /** The window the player is in: picture in picture's once moved there. */
+  win?: Window
+}) {
   const { open, close, toggle, trigger, menu } = useMenuButton()
   const ref = useDismiss<HTMLDivElement>(close, open)
-  const room = useRoomAbove(ref, open)
+  const room = useRoomAbove(ref, open, win)
   const summary = soundSummary(value)
 
   return (
@@ -2398,9 +2425,7 @@ function PlayerMenu({
     if (open && doc && (doc.activeElement === doc.body || !doc.activeElement)) menuItems(menu.current)[0]?.focus()
   }, [open, view, menu])
   const ref = useDismiss<HTMLDivElement>(close, open)
-  const room = useRoomAbove(ref, open)
-  // A phone's player is too short for the list above its bar: there it is a sheet along the screen's bottom.
-  const wide = useMediaQuery('(min-width: 40rem)')
+  const { wide, backdrop, style: sheetStyle, className: sheetClass } = usePopSheet(ref, open, close)
   useEffect(() => {
     onOpen(open)
     return () => onOpen(false)
@@ -2443,20 +2468,15 @@ function PlayerMenu({
         {sleep.kind === 'at' && <span>{left}m</span>}
       </button>
 
-      {open && !wide && <div aria-hidden className="fixed inset-0 z-50 bg-black/50" onClick={close} />}
+      {backdrop}
       {open && (
         <div
           ref={menu}
           role="menu"
           aria-label="Player settings"
           onKeyDown={walkMenu}
-          style={{ maxHeight: wide ? room : '70vh' }}
-          className={cx(
-            'z-50 animate-rise overflow-y-auto border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/60 scrollbar-thin',
-            wide
-              ? 'absolute right-0 bottom-full mb-2 w-64 origin-bottom-right rounded-lg'
-              : 'fixed inset-x-0 bottom-0 rounded-t-xl pb-[max(0.5rem,env(safe-area-inset-bottom))]',
-          )}
+          style={sheetStyle}
+          className={sheetClass('w-64', 'py-1')}
         >
           {view === 'main' && (
             <>
@@ -3151,6 +3171,27 @@ function CastIcon({ on }: { on: boolean }) {
   )
 }
 
+// A list above the player's bar, or on a narrow screen a sheet along the bottom (a phone's player is too short);
+// the page's own window only, as picture in picture's bar has neither menu.
+function usePopSheet(anchor: RefObject<HTMLElement | null>, open: boolean, close: () => void) {
+  const wide = useMediaQuery('(min-width: 40rem)')
+  // Measured only for the list above the bar: the sheet's height is the screen's.
+  const room = useRoomAbove(anchor, open && wide)
+  return {
+    wide,
+    backdrop: open && !wide ? <div aria-hidden className="fixed inset-0 z-50 bg-black/50" onClick={close} /> : null,
+    style: { maxHeight: wide ? room : '70vh' },
+    className: (width: string, pad: string) =>
+      cx(
+        'z-50 animate-rise overflow-y-auto border border-base-700 bg-base-850 shadow-xl shadow-black/60 scrollbar-thin',
+        pad,
+        wide
+          ? cx('absolute right-0 bottom-full mb-2 origin-bottom-right rounded-lg', width)
+          : 'fixed inset-x-0 bottom-0 rounded-t-xl pb-[max(0.5rem,env(safe-area-inset-bottom))]',
+      ),
+  }
+}
+
 type Need = { label: string; met: boolean | null; detail?: ReactNode }
 
 // Always in the bar: when casting can't start, it lists what casting needs, each met or not, with the fix.
@@ -3167,6 +3208,7 @@ function CastButton({
   device: string
   phase: CastPhase
   sdkState: CastSdk
+  /** Chrome's own list first, unless a TV is connected; the episode goes over once one is picked. */
   onCast: () => void
   onStop: () => void
   onOpen: (open: boolean) => void
@@ -3175,7 +3217,7 @@ function CastButton({
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close, open)
-  const room = useRoomAbove(ref, open)
+  const { backdrop, style: sheetStyle, className: sheetClass } = usePopSheet(ref, open, close)
   useEffect(() => {
     onOpen(open)
     // Unmounted open (another episode's bar), the controls must not stay held.
@@ -3247,11 +3289,24 @@ function CastButton({
       label: 'A TV on this Wi-Fi',
       met: sdkState !== 'ok' ? null : phase !== 'none',
       detail:
-        sdkState === 'loading'
-          ? 'Looking…'
-          : sdkState === 'ok' && phase === 'none'
-            ? 'None found yet: a Chromecast or Google TV, switched on and on the same Wi-Fi as this device.'
-            : undefined,
+        sdkState === 'loading' ? (
+          'Looking…'
+        ) : sdkState === 'ok' && phase === 'none' ? (
+          // Chrome on a Mac doesn't search until something asks; its own list does, as YouTube's button does.
+          <span className="flex flex-wrap items-center gap-2">
+            None found yet: a Chromecast or Google TV, switched on and on the same Wi-Fi as this device.
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                onCast()
+              }}
+              className={buttonClass('secondary', 'sm')}
+            >
+              Look for TVs
+            </button>
+          </span>
+        ) : undefined,
     },
   ]
 
@@ -3263,12 +3318,13 @@ function CastButton({
       >
         <CastIcon on={casting} />
       </IconButton>
+      {backdrop}
       {open && (
         <div
           role="dialog"
           aria-label="Cast to a TV"
-          style={{ maxHeight: room }}
-          className="absolute right-0 bottom-full z-50 mb-2 w-80 max-w-[calc(100vw-2rem)] origin-bottom-right animate-rise overflow-y-auto rounded-lg border border-base-700 bg-base-850 p-3 text-sm shadow-xl shadow-black/60 scrollbar-thin"
+          style={sheetStyle}
+          className={sheetClass('w-80 max-w-[calc(100vw-2rem)]', 'p-3 text-sm')}
         >
           <p className="font-medium text-white">Cast to a TV</p>
           <p className="mt-0.5 text-xs text-base-400">

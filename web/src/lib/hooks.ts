@@ -189,7 +189,7 @@ export function useAnchorBox<T extends HTMLElement>(trigger: React.RefObject<T |
 }
 
 /** Room above an anchor, under a sticky header, for a menu opening upward: on a phone its top was cut off. */
-export function useRoomAbove(anchor: React.RefObject<HTMLElement | null>, open: boolean) {
+export function useRoomAbove(anchor: React.RefObject<HTMLElement | null>, open: boolean, view: Window = window) {
   const [room, setRoom] = useState<number>()
   // Measured after layout, as useAnchorBox does: the DOM is what this follows.
   useLayoutEffect(() => {
@@ -200,8 +200,12 @@ export function useRoomAbove(anchor: React.RefObject<HTMLElement | null>, open: 
       const header = doc.fullscreenElement ? 0 : (doc.querySelector('header')?.getBoundingClientRect().bottom ?? 0)
       setRoom(Math.max(120, el.getBoundingClientRect().top - Math.max(0, header) - 12))
     }
-    if (open) measure()
-  }, [anchor, open])
+    if (!open) return
+    measure()
+    // A turned phone or a resized window moves the anchor; view is the one it is in (picture in picture's).
+    view.addEventListener('resize', measure)
+    return () => view.removeEventListener('resize', measure)
+  }, [anchor, open, view])
   return open ? room : undefined
 }
 
