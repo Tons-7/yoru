@@ -83,34 +83,38 @@ func (s *Server) castLink(w http.ResponseWriter, r *http.Request) {
 		session, target = tv, tv
 	}
 
-	base := requestOrigin(r)
-	if names := s.httpsNames(); len(names) > 0 && r.TLS == nil {
-		base = fmt.Sprintf("https://%s:%s", names[0], s.port())
-	} else if lan := lanAddrs(); loopbackHost(r.Host) && len(lan) > 0 {
-		// The host's own window is on loopback, which on the TV is the TV itself.
-		base = fmt.Sprintf("http://%s:%s", lan[0], s.port())
-	}
+	base := s.tvBase(r)
 	expires := time.Now().Add(externalFor)
 	root := base + "/c/" + s.signGrant(grant{Source: castPrefix + target.ID, Expires: expires.Unix()}) + "/"
 
-	type track struct {
-		Index    int    `json:"index"`
-		Language string `json:"language,omitempty"`
-		Title    string `json:"title,omitempty"`
-		URL      string `json:"url"`
-	}
-	tracks := []track{}
+	tracks := []castTrack{}
 	for _, sub := range session.Info.Subtitles {
 		// Drawn in, the picture carries them; a text track as well would show them twice.
 		if target != session || !transcode.TextSubtitle(sub.Codec) {
 			continue
 		}
-		tracks = append(tracks, track{Index: sub.Index, Language: sub.Language, Title: sub.Title,
+		tracks = append(tracks, castTrack{Index: sub.Index, Language: sub.Language, Title: sub.Title,
 			URL: root + "sub-" + strconv.Itoa(sub.Index) + ".vtt"})
 	}
+	_, episode, _ := parseSessionID(session.ID)
 	send(w, http.StatusOK, map[string]any{
 		"url": root + "playlist.m3u8", "subtitles": tracks, "burned": target != session, "note": note,
+		// ?sub= is the shown track's language, which the queued episodes' text tracks follow.
+		"queue": s.castQueue(r.Context(), animeID, episode, base, expires, r.URL.Query().Get("sub")),
 	})
+}
+
+// tvBase is where a TV reaches Yoru: the HTTPS name if any (a receiver is an HTTPS page; a phone may be on
+// localhost), else this request's own address, the network's for the host's loopback.
+func (s *Server) tvBase(r *http.Request) string {
+	if names := s.httpsNames(); len(names) > 0 && r.TLS == nil {
+		return fmt.Sprintf("https://%s:%s", names[0], s.port())
+	}
+	if lan := lanAddrs(); loopbackHost(r.Host) && len(lan) > 0 {
+		// The host's own window is on loopback, which on the TV is the TV itself.
+		return fmt.Sprintf("http://%s:%s", lan[0], s.port())
+	}
+	return requestOrigin(r)
 }
 
 var errStillArriving = errors.New("the episode is still downloading")
@@ -202,23 +206,83 @@ func (s *Server) castFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g, ok := s.openGrant(r.PathValue("grant"), time.Now())
-	if !ok || !strings.HasPrefix(g.Source, castPrefix) {
+	queued, episode, lang, isQueued := parseCastEpisode(g.Source)
+	if !ok || !strings.HasPrefix(g.Source, castPrefix) && !isQueued {
 		http.Error(w, "this cast link has expired; cast again from Yoru", http.StatusForbidden)
 		return
 	}
 	defer s.serving()()
-	r.SetPathValue("id", strings.TrimPrefix(g.Source, castPrefix))
+	id := strings.TrimPrefix(g.Source, castPrefix)
+	// A queued episode opens on the TV's first ask, as the page would open it.
+	if isQueued {
+		var err error
+		if id, err = s.queuedSession(r.Context(), queued, episode); err != nil {
+			s.log.Warn("cast queue", "anime", queued, "episode", episode, "err", err)
+			http.Error(w, "this episode couldn't be opened for the TV", http.StatusBadGateway)
+			return
+		}
+	}
+	r.SetPathValue("id", id)
 	file := r.PathValue("file")
 	switch {
 	case file == "playlist.m3u8":
 		s.streamPlaylist(w, r)
 	case file == "init.mp4":
 		s.streamInit(w, r)
+	case file == "sub-auto.vtt":
+		session, live := s.streams.Get(id)
+		if !live {
+			http.NotFound(w, r)
+			return
+		}
+		track, found := autoTrack(session, lang)
+		// None in that language, or only pictures: an empty track, as one that fails could fail the episode.
+		if !found {
+			w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+			w.Write([]byte("WEBVTT\n"))
+			return
+		}
+		r.SetPathValue("track", strconv.Itoa(track))
+		s.castSubtitle(w, r, -1)
+	case file == "master.m3u8" || strings.HasPrefix(file, "subs-") && strings.HasSuffix(file, ".m3u8"):
+		// AirPlay's playlists: the picture and its text subtitles.
+		session, live := s.streams.Get(id)
+		if !live {
+			http.NotFound(w, r)
+			return
+		}
+		body := airplayMaster(session, r.URL.Query().Get("sub"))
+		if file != "master.m3u8" {
+			track, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(file, "subs-"), ".m3u8"))
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			body = airplaySubtitles(session, track)
+		}
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write([]byte(body))
+	case strings.HasPrefix(file, "subs-") && strings.HasSuffix(file, ".vtt"):
+		// AirPlay's pieces: subs-<track>-<piece>.vtt.
+		track, piece, _ := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(file, "subs-"), ".vtt"), "-")
+		n, err := strconv.Atoi(piece)
+		if err != nil || n < 0 {
+			http.NotFound(w, r)
+			return
+		}
+		r.SetPathValue("track", track)
+		s.castSubtitle(w, r, n)
 	case strings.HasPrefix(file, "sub-") && strings.HasSuffix(file, ".vtt"):
 		r.SetPathValue("track", strings.TrimSuffix(strings.TrimPrefix(file, "sub-"), ".vtt"))
-		s.castSubtitle(w, r)
+		s.castSubtitle(w, r, -1)
 	case strings.HasSuffix(file, ".mp4"):
 		r.SetPathValue("segment", file)
+		if session, live := s.streams.Get(id); live {
+			if n, err := strconv.Atoi(strings.TrimSuffix(file, ".mp4")); err == nil {
+				s.noteTV(session, n)
+			}
+		}
 		s.streamSegment(w, r)
 	default:
 		http.NotFound(w, r)
@@ -226,7 +290,8 @@ func (s *Server) castFile(w http.ResponseWriter, r *http.Request) {
 }
 
 // castSubtitle is the track as WebVTT, the one text format the receiver draws: styling and positions go.
-func (s *Server) castSubtitle(w http.ResponseWriter, r *http.Request) {
+// piece: one of AirPlay's minutes (airplayCues); -1, the whole track, for the Chromecast.
+func (s *Server) castSubtitle(w http.ResponseWriter, r *http.Request, piece int) {
 	rec := httptest.NewRecorder()
 	s.streamSubtitle(rec, r)
 	if rec.Code != http.StatusOK {
@@ -243,6 +308,9 @@ func (s *Server) castSubtitle(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("cast subtitles", "err", err)
 		http.Error(w, "subtitles could not be converted", http.StatusInternalServerError)
 		return
+	}
+	if piece >= 0 {
+		vtt = airplayCues(vtt, piece)
 	}
 	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

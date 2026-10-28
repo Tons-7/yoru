@@ -282,6 +282,7 @@ func (e *Enricher) flagsAsync(animeID int) {
 		crawl := sync.OnceValues(func() (metadata.Listing, error) { return e.meta.Listing(ctx, malID) })
 		e.flags(ctx, animeID, malID, crawl)
 		e.listingFrom(ctx, animeID, crawl)
+		e.scores(ctx, animeID, malID, crawl)
 
 		// Outside flags: that stops once it has been run for a show, while a
 		// currently-airing series grows new unclassified episodes every week.
@@ -319,6 +320,22 @@ func (e *Enricher) flags(ctx context.Context, animeID, malID int, crawl func() (
 	}
 	if recaps > 0 {
 		e.log.Info("recap episodes found", "anime", animeID, "count", recaps)
+	}
+}
+
+// scores keeps MyAnimeList's episode ratings and threads for a show with something watched, weekly at most.
+func (e *Enricher) scores(ctx context.Context, animeID, malID int, crawl func() (metadata.Listing, error)) {
+	if !e.store.ScoresDue(ctx, animeID, malID) {
+		return
+	}
+	found, err := crawl()
+	// Not listed yet is an answer too: asked again in a week, not on every page load.
+	if err != nil && !errors.Is(err, metadata.ErrNotListed) {
+		e.log.Warn("episode scores", "anime", animeID, "err", err)
+		return
+	}
+	if err := e.store.SaveScores(ctx, malID, found.Scores); err != nil {
+		e.log.Warn("save episode scores", "anime", animeID, "err", err)
 	}
 }
 

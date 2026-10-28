@@ -653,6 +653,7 @@ export function Watch() {
                   onEnded={onEnded}
                   onNext={hasNext ? goNext : undefined}
                   onPrevious={previousPath ? goPrevious : undefined}
+                  onTVMovedOn={(anime, episode) => navigate(`/watch/${anime}/${episode}`)}
                   // Back into the finished episode: the countdown must not take the viewer away mid-rewatch.
                   onResume={clearEnded}
                   onEndStuck={(detail) => note('end-stuck', detail)}

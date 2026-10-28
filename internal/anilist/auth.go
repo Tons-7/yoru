@@ -3,6 +3,7 @@ package anilist
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,8 +21,41 @@ func WithOAuthBase(base string) Option {
 	return func(c *Client) { c.oauthBase = base }
 }
 
-// AniList has no PKCE or usable implicit flow (implicit token lands in a URL
-// fragment the server never sees), so Authorization Code is the only option.
+// YoruClientID is Yoru's own AniList client, redirecting to AniList's pin page: the token is shown there to
+// paste back, so connecting needs no client of one's own. Its secret is never used.
+const YoruClientID = "55278"
+
+// AuthorizeTokenURL asks for a token straight away (the implicit grant): it needs no secret.
+func (c *Client) AuthorizeTokenURL(clientID string) string {
+	return c.oauthBase + "/authorize?" + url.Values{"client_id": {clientID}, "response_type": {"token"}}.Encode()
+}
+
+// PastedToken reads what the viewer pasted from the pin page: the token alone or the whole address it came
+// in. Its expiry is the token's own (a JWT), or AniList's year when it doesn't say.
+func PastedToken(pasted string) (Token, bool) {
+	raw := strings.TrimSpace(pasted)
+	if _, fragment, ok := strings.Cut(raw, "#"); ok {
+		if v, err := url.ParseQuery(fragment); err == nil {
+			raw = v.Get("access_token")
+		}
+	}
+	if raw == "" || strings.ContainsAny(raw, " \t\r\n") {
+		return Token{}, false
+	}
+	token := Token{AccessToken: raw, TokenType: "Bearer", ExpiresIn: 365 * 24 * 3600}
+	if parts := strings.Split(raw, "."); len(parts) == 3 {
+		var claims struct {
+			Exp int64 `json:"exp"`
+		}
+		body, err := base64.RawURLEncoding.DecodeString(parts[1])
+		if err == nil && json.Unmarshal(body, &claims) == nil && claims.Exp > 0 {
+			token.ExpiresIn = int(claims.Exp - time.Now().Unix())
+		}
+	}
+	return token, true
+}
+
+// The own-client flow: Authorization Code, as AniList has no PKCE.
 func (c *Client) AuthorizeURL(clientID, redirectURI, state string) string {
 	q := url.Values{
 		"client_id":     {clientID},

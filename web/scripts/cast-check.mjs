@@ -39,6 +39,28 @@ const fakeSdk = `(() => {
         mediaInfo: { contentId: req.media.contentId } })
       fire('anyChanged')
     },
+    // A whole queue: the TV plays the first, and __castNextItem() moves it on as its autoplay would.
+    getSessionObj: () => ({
+      queueLoad: (req, done) => {
+        window.__castQueued = JSON.parse(JSON.stringify(req))
+        const first = req.items[req.startIndex ?? 0]
+        Object.assign(player, { currentTime: first.startTime, duration: 180, isPaused: false, isConnected: true,
+          mediaInfo: { contentId: first.media.contentId } })
+        let at = req.startIndex ?? 0
+        window.__castNextItem = () => {
+          at++
+          Object.assign(player, { currentTime: 0, mediaInfo: { contentId: req.items[at].media.contentId } })
+          fire('anyChanged')
+        }
+        fire('anyChanged')
+        done()
+      },
+    }),
+  }
+  // The TV's time and length change on their own, as when the next item's arrive before its media info.
+  window.__castTVAt = (currentTime, duration) => {
+    Object.assign(player, { currentTime, duration: duration ?? player.duration })
+    fire('anyChanged')
   }
   // Another sender's stream on the TV.
   window.__castOther = () => {
@@ -75,12 +97,15 @@ const fakeSdk = `(() => {
   class MediaInfo { constructor(contentId, contentType) { this.contentId = contentId; this.contentType = contentType } }
   class LoadRequest { constructor(media) { this.media = media } }
   class Track { constructor(trackId, type) { this.trackId = trackId; this.type = type } }
+  class QueueItem { constructor(media) { this.media = media } }
+  class QueueLoadRequest { constructor(items) { this.items = items } }
   window.chrome = window.chrome || {}
   window.chrome.cast = {
     AutoJoinPolicy: { ORIGIN_SCOPED: 'origin_scoped' },
     Image: class { constructor(url) { this.url = url } },
     media: {
       DEFAULT_MEDIA_RECEIVER_APP_ID: 'CC1AD845', MediaInfo, GenericMediaMetadata: Obj, LoadRequest, Track, TextTrackStyle: Obj,
+      QueueItem, QueueLoadRequest,
       TrackType: { TEXT: 'TEXT' }, TextTrackType: { SUBTITLES: 'SUBTITLES' }, StreamType: { BUFFERED: 'BUFFERED' },
       HlsSegmentFormat: { FMP4: 'fmp4' }, HlsVideoSegmentFormat: { FMP4: 'fmp4' },
     },
@@ -119,7 +144,7 @@ try {
 
   // Reachable: the link the server signs is what the TV is given.
   await page.route('**/api/access', (route) => route.fulfill({ json: { reachable: true, urls: [], canSwitch: true, host: true } }))
-  await page.route('**/api/stream/*/cast', (route) => route.fulfill({ json: {
+  await page.route('**/api/stream/*/cast*', (route) => route.fulfill({ json: {
     url: `${BASE}/c/signed/playlist.m3u8`, subtitles: [{ index: 2, language: 'eng', url: `${BASE}/c/signed/sub-2.vtt` }],
   } }))
   await page.reload({ waitUntil: 'domcontentloaded' })
@@ -157,13 +182,64 @@ try {
     String(await video.evaluate((v) => v.currentTime)))
   await page.evaluate(() => window.cast.framework.CastContext.getInstance().endCurrentSession(true))
 
+  // With Auto next on, the TV is given what plays after too, and goes on by itself; this page follows it.
+  await page.unroute('**/api/stream/*/cast*')
+  const queued = (n) => ({
+    key: `${ANIME}-${n}`, url: `${BASE}/c/next${n}/playlist.m3u8`, title: 'Show', subtitle: `Episode ${n}`,
+    subtitles: [{ index: 0, language: 'eng', url: `${BASE}/c/next${n}/sub-auto.vtt` }],
+  })
+  let castAsked = ''
+  await page.route('**/api/stream/*/cast*', (route) => {
+    castAsked = route.request().url()
+    return route.fulfill({ json: {
+      url: `${BASE}/c/signed/playlist.m3u8`, subtitles: [{ index: 2, language: 'eng', url: `${BASE}/c/signed/sub-2.vtt` }],
+      queue: [queued(2), queued(3)],
+    } })
+  })
+  await video.evaluate((v) => (v.currentTime = 42))
+  await video.hover()
+  await castButton.click()
+  const queue = await until(() => page.evaluate(() => !!window.__castQueued), 8000) && await page.evaluate(() => window.__castQueued)
+  const items = queue?.items ?? []
+  check(/[?&]sub=eng/.test(castAsked), "the shown subtitles' language is asked for, for the queued episodes to follow", castAsked)
+  check(items.length === 3 && items[1].media.contentId === `${BASE}/c/next2/playlist.m3u8`,
+    'the TV is given this episode and the two after', JSON.stringify(items.map((i) => i.media.contentId)))
+  check(Math.abs((items[0]?.startTime ?? 0) - 42) < 2 && items[1]?.startTime === 0, 'the first from where it got to, the next from the start')
+  check(items.every((i) => i.autoplay === true && i.preloadTime > 0), 'each plays on its own, loaded a little before')
+  check(items[1]?.media.tracks?.[0]?.trackContentId?.endsWith('/sub-auto.vtt') && items[1]?.activeTrackIds?.[0] === 1,
+    "with subtitles in this episode's language shown", JSON.stringify(items[1]?.media.tracks ?? []))
+  check(await until(() => panel.isVisible()), 'the player is the remote for it')
+  const reports = []
+  await page.route('**/api/progress', (route) => {
+    reports.push(route.request().postDataJSON())
+    return route.continue()
+  })
+  await page.evaluate(() => window.__castTVAt(150))
+  await sleep(300)
+  // The next one's time and length first, then which it is: the last report for this one keeps its own.
+  await page.evaluate(() => window.__castTVAt(1, 1300))
+  await sleep(300)
+  await page.evaluate(() => window.__castNextItem())
+  check(await until(async () => page.url().endsWith(`/watch/${ANIME}/2`), 10_000), 'the TV going on to episode 2 takes this page there',
+    page.url())
+  check(await page.evaluate(() => [...document.querySelectorAll('video')].every((v) => v.paused)), "and nothing plays here while the TV does")
+  // Both of them: the TV's, and the page's on leaving the episode to follow it.
+  const ones = reports.filter((r) => r.episode === 1)
+  check(ones.length > 0 && ones.every((r) => Math.abs(r.position - 150) < 1 && Math.abs(r.duration - 180) < 1),
+    "episode 1's last reports are where the TV left it, not the next one's place or where casting began", JSON.stringify(reports))
+  await page.unroute('**/api/progress')
+  await page.evaluate(() => window.cast.framework.CastContext.getInstance().endCurrentSession(true))
+  await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
+  await video.waitFor({ timeout: 30_000 })
+  await page.waitForFunction(() => (document.querySelector('video')?.readyState ?? 0) >= 2, null, { timeout: 30_000 }).catch(() => {})
+
   // Drawn in, with the setting on: the track shown here goes into the picture, and no text track beside it.
   await fetch(`${BASE}/api/prefs`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ key: 'cast.burn_subtitles', value: 'true' }),
   })
   let asked = ''
-  await page.unroute('**/api/stream/*/cast')
+  await page.unroute('**/api/stream/*/cast*')
   await page.route('**/api/stream/*/cast*', (route) => {
     asked = route.request().url()
     return route.fulfill({ json: { url: `${BASE}/c/burned/playlist.m3u8`, subtitles: [], burned: true } })

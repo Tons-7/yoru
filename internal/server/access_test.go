@@ -409,6 +409,7 @@ func TestHostOnlyRoutesRefusePairedDevices(t *testing.T) {
 		{"POST", "/api/setup/install/ffmpeg", ""},
 		{"POST", "/api/update/apply", ""},
 		{"POST", "/api/auth/logout", ""},
+		{"POST", "/api/auth/token", `{"token":"x"}`},
 		{"POST", "/api/mal/auth/logout", ""},
 		{"GET", "/api/access/devices", ""},
 		{"POST", "/api/access/devices/1", `{}`},

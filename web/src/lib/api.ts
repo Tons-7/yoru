@@ -276,6 +276,9 @@ export interface Episode {
   local?: boolean
   /** Title, synopsis and still held back by the show's spoiler rule until watched or tapped open. */
   spoiler?: boolean
+  /** MyAnimeList's 1 to 5 rating and discussion thread, sent only once it's watched. */
+  score?: number
+  forumUrl?: string
 }
 
 /** Mixed episodes are part filler, so they carry the filler colour too. */
@@ -466,6 +469,8 @@ export interface StreamInfo {
   fontsUrl?: string
   /** The file's only subtitles are pictures (PGS, VobSub), which the browser can't draw. */
   imageSubtitles?: boolean
+  /** The signed playlist an Apple TV fetches itself, while a TV can reach Yoru. */
+  airplay?: string
 }
 
 export interface SkipRange {
@@ -508,6 +513,8 @@ export interface Tracker {
   redirect: string
   register: string
   secretRequired: boolean
+  /** AniList only: asks for a code to paste back, on Yoru's own client, so no keys are needed. */
+  tokenUrl?: string
 }
 
 export function statusLabel(value?: string | null) {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"yoru/internal/anilist"
 	"yoru/internal/library"
 )
 
@@ -22,6 +23,8 @@ type trackerStatus struct {
 	Register  string `json:"register"`
 	// False for MyAnimeList: its public clients authenticate with PKCE alone.
 	SecretRequired bool `json:"secretRequired"`
+	// TokenURL asks for a token to paste back, on Yoru's own client: AniList only, once that client exists.
+	TokenURL string `json:"tokenUrl,omitempty"`
 }
 
 func (s *Server) trackers(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +48,9 @@ func (s *Server) trackers(w http.ResponseWriter, r *http.Request) {
 		Register:       "https://anilist.co/settings/developer",
 		SecretRequired: true,
 	}}
+	if anilist.YoruClientID != "" {
+		list[0].TokenURL = s.anilist.AuthorizeTokenURL(anilist.YoruClientID)
+	}
 
 	mal := trackerStatus{
 		Provider: "mal",

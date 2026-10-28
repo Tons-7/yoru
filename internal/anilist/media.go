@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Nearly every AniList field is nullable, so pointers keep "absent" apart from "zero".
@@ -279,6 +280,87 @@ func (c *Client) MediaByIDs(ctx context.Context, ids []int) ([]Media, error) {
 		return anon.Page.Media, nil
 	}
 	return out.Page.Media, nil
+}
+
+// Recommended is one show AniList's community recommends after another, with the recommendation's rating.
+type Recommended struct {
+	From, ID, Rating int
+}
+
+// Recommendations asks after each show's top community recommendations in one request, one alias per show.
+func (c *Client) Recommendations(ctx context.Context, ids []int, per int) ([]Recommended, error) {
+	recs, err := c.recommendations(ctx, ids, per)
+	errs, ok := errors.AsType[Errors](err)
+	if !ok || !errs.NotFound() || len(ids) < 2 {
+		return recs, err
+	}
+	// A show AniList no longer has (or hides) fails every alias: asked one by one, that one left out.
+	recs = nil
+	for _, id := range ids {
+		one, err := c.recommendations(ctx, []int{id}, per)
+		if errs, ok := errors.AsType[Errors](err); ok && errs.NotFound() {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		recs = append(recs, one...)
+	}
+	return recs, nil
+}
+
+func (c *Client) recommendations(ctx context.Context, ids []int, per int) ([]Recommended, error) {
+	var q strings.Builder
+	q.WriteString("query {")
+	for i, id := range ids {
+		fmt.Fprintf(&q, " m%d: Media(id: %d, type: ANIME) { id recommendations(sort: RATING_DESC, perPage: %d) "+
+			"{ nodes { rating mediaRecommendation { id type } } } }", i, id, per)
+	}
+	q.WriteString(" }")
+	var out map[string]*struct {
+		ID              int `json:"id"`
+		Recommendations struct {
+			Nodes []struct {
+				Rating              int `json:"rating"`
+				MediaRecommendation *struct {
+					ID   int    `json:"id"`
+					Type string `json:"type"`
+				} `json:"mediaRecommendation"`
+			} `json:"nodes"`
+		} `json:"recommendations"`
+	}
+	if err := c.Query(ctx, q.String(), nil, &out); err != nil {
+		return nil, err
+	}
+	var recs []Recommended
+	for _, m := range out {
+		if m == nil {
+			continue
+		}
+		for _, n := range m.Recommendations.Nodes {
+			if r := n.MediaRecommendation; r != nil && r.Type == "ANIME" {
+				recs = append(recs, Recommended{From: m.ID, ID: r.ID, Rating: n.Rating})
+			}
+		}
+	}
+	return recs, nil
+}
+
+// IDForMal is the AniList id of a MyAnimeList one; 0 when AniList has none.
+func (c *Client) IDForMal(ctx context.Context, malID int) (int, error) {
+	var out struct {
+		Media *struct {
+			ID int `json:"id"`
+		} `json:"Media"`
+	}
+	err := c.Query(ctx, `query ($mal: Int) { Media(idMal: $mal, type: ANIME) { id } }`, map[string]any{"mal": malID}, &out)
+	if errs, ok := errors.AsType[Errors](err); ok && errs.NotFound() {
+		return 0, nil
+	}
+	if err != nil || out.Media == nil {
+		return 0, err
+	}
+	return out.Media.ID, nil
 }
 
 // ErrIncomplete comes with a partial result; the missing ids may be hidden, not gone.

@@ -34,6 +34,14 @@ func (s *Store) ShownTitle(ctx context.Context, animeID int) string {
 	return PickTitle(s.TitleMode(ctx, animeID), romaji, english)
 }
 
+// AniListForMal is a MyAnimeList id's AniList one, from a show seen or the offline catalogue; 0 if neither.
+func (s *Store) AniListForMal(ctx context.Context, malID int) int {
+	var id int
+	s.r.QueryRowContext(ctx, `SELECT id FROM anime WHERE mal_id = ?1
+		UNION ALL SELECT anime_id FROM corpus_anime WHERE mal_id = ?1 LIMIT 1`, malID).Scan(&id)
+	return id
+}
+
 // BannerOf is the show's wide picture, else its cover, for an alert; "" when there's neither.
 func (s *Store) BannerOf(ctx context.Context, animeID int) string {
 	var url string

@@ -54,6 +54,9 @@ const CHECKS = [
   ['lossless-audio-check.mjs'],
   ['no-transcoder-check.mjs', { BIN_ONLY: 'none' }],
   ['notices-check.mjs', {}, ALONE],
+  ['pair-check.mjs'],
+  ['airplay-check.mjs'],
+  ['picks-check.mjs', {}, ALONE],
   ['over-budget-note-check.mjs'],
   ['pip-check.mjs'],
   // Real sites would compete with the local swarm's.

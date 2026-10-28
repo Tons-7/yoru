@@ -35,6 +35,15 @@ export function useHome() {
   })
 }
 
+/** Home's own picks from the list: "Sequels you missed", and "For you" (the server keeps the day's). */
+export function useHomePicks(kind: 'sequels' | 'for-you') {
+  return useQuery({
+    queryKey: ['home', kind],
+    queryFn: () => api.get<{ items: DiscoverItem[] }>(`/api/home/${kind}`),
+    staleTime: 30 * 60_000,
+  })
+}
+
 export function useDiscover(sort: string, perPage = 24) {
   return useQuery({
     queryKey: ['discover', sort, perPage],

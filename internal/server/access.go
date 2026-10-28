@@ -239,8 +239,10 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// A player app's or a TV's link carries its own signed, expiring grant, checked by its handler.
-		if safeMethod(r.Method) && (strings.HasPrefix(r.URL.Path, "/x/") || strings.HasPrefix(r.URL.Path, "/c/")) {
+		// A player app's or a TV's link carries its own signed, expiring grant, checked by its handler; a
+		// device pairing with a code asks with its pairing cookie.
+		if safeMethod(r.Method) && (strings.HasPrefix(r.URL.Path, "/x/") || strings.HasPrefix(r.URL.Path, "/c/") ||
+			r.URL.Path == "/api/pair/wait") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -253,6 +255,11 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		}
 
 		if subtle.ConstantTimeCompare([]byte(presented(r)), []byte(token)) != 1 {
+			// A TV opening Yoru's address is shown a code to pair with, not a refusal it can do nothing with.
+			if r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html") {
+				s.pairPage(w, r)
+				return
+			}
 			w.Header().Set("WWW-Authenticate", `Bearer realm="Yoru"`)
 			send(w, http.StatusUnauthorized, map[string]any{"error": "invalid or missing token"})
 			return

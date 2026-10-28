@@ -84,6 +84,9 @@ func (s *Session) segmentStart(n int) float64 {
 	return s.starts[max(n, 0)]
 }
 
+// SegmentStart is where segment n begins in the episode, as the TV's asks are read for its place.
+func (s *Session) SegmentStart(n int) float64 { return s.segmentStart(n) }
+
 // SegmentAt is the segment time t falls in, as the player would ask for it.
 func (s *Session) SegmentAt(t float64) int {
 	if !s.sliced() {

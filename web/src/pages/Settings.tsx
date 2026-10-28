@@ -653,7 +653,7 @@ function PlaybackTab() {
           label="Ask if still watching"
           hint={
             f.get('playback.autonext')
-              ? 'After this many episodes in a row with no key, tap or mouse, Auto next stops and asks.'
+              ? 'After this many episodes in a row with no key, tap or mouse, Auto next stops and asks. A TV cast to stops there too.'
               : 'Only with Auto next episode on.'
           }
           keywords="still watching asleep sleep binge pause"
@@ -1822,7 +1822,20 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
   const [clientId, setClientId] = useState(tracker.clientId)
   const [secret, setSecret] = useState('')
   // Keys are the host's to add: a paired device got the form open and a Save that always failed.
-  const [editing, setEditing] = useState(!tracker.configured && host)
+  const [editing, setEditing] = useState(!tracker.configured && host && !tracker.tokenUrl)
+  // Yoru's own AniList client: AniList shows a code to paste back, no keys of one's own. An own client leads.
+  const quick = !tracker.configured && host ? tracker.tokenUrl : undefined
+  const [pasting, setPasting] = useState(false)
+  const [pasted, setPasted] = useState('')
+  const connect = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post('/api/auth/token', { token: pasted }),
+    onSuccess: () => {
+      setPasted('')
+      setPasting(false)
+      qc.invalidateQueries({ queryKey: ['trackers'] })
+    },
+  })
 
   const save = useMutation({
     meta: { inline: true },
@@ -1857,7 +1870,9 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
       ? tracker.user ? `Connected as ${tracker.user}` : 'Connected'
       : tracker.configured
         ? 'Set up, not connected'
-        : 'Not set up'
+        : tracker.tokenUrl
+          ? 'Not connected'
+          : 'Not set up'
 
   const loginPath = tracker.provider === 'anilist' ? '/api/auth/login' : '/api/mal/auth/login'
   const logoutPath =
@@ -1892,12 +1907,26 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
               {tracker.connected ? 'Reconnect' : 'Connect'}
             </a>
           )}
+          {quick && (
+            <a
+              href={quick}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => {
+                setPasting(true)
+                setEditing(false)
+              }}
+              className={buttonClass('primary')}
+            >
+              {tracker.connected ? 'Reconnect' : 'Connect'}
+            </a>
+          )}
           {host && (
             <button
               onClick={() => setEditing((open) => !open)}
               className={buttonClass()}
             >
-              {editing ? 'Cancel' : tracker.configured ? 'Edit keys' : 'Add keys'}
+              {editing ? 'Cancel' : tracker.configured ? 'Edit keys' : quick ? 'Use my own client' : 'Add keys'}
             </button>
           )}
           {tracker.provider === 'mal' && tracker.connected && (
@@ -1951,6 +1980,28 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
       )}
 
       {tracker.connected && tracker.provider === 'anilist' && <ImportRow />}
+
+      {pasting && quick && (
+        <div className="space-y-3 rounded-lg border border-base-850 bg-base-950/40 p-3">
+          <p className="text-xs text-base-400">
+            Approve Yoru on the AniList page that opened, then paste the code it shows here.
+          </p>
+          <Field label="Code from AniList" value={pasted} onChange={setPasted} secret />
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => connect.mutate()}
+              disabled={connect.isPending || pasted.trim() === ''}
+              className={buttonClass('primary')}
+            >
+              {connect.isPending ? 'Connecting…' : 'Connect'}
+            </button>
+            <button onClick={() => setPasting(false)} className={buttonClass()}>
+              Cancel
+            </button>
+            {connect.isError && <span className="text-xs text-red-400">{(connect.error as Error).message}</span>}
+          </div>
+        </div>
+      )}
 
       {editing && (
         <div className="space-y-3 rounded-lg border border-base-850 bg-base-950/40 p-3">
@@ -2477,6 +2528,7 @@ function DevicesAccess() {
           </div>
         </div>
       )}
+      {access.data?.reachable && access.data.urls.length > 0 && <PairDevice url={access.data.urls[0]} />}
       {/* Whatever device this is: the phone that installs is rarely the computer Yoru runs on. */}
       <InstallHere />
       {proxy && <ProxyRow proxy={proxy} token={access.data?.token ?? ''} />}
@@ -2693,6 +2745,55 @@ function InstallAsApp() {
         </form>
       )}
     </>
+  )
+}
+
+// A TV or console opening Yoru's address without the link's token shows a code; typed here, it lets it in.
+function PairDevice({ url }: { url: string }) {
+  const [code, setCode] = useState('')
+  const pair = useMutation({
+    meta: { inline: true },
+    mutationFn: (typed: string) => api.post<{ paired: string }>('/api/pair', { code: typed }),
+    onSuccess: () => setCode(''),
+  })
+  // The address alone, which a remote can type: the token stays in the link.
+  const address = new URL(url).origin
+  const complete = code.replace(/[\s-]/g, '').length === 6
+  return (
+    <Row
+      label="Pair a device"
+      hint={
+        pair.isError
+          ? (pair.error as Error).message
+          : pair.data
+            ? `Paired ${pair.data.paired}.`
+            : `On a TV or console, open ${address}: it shows a code to type here.`
+      }
+      keywords="pair code tv console remote link quick connect"
+    >
+      <form
+        className="flex items-center gap-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          pair.mutate(code)
+        }}
+      >
+        <input
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase())}
+          placeholder="K7Q-2MX"
+          aria-label="The code the device shows"
+          maxLength={8}
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          className={cx(inputClass, 'w-28 font-mono tracking-widest uppercase')}
+        />
+        <button type="submit" disabled={!complete || pair.isPending} className={buttonClass('primary')}>
+          {pair.isPending ? 'Pairing…' : 'Pair'}
+        </button>
+      </form>
+    </Row>
   )
 }
 

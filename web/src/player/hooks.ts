@@ -10,6 +10,7 @@ import type { PgsRenderer } from 'libpgs'
 import pgsWorkerUrl from 'libpgs/dist/libpgs.worker.js?url'
 import type { SkipRange, StreamInfo, SubtitleTrack } from '../lib/api'
 import { restyle as restyleASS, type SubLook } from './subLook'
+import { airplayHere } from './airplay'
 
 // hls.js's details for a codec the browser won't take at all.
 const REFUSED_CODEC = new Set<string>(['bufferAddCodecError', 'bufferIncompatibleCodecsError', 'manifestIncompatibleCodecsError'])
@@ -22,6 +23,8 @@ export function useHlsSource(
   onGone?: () => void,
   /** A decode failure; true when it is handled (reopened converted), so no error is shown. */
   onUndecodable?: () => boolean,
+  /** The playlist an Apple TV fetches itself, offered beside the page's own source where AirPlay is. */
+  airplay?: string,
 ) {
   // Tagged with what it was about: the last episode's error never sits over the next one's search.
   const [failure, setFailure] = useState<{
@@ -39,6 +42,14 @@ export function useHlsSource(
   const readStart = useEffectEvent(() => startAt)
   const gone = useEffectEvent(() => onGone?.())
   const undecodable = useEffectEvent(() => !!onUndecodable?.())
+  // Read at attach time too: a new signed link mid-episode needn't rebuild the player.
+  const readAirplay = useEffectEvent(() => airplay)
+  // The Apple TV's source beside hls.js's, where AirPlay is.
+  const alternative = useRef<HTMLSourceElement | null>(null)
+  // Its link follows the subtitles picked here as they change, for when an Apple TV is picked.
+  useEffect(() => {
+    if (alternative.current && airplay) alternative.current.src = airplay
+  }, [airplay])
 
   useEffect(() => {
     if (!video || !playlist) return
@@ -168,9 +179,24 @@ export function useHlsSource(
         }
       })
 
+      // Safari's managed media source goes to an Apple TV only beside an HLS source it fetches: that one,
+      // second. hls.js empties the sources and turns remote playback off on each attach, a recovery's too.
+      const offer = () => {
+        const remote = readAirplay()
+        if (!remote || !airplayHere() || cancelled) return
+        // The attribute behind disableRemotePlayback, which hls.js set.
+        video.removeAttribute('disableremoteplayback')
+        const source = (alternative.current ??= video.ownerDocument.createElement('source'))
+        source.type = 'application/x-mpegURL'
+        source.src = remote
+        if (source.parentNode !== video) video.append(source)
+      }
+      instance.on(HlsCtor.Events.MEDIA_ATTACHED, offer)
+
       instance.loadSource(playlist)
       instance.attachMedia(video)
       hls.current = instance
+      offer()
     })()
 
     return () => {
@@ -179,6 +205,9 @@ export function useHlsSource(
       video.removeEventListener('seeking', onSeeking)
       hls.current?.destroy()
       hls.current = null
+      // Before the reload below, or Safari would play the Apple TV's source here.
+      alternative.current?.remove()
+      alternative.current = null
       if (native && seek) video.removeEventListener('loadedmetadata', seek)
       // Episodes share the element, emptied so the next source doesn't attach to a finished one.
       video.removeAttribute('src')

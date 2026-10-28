@@ -112,6 +112,20 @@ type Server struct {
 	derivingMu sync.Mutex
 	deriving   map[int]struct{}
 
+	// Home's "For you" (home.go), kept a day.
+	forYouMu sync.Mutex
+	forYou   forYouPicks
+
+	// Devices pairing with a code (pairing.go), by the secret in their pairing cookie.
+	pairMu sync.Mutex
+	pairs  map[string]*pairing
+
+	// The TV's queue (castqueue.go): episodes opening for it, where it has read each, pages' last reports.
+	tvMu         sync.Mutex
+	tvOpens      map[string]*tvOpen
+	tvSeen       map[string]*tvWatch
+	pageReported map[string]time.Time
+
 	// Rotated from a handler while the guard reads it.
 	tokenMu sync.RWMutex
 	token   string
@@ -178,40 +192,44 @@ func New(d Deps) *Server {
 		importer: d.Importer, ingester: d.Ingester,
 		indexer: d.Indexer, sites: d.Sites, push: d.Push, log: d.Log,
 		// Built once by the caller; a second one here lacked the real one's configuration.
-		finder:      d.Finder,
-		playback:    d.Playback,
-		watcher:     d.Watcher,
-		enricher:    d.Enricher,
-		relations:   d.Relations,
-		cache:       d.Cache,
-		streams:     d.Streams,
-		subtitles:   d.Subtitles,
-		thumbs:      d.Thumbs,
-		jobs:        d.Jobs,
-		mal:         d.MAL,
-		malSync:     d.MALSync,
-		scanner:     d.Scanner,
-		syncer:      d.Sync,
-		prefetch:    d.Prefetch,
-		player:      d.Player,
-		deps:        d.Deps,
-		downloader:  d.Downloader,
-		updater:     d.Updater,
-		engine:      d.Engine,
-		presence:    d.Presence,
-		relaunch:    d.Relaunch,
-		exit:        d.Exit,
-		showWindow:  d.ShowWindow,
-		token:       d.Token,
-		grantSecret: randomBytes(32),
-		fonts:       map[string][]transcode.FontFile{},
-		fontJobs:    map[string]struct{}{},
-		readying:    map[string]time.Time{},
-		finding:     map[int]bool{},
-		findTried:   map[string]time.Time{},
-		deriving:    map[int]struct{}{},
-		jimaku:      jimaku.New(),
-		jimakuFiles: map[string]jimakuListing{},
+		finder:       d.Finder,
+		playback:     d.Playback,
+		watcher:      d.Watcher,
+		enricher:     d.Enricher,
+		relations:    d.Relations,
+		cache:        d.Cache,
+		streams:      d.Streams,
+		subtitles:    d.Subtitles,
+		thumbs:       d.Thumbs,
+		jobs:         d.Jobs,
+		mal:          d.MAL,
+		malSync:      d.MALSync,
+		scanner:      d.Scanner,
+		syncer:       d.Sync,
+		prefetch:     d.Prefetch,
+		player:       d.Player,
+		deps:         d.Deps,
+		downloader:   d.Downloader,
+		updater:      d.Updater,
+		engine:       d.Engine,
+		presence:     d.Presence,
+		relaunch:     d.Relaunch,
+		exit:         d.Exit,
+		showWindow:   d.ShowWindow,
+		token:        d.Token,
+		grantSecret:  randomBytes(32),
+		fonts:        map[string][]transcode.FontFile{},
+		fontJobs:     map[string]struct{}{},
+		readying:     map[string]time.Time{},
+		finding:      map[int]bool{},
+		findTried:    map[string]time.Time{},
+		deriving:     map[int]struct{}{},
+		pairs:        map[string]*pairing{},
+		tvOpens:      map[string]*tvOpen{},
+		tvSeen:       map[string]*tvWatch{},
+		pageReported: map[string]time.Time{},
+		jimaku:       jimaku.New(),
+		jimakuFiles:  map[string]jimakuListing{},
 	}
 	s.downloader.WhenArrived(s.watchedArrived)
 	return s
@@ -253,8 +271,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/seadex/refresh", s.refreshSeaDex)
 	mux.HandleFunc("GET /api/schedule", s.schedule)
 	mux.HandleFunc("GET /api/discover", s.discover)
+	mux.HandleFunc("GET /api/home/sequels", s.homeSequels)
+	mux.HandleFunc("GET /api/home/for-you", s.homeForYou)
 	mux.HandleFunc("GET /api/random", s.random)
 	mux.HandleFunc("GET /api/anime/{id}", s.anime)
+	mux.HandleFunc("GET /api/anime/from-mal", s.animeFromMal)
 	mux.HandleFunc("GET /api/anime/{id}/characters", s.characters)
 	mux.HandleFunc("GET /api/anime/{id}/extra", s.extra)
 	mux.HandleFunc("GET /api/browse", s.browse)
@@ -295,6 +316,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/update/apply", hostOnly(s.updateApply))
 	mux.HandleFunc("GET /api/auth/login", hostOnly(s.authLogin))
 	mux.HandleFunc("POST /api/auth/logout", hostOnly(s.authLogout))
+	mux.HandleFunc("POST /api/auth/token", hostOnly(s.authToken))
 	mux.HandleFunc("GET /callback", hostOnly(s.authCallback))
 	mux.HandleFunc("POST /api/sync", s.sync)
 	mux.HandleFunc("POST /api/play", s.play)
@@ -413,6 +435,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/access/devices/{id}", hostOnly(s.decideDevice))
 	mux.HandleFunc("DELETE /api/access/devices/{id}", hostOnly(s.removeDevice))
 	mux.HandleFunc("POST /api/access/approval", hostOnly(s.setApproval))
+	// Pairing with a code: entered by a device already in (pairApprove decides which), asked after by the TV.
+	mux.HandleFunc("POST /api/pair", s.pairApprove)
+	mux.HandleFunc("GET /api/pair/wait", s.pairWait)
 	mux.HandleFunc("GET /api/access/https", hostOnly(s.accessHTTPS))
 	mux.HandleFunc("POST /api/access/https", hostOnly(s.setAccessHTTPS))
 	mux.HandleFunc("POST /api/access/https/check", hostOnly(s.checkAccessHTTPS))

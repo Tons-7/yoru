@@ -35,6 +35,7 @@ import { Shortcuts } from './Shortcuts'
 import { SavedCopyNotice } from './SavedCopyNotice'
 import { menuItems, useDebounced, useDismiss, useMediaQuery, useModalFocus, walkMenu } from '../lib/hooks'
 import { useNewSettings } from '../lib/whatsNew'
+import { showLink } from '../lib/showLink'
 
 const TABS = [
   { to: '/', label: 'Home', end: true },
@@ -296,18 +297,25 @@ function SearchBox() {
   const [active, setActive] = useState(-1)
   const close = useCallback(() => setOpen(false), [])
   const box = useDismiss<HTMLFormElement>(close, open)
+  // A pasted AniList or MyAnimeList show link opens that show rather than searching for its address.
+  const link = showLink(value)
   const local = useQuery({
-    enabled: q.length >= 2,
+    enabled: q.length >= 2 && !link,
     queryKey: ['search', 'local', q],
     queryFn: () => api.get<{ results: LibraryItem[] }>(`/api/search/local?q=${encodeURIComponent(q)}&limit=8`),
     staleTime: 30_000,
   })
-  const hits = q.length >= 2 ? (local.data?.results ?? []) : []
+  const hits = q.length >= 2 && !link ? (local.data?.results ?? []) : []
   const showMenu = open && q.length >= 2
 
   const browse = () => {
     if (!value.trim()) return
     setOpen(false)
+    if (link) {
+      setValue('')
+      navigate(`/open?url=${encodeURIComponent(value.trim())}`)
+      return
+    }
     navigate(`/browse?q=${encodeURIComponent(value.trim())}`)
   }
   const pick = (id: number) => {
@@ -429,7 +437,7 @@ function SearchBox() {
               </button>
             </li>
           ))}
-          {hits.length === 0 && local.isSuccess && (
+          {hits.length === 0 && local.isSuccess && !link && (
             // It searches every show Yoru holds, not only the library.
             <li className="px-2 py-1.5 text-xs text-base-500">Nothing saved matches. Press Enter to search AniList.</li>
           )}
@@ -444,7 +452,7 @@ function SearchBox() {
                 active === hits.length ? 'bg-base-800' : 'hover:bg-base-800',
               )}
             >
-              Search AniList for “{value.trim()}”
+              {link ? `Open this ${link.site === 'anilist' ? 'AniList' : 'MyAnimeList'} link` : `Search AniList for “${value.trim()}”`}
             </button>
           </li>
         </ul>

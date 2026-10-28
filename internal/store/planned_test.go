@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func animeWithCount(t *testing.T, s *Store, id, episodes int) {
@@ -67,6 +68,32 @@ func TestNoEpisodesWhenTheCountIsUnknown(t *testing.T) {
 	if len(eps) != 0 {
 		t.Fatalf("invented %d episodes for a show with no count", len(eps))
 	}
+}
+
+// An airing show with no count yet lists what aired and the next, dated; still so once releases give rows.
+func TestAnAiringShowWithoutACountListsWhatAired(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	animeWithCount(t, s, 1, 0)
+	at := time.Now().Add(72 * time.Hour).Unix()
+	if _, err := s.w.Exec(`UPDATE anime SET status = 'RELEASING', next_episode = 4, next_airing_at = ? WHERE id = 1`, at); err != nil {
+		t.Fatal(err)
+	}
+	listed := func(when string) {
+		t.Helper()
+		eps, err := s.Episodes(ctx, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(eps) != 4 || eps[3].AirDate == nil || *eps[3].AirDate != at {
+			t.Fatalf("%s: %d episodes (%+v), want 1-4 with 4 dated", when, len(eps), eps)
+		}
+	}
+	listed("planned")
+	if _, err := s.SaveDerivedEpisodes(ctx, 1, []int{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	listed("derived 1-2")
 }
 
 func itoa(n int) string {

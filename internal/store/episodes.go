@@ -45,6 +45,9 @@ type EpisodeRow struct {
 	Local bool `json:"local,omitempty"`
 	// Spoiler: title, synopsis and still are held back until it's watched or tapped open.
 	Spoiler bool `json:"spoiler,omitempty"`
+	// MyAnimeList's rating of the episode and its discussion thread, given only once it's watched.
+	Score *float64 `json:"score,omitempty"`
+	Forum *string  `json:"forumUrl,omitempty"`
 }
 
 func (s *Store) SaveEpisodes(ctx context.Context, animeID int, eps []metadata.Episode) (int, error) {
@@ -215,6 +218,55 @@ func (s *Store) SaveFlags(ctx context.Context, malID int, flags []metadata.Episo
 	return recaps, tx.Commit()
 }
 
+// SaveScores replaces a show's episode scores and marks them fetched.
+func (s *Store) SaveScores(ctx context.Context, malID int, scores []metadata.EpisodeScore) error {
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, sc := range scores {
+		var score any
+		if sc.Score > 0 {
+			score = sc.Score
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO episode_score (mal_id, number, score, forum_url) VALUES (?,?,?,?)
+			ON CONFLICT(mal_id, number) DO UPDATE SET score=excluded.score, forum_url=excluded.forum_url`,
+			malID, sc.Episode, score, nullable(sc.Forum)); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.MarkSource(ctx, scoresKey(malID), len(scores))
+}
+
+// scoresRetry: an airing show's new episodes gain scores week by week.
+const scoresRetry = 7 * 24 * time.Hour
+
+// ScoresDue: a show with something watched whose episode scores are missing or a week old.
+func (s *Store) ScoresDue(ctx context.Context, animeID, malID int) bool {
+	if malID == 0 {
+		return false
+	}
+	if at, err := s.SourceRefreshedAt(ctx, scoresKey(malID)); err != nil || time.Since(at) < scoresRetry {
+		return false
+	}
+	var watched bool
+	s.r.QueryRowContext(ctx, `
+		SELECT coalesce((SELECT progress FROM list_entry WHERE anime_id = ?), 0) > 0
+		    OR EXISTS (SELECT 1 FROM playback WHERE anime_id = ? AND watched = 1)`,
+		animeID, animeID).Scan(&watched)
+	return watched
+}
+
+func scoresKey(malID int) string {
+	return "scores:" + strconv.Itoa(malID)
+}
+
 func (s *Store) SaveSkips(ctx context.Context, malID, episode int, skips []metadata.SkipTime) error {
 	if len(skips) == 0 {
 		return nil
@@ -249,12 +301,13 @@ SELECT e.anime_id, e.ep_key, e.number, e.absolute,
        coalesce(p.position_s, 0), coalesce(p.duration_s, 0),
        EXISTS (SELECT 1 FROM torrent_file tf
                WHERE tf.anime_id = e.anime_id AND tf.ep_key = e.ep_key AND tf.selected = 1),
-       coalesce(p.done_s, 0)
+       coalesce(p.done_s, 0), sc.score, sc.forum_url
 FROM episode e
-LEFT JOIN anime a      ON a.id = e.anime_id
-LEFT JOIN list_entry l ON l.anime_id = e.anime_id
-LEFT JOIN filler f     ON f.mal_id = a.mal_id AND f.number = e.number
-LEFT JOIN playback p   ON p.anime_id = e.anime_id AND p.ep_key = e.ep_key
+LEFT JOIN anime a          ON a.id = e.anime_id
+LEFT JOIN list_entry l     ON l.anime_id = e.anime_id
+LEFT JOIN filler f         ON f.mal_id = a.mal_id AND f.number = e.number
+LEFT JOIN episode_score sc ON sc.mal_id = a.mal_id AND sc.number = e.number
+LEFT JOIN playback p       ON p.anime_id = e.anime_id AND p.ep_key = e.ep_key
 WHERE e.anime_id = ?
 ORDER BY e.number`
 
@@ -276,10 +329,15 @@ func (s *Store) Episodes(ctx context.Context, animeID int) ([]EpisodeRow, error)
 		var done float64
 		if err := rows.Scan(&e.AnimeID, &e.EpKey, &e.Number, &e.Absolute,
 			&e.TitleEN, &e.TitleJA, &e.Overview, &e.Still, &e.AirDate, &e.Runtime,
-			&e.Filler, &recap, &watched, &e.Position, &e.Duration, &e.OnDisk, &done); err != nil {
+			&e.Filler, &recap, &watched, &e.Position, &e.Duration, &e.OnDisk, &done,
+			&e.Score, &e.Forum); err != nil {
 			return nil, err
 		}
 		e.Watched = watched == 1
+		// A rating or a thread would give away an episode not yet seen.
+		if !e.Watched {
+			e.Score, e.Forum = nil, nil
+		}
 		e.Resumable = resumable(e.Position, e.Duration, e.Watched, threshold, done)
 		e.Recap = recap == 1
 		out = append(out, e)
@@ -425,7 +483,8 @@ func (s *Store) asItself(ctx context.Context, animeID int, out []EpisodeRow) []E
 	return out
 }
 
-// padToCount adds episodes the catalogue counts but release-derived lists stop short of.
+// padToCount adds episodes the catalogue counts (with no count yet, up to the next airing) that lists derived
+// from releases stop short of.
 func (s *Store) padToCount(ctx context.Context, animeID int, out []EpisodeRow) []EpisodeRow {
 	for _, e := range out {
 		if e.TitleEN != nil || e.AirDate != nil {
@@ -435,7 +494,7 @@ func (s *Store) padToCount(ctx context.Context, animeID int, out []EpisodeRow) [
 
 	var total int
 	if err := s.r.QueryRowContext(ctx,
-		`SELECT coalesce(episode_count, 0) FROM anime WHERE id = ?`, animeID).Scan(&total); err != nil {
+		`SELECT coalesce(nullif(episode_count, 0), next_episode, 0) FROM anime WHERE id = ?`, animeID).Scan(&total); err != nil {
 		return out
 	}
 
@@ -458,6 +517,9 @@ func (s *Store) padToCount(ctx context.Context, animeID int, out []EpisodeRow) [
 func (s *Store) plannedEpisodes(ctx context.Context, animeID int) ([]EpisodeRow, error) {
 	// The corpus knows the count for shows never imported, MAL-only ones included.
 	total, _ := s.EpisodeCount(ctx, animeID)
+	if total <= 0 {
+		total = s.scheduledThrough(ctx, animeID)
+	}
 	if total <= 0 {
 		return []EpisodeRow{}, nil
 	}
@@ -492,6 +554,16 @@ func (s *Store) plannedEpisodes(ctx context.Context, animeID int) ([]EpisodeRow,
 		out = append(out, row)
 	}
 	return out, nil
+}
+
+// scheduledThrough is the next episode to air: with no count yet, an airing show's list runs to it.
+func (s *Store) scheduledThrough(ctx context.Context, animeID int) int {
+	var next int
+	if err := s.r.QueryRowContext(ctx,
+		`SELECT coalesce(next_episode, 0) FROM anime WHERE id = ?`, animeID).Scan(&next); err != nil {
+		return 0
+	}
+	return next
 }
 
 type playedEpisode struct {

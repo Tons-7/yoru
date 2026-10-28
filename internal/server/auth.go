@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"strconv"
 
+	"yoru/internal/anilist"
 	"yoru/internal/library"
 	"yoru/internal/store"
 )
@@ -65,14 +67,43 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	// Installed only once saved: a failure on the way leaves the previous login, or none, in force.
-	viewer, err := s.anilist.ViewerWith(ctx, token.AccessToken)
-	if err != nil {
-		s.log.Error("viewer", "err", err)
+	if _, err := s.connectAniList(ctx, token); err != nil {
+		s.log.Error("anilist connect", "err", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	http.Redirect(w, r, "/settings?connected=anilist", http.StatusFound)
+}
 
+// authToken connects with a token pasted from AniList's pin page, the one-step way on Yoru's own client.
+func (s *Server) authToken(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		send(w, http.StatusBadRequest, map[string]any{"error": "malformed body"})
+		return
+	}
+	token, ok := anilist.PastedToken(body.Token)
+	if !ok {
+		send(w, http.StatusBadRequest, map[string]any{"error": "That isn't a token. Copy the whole code AniList shows."})
+		return
+	}
+	viewer, err := s.connectAniList(r.Context(), token)
+	if err != nil {
+		s.log.Warn("anilist token", "err", err)
+		send(w, http.StatusBadRequest, map[string]any{"error": "AniList didn't accept that code. Ask for a new one and paste it again."})
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"connected": true, "user": viewer.Name})
+}
+
+// connectAniList installs a login only once saved: a failure leaves the previous one, or none, in force.
+func (s *Server) connectAniList(ctx context.Context, token anilist.Token) (anilist.Viewer, error) {
+	viewer, err := s.anilist.ViewerWith(ctx, token.AccessToken)
+	if err != nil {
+		return viewer, err
+	}
 	err = s.store.SetSettings(ctx, map[string]string{
 		"anilist.token":          token.AccessToken,
 		"anilist.expires_at":     strconv.FormatInt(token.ExpiresAt().Unix(), 10),
@@ -82,13 +113,11 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		library.AuthErrorSetting: "",
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return viewer, err
 	}
 	s.anilist.SetToken(token.AccessToken)
-
 	s.log.Info("anilist connected", "user", viewer.Name, "id", viewer.ID)
-	http.Redirect(w, r, "/settings?connected=anilist", http.StatusFound)
+	return viewer, nil
 }
 
 // authLogout forgets the account, leaving the client ID so it can reconnect.

@@ -22,6 +22,7 @@ const Notifications = lazy(() =>
 const Downloads = lazy(() => import('./pages/Manage').then((m) => ({ default: m.Downloads })))
 const LocalFiles = lazy(() => import('./pages/Manage').then((m) => ({ default: m.LocalFiles })))
 const SetupPage = lazy(() => import('./pages/Setup').then((m) => ({ default: m.SetupPage })))
+const Open = lazy(() => import('./pages/Open').then((m) => ({ default: m.Open })))
 
 function Loading() {
   return (
@@ -50,6 +51,7 @@ export function App() {
           <Route path="downloads" element={<Downloads />} />
           <Route path="local" element={<LocalFiles />} />
           <Route path="setup" element={<SetupPage />} />
+          <Route path="open" element={<Open />} />
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>

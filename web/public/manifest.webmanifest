@@ -10,6 +10,7 @@
   "background_color": "#0b0d12",
   "theme_color": "#0b0d12",
   "launch_handler": { "client_mode": ["navigate-existing", "auto"] },
+  "share_target": { "action": "/open", "method": "GET", "params": { "title": "title", "text": "text", "url": "url" } },
   "shortcuts": [
     { "name": "Continue watching", "short_name": "Continue", "url": "/", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
     { "name": "Schedule", "url": "/schedule", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },

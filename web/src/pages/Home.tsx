@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { api, type LibraryItem } from '../lib/api'
+import { api, type DiscoverItem, type LibraryItem } from '../lib/api'
 import { clockTime } from '../lib/format'
 import { browseSeason, currentSeason, nextSeason } from '../lib/season'
-import { useAired, useDiscover, useHome, useNow, useUpNext } from '../lib/queries'
+import { useAired, useDiscover, useHome, useHomePicks, useNow, useUpNext } from '../lib/queries'
 import { Hero } from '../components/Hero'
 import { HoverInfo } from '../components/HoverInfo'
 import { PlayIcon, PosterCard } from '../components/PosterCard'
@@ -20,6 +20,8 @@ export function Home() {
   const seasonal = useDiscover('season', 20)
   const upcoming = useDiscover('upcoming', 20)
   const continuing = useHome()
+  const sequels = useHomePicks('sequels')
+  const forYou = useHomePicks('for-you')
   const schedule = useAired(48)
   const upNext = useUpNext()
   const upNextEmpty = upNext.isSuccess && upNext.data.items.length === 0
@@ -72,6 +74,9 @@ export function Home() {
               </Rail>
             )
           )}
+
+          <PicksRail title="Sequels you missed" picks={sequels} />
+          <PicksRail title="For you" picks={forYou} />
 
           {schedule.isPending ? (
             <RailSkeleton title="Recently released" />
@@ -252,6 +257,22 @@ function ContinueCard({ item }: { item: LibraryItem }) {
 }
 
 // A rail whose request failed keeps its heading, with one line and a retry instead of an empty row.
+// Home's own picks, shown once they hold something: many lists have few sequels missed, or none.
+function PicksRail({ title, picks }: { title: string; picks: UseQueryResult<{ items: DiscoverItem[] }> }) {
+  if (picks.isError && !picks.data) return <RailFailed title={title} retry={() => void picks.refetch()} />
+  const items = picks.data?.items ?? []
+  if (items.length === 0) return null
+  return (
+    <Rail title={title}>
+      {items.map((anime) => (
+        <RailItem key={anime.id}>
+          <PosterCard anime={toCard(anime)} />
+        </RailItem>
+      ))}
+    </Rail>
+  )
+}
+
 function RailFailed({ title, retry }: { title: string; retry: () => void }) {
   return (
     <section>

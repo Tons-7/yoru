@@ -138,6 +138,12 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		"sound":      session.Sound(),
 	}
 
+	// AirPlay's address for this session (an Apple TV can't carry the page's cookie), when a TV can reach it.
+	if s.rebind == nil || s.bound() {
+		airplay := grant{Source: castPrefix + id, Expires: time.Now().Add(externalFor).Unix()}
+		body["airplay"] = s.tvBase(r) + "/c/" + s.signGrant(airplay) + "/master.m3u8"
+	}
+
 	// Fonts start extracting now but do not hold up the reply; the client
 	// picks them up from the fonts endpoint and re-renders the subtitles.
 	tracks := s.subtitleTracks(session, base)

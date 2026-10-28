@@ -258,18 +258,24 @@ func TestFlagsReadsRecap(t *testing.T) {
 	}
 }
 
-// The same crawl names the episodes; a field in an unexpected shape must not cost the flags.
+// The same crawl names the episodes and scores them; a field in an unexpected shape must not cost the flags,
+// and a thread off MyAnimeList is dropped.
 func TestListingReadsTitlesAndDates(t *testing.T) {
 	c := testClient(t, "tenrai", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"data":[
-		  {"mal_id":1,"title":"Ilse's Notebook","title_japanese":"イルゼの手帳","aired":"2013-12-09T00:00:00+00:00","duration":1398.5,"synopsis":"A scout writes.","recap":true},
-		  {"mal_id":2,"title":"Episode 2","title_japanese":null,"aired":null,"duration":null,"synopsis":null}
+		  {"mal_id":1,"title":"Ilse's Notebook","title_japanese":"イルゼの手帳","aired":"2013-12-09T00:00:00+00:00","duration":1398.5,"synopsis":"A scout writes.","recap":true,
+		   "score":4.31,"forum_url":"https://myanimelist.net/forum/?topicid=1"},
+		  {"mal_id":2,"title":"Episode 2","title_japanese":null,"aired":null,"duration":null,"synopsis":null,"score":null,"forum_url":"javascript:alert(1)"}
 		],"pagination":{"last_visible_page":1,"has_next_page":false}}`)
 	})
 
 	got, err := c.Listing(context.Background(), 20)
 	if err != nil || len(got.Episodes) != 2 || len(got.Flags) != 1 {
 		t.Fatalf("listing = %+v, err %v", got, err)
+	}
+	want := EpisodeScore{Episode: 1, Score: 4.31, Forum: "https://myanimelist.net/forum/?topicid=1"}
+	if len(got.Scores) != 1 || got.Scores[0] != want {
+		t.Errorf("scores = %+v, want only %+v", got.Scores, want)
 	}
 	first := got.Episodes[0]
 	if first.Number != 1 || first.TitleEN != "Ilse's Notebook" || first.TitleJA != "イルゼの手帳" || first.Overview != "A scout writes." {

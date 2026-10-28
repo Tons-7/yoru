@@ -498,6 +498,8 @@ type jikanResponse struct {
 		Aired    *string `json:"aired"`
 		Seconds  float64 `json:"duration"`
 		Synopsis string  `json:"synopsis"`
+		Score    float64 `json:"score"`
+		Forum    string  `json:"forum_url"`
 	} `json:"data"`
 	Pagination struct {
 		LastPage    int  `json:"last_visible_page"`
@@ -518,6 +520,14 @@ func (c *Client) Flags(ctx context.Context, malID int) ([]EpisodeFlags, error) {
 type Listing struct {
 	Episodes []Episode
 	Flags    []EpisodeFlags
+	Scores   []EpisodeScore
+}
+
+// EpisodeScore is how MyAnimeList's members rate one episode (1 to 5), and where they talk about it.
+type EpisodeScore struct {
+	Episode int
+	Score   float64
+	Forum   string
 }
 
 // placeholder is the title MyAnimeList gives an episode nobody has named.
@@ -581,6 +591,13 @@ func (c *Client) Listing(ctx context.Context, malID int) (Listing, error) {
 			}
 			if ep.Filler || ep.Recap {
 				out.Flags = append(out.Flags, EpisodeFlags{Episode: number, Filler: ep.Filler, Recap: ep.Recap})
+			}
+			// Only MyAnimeList's own forum: the link goes straight into the page.
+			if !strings.HasPrefix(ep.Forum, "https://myanimelist.net/") {
+				ep.Forum = ""
+			}
+			if ep.Score > 0 || ep.Forum != "" {
+				out.Scores = append(out.Scores, EpisodeScore{Episode: number, Score: ep.Score, Forum: ep.Forum})
 			}
 			listed := Episode{Number: number, TitleJA: ep.TitleJA, Overview: ep.Synopsis, Runtime: int(ep.Seconds) / 60}
 			if !placeholder.MatchString(strings.TrimSpace(ep.Title)) {

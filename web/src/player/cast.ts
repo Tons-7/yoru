@@ -10,6 +10,10 @@ const SDK = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFram
 interface CastSession {
   getCastDevice(): { friendlyName: string }
   loadMedia(request: unknown): Promise<unknown>
+  // The older session, which takes a whole queue at once.
+  getSessionObj(): {
+    queueLoad(request: unknown, done: () => void, failed: (err?: { code?: string; description?: string }) => void): void
+  }
 }
 interface CastContext {
   setOptions(options: { receiverApplicationId: string; autoJoinPolicy: string }): void
@@ -49,6 +53,8 @@ interface ChromeCast {
     MediaInfo: new (url: string, contentType: string) => Record<string, unknown>
     GenericMediaMetadata: Ctor
     LoadRequest: new (info: unknown) => Record<string, unknown>
+    QueueItem: new (info: unknown) => Record<string, unknown>
+    QueueLoadRequest: new (items: unknown[]) => Record<string, unknown>
     Track: new (id: number, type: string) => Record<string, unknown>
     TextTrackStyle: Ctor
     TrackType: { TEXT: string }
@@ -103,26 +109,35 @@ function loadSdk(): Promise<CastSdk> {
   return loading
 }
 
-export interface CastMedia {
-  /** Which stream this is, so a page can tell its own on the TV from another's. */
+/** An episode the TV plays after the one cast, on its own: the server's queue. */
+export interface QueuedMedia {
+  /** Which episode this is ("anime-episode"), so a page can tell its own on the TV from another's. */
   key: string
   url: string
   title: string
   subtitle?: string
   artwork?: string
-  startAt: number
   subtitles: Array<{ url: string; language?: string; title?: string }>
   /** Position in subtitles of the track to show, if any. */
   subtitleTrack?: number
+}
+
+export interface CastMedia extends QueuedMedia {
+  startAt: number
   /** How the TV draws them: TextTrackStyle's fields (see subLook.ts). */
   textStyle?: Record<string, unknown>
+  /** What plays after, with Auto next on; each opens on the server once the TV gets to it. */
+  queue?: QueuedMedia[]
 }
+
+/** An episode's key, the same for every device's session of it ("-dev…", "-cast", drawn-in copies). */
+export const episodeKey = (sessionId: string) => sessionId.replace(/-[a-z].*$/, '')
 
 export type CastPhase = 'none' | 'idle' | 'connecting' | 'connected'
 
-// What this page last sent to the TV. A session outlives episodes and is joined on any page of Yoru,
-// so a connection alone doesn't say the TV plays the episode open here.
-let sent: { key: string; url: string; seen: boolean } | null = null
+// What this page last sent to the TV, the queue after it included. A session outlives episodes and is joined
+// on any page of Yoru, so a connection alone doesn't say the TV plays the episode open here.
+let sent: { items: Array<{ key: string; url: string }>; seen: boolean } | null = null
 
 /** The cast device's state, and the TV's player once connected. 'none': no device found, or no SDK. */
 export function useCast() {
@@ -130,7 +145,8 @@ export function useCast() {
   // Not asked on an insecure page: the SDK can't work there, and the needs list says why.
   const [sdkState, setSdkState] = useState<CastSdk>(() => (castSupported() ? 'loading' : 'off'))
   const [device, setDevice] = useState('')
-  const [remote, setRemote] = useState({ time: 0, duration: 0, paused: true })
+  // key: the episode these times are of, '' while the TV plays none of this page's.
+  const [remote, setRemote] = useState({ time: 0, duration: 0, paused: true, key: '' })
   // The key of the stream the TV plays, if this page sent it; '' for anything else.
   const [playing, setPlaying] = useState('')
   const player = useRef<RemotePlayer | null>(null)
@@ -153,12 +169,16 @@ export function useCast() {
       const c = new fw.RemotePlayerController(p)
       player.current = p
       controller.current = c
-      // Ours while the TV reports our link, and until it first does (still loading it); not once it moved on.
+      // Ours while the TV reports one of our links, and until it first does (still loading it); not once it
+      // moved on to another sender's.
       const ours = () => {
         if (!sent) return ''
-        if (p.mediaInfo?.contentId === sent.url) sent.seen = true
-        else if (sent.seen) return ''
-        return sent.key
+        const on = sent.items.find((i) => i.url === p.mediaInfo?.contentId)
+        if (on) {
+          sent.seen = true
+          return on.key
+        }
+        return sent.seen ? '' : sent.items[0].key
       }
       const onState = () => {
         const state = ctx.getCastState()
@@ -167,8 +187,16 @@ export function useCast() {
         setDevice(ctx.getCurrentSession()?.getCastDevice().friendlyName ?? '')
         setPlaying(ours())
       }
+      // The length each link first showed: an episode's stays put, so another is the next's, its time come
+      // before the TV said it moved on.
+      const lengths = new Map<string, number>()
       const onChange = () => {
-        setRemote({ time: p.currentTime, duration: p.duration, paused: p.isPaused })
+        const url = p.mediaInfo?.contentId ?? ''
+        const on = sent?.items.find((i) => i.url === url)?.key ?? ''
+        if (on && p.duration > 0 && !lengths.has(url)) lengths.set(url, p.duration)
+        const length = lengths.get(url) ?? 0
+        const moved = length > 0 && p.duration > 0 && Math.abs(p.duration - length) >= 0.5
+        setRemote({ time: p.currentTime, duration: p.duration, paused: p.isPaused, key: moved ? '' : on })
         setPlaying(ours())
       }
       ctx.addEventListener(fw.CastContextEventType.CAST_STATE_CHANGED, onState)
@@ -195,35 +223,59 @@ export function useCast() {
     const session = ctx.getCurrentSession()
     if (!session) return
     const m = chrome.cast.media
-    const info = new m.MediaInfo(media.url, 'application/x-mpegURL')
-    info.streamType = m.StreamType.BUFFERED
-    // Yoru's segments are fragmented MP4; the receiver assumes TS unless told.
-    info.hlsSegmentFormat = m.HlsSegmentFormat.FMP4
-    info.hlsVideoSegmentFormat = m.HlsVideoSegmentFormat.FMP4
-    const meta = new m.GenericMediaMetadata()
-    meta.title = media.title
-    meta.subtitle = media.subtitle
-    if (media.artwork) meta.images = [new chrome.cast.Image(media.artwork)]
-    info.metadata = meta
-    info.tracks = media.subtitles.map((s, i) => {
-      const track = new m.Track(i + 1, m.TrackType.TEXT)
-      track.trackContentId = s.url
-      track.trackContentType = 'text/vtt'
-      track.subtype = m.TextTrackType.SUBTITLES
-      track.name = s.title || s.language || `Subtitles ${i + 1}`
-      track.language = s.language || 'und'
-      return track
-    })
-    if (media.textStyle) info.textTrackStyle = Object.assign(new m.TextTrackStyle(), media.textStyle)
-    const request = new m.LoadRequest(info)
-    request.currentTime = media.startAt
-    request.autoplay = true
-    if (media.subtitleTrack != null) request.activeTrackIds = [media.subtitleTrack + 1]
-    // Before the load: the TV may report the new media before loadMedia settles.
+    const Image = chrome.cast.Image
+    const describe = (item: QueuedMedia) => {
+      const info = new m.MediaInfo(item.url, 'application/x-mpegURL')
+      info.streamType = m.StreamType.BUFFERED
+      // Yoru's segments are fragmented MP4; the receiver assumes TS unless told.
+      info.hlsSegmentFormat = m.HlsSegmentFormat.FMP4
+      info.hlsVideoSegmentFormat = m.HlsVideoSegmentFormat.FMP4
+      const meta = new m.GenericMediaMetadata()
+      meta.title = item.title
+      meta.subtitle = item.subtitle
+      if (item.artwork) meta.images = [new Image(item.artwork)]
+      info.metadata = meta
+      info.tracks = item.subtitles.map((s, i) => {
+        const track = new m.Track(i + 1, m.TrackType.TEXT)
+        track.trackContentId = s.url
+        track.trackContentType = 'text/vtt'
+        track.subtype = m.TextTrackType.SUBTITLES
+        track.name = s.title || s.language || `Subtitles ${i + 1}`
+        track.language = s.language || 'und'
+        return track
+      })
+      if (media.textStyle) info.textTrackStyle = Object.assign(new m.TextTrackStyle(), media.textStyle)
+      return info
+    }
+    const all = [media, ...(media.queue ?? [])]
+    // Before the load: the TV may report the new media before it settles.
     const before = sent
-    sent = { key: media.key, url: media.url, seen: false }
+    sent = { items: all.map((i) => ({ key: i.key, url: i.url })), seen: false }
     try {
-      await session.loadMedia(request)
+      if (all.length > 1) {
+        // Each plays on its own and loads a little before the last ends: the TV goes on with this page shut.
+        const items = all.map((item, i) => {
+          const q = new m.QueueItem(describe(item))
+          q.autoplay = true
+          q.preloadTime = 30
+          q.startTime = i === 0 ? media.startAt : 0
+          if (item.subtitleTrack != null) q.activeTrackIds = [item.subtitleTrack + 1]
+          return q
+        })
+        const request = new m.QueueLoadRequest(items)
+        request.startIndex = 0
+        await new Promise<void>((done, failed) =>
+          session.getSessionObj().queueLoad(request, () => done(), (err) =>
+            failed(new Error(err?.description || err?.code || "the TV didn't take the episodes")),
+          ),
+        )
+      } else {
+        const request = new m.LoadRequest(describe(media))
+        request.currentTime = media.startAt
+        request.autoplay = true
+        if (media.subtitleTrack != null) request.activeTrackIds = [media.subtitleTrack + 1]
+        await session.loadMedia(request)
+      }
     } catch (e) {
       sent = before
       throw e

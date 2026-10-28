@@ -29,7 +29,8 @@ import { actionFor, keyHint, keyScope, useKeymap, type KeyAction } from '../lib/
 import { getSleep, noteInput, setSleep, useSleep, type Sleep } from '../lib/watching'
 import { useAnime4K, type UpscaleTier } from './anime4k'
 import { useTouchGestures } from './gestures'
-import { castImpossible, isBrave, useCast, type CastPhase, type CastSdk } from './cast'
+import { castImpossible, episodeKey, isBrave, useCast, type CastPhase, type CastSdk, type QueuedMedia } from './cast'
+import { useAirPlay } from './airplay'
 import {
   SKIPPED_GUARD,
   skipKind,
@@ -223,6 +224,8 @@ export interface PlayerProps {
   onNext?: (by: 'button' | 'key' | 'media') => void
   /** The episode before, absent on the first. */
   onPrevious?: () => void
+  /** The TV went on to the next episode it was given; the page follows it there. */
+  onTVMovedOn?: (animeId: number, episode: number) => void
   /** Playing or seeking again, which after the end means the viewer went back. */
   onResume?: (by: 'play' | 'seek') => void
   /** Sat at the very end without ending, so no countdown comes; told once per stream. */
@@ -265,6 +268,7 @@ export function Player({
   onEnded,
   onNext,
   onPrevious,
+  onTVMovedOn,
   onResume,
   onEndStuck,
   onSessionLost,
@@ -465,7 +469,11 @@ export function Player({
     showNotice("This device couldn't play the original, so it's converted instead", 6000)
     return true
   }, [onUndecodable, showNotice])
-  const { error, final, hls, streamEnded } = useHlsSource(video, playlist, resumeAt, recover, undecodable)
+  // The Apple TV shows the subtitles picked here, or none; a loaded file stays here, so the episode's own.
+  const airplaySub = track == null ? 'off' : stream?.subtitles.some((t) => t.index === track) ? String(track) : ''
+  const airplayLink = stream?.airplay && (airplaySub ? `${stream.airplay}?sub=${airplaySub}` : stream.airplay)
+  const { error, final, hls, streamEnded } = useHlsSource(video, playlist, resumeAt, recover, undecodable, airplayLink)
+  const airplay = useAirPlay(video)
   useKeepAlive(video, playlist, recover)
   recoverRef.current = () => {
     if (recovering.current || !onSessionLost) return
@@ -629,7 +637,10 @@ export function Player({
   const holdingStart = autoPlay && !!stream?.id && !subtitlesSettled
   useEffect(() => {
     if (!video || !stream?.id || !autoPlayRef.current || !subtitlesSettled || playedByHand.current === stream.id) return
-    const start = () => void video.play().catch(() => {})
+    // Not while the TV plays this episode: the page followed it here, and the TV has the picture.
+    const start = () => {
+      if (!castingRef.current) void video.play().catch(() => {})
+    }
     // Straight away; waiting on canplay left the next episode still for seconds.
     start()
     // Asked again only if it couldn't play yet: a canplay left armed fired on the next seek, playing a pause.
@@ -642,6 +653,8 @@ export function Player({
   reportRef.current = onProgress
   const endedRef = useRef(onEnded)
   endedRef.current = onEnded
+  // Where the TV left the episode becomes its known place here, or leaving would report where casting began.
+  const placeRef = useRef<((at: number, duration: number) => void) | null>(null)
 
   // Reports on a timer with the time really played (a big step is a seek); per stream, keeping the last
   // known position, since the source is torn down by the time Next or leaving sends it.
@@ -671,6 +684,10 @@ export function Player({
       reporter(at, duration, played, final, video.paused)
       played = 0
     }
+    placeRef.current = (at, d) => {
+      position = last = at
+      if (d > 0) duration = d
+    }
     const id = window.setInterval(() => {
       if (!video.paused && duration > 0) report(position)
     }, 10_000)
@@ -697,6 +714,7 @@ export function Player({
       video.removeEventListener('play', flush)
       video.removeEventListener('ended', ended)
       window.removeEventListener('pagehide', flush)
+      placeRef.current = null
       if (duration > 0) report(position, true)
     }
   }, [video, stream?.id])
@@ -705,29 +723,40 @@ export function Player({
   // carries on where the TV was when casting stops.
   const { phase: castPhase, sdkState: castSdk, device: castDevice, remote, playing: castPlaying, start: startCast,
     connect: connectCast, stop: stopCast, playPause: castPlayPause, seek: castSeek } = useCast()
-  // This stream on the TV, not just a session: another episode, or another page's, leaves this one alone.
-  const casting = castPhase === 'connected' && !!stream?.id && castPlaying === stream.id
-  // Sends what plays here now to the TV connected.
+  // This episode on the TV, not just a session: another episode, or another page's, leaves this one alone.
+  const casting = castPhase === 'connected' && !!stream?.id && castPlaying === episodeKey(stream.id)
+  // Read where autoplay starts the video: an episode the TV is playing must not also play here.
+  const castingRef = useRef(casting)
+  castingRef.current = casting
+  // Sends what plays here now to the TV connected, and with Auto next on what plays after.
   const castTo = useCallback(async () => {
     if (!stream?.id || !video) return
     try {
       // Drawn in, the TV gets the track shown here, with this episode's delay; pictures it can't draw itself.
       const chosen = stream.subtitles.find((t) => t.index === track)
-      const burn = chosen && (castBurn || chosen.pictures) ? `?burn=${track}&delay=${subDelay}` : ''
+      const params = new URLSearchParams()
+      if (chosen && (castBurn || chosen.pictures)) {
+        params.set('burn', String(track))
+        params.set('delay', String(subDelay))
+      }
+      // The queued episodes show subtitles in the language shown here.
+      if (chosen?.language) params.set('sub', chosen.language)
       const link = await api.post<{
         url: string
         subtitles: Array<{ index: number; language?: string; title?: string; url: string }>
         note?: string
-      }>(`/api/stream/${stream.id}/cast${burn}`)
+        queue?: QueuedMedia[]
+      }>(`/api/stream/${stream.id}/cast${params.size ? `?${params}` : ''}`)
       if (link.note) showNotice(link.note, 6000)
       // A file from this device or Jimaku's lives in this page; the TV can't fetch it.
       else if (track != null && !chosen) showNotice("The TV shows the episode's own subtitles; loaded ones stay here", 6000)
       const shown = track == null ? -1 : link.subtitles.findIndex((s) => s.index === track)
       video.pause()
       await startCast({
-        key: stream.id, url: link.url, title: title ?? '', subtitle, artwork, startAt: video.currentTime,
+        key: episodeKey(stream.id), url: link.url, title: title ?? '', subtitle, artwork, startAt: video.currentTime,
         subtitles: link.subtitles, subtitleTrack: shown >= 0 ? shown : undefined,
         textStyle: castStyle(lookPreset, subScale),
+        queue: (link.queue ?? []).map((q) => ({ ...q, subtitleTrack: q.subtitles.length ? 0 : undefined })),
       })
     } catch (e) {
       // Closing Chrome's device list rejects with "cancel": nothing went wrong.
@@ -738,6 +767,18 @@ export function Player({
   // Read once a TV is picked, not when the list opened: it may stay open while the episode moves on.
   const castToRef = useRef(castTo)
   castToRef.current = castTo
+  // The TV moved on from this episode to the next in its queue: the page follows, controls and progress too.
+  // Only from this one, so an episode opened here by hand isn't pulled back to the TV's.
+  const tvMovedOn = useRef(onTVMovedOn)
+  tvMovedOn.current = onTVMovedOn
+  const lastOnTV = useRef(castPlaying)
+  useEffect(() => {
+    const was = lastOnTV.current
+    lastOnTV.current = castPlaying
+    if (!stream?.id || !castPlaying || castPlaying === was || was !== episodeKey(stream.id)) return
+    const on = /^(-?\d+)-(\d+)$/.exec(castPlaying)
+    if (on) tvMovedOn.current?.(Number(on[1]), Number(on[2]))
+  }, [castPlaying, stream?.id])
   // The TV first: a list closed without a pick leaves the episode playing here, with nothing asked of Yoru.
   const chooseTV = useCallback(async () => {
     // A failed try's words must not sit over the cast that works.
@@ -754,9 +795,9 @@ export function Player({
     if (casting) video?.pause()
   }, [casting, video])
   // The TV's position goes to the list as the video's would, the time really played counted the same way.
-  // Only while it plays this stream: what it shows after moving on is another episode's.
+  // Only the TV's report for this stream: what it shows after moving on is another episode's.
   const remoteRef = useRef(remote)
-  if (casting) remoteRef.current = remote
+  if (casting && remote.key === castPlaying) remoteRef.current = remote
   useEffect(() => {
     if (!casting || !stream?.id) return
     const reporter = reportRef.current
@@ -777,7 +818,10 @@ export function Player({
       window.clearInterval(id)
       const r = remoteRef.current
       // Carried on here where the TV was, unless this player has moved to another episode meanwhile.
-      if (video && r.time > 0 && liveId.current === sid) video.currentTime = r.time
+      if (video && r.time > 0 && liveId.current === sid) {
+        video.currentTime = r.time
+        placeRef.current?.(r.time, r.duration)
+      }
       if (r.duration > 0) reporter(r.time, r.duration, played, false, true)
     }
   }, [casting, stream?.id, video])
@@ -1332,7 +1376,7 @@ export function Player({
       <video
         ref={setVideo}
         playsInline
-        autoPlay={autoPlay && subtitlesSettled}
+        autoPlay={autoPlay && subtitlesSettled && !casting}
         className={cx('size-full', fill && 'object-cover', corners)}
         {...surface}
         onPlay={() => {
@@ -1663,6 +1707,19 @@ export function Player({
                     onStop={stopCast}
                     onOpen={holdForCast}
                   />
+                )}
+                {/* Where Safari sees an Apple TV; without its link the TV can't reach Yoru, and says so. */}
+                {airplay.available && (
+                  <IconButton
+                    label={airplay.active ? 'Playing on AirPlay' : 'AirPlay'}
+                    onClick={() =>
+                      stream?.airplay
+                        ? airplay.pick()
+                        : showNotice('AirPlay needs access from other devices: turn it on in Settings, Devices.', 6000)
+                    }
+                  >
+                    <AirPlayIcon on={airplay.active} />
+                  </IconButton>
                 )}
                 {pip.supported ? (
                   <IconButton label="Picture in picture" onClick={() => void pip.toggle()}>
@@ -3167,6 +3224,16 @@ function CastIcon({ on }: { on: boolean }) {
       <path d="M3 13a6 6 0 0 1 6 6M3 16.5A2.5 2.5 0 0 1 5.5 19" {...stroke} strokeLinecap="round" />
       <circle cx="3.5" cy="19" r="0.5" fill="currentColor" />
       {on && <rect x="7" y="8" width="11" height="8" rx="1" fill="currentColor" opacity="0.6" />}
+    </svg>
+  )
+}
+
+function AirPlayIcon({ on }: { on: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
+      <path d="M7 17H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2" {...stroke} />
+      <path d="M12 15l5 6H7z" fill="currentColor" />
+      {on && <rect x="6" y="7" width="12" height="6" rx="1" fill="currentColor" opacity="0.6" />}
     </svg>
   )
 }

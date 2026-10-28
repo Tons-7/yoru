@@ -71,15 +71,16 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	// The store decides what counts as watched, for this and the mpv path alike, so a client cannot claim it.
-	watched, err := s.store.SavePlayback(ctx, store.PlaybackState{
-		AnimeID:  body.AnimeID,
-		EpKey:    epKey(body.Episode),
-		Position: body.Position,
-		Duration: body.Duration,
-		Played:   body.Played,
-		Ending:   s.endingFor(ctx, body.AnimeID, body.Episode),
-	})
+	// A page knows the TV's exact time; its report beats the TV's own estimate (noteTV) for a while.
+	s.tvMu.Lock()
+	key := sessionID(body.AnimeID, body.Episode)
+	if _, seen := s.pageReported[key]; !seen {
+		// Only the last pageWins count: cleared out on each new episode.
+		maps.DeleteFunc(s.pageReported, func(_ string, at time.Time) bool { return time.Since(at) >= pageWins })
+	}
+	s.pageReported[key] = time.Now()
+	s.tvMu.Unlock()
+	watched, err := s.savePosition(ctx, body.AnimeID, body.Episode, body.Position, body.Duration, body.Played)
 	if err != nil {
 		s.fail(w, "save playback", err)
 		return
@@ -93,13 +94,29 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 		s.noteWatching(r, body.AnimeID, body.Episode, body.Final || body.Paused)
 	}
 
+	send(w, http.StatusOK, map[string]any{"saved": true, "watched": watched})
+}
+
+// savePosition saves a page's report or the TV's estimate alike: the store decides what counts as watched
+// (as for mpv), so no client can claim it, and a newly watched episode goes to the trackers.
+func (s *Server) savePosition(ctx context.Context, animeID, episode int, position, duration, played float64) (bool, error) {
+	watched, err := s.store.SavePlayback(ctx, store.PlaybackState{
+		AnimeID:  animeID,
+		EpKey:    epKey(episode),
+		Position: position,
+		Duration: duration,
+		Played:   played,
+		Ending:   s.endingFor(ctx, animeID, episode),
+	})
+	if err != nil {
+		return false, err
+	}
 	if watched && s.syncer != nil {
-		if err := s.syncer.Watched(ctx, body.AnimeID, body.Episode); err != nil {
-			s.log.Warn("sync watched", "anime", body.AnimeID, "err", err)
+		if err := s.syncer.Watched(ctx, animeID, episode); err != nil {
+			s.log.Warn("sync watched", "anime", animeID, "err", err)
 		}
 	}
-
-	send(w, http.StatusOK, map[string]any{"saved": true, "watched": watched})
+	return watched, nil
 }
 
 // prepare resolves an episode's release before play is asked, so the search is done by then.

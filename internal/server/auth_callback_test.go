@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"io"
 	"log/slog"
 	"net/http"
@@ -62,6 +63,43 @@ func TestAniListCallbackInstallsTheTokenOnlyOnceSaved(t *testing.T) {
 		t.Fatalf("user = %q", name)
 	}
 }
+
+// A token pasted from AniList's pin page connects in one step, whole address and all, with the expiry the
+// token carries; one AniList refuses, or text that isn't one, leaves the login as it was.
+func TestPastedAniListTokenConnects(t *testing.T) {
+	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+jwt {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"errors":[{"message":"Invalid token","status":401}]}`)
+			return
+		}
+		io.WriteString(w, `{"data":{"Viewer":{"id":7,"name":"tony","mediaListOptions":{"scoreFormat":"POINT_10"}}}}`)
+	})
+	ctx := t.Context()
+
+	for _, bad := range []string{`{"token":"not one at all"}`, `{"token":"nope"}`} {
+		if code, _ := h.call(t, "POST", "/api/auth/token", bad); code != http.StatusBadRequest {
+			t.Fatalf("%s: status %d, want refused", bad, code)
+		}
+	}
+	if h.server.anilist.Authenticated() {
+		t.Fatal("a refused token was installed")
+	}
+
+	pasted := `{"token":"https://anilist.co/api/v2/oauth/pin#access_token=` + jwt + `&token_type=Bearer&expires_in=31536000"}`
+	if code, body := h.call(t, "POST", "/api/auth/token", pasted); code != http.StatusOK || body["user"] != "tony" {
+		t.Fatalf("status %d %v", code, body)
+	}
+	if !h.server.anilist.Authenticated() {
+		t.Fatal("the pasted token wasn't installed")
+	}
+	if at, _ := h.store.Setting(ctx, "anilist.expires_at"); at != "4102444800" {
+		t.Errorf("expires_at = %s, want the token's own exp", at)
+	}
+}
+
+// jwt is a token whose claims say it expires at the start of 2100.
+var jwt = "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(`{"exp":4102444800}`)) + ".sig"
 
 // The reaper taking a session nobody closed releases the episode the way a close does: unpinned, so the
 // cache may take it, and the queue's hold is given back.

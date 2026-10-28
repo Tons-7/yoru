@@ -700,6 +700,11 @@ function EpisodeRow({
             )}
             {episode.runtime ? <span>{episode.runtime} min</span> : null}
             {!compact && episode.airDate ? <span>{airDay(episode.airDate)}</span> : null}
+            {episode.score ? (
+              <span className="text-amber-300" title="MyAnimeList members' rating, out of 5">
+                ★ {episode.score.toFixed(1)}
+              </span>
+            ) : null}
             {episode.onDisk ? (
               <span className="flex items-center gap-1 text-emerald-300" title="On this machine">
                 <DiskGlyph />
@@ -729,6 +734,7 @@ function EpisodeRow({
     resumeAt !== undefined ? `resume at ${clockTime(resumeAt)}` : '',
     episode.onDisk ? 'downloaded' : episode.local ? 'in your library' : '',
     listed ? 'in Up next' : '',
+    episode.score ? `rated ${episode.score.toFixed(1)} of 5` : '',
   ].filter(Boolean)
 
   // A tick reaching past this episode, either way, asks first: auto-delete and the trackers follow it.
@@ -847,6 +853,20 @@ function EpisodeRow({
     </button>
   )
 
+  // Watched rows only, so it takes the place the spoiler eye has on unwatched ones.
+  const discuss = episode.forumUrl && !onToggle && !compact && (
+    <a
+      href={episode.forumUrl}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Discuss episode ${number} on MyAnimeList`}
+      title="Discussion on MyAnimeList"
+      className="tap relative grid size-8 shrink-0 place-items-center rounded-full text-base-500 ring-1 ring-base-700 transition-colors hover:bg-base-800 hover:text-base-100"
+    >
+      <TalkGlyph />
+    </a>
+  )
+
   const queueUp = !unaired && !onToggle && (
     <button
       type="button"
@@ -917,6 +937,7 @@ function EpisodeRow({
             {text}
           </Link>
           {showSpoiler}
+          {discuss}
           {queueUp}
           {download}
           {tick}
@@ -993,6 +1014,20 @@ function PlayGlyph() {
 }
 
 // A filled check, a state: the arrow beside it on the next row is the Download action.
+function TalkGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <path
+        d="M4.5 5.5h15v10h-8l-4.5 3.5v-3.5h-2.5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 function EyeGlyph() {
   return (
     <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
