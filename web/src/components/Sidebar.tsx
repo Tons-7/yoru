@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { DiscoverItem, ScheduleDay } from '../lib/api'
-import { airTime, cx, episodeCount } from '../lib/format'
+import { airTime, cx, dayName, episodeCount } from '../lib/format'
 import { useDiscover, useNow, useSchedule } from '../lib/queries'
 import { Badge, Skeleton } from './ui'
 
@@ -134,7 +134,8 @@ export function ScheduleWidget() {
             {days.map((day, i) => (
               <button
                 key={day.date}
-                title={day.weekday}
+                title={dayName(day.date, day.weekday, days[todayIndex]?.date)}
+                aria-label={dayName(day.date, day.weekday, days[todayIndex]?.date)}
                 aria-pressed={i === shownIndex}
                 onClick={() => setSelectedDate(day.date)}
                 className={cx(
@@ -144,7 +145,7 @@ export function ScheduleWidget() {
                     : 'text-base-400 hover:bg-base-850 hover:text-base-200',
                 )}
               >
-                {day.today ? 'Now' : day.weekday.slice(0, 3)}
+                {dayName(day.date, day.weekday, days[todayIndex]?.date, true)}
               </button>
             ))}
           </div>

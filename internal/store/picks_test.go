@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// A finished show's sequel not started is missed: off the list first, then planned; not one started, dropped,
-// unaired, or after a show still being watched.
+// A finished show's sequel off the list is missed; not one planned, favourited, started, dropped, unaired, or
+// after a show still being watched.
 func TestSequelsMissed(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -21,6 +21,7 @@ func TestSequelsMissed(t *testing.T) {
 		{ID: 6, Romaji: "Dropped", Status: str("FINISHED")},
 		{ID: 7, Romaji: "Watching", Status: str("RELEASING")},
 		{ID: 8, Romaji: "After the one watching", Status: str("FINISHED")},
+		{ID: 9, Romaji: "Its OVA, favourited", Status: str("FINISHED")},
 	}
 	entries := []Entry{
 		{ID: 1, AnimeID: 1, Status: str("COMPLETED")},
@@ -32,8 +33,11 @@ func TestSequelsMissed(t *testing.T) {
 	if _, err := s.ImportList(ctx, shows, entries, ImportMerge); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.SetBookmark(ctx, 9, Bookmark{Favourite: true}); err != nil {
+		t.Fatal(err)
+	}
 	var rels []Relation
-	for _, sequel := range []int{2, 3, 4, 5, 6} {
+	for _, sequel := range []int{2, 3, 4, 5, 6, 9} {
 		rels = append(rels, Relation{AnimeID: 1, RelatedID: sequel, Kind: "SEQUEL"})
 	}
 	rels = append(rels, Relation{AnimeID: 7, RelatedID: 8, Kind: "SEQUEL"})
@@ -44,7 +48,10 @@ func TestSequelsMissed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(ids, []int{2, 3}) {
-		t.Errorf("missed = %v, want [2 3]: the one off the list, then the planned film", ids)
+	if !slices.Equal(ids, []int{2}) {
+		t.Errorf("missed = %v, want [2]: only the one off the list, not the planned film or the favourite", ids)
+	}
+	if known, err := s.Known(ctx); err != nil || !known[3] || !known[9] || known[2] {
+		t.Errorf("known = %v (%v), want the planned 3 and the favourite 9, not 2", known, err)
 	}
 }

@@ -59,11 +59,17 @@ export function StatusMenu({
           remove.reset()
         }}
         className={cx(
-          'flex items-center gap-1.5 font-medium transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400',
+          'flex items-center gap-1.5 font-medium transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-300',
           compact ? 'tap relative size-8 justify-center rounded-md' : 'rounded-lg px-4 py-2 text-sm pointer-coarse:min-h-11',
-          active
-            ? 'bg-accent-500/20 text-accent-400 hover:bg-accent-500/30'
-            : 'bg-base-800/90 text-base-200 hover:bg-base-700',
+          // Over art, solid violet or a dark frosted chip: a faint tint vanished into a busy cover.
+          compact
+            ? active
+              ? 'bg-accent-500 text-white shadow-md shadow-black/40 ring-1 ring-white/20 hover:bg-accent-400'
+              : 'bg-base-950/75 text-white ring-1 ring-white/15 backdrop-blur-sm hover:bg-base-800'
+            : // Beside Play, which is the solid one.
+              active
+              ? 'bg-accent-500/25 text-accent-300 ring-1 ring-accent-400/60 hover:bg-accent-500/35'
+              : 'bg-base-800/90 text-base-100 ring-1 ring-white/10 hover:bg-base-700',
         )}
       >
         <BookmarkIcon filled={!!active} />

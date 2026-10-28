@@ -36,7 +36,7 @@ type forYouPicks struct {
 }
 
 // homeForYou is Home's "For you": what AniList's community recommends after the viewer's best-liked shows,
-// weighted by each one's place among them and the recommendation's rating, none already on the list.
+// weighted by each one's place among them and the recommendation's rating, none already known (store.Known).
 func (s *Server) homeForYou(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	seeds, err := s.store.TopScored(ctx, 10)
@@ -54,13 +54,13 @@ func (s *Server) homeForYou(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "for you", err)
 		return
 	}
-	// One added since the day's picks were made leaves at once.
-	listed, err := s.store.Listed(ctx)
+	// One added or favourited since the day's picks were made leaves at once.
+	known, err := s.store.Known(ctx)
 	if err != nil {
 		s.fail(w, "for you", err)
 		return
 	}
-	ids = slices.DeleteFunc(slices.Clone(ids), func(id int) bool { return listed[id] })
+	ids = slices.DeleteFunc(slices.Clone(ids), func(id int) bool { return known[id] })
 	media, err := s.mediaInOrder(ctx, ids)
 	if err != nil {
 		s.fail(w, "for you", err)
@@ -85,7 +85,7 @@ func (s *Server) forYouIDs(ctx context.Context, seeds []int, adult bool) ([]int,
 	if err != nil {
 		return nil, err
 	}
-	listed, err := s.store.Listed(ctx)
+	known, err := s.store.Known(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func (s *Server) forYouIDs(ctx context.Context, seeds []int, adult bool) ([]int,
 	}
 	weight := map[int]float64{}
 	for _, rec := range recs {
-		if listed[rec.ID] || rec.Rating <= 0 || rec.Adult && !adult {
+		if known[rec.ID] || rec.Rating <= 0 || rec.Adult && !adult {
 			continue
 		}
 		// The best-liked show counts in full, falling to about half for the tenth.

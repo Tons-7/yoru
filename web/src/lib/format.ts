@@ -79,6 +79,20 @@ export function airTime(unix: number): string {
   })
 }
 
+// A schedule day as TV guides name it: Yesterday, Today, Tomorrow, then its weekday; short, for a narrow
+// column, Today or "Fri". Dates are "2026-10-29", today's from the schedule itself.
+export function dayName(date: string, weekday: string, today: string | undefined, short = false): string {
+  const from = today ? Math.round((Date.parse(`${date}T00:00Z`) - Date.parse(`${today}T00:00Z`)) / 86_400_000) : NaN
+  if (from === 0) return 'Today'
+  if (short) return weekday.slice(0, 3)
+  return from === -1 ? 'Yesterday' : from === 1 ? 'Tomorrow' : weekday
+}
+
+/** "Oct 29", a schedule day's date in the viewer's own format. */
+export function dayDate(date: string): string {
+  return new Date(`${date}T00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
 /** A dense screen takes the larger poster; an ordinary one keeps the small file. */
 export function posterSet(cover?: string | null, large?: string | null): string | undefined {
   return cover && large && large !== cover ? `${cover} 1x, ${large} 2x` : undefined

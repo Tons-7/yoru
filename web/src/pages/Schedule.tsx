@@ -1,14 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { airTime, cx, relativeTime } from '../lib/format'
+import { airTime, cx, dayDate, dayName, relativeTime } from '../lib/format'
 import { useMediaQuery, useStoredFlag } from '../lib/hooks'
 import { useNow, useSchedule } from '../lib/queries'
 import { Badge, Empty, ErrorState, FilterToggle, PageHeader, RefreshFailed, Segmented, Skeleton } from '../components/ui'
 import { RecentPage } from './Recent'
-
-function dayLabel(date: string) {
-  return new Date(`${date}T00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-}
 
 // On a phone Recently released is a tab here: the tab bar has room for five places, not six.
 export function SchedulePage() {
@@ -78,31 +74,38 @@ function Airing() {
         <Skeleton className="h-96 w-full" />
       ) : (
         <>
-          <div className="no-scrollbar flex gap-1.5 overflow-x-auto pb-1">
+          {/* Seven across on a wide screen; narrower, a strip to the screen's edges with room around each day,
+              as a scrolling box clips what's drawn outside it (it cut the outlines off). */}
+          <div className="no-scrollbar -mx-4 flex snap-x scroll-px-4 gap-2 overflow-x-auto px-4 py-1 sm:-mx-6 sm:scroll-px-6 sm:px-6 lg:mx-0 lg:grid lg:grid-cols-7 lg:overflow-visible lg:px-0">
             {days.map((day, i) => {
               const isActive = i === shownIndex
+              const name = dayName(day.date, day.weekday, days[todayIndex]?.date)
               return (
                 <button
                   key={day.date}
                   aria-pressed={isActive}
+                  aria-label={`${name}, ${dayDate(day.date)}, ${day.items.length} episodes`}
                   onClick={() => setSelectedDate(day.date)}
                   className={cx(
-                    'shrink-0 rounded-lg px-4 py-2 text-left ring-1 transition-colors',
+                    'min-w-[6.75rem] shrink-0 snap-start rounded-xl px-3.5 py-2.5 text-left ring-1 transition-colors lg:min-w-0',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-300',
                     isActive
-                      ? 'bg-accent-500/15 ring-accent-500/40'
-                      : 'bg-base-900/60 ring-white/[0.06] hover:bg-base-850',
+                      ? 'bg-accent-500/15 ring-accent-400/60'
+                      : 'bg-base-900/60 ring-white/[0.06] hover:bg-base-850 hover:ring-white/10',
                   )}
                 >
                   <span
                     className={cx(
-                      'block text-sm font-medium',
-                      isActive ? 'text-accent-300' : 'text-base-200',
+                      'flex items-center gap-1.5 text-sm font-semibold whitespace-nowrap',
+                      isActive ? 'text-accent-300' : 'text-base-100',
                     )}
                   >
-                    {day.today ? 'Today' : day.weekday}
+                    {/* Today is marked whichever day is open. */}
+                    {day.today && <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-accent-400" />}
+                    {name}
                   </span>
-                  <span className="block text-[11px] text-base-500">
-                    {dayLabel(day.date)} · {day.items.length} ep
+                  <span className="mt-0.5 block text-xs whitespace-nowrap tabular-nums text-base-500">
+                    {dayDate(day.date)} · {day.items.length} ep
                   </span>
                 </button>
               )
