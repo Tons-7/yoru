@@ -33,6 +33,8 @@ const isolated = {
   LOCALAPPDATA: appdata,
   APPDATA: appdata,
   YORU_NO_WINDOW: '1',
+  // Never GitHub: a release check's 70 instances spent the network's hourly allowance, and the real app's.
+  YORU_UPDATE_API: process.env.YORU_UPDATE_API ?? 'http://127.0.0.1:9',
 }
 const lib = join(scratch, 'lib')
 const shots = join(scratch, 'shots')

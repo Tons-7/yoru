@@ -9,8 +9,8 @@ import { join } from 'node:path'
 import { chromium } from 'playwright'
 
 const REPO = process.env.YORU_REPO ?? join(process.cwd(), '..')
-// The last release: what people have installed.
-const RELEASED_TAG = process.env.YORU_TAG ?? 'v2026.10.17'
+// A release people have installed (2026.10.17), by its commit: its tag went with it, as only three are kept.
+const RELEASED_TAG = process.env.YORU_TAG ?? '13c57fb9da3c328895d7b40e60c33a0da17b0dfa'
 const PORT = 4398
 const BASE = `http://127.0.0.1:${PORT}`
 const OLD = '1.0.0'
@@ -136,6 +136,16 @@ const gh = createServer((req, res) => {
         ...listed.map((v) => ({ tag_name: `v${v}`, body: NOTES[v], published_at: '2026-10-16T10:00:00Z' })),
       ]),
     )
+  } else if (url === '/Tons-7/yoru/releases.atom') {
+    // The release feed, which the API's limit doesn't count: each release's notes rendered, as GitHub does.
+    const html = (md) => md.split('\n').map((l) => (l.startsWith('## ') ? `<h2>${l.slice(3)}</h2>` : `<ul><li>${l.slice(2)}</li></ul>`))
+      .join('\n').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    const xml = (s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+    const entries = [NEWER, ...listed].map((v) =>
+      `<entry><link rel="alternate" type="text/html" href="${ghBase()}/Tons-7/yoru/releases/tag/v${v}"/>` +
+      `<content type="html">${xml(html(NOTES[v]))}</content></entry>`)
+    res.setHeader('content-type', 'application/atom+xml')
+    res.end(`<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom">${entries.join('')}</feed>`)
   } else if (url === '/Tons-7/yoru/releases/latest') {
     res.statusCode = 302
     res.setHeader('location', `${ghBase()}/Tons-7/yoru/releases/tag/v${latest.version}`)
@@ -262,6 +272,13 @@ check(await waitVersion(NEWER, 60), `Yoru ${NEWER} answering`)
 for (let i = 0; i < 40 && existsSync(yoruExe + '.old'); i++) await sleep(250)
 check(readFileSync(yoruExe).equals(readFileSync(join(release, 'newer.exe'))), 'yoru.exe is the newer program')
 check(!existsSync(yoruExe + '.old') && !existsSync(yoruExe + '.new'), 'no leftovers from the second update')
+let newest = {}
+for (let i = 0; i < 40 && !newest.whatsNew?.length; i++) {
+  await sleep(250)
+  newest = (await api('/api/update')).body ?? {}
+}
+check(newest.whatsNew?.[0]?.version === NEWER && newest.whatsNew[0].notes === NOTES[NEWER],
+  "with the API still limited, what's new reads the notes from the release feed", JSON.stringify(newest.whatsNew))
 
 if (failures) console.log(oldLog.slice(-2000))
 

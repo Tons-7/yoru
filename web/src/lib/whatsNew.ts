@@ -18,6 +18,8 @@ export const NEW_SETTINGS: NewSetting[] = [
   { label: 'On mobile data', since: '2026.10.25' },
   { label: 'Streaming quality', since: '2026.10.25' },
   { label: 'Pair a device', since: '2026.10.28' },
+  { label: 'Rows on Home', since: '2026.10.29' },
+  { label: 'Adult titles in For you', since: '2026.10.29' },
 ]
 
 // What works differently, with no setting of its own to show.

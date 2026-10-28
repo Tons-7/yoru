@@ -34,15 +34,18 @@ function assTime(t: number): string {
 
 // Italic and bold carried over; other markup (voices, colours, positions) dropped.
 function assText(lines: string[]): string {
-  return (
-    lines
-      .join('\\N')
-      // A brace in the text would read as an ASS tag.
-      .replace(/[{}]/g, '')
-      .replace(/<\/?i>/g, (t) => (t[1] === '/' ? '{\\i0}' : '{\\i1}'))
-      .replace(/<\/?b>/g, (t) => (t[1] === '/' ? '{\\b0}' : '{\\b1}'))
-      .replace(/<[^>]*>/g, '')
-  )
+  let text = lines
+    .join('\\N')
+    // A brace in the text would read as an ASS tag.
+    .replace(/[{}]/g, '')
+    .replace(/<\/?i>/g, (t) => (t[1] === '/' ? '{\\i0}' : '{\\i1}'))
+    .replace(/<\/?b>/g, (t) => (t[1] === '/' ? '{\\b0}' : '{\\b1}'))
+  // Until nothing changes, as code scanning asks of tag stripping; this text reaches the renderer, never HTML.
+  for (let was = ''; was !== text; ) {
+    was = text
+    text = text.replace(/<[^>]*>/g, '')
+  }
+  return text
 }
 
 /** SRT or WebVTT as ASS: each cue's times, then its lines. */

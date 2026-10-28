@@ -53,13 +53,14 @@ export function UpNextToggle({ animeId, episode, title }: { animeId: number; epi
 }
 
 /** Home's row of the list, numbered in play order; nothing at all while the list is empty. */
-export function UpNextRail({ onEdit }: { onEdit: () => void }) {
+export function UpNextRail({ onEdit, fold }: { onEdit: () => void; fold?: { folded: boolean; onToggle: () => void } }) {
   const list = useUpNext()
   const items = list.data?.items ?? []
   if (items.length === 0) return null
   return (
     <Rail
       title="Up next"
+      fold={fold}
       meta={upNextSummary(items)}
       action={
         <button

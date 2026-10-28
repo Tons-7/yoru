@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -12,10 +13,20 @@ import (
 	"yoru/internal/store"
 )
 
-// fakeShows answers the by-ids query with these shows, each with a status.
-func fakeShows(w http.ResponseWriter, shows map[int]string) {
+// fakeShows answers the by-ids query with those asked for of these shows, each with a status.
+func fakeShows(w http.ResponseWriter, body []byte, shows map[int]string) {
+	var asked struct {
+		Variables struct {
+			IDs []int `json:"ids"`
+		} `json:"variables"`
+	}
+	json.Unmarshal(body, &asked)
 	var media []string
-	for id, status := range shows {
+	for _, id := range asked.Variables.IDs {
+		status, known := shows[id]
+		if !known {
+			continue
+		}
 		n := strconv.Itoa(id)
 		media = append(media, `{"id":`+n+`,"status":"`+status+`","title":{"romaji":"Show `+n+`"}}`)
 	}
@@ -37,7 +48,7 @@ func seedList(t *testing.T, h *harness, entries map[int][2]any) {
 }
 
 // "For you" sums the picks after the best-liked shows, the favourite's in full: one after both comes first;
-// none on the list, and AniList asked once a day.
+// none on the list or adult, and AniList asked once a day.
 func TestForYouWeighsTheFavouritesRecommendations(t *testing.T) {
 	asked := 0
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
@@ -47,11 +58,12 @@ func TestForYouWeighsTheFavouritesRecommendations(t *testing.T) {
 			node := func(id, rating int) string {
 				return `{"rating":` + strconv.Itoa(rating) + `,"mediaRecommendation":{"id":` + strconv.Itoa(id) + `,"type":"ANIME"}}`
 			}
-			io.WriteString(w, `{"data":{"m0":{"id":1,"recommendations":{"nodes":[`+node(10, 50)+`,`+node(11, 30)+`,`+node(2, 99)+`]}},`+
+			adult := `{"rating":99,"mediaRecommendation":{"id":13,"type":"ANIME","isAdult":true}}`
+			io.WriteString(w, `{"data":{"m0":{"id":1,"recommendations":{"nodes":[`+node(10, 50)+`,`+node(11, 30)+`,`+node(2, 99)+`,`+adult+`]}},`+
 				`"m1":{"id":2,"recommendations":{"nodes":[`+node(11, 40)+`,`+node(12, 10)+`]}}}}`)
 			return
 		}
-		fakeShows(w, map[int]string{10: "FINISHED", 11: "FINISHED", 12: "RELEASING"})
+		fakeShows(w, body, map[int]string{10: "FINISHED", 11: "FINISHED", 12: "RELEASING", 13: "FINISHED"})
 	})
 	seedList(t, h, map[int][2]any{1: {"COMPLETED", 90}, 2: {"COMPLETED", 70}})
 
@@ -63,11 +75,24 @@ func TestForYouWeighsTheFavouritesRecommendations(t *testing.T) {
 			ids = append(ids, it.(map[string]any)["id"].(float64))
 		}
 		if code != http.StatusOK || len(ids) != 3 || ids[0] != 11 || ids[1] != 10 || ids[2] != 12 {
-			t.Fatalf("for you: %d %v, want 11 (after both), 10, 12; never 2, on the list", code, ids)
+			t.Fatalf("for you: %d %v, want 11 (after both), 10, 12; never 2, on the list, or 13, adult", code, ids)
 		}
 	}
 	if asked != 1 {
 		t.Errorf("AniList asked for recommendations %d times, want once a day", asked)
+	}
+
+	// Asked for in Settings, the adult one comes too, first by its rating.
+	if code, _ := h.call(t, "POST", "/api/prefs", `{"key":"home.adult_picks","value":"true"}`); code != http.StatusOK {
+		t.Fatalf("allowing adult titles: %d", code)
+	}
+	shown := map[int]bool{}
+	_, body := h.call(t, "GET", "/api/home/for-you", "")
+	for _, it := range body["items"].([]any) {
+		shown[int(it.(map[string]any)["id"].(float64))] = true
+	}
+	if !shown[13] {
+		t.Errorf("with adult titles allowed: %v, want 13 among them", body["items"])
 	}
 }
 
@@ -84,7 +109,7 @@ func TestForYouLeavesOutAShowAniListLost(t *testing.T) {
 			io.WriteString(w, `{"data":{"m0":{"id":1,"recommendations":{"nodes":[{"rating":5,"mediaRecommendation":{"id":10,"type":"ANIME"}}]}}}}`)
 			return
 		}
-		fakeShows(w, map[int]string{10: "FINISHED"})
+		fakeShows(w, body, map[int]string{10: "FINISHED"})
 	})
 	seedList(t, h, map[int][2]any{1: {"COMPLETED", 90}, 2: {"COMPLETED", 70}})
 	code, body := h.call(t, "GET", "/api/home/for-you", "")
@@ -97,7 +122,8 @@ func TestForYouLeavesOutAShowAniListLost(t *testing.T) {
 // A sequel AniList now says isn't out yet stays off "Sequels you missed", whatever was saved.
 func TestSequelsMissedAreOutNow(t *testing.T) {
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
-		fakeShows(w, map[int]string{2: "FINISHED", 3: "NOT_YET_RELEASED"})
+		body, _ := io.ReadAll(r.Body)
+		fakeShows(w, body, map[int]string{2: "FINISHED", 3: "NOT_YET_RELEASED"})
 	})
 	seedList(t, h, map[int][2]any{1: {"COMPLETED", 0}})
 	if err := h.store.SaveRelations(context.Background(), []int{1},

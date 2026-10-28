@@ -55,6 +55,7 @@ export function Rail({
   meta,
   more,
   action,
+  fold,
   children,
 }: {
   title: string
@@ -63,8 +64,11 @@ export function Rail({
   more?: { to: string; label?: string }
   /** A control beside the arrows, where "more" would be a link to a page. */
   action?: ReactNode
+  /** Home's rows fold to their heading, which opens them again. */
+  fold?: { folded: boolean; onToggle: () => void }
   children: ReactNode
 }) {
+  const folded = !!fold?.folded
   const track = useRef<HTMLDivElement>(null)
   const { scrollable, atStart, atEnd, progress, visible } = useScrollState(track)
 
@@ -79,10 +83,26 @@ export function Rail({
       <div className="mb-3 flex items-center justify-between gap-4">
         {/* Big enough to read across the row it labels. */}
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
-          <h2 className="section-title">{title}</h2>
-          {meta && <span className="text-sm text-base-500">{meta}</span>}
+          {fold ? (
+            <h2 className="section-title">
+              <button
+                type="button"
+                onClick={fold.onToggle}
+                aria-expanded={!folded}
+                className="tap relative flex items-center gap-1.5 text-left transition-colors hover:text-base-200"
+              >
+                {title}
+                <svg viewBox="0 0 24 24" className={cx('size-4 text-base-500 transition-transform', folded && '-rotate-90')} aria-hidden>
+                  <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </h2>
+          ) : (
+            <h2 className="section-title">{title}</h2>
+          )}
+          {meta && !folded && <span className="text-sm text-base-500">{meta}</span>}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className={cx('flex shrink-0 items-center gap-2', folded && 'hidden')}>
           {more && (
             <Link
               to={more.to}
@@ -112,15 +132,16 @@ export function Rail({
         </div>
       </div>
 
+      {/* Kept mounted when folded, so its measures pick up again on opening. */}
       <div
         ref={track}
-        className="no-scrollbar -mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth px-1 pb-1"
+        className={cx('no-scrollbar -mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth px-1 pb-1', folded && 'hidden')}
       >
         {children}
       </div>
 
       {/* Where you are in the row; the thumb is the share on screen. */}
-      {scrollable && (
+      {scrollable && !folded && (
         <div className="mt-1.5 h-0.5 overflow-hidden rounded-full bg-base-850" aria-hidden>
           <div
             className="h-full rounded-full bg-base-700"

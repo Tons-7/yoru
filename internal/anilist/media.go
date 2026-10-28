@@ -285,6 +285,7 @@ func (c *Client) MediaByIDs(ctx context.Context, ids []int) ([]Media, error) {
 // Recommended is one show AniList's community recommends after another, with the recommendation's rating.
 type Recommended struct {
 	From, ID, Rating int
+	Adult            bool
 }
 
 // Recommendations asks after each show's top community recommendations in one request, one alias per show.
@@ -314,7 +315,7 @@ func (c *Client) recommendations(ctx context.Context, ids []int, per int) ([]Rec
 	q.WriteString("query {")
 	for i, id := range ids {
 		fmt.Fprintf(&q, " m%d: Media(id: %d, type: ANIME) { id recommendations(sort: RATING_DESC, perPage: %d) "+
-			"{ nodes { rating mediaRecommendation { id type } } } }", i, id, per)
+			"{ nodes { rating mediaRecommendation { id type isAdult } } } }", i, id, per)
 	}
 	q.WriteString(" }")
 	var out map[string]*struct {
@@ -323,8 +324,9 @@ func (c *Client) recommendations(ctx context.Context, ids []int, per int) ([]Rec
 			Nodes []struct {
 				Rating              int `json:"rating"`
 				MediaRecommendation *struct {
-					ID   int    `json:"id"`
-					Type string `json:"type"`
+					ID      int    `json:"id"`
+					Type    string `json:"type"`
+					IsAdult bool   `json:"isAdult"`
 				} `json:"mediaRecommendation"`
 			} `json:"nodes"`
 		} `json:"recommendations"`
@@ -339,7 +341,7 @@ func (c *Client) recommendations(ctx context.Context, ids []int, per int) ([]Rec
 		}
 		for _, n := range m.Recommendations.Nodes {
 			if r := n.MediaRecommendation; r != nil && r.Type == "ANIME" {
-				recs = append(recs, Recommended{From: m.ID, ID: r.ID, Rating: n.Rating})
+				recs = append(recs, Recommended{From: m.ID, ID: r.ID, Rating: n.Rating, Adult: r.IsAdult})
 			}
 		}
 	}

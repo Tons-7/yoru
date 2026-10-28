@@ -36,11 +36,13 @@ export function useHome() {
 }
 
 /** Home's own picks from the list: "Sequels you missed", and "For you" (the server keeps the day's). */
-export function useHomePicks(kind: 'sequels' | 'for-you') {
+/** Off for a row taken off Home, which then asks AniList nothing. */
+export function useHomePicks(kind: 'sequels' | 'for-you', enabled = true) {
   return useQuery({
     queryKey: ['home', kind],
     queryFn: () => api.get<{ items: DiscoverItem[] }>(`/api/home/${kind}`),
     staleTime: 30 * 60_000,
+    enabled,
   })
 }
 
@@ -440,7 +442,7 @@ export function useSetPref() {
 // Everything that shows list state or progress: a status change, a tick or an import refreshes all of it.
 const LIST_STATE_KEYS = [
   'library', 'continue', 'discover', 'browse', 'schedule', 'anime', 'episodes', 'franchise',
-  'recommend', 'aired', 'bookmarks', 'search', 'history', 'upnext', 'upnext-after',
+  'recommend', 'aired', 'bookmarks', 'search', 'history', 'upnext', 'upnext-after', 'home',
 ]
 
 export function useUpNext() {

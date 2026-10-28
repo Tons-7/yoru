@@ -67,6 +67,10 @@ var Defaults = map[string]string{
 	"cast.burn_subtitles": "false",
 
 	"display.titles": TitleEnglish,
+	// Home's rows taken off, a JSON list of their ids (web/src/lib/homeRows.ts); folding one is per device.
+	"home.hidden": `[]`,
+	// For you leaves adult titles out until asked.
+	"home.adult_picks": "false",
 	// The version whose new settings were seen in Settings' New tab, which marks Settings until then.
 	"settings.new_seen": "",
 	// How the app window opens: fullscreen or maximized. Takes effect next launch.

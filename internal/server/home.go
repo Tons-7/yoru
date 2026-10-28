@@ -44,7 +44,12 @@ func (s *Server) homeForYou(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "for you", err)
 		return
 	}
-	ids, err := s.forYouIDs(ctx, seeds)
+	prefs, err := s.store.Prefs(ctx, 0)
+	if err != nil {
+		s.fail(w, "for you", err)
+		return
+	}
+	ids, err := s.forYouIDs(ctx, seeds, prefs.Bool("home.adult_picks"))
 	if err != nil {
 		s.fail(w, "for you", err)
 		return
@@ -64,9 +69,9 @@ func (s *Server) homeForYou(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"items": s.decorate(r, media)})
 }
 
-// forYouIDs are the day's picks for these seeds: asked once (one request for all ten), then kept.
-func (s *Server) forYouIDs(ctx context.Context, seeds []int) ([]int, error) {
-	key := fmt.Sprint(seeds)
+// forYouIDs are the day's picks for these seeds, asked once (one request for all ten); adult ones if allowed.
+func (s *Server) forYouIDs(ctx context.Context, seeds []int, adult bool) ([]int, error) {
+	key := fmt.Sprint(seeds, adult)
 	s.forYouMu.Lock()
 	cached := s.forYou
 	s.forYouMu.Unlock()
@@ -90,7 +95,7 @@ func (s *Server) forYouIDs(ctx context.Context, seeds []int) ([]int, error) {
 	}
 	weight := map[int]float64{}
 	for _, rec := range recs {
-		if listed[rec.ID] || rec.Rating <= 0 {
+		if listed[rec.ID] || rec.Rating <= 0 || rec.Adult && !adult {
 			continue
 		}
 		// The best-liked show counts in full, falling to about half for the tenth.

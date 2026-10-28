@@ -4,11 +4,13 @@ package update
 
 import (
 	"archive/zip"
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -17,12 +19,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/html"
 
 	"yoru/internal/config"
 	"yoru/internal/store"
@@ -167,6 +172,15 @@ func (u *Updater) Check(ctx context.Context) (Status, error) {
 		if site, serr := u.latestFromSite(ctx); serr == nil {
 			u.log.Info("GitHub's API is limiting this network; read the latest release from its site", "version", site.Version)
 			rel, err, all = site, nil, u.knownNotes(site.Version)
+			// Its feed has the latest releases' notes, or What's new would stay empty after an update.
+			if feed, ferr := u.feedNotes(ctx); ferr == nil {
+				all = withNotes(all, feed)
+				if i := slices.IndexFunc(feed, func(n Notes) bool { return n.Version == site.Version }); i >= 0 {
+					rel.Notes = feed[i].Notes
+				}
+			} else {
+				u.log.Warn("release notes from GitHub's feed", "err", ferr)
+			}
 		} else {
 			u.log.Warn("latest release from GitHub's site", "err", serr)
 		}
@@ -325,6 +339,98 @@ func (u *Updater) knownNotes(latest string) []Notes {
 	}
 	return newestFirst(all)
 }
+
+// withNotes fills known releases' notes from the feed and adds those it alone has, newest first.
+func withNotes(known, feed []Notes) []Notes {
+	out := slices.Clone(known)
+	for _, n := range feed {
+		if i := slices.IndexFunc(out, func(k Notes) bool { return k.Version == n.Version }); i >= 0 {
+			out[i].Notes = cmp.Or(out[i].Notes, n.Notes)
+		} else {
+			out = append(out, n)
+		}
+	}
+	return newestFirst(out)
+}
+
+// feedNotes reads the latest releases' notes from GitHub's release feed, which the API's limit doesn't count.
+func (u *Updater) feedNotes(ctx context.Context) ([]Notes, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.web+"/"+Repo+"/releases.atom", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	res, err := u.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github: release feed (HTTP %d)", res.StatusCode)
+	}
+	var feed struct {
+		Entries []struct {
+			Link struct {
+				Href string `xml:"href,attr"`
+			} `xml:"link"`
+			Content string `xml:"content"`
+		} `xml:"entry"`
+	}
+	if err := xml.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(&feed); err != nil {
+		return nil, fmt.Errorf("github: release feed: %w", err)
+	}
+	var out []Notes
+	for _, e := range feed.Entries {
+		i := strings.LastIndex(e.Link.Href, "/tag/")
+		if i < 0 {
+			continue
+		}
+		out = append(out, Notes{Version: strings.TrimPrefix(e.Link.Href[i+len("/tag/"):], "v"), Notes: htmlNotes(e.Content)})
+	}
+	return out, nil
+}
+
+// htmlNotes turns the feed's rendered notes back into the headings, bullets and bold the About tab reads.
+// Links keep only their words, as in the notes themselves.
+func htmlNotes(rendered string) string {
+	var b strings.Builder
+	z := html.NewTokenizer(strings.NewReader(rendered))
+	for {
+		tt := z.Next()
+		switch tt {
+		case html.ErrorToken:
+			return strings.TrimSpace(blankLines.ReplaceAllString(b.String(), "\n\n"))
+		case html.TextToken:
+			// Line breaks between tags are the page's layout, not the notes'; a space between words stays.
+			text := string(z.Text())
+			if strings.TrimSpace(text) != "" {
+				b.WriteString(strings.ReplaceAll(text, "\n", " "))
+			} else if !strings.Contains(text, "\n") {
+				b.WriteString(" ")
+			}
+		case html.StartTagToken, html.EndTagToken, html.SelfClosingTagToken:
+			name, _ := z.TagName()
+			start := tt != html.EndTagToken
+			switch tag := string(name); {
+			case len(tag) == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6':
+				b.WriteString("\n\n")
+				if start {
+					b.WriteString("## ")
+				}
+			case tag == "li" && start:
+				b.WriteString("\n- ")
+			case tag == "strong" || tag == "b":
+				b.WriteString("**")
+			case tag == "p" || tag == "ul" || tag == "ol":
+				b.WriteString("\n\n")
+			case tag == "br":
+				b.WriteString("\n")
+			}
+		}
+	}
+}
+
+var blankLines = regexp.MustCompile(`\n{3,}`)
 
 func newestFirst(out []Notes) []Notes {
 	slices.SortStableFunc(out, func(a, b Notes) int {

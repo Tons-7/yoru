@@ -45,7 +45,15 @@ try {
 
   let page = await fresh()
   let forYouFails = true
-  await page.route('**/api/home/sequels', (route) => route.fulfill({ json: { items: shows.slice(0, 2) } }))
+  // The list tags a card shows, as the server would after a status is set.
+  const listed = {}
+  await page.route('**/api/status', (route) => {
+    const { animeId, status } = route.request().postDataJSON()
+    listed[animeId] = status
+    return route.fulfill({ json: { ok: true } })
+  })
+  await page.route('**/api/home/sequels', (route) =>
+    route.fulfill({ json: { items: shows.slice(0, 2).map((s) => ({ ...s, listStatus: listed[s.id] ?? null })) } }))
   await page.route('**/api/home/for-you', (route) =>
     route.fulfill(forYouFails ? { status: 500, json: { error: 'down' } } : { json: { items: shows.slice(2) } }))
   await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
@@ -58,6 +66,43 @@ try {
   forYouFails = false
   await rail('For you').getByRole('button', { name: 'Try again' }).click()
   check(await until(async () => (await cards('For you').count()) >= 2), 'and Try again fills it')
+  // Folded by its heading, a row keeps only that, here and after a reload, until opened again.
+  const heading = (title) => rail(title).getByRole('button', { name: title, exact: true })
+  await heading('Sequels you missed').click()
+  check(await until(async () => (await heading('Sequels you missed').getAttribute('aria-expanded')) === 'false' &&
+    !(await cards('Sequels you missed').first().isVisible())), 'a row folds to its heading')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  check(await until(async () => (await heading('Sequels you missed').getAttribute('aria-expanded')) === 'false'),
+    'and stays folded on this device')
+  await heading('Sequels you missed').click()
+  check(await until(() => cards('Sequels you missed').first().isVisible()), 'pressed again, it opens')
+  // A card's bookmark: the tag picked shows at once, as anywhere else.
+  await rail('Sequels you missed').getByRole('button', { name: 'Add to list' }).first().click()
+  await page.getByRole('menuitem', { name: 'Plan to watch' }).click()
+  check(await until(() => rail('Sequels you missed').getByRole('button', { name: 'Listed as Plan to watch' }).first().isVisible()),
+    "a sequel's bookmark fills once it's on the list")
+  await page.close()
+
+  // Settings, Home: a row switched off leaves Home, asking AniList nothing; adult titles stay off by default.
+  page = await fresh()
+  let forYouAsked = 0
+  await page.route('**/api/home/for-you', (route) => {
+    forYouAsked++
+    return route.fulfill({ json: { items: shows.slice(2) } })
+  })
+  await page.goto(`${BASE}/settings?tab=Language`, { waitUntil: 'domcontentloaded' })
+  const forYouSwitch = page.getByRole('switch', { name: 'For you', exact: true })
+  check(await until(() => forYouSwitch.isVisible()), 'Settings lists the rows on Home')
+  check((await page.getByRole('switch', { name: 'Adult titles in For you' }).getAttribute('aria-checked')) === 'false',
+    'adult titles in For you are off to begin with')
+  await forYouSwitch.click()
+  check(await until(async () => (await forYouSwitch.getAttribute('aria-checked')) === 'false'), 'For you switched off')
+  forYouAsked = 0
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+  await until(() => page.getByRole('heading', { name: 'Trending now', exact: true }).isVisible())
+  check((await page.getByRole('heading', { name: 'For you', exact: true }).count()) === 0 && forYouAsked === 0,
+    'and it leaves Home, nothing asked for it', `asked ${forYouAsked}`)
+  await fetch(`${BASE}/api/prefs`, { method: 'POST', body: JSON.stringify({ key: 'home.hidden', value: '[]' }) })
   await page.close()
 
   page = await fresh()

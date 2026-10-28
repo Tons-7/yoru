@@ -332,6 +332,33 @@ func TestRateLimitedCheckKeepsTheNotesItHad(t *testing.T) {
 	}
 }
 
+// Limited, the notes come from the release feed, which the API's limit doesn't count: What's new after an
+// update isn't left empty. Its HTML goes back to the headings, bullets and bold the About tab reads.
+func TestRateLimitedCheckReadsTheNotesFromTheFeed(t *testing.T) {
+	setVersion(t, "2026.08.27")
+	gh := fakeRelease(t, "2026.08.27", []byte("new"), true, true, true)
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/"+Repo+"/releases.atom" {
+			gh.Config.Handler.ServeHTTP(w, r)
+			return
+		}
+		io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><entry>`+
+			`<link rel="alternate" type="text/html" href="https://github.com/`+Repo+`/releases/tag/v2026.08.27"/>`+
+			`<content type="html">&lt;h2&gt;New&lt;/h2&gt;&#10;&lt;ul&gt;&#10;&lt;li&gt;&lt;strong&gt;Faster seeks:&lt;/strong&gt; `+
+			`Yoru&#39;s own &lt;a href="x"&gt;engine&lt;/a&gt;&lt;/li&gt;&#10;&lt;li&gt;Two&lt;/li&gt;&#10;&lt;/ul&gt;</content></entry></feed>`)
+	}))
+	t.Cleanup(site.Close)
+
+	got, err := newUpdater(t, testStore(t), site, "yoru.exe").Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "## New\n\n- **Faster seeks:** Yoru's own engine\n- Two"
+	if len(got.WhatsNew) != 1 || got.WhatsNew[0].Notes != want {
+		t.Errorf("what's new = %+v, want %q", got.WhatsNew, want)
+	}
+}
+
 // With the site out of reach too, the check says what's wrong and when it clears, not "HTTP 403".
 func TestRateLimitedCheckSaysUntilWhen(t *testing.T) {
 	setVersion(t, "2026.08.24")

@@ -5,6 +5,7 @@ import { api, type DiscoverItem, type LibraryItem } from '../lib/api'
 import { clockTime } from '../lib/format'
 import { browseSeason, currentSeason, nextSeason } from '../lib/season'
 import { useAired, useDiscover, useHome, useHomePicks, useNow, useUpNext } from '../lib/queries'
+import { useHomeRows, type HomeRow } from '../lib/homeRows'
 import { Hero } from '../components/Hero'
 import { HoverInfo } from '../components/HoverInfo'
 import { PlayIcon, PosterCard } from '../components/PosterCard'
@@ -16,12 +17,13 @@ import { ConfirmInline, ProgressBar, Skeleton } from '../components/ui'
 import { ListPlusGlyph, UpNextRail, UpNextSheet } from '../components/UpNext'
 
 export function Home() {
+  const rows = useHomeRows()
   const trending = useDiscover('trending', 20)
   const seasonal = useDiscover('season', 20)
   const upcoming = useDiscover('upcoming', 20)
   const continuing = useHome()
-  const sequels = useHomePicks('sequels')
-  const forYou = useHomePicks('for-you')
+  const sequels = useHomePicks('sequels', rows.wanted('sequels'))
+  const forYou = useHomePicks('for-you', rows.wanted('foryou'))
   const schedule = useAired(48)
   const upNext = useUpNext()
   const upNextEmpty = upNext.isSuccess && upNext.data.items.length === 0
@@ -35,22 +37,27 @@ export function Home() {
     .sort((a, b) => Number(b.onList) - Number(a.onList) || b.airingAt - a.airingAt)
     .slice(0, 20)
 
+  // Folded, a row still loading shows its heading alone, not a strip of placeholders.
+  const loading = (id: HomeRow, title: string) =>
+    rows.fold(id).folded ? <Rail title={title} fold={rows.fold(id)}>{null}</Rail> : <RailSkeleton title={title} />
+
   return (
     <div className="space-y-8">
       <Hero items={trending.data?.items} loading={trending.isPending} />
 
       <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 space-y-8">
-          <UpNextRail onEdit={() => setEditing(true)} />
+          {rows.shown('upnext') && <UpNextRail onEdit={() => setEditing(true)} fold={rows.fold('upnext')} />}
 
-          {continuing.isPending ? (
-            <RailSkeleton title="Continue watching" />
+          {!rows.shown('continue') ? null : continuing.isPending ? (
+            loading('continue', 'Continue watching')
           ) : continuing.isError && !continuing.data ? (
             <RailFailed title="Continue watching" retry={() => void continuing.refetch()} />
           ) : (
             continuing.data && continuing.data.items.length > 0 && (
               <Rail
                 title="Continue watching"
+                fold={rows.fold('continue')}
                 more={{ to: '/library' }}
                 // The way into an empty Up next list, whose own row stays hidden until it has something.
                 action={
@@ -75,16 +82,16 @@ export function Home() {
             )
           )}
 
-          <PicksRail title="Sequels you missed" picks={sequels} />
-          <PicksRail title="For you" picks={forYou} />
+          {rows.shown('sequels') && <PicksRail title="Sequels you missed" picks={sequels} fold={rows.fold('sequels')} />}
+          {rows.shown('foryou') && <PicksRail title="For you" picks={forYou} fold={rows.fold('foryou')} />}
 
-          {schedule.isPending ? (
-            <RailSkeleton title="Recently released" />
+          {!rows.shown('released') ? null : schedule.isPending ? (
+            loading('released', 'Recently released')
           ) : schedule.isError && !schedule.data ? (
             <RailFailed title="Recently released" retry={() => void schedule.refetch()} />
           ) : (
             released.length > 0 && (
-              <Rail title="Recently released" more={{ to: '/recent' }}>
+              <Rail title="Recently released" more={{ to: '/recent' }} fold={rows.fold('released')}>
                 {released.map((item) => (
                   <RailItem key={`${item.animeId}-${item.episode}`}>
                     <ReleasedCard item={item} />
@@ -94,12 +101,12 @@ export function Home() {
             )
           )}
 
-          {seasonal.isPending ? (
-            <RailSkeleton title="This season" />
+          {!rows.shown('season') ? null : seasonal.isPending ? (
+            loading('season', 'This season')
           ) : seasonal.isError && !seasonal.data ? (
             <RailFailed title="This season" retry={() => void seasonal.refetch()} />
           ) : (
-            <Rail title="This season" more={{ to: browseSeason(currentSeason()) }}>
+            <Rail title="This season" more={{ to: browseSeason(currentSeason()) }} fold={rows.fold('season')}>
               {(seasonal.data?.items ?? []).map((anime) => (
                 <RailItem key={anime.id}>
                   <PosterCard anime={toCard(anime)} />
@@ -108,12 +115,12 @@ export function Home() {
             </Rail>
           )}
 
-          {trending.isPending ? (
-            <RailSkeleton title="Trending now" />
+          {!rows.shown('trending') ? null : trending.isPending ? (
+            loading('trending', 'Trending now')
           ) : trending.isError && !trending.data ? (
             <RailFailed title="Trending now" retry={() => void trending.refetch()} />
           ) : (
-            <Rail title="Trending now" more={{ to: '/browse?sort=trending' }}>
+            <Rail title="Trending now" more={{ to: '/browse?sort=trending' }} fold={rows.fold('trending')}>
               {(trending.data?.items ?? []).map((anime) => (
                 <RailItem key={anime.id}>
                   <PosterCard anime={toCard(anime)} />
@@ -122,13 +129,13 @@ export function Home() {
             </Rail>
           )}
 
-          {upcoming.isPending ? (
-            <RailSkeleton title="Upcoming" />
+          {!rows.shown('upcoming') ? null : upcoming.isPending ? (
+            loading('upcoming', 'Upcoming')
           ) : upcoming.isError && !upcoming.data ? (
             <RailFailed title="Upcoming" retry={() => void upcoming.refetch()} />
           ) : (
             (upcoming.data?.items ?? []).length > 0 && (
-              <Rail title="Upcoming" more={{ to: browseSeason(nextSeason()) }}>
+              <Rail title="Upcoming" more={{ to: browseSeason(nextSeason()) }} fold={rows.fold('upcoming')}>
                 {(upcoming.data?.items ?? []).map((anime) => (
                   <RailItem key={anime.id}>
                     <PosterCard anime={toCard(anime)} />
@@ -256,14 +263,21 @@ function ContinueCard({ item }: { item: LibraryItem }) {
   )
 }
 
-// A rail whose request failed keeps its heading, with one line and a retry instead of an empty row.
 // Home's own picks, shown once they hold something: many lists have few sequels missed, or none.
-function PicksRail({ title, picks }: { title: string; picks: UseQueryResult<{ items: DiscoverItem[] }> }) {
+function PicksRail({
+  title,
+  picks,
+  fold,
+}: {
+  title: string
+  picks: UseQueryResult<{ items: DiscoverItem[] }>
+  fold: { folded: boolean; onToggle: () => void }
+}) {
   if (picks.isError && !picks.data) return <RailFailed title={title} retry={() => void picks.refetch()} />
   const items = picks.data?.items ?? []
   if (items.length === 0) return null
   return (
-    <Rail title={title}>
+    <Rail title={title} fold={fold}>
       {items.map((anime) => (
         <RailItem key={anime.id}>
           <PosterCard anime={toCard(anime)} />
@@ -273,6 +287,7 @@ function PicksRail({ title, picks }: { title: string; picks: UseQueryResult<{ it
   )
 }
 
+// A rail whose request failed keeps its heading, with one line and a retry instead of an empty row.
 function RailFailed({ title, retry }: { title: string; retry: () => void }) {
   return (
     <section>

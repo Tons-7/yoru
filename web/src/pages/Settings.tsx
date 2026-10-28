@@ -42,6 +42,7 @@ import { SUB_LOOKS } from '../player/subLook'
 import { ON_MOBILE, QUALITIES, setDeviceQuality, setOnMobile, useNetwork, type OnMobile, type Quality } from '../player/network'
 import { ENCODERS } from '../player/encoders'
 import { SEEN_KEY, useNewSettings } from '../lib/whatsNew'
+import { HOME_ROWS, hiddenRows } from '../lib/homeRows'
 import { ReleasePicker } from '../components/ReleasePicker'
 import { DESKTOP_NOTIFY_KEY, desktopNotifyWanted } from '../lib/notifications'
 import { disablePush, enablePush, pushState, testPush, type PushState } from '../lib/push'
@@ -778,7 +779,41 @@ function LanguageTab() {
           </Select>
         </Row>
       </Section>
+
+      <Section title="Home">
+        <HomeRowsRow f={f} />
+        <Row label="Adult titles in For you" hint="Off, For you never suggests 18+ shows." keywords="adult 18+ nsfw hentai recommendations">
+          <Switch on={f.get('home.adult_picks')} onChange={(v) => f.set('home.adult_picks', String(v))} />
+        </Row>
+      </Section>
     </div>
+  )
+}
+
+// Off takes a row off Home on every device; folding one by its heading on Home is that device's alone.
+function HomeRowsRow({ f }: { f: ReturnType<typeof useFlag> }) {
+  const hidden = hiddenRows(f.value('home.hidden'))
+  const set = (id: string, on: boolean) => {
+    if (on) hidden.delete(id)
+    else hidden.add(id)
+    f.set('home.hidden', JSON.stringify(HOME_ROWS.map((r) => r.id).filter((r) => hidden.has(r))))
+  }
+  return (
+    <Row
+      label="Rows on Home"
+      hint="Off takes a row off Home. To fold one away for now, press its heading on Home."
+      keywords="home rows rails hide collapse for you sequels trending season upcoming"
+      stacked
+    >
+      <div className="grid w-full gap-x-8 sm:grid-cols-2">
+        {HOME_ROWS.map((row) => (
+          <div key={row.id} className="flex items-center justify-between gap-3 py-1.5">
+            <span className="text-sm text-base-300">{row.label}</span>
+            <Switch label={row.label} on={!hidden.has(row.id)} onChange={(on) => set(row.id, on)} />
+          </div>
+        ))}
+      </div>
+    </Row>
   )
 }
 

@@ -133,7 +133,7 @@ func (s *Server) streamJimaku(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type entry struct {
-		Index int    `json:"index"`
+		Index int64  `json:"index"`
 		Name  string `json:"name"`
 		URL   string `json:"url"`
 	}
@@ -142,7 +142,7 @@ func (s *Server) streamJimaku(w http.ResponseWriter, r *http.Request) {
 		// Numbered by the file too, so a picked track stays the same file when a fresh listing reorders; 48 bits,
 		// as two files sharing a number would pick each other.
 		n, _ := strconv.ParseInt(jimakuName(f)[:12], 16, 64)
-		out[i] = entry{Index: int(n), Name: f.Name, URL: fmt.Sprintf("/api/stream/%s/jimaku/%s", session.ID, jimakuName(f))}
+		out[i] = entry{Index: n, Name: f.Name, URL: fmt.Sprintf("/api/stream/%s/jimaku/%s", session.ID, jimakuName(f))}
 	}
 	send(w, http.StatusOK, map[string]any{"files": out})
 }
