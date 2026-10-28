@@ -379,10 +379,11 @@ check(await page.getByRole('option', { name: /Search AniList for/ }).isVisible()
 await search.press('Escape')
 
 // ---------------------------------------------------------------- external links + trailer
-const aniLink = page.getByRole('link', { name: /AniList/ })
+// The show's own links: watched episodes' Discussion buttons name MyAnimeList too.
+const aniLink = page.getByRole('link', { name: /^AniList/ })
 check(await until(() => aniLink.isVisible()), 'AniList link on the series page')
 check((await aniLink.getAttribute('href')) === `https://anilist.co/anime/${ANIME}`, 'AniList link targets the show')
-const malLink = page.getByRole('link', { name: /MyAnimeList/ })
+const malLink = page.getByRole('link', { name: /^MyAnimeList/ })
 check(await malLink.isVisible(), 'MyAnimeList link on the series page')
 const trailerBtn = page.getByRole('button', { name: /Trailer/ }).first()
 if (await trailerBtn.isVisible()) {

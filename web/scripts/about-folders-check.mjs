@@ -14,7 +14,8 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
 await page.goto(`${BASE}/settings?tab=Storage`, { waitUntil: 'domcontentloaded' })
 await page.getByRole('tab', { name: 'Storage' }).click().catch(() => {})
 const heading = page.getByRole('heading', { name: 'Where things go' })
-check(await heading.isVisible({ timeout: 15000 }).catch(() => false), 'Storage lists where things go')
+// isVisible doesn't wait, whatever its timeout says: a slow first load (lanes starting at once) failed here.
+check(await heading.waitFor({ timeout: 15000 }).then(() => true, () => false), 'Storage lists where things go')
 check(await page.getByText('History and settings').first().isVisible().catch(() => false), 'the data folder row is shown')
 const setup = await (await fetch(`${BASE}/api/setup`)).json()
 for (const [label, key, path] of [
