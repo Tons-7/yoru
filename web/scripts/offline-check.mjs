@@ -93,6 +93,14 @@ try {
   check(await until(() => page.getByText('Nothing saved on this device').isVisible()), 'Delete removes it')
   check(await until(async () => { const k = await kept(); return k.segments === 0 && k.apps === 0 }), 'and every piece, the app copy too')
 
+  const silent = () => {}
+  await context.route('**/*', silent)
+  const asked = Date.now()
+  await page.goto(`${BASE}/`, { waitUntil: 'commit', timeout: 15_000 }).catch(() => {})
+  check(await until(() => page.getByRole('heading', { name: "Can't reach Yoru" }).isVisible(), 10_000),
+    'with nothing saved and the PC silent, it says so in seconds', `${((Date.now() - asked) / 1000).toFixed(1)} s`)
+  await context.unroute('**/*', silent)
+
   // A finished download saves from its row in Downloads; the PC's own page has no such button.
   const finished = {
     infoHash: 'cd'.repeat(20), animeId: ANIME, title: 'Yoru Test Show', name: 'Yoru Test Show - 01.mkv', episode: '1',

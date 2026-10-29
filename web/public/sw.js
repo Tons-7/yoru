@@ -51,9 +51,9 @@ async function page(req, url) {
   const app = await shell()
   if (app && url.searchParams.has('offline')) return (await app.match('/')) || Response.error()
   const ctl = new AbortController()
-  const timer = app ? setTimeout(() => ctl.abort(), 3000) : 0
+  const timer = setTimeout(() => ctl.abort(), 3000)
   try {
-    return await (app ? fetch(req, { signal: ctl.signal }) : fetch(req))
+    return await fetch(req, { signal: ctl.signal })
   } catch {
     if (!app) return (await caches.match('/offline.html', { cacheName: OFFLINE })) || Response.error()
     return Response.redirect(`${url.pathname.startsWith('/saved') ? url.pathname : '/saved'}?offline=1`, 302)

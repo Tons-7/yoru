@@ -42,7 +42,7 @@
         busy = true
         if (byHand) status.textContent = 'Trying…'
         try {
-          await fetch('/manifest.webmanifest', { cache: 'no-store' })
+          await fetch('/manifest.webmanifest', { cache: 'no-store', signal: AbortSignal.timeout(4000) })
           location.reload()
         } catch {
           status.textContent = byHand ? 'Still not answering. Trying again every few seconds.' : status.textContent
