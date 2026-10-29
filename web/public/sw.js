@@ -1,6 +1,8 @@
-// Yoru's worker: shows pushed alerts, opens the episode they name, and says why when a page can't load at all.
-// Nothing is served from a copy: every request goes to the network; only a failed page load is answered.
+// Yoru's worker: pushed alerts, a page for when Yoru can't be reached, and episodes saved on this device.
 const OFFLINE = 'yoru-offline-1'
+// Kept across updates: saved episodes, and a copy of the app per build to play them in.
+const SAVED = 'yoru-saved'
+const SHELL = 'yoru-shell-'
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()
@@ -11,18 +13,54 @@ self.addEventListener('activate', (event) =>
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== OFFLINE).map((k) => caches.delete(k))))
+      .then((keys) => keys.filter((k) => k !== OFFLINE && k !== SAVED && !k.startsWith(SHELL)))
+      .then((old) => Promise.all(old.map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   ),
 )
 
-// Page loads only: the installed app has no address bar or reload, so a dead network gets words and a retry.
 self.addEventListener('fetch', (event) => {
-  if (event.request.mode !== 'navigate') return
-  event.respondWith(
-    fetch(event.request).catch(() => caches.match('/offline.html', { cacheName: OFFLINE }).then((r) => r || Response.error())),
-  )
+  const req = event.request
+  const url = new URL(req.url)
+  if (url.origin !== self.location.origin || req.method !== 'GET') return
+  if (url.pathname.startsWith('/api/stream/saved-')) return event.respondWith(saved(req))
+  if (req.mode === 'navigate') return event.respondWith(page(req, url))
+  if (url.pathname.startsWith('/assets/')) event.respondWith(asset(req))
 })
+
+async function saved(req) {
+  const hit = await caches.match(req, { cacheName: SAVED, ignoreSearch: true })
+  return hit || new Response('{"error":"not saved on this device"}', { status: 404, headers: { 'Content-Type': 'application/json' } })
+}
+
+async function shell() {
+  for (const name of (await caches.keys()).filter((k) => k.startsWith(SHELL)).reverse()) {
+    const cache = await caches.open(name)
+    if (await cache.match('/__ready')) return cache
+  }
+  return null
+}
+
+// Named by their contents, so the kept file is the same one; a PC asleep never holds it up.
+async function asset(req) {
+  const cache = await shell()
+  return (cache && (await cache.match(req, { ignoreSearch: true }))) || fetch(req)
+}
+
+async function page(req, url) {
+  const app = await shell()
+  if (app && url.searchParams.has('offline')) return (await app.match('/')) || Response.error()
+  const ctl = new AbortController()
+  const timer = app ? setTimeout(() => ctl.abort(), 3000) : 0
+  try {
+    return await (app ? fetch(req, { signal: ctl.signal }) : fetch(req))
+  } catch {
+    if (!app) return (await caches.match('/offline.html', { cacheName: OFFLINE })) || Response.error()
+    return Response.redirect(`${url.pathname.startsWith('/saved') ? url.pathname : '/saved'}?offline=1`, 302)
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 // The server sends the declarative form ({ web_push: 8030, notification: {...} }), which Safari can show by
 // itself; here it is shown for the browsers that hand it to the worker.

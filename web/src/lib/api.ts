@@ -58,16 +58,11 @@ export const catalogueSource = {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = readToken()
   const headers = new Headers(init?.headers)
-  if (token) headers.set('Authorization', `Bearer ${token}`)
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
 
-  const res = await fetch(path, { ...init, headers, credentials: 'same-origin' })
+  const res = await fetchAuthed(path, { ...init, headers })
   noteSource(res)
-
-  // A revoked device fails every call alike, so the app says so once, not per page.
-  if (res.status === 401) window.dispatchEvent(new Event(UNPAIRED_EVENT))
 
   if (!res.ok) {
     let body: unknown
@@ -102,6 +97,16 @@ export const api = {
       body: file,
       headers: { 'Content-Type': file.type || 'application/octet-stream' },
     }),
+}
+
+export async function fetchAuthed(path: string, init?: RequestInit): Promise<Response> {
+  const token = readToken()
+  const headers = new Headers(init?.headers)
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const res = await fetch(path, { ...init, headers, credentials: 'same-origin' })
+  // A revoked device fails every call alike, so the app says so once, not per page.
+  if (res.status === 401) window.dispatchEvent(new Event(UNPAIRED_EVENT))
+  return res
 }
 
 /** The path with the access token in its query, for requests that cannot set a header. */
@@ -471,6 +476,9 @@ export interface StreamInfo {
   imageSubtitles?: boolean
   /** The signed playlist an Apple TV fetches itself, while a TV can reach Yoru. */
   airplay?: string
+  /** Played from this device's storage (lib/offline.ts). */
+  saved?: boolean
+  complete?: boolean
 }
 
 export interface SkipRange {

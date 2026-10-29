@@ -33,6 +33,8 @@ type PlaybackState struct {
 	Played float64
 	// Where the ending starts by every source the player has, seconds; 0 when none knows.
 	Ending float64
+	// Catchup: a saved copy's offline watching in one late report, so Played may be the whole episode.
+	Catchup bool
 }
 
 // EndingThreshold is sync.progress_at's "when the ending starts": the ending's start, if known and late enough.
@@ -348,6 +350,17 @@ func (s *Store) DownloadStatus(ctx context.Context) ([]Download, error) {
 	return out, rows.Err()
 }
 
+// PlayedAt is when an episode was last reported played, unix seconds; 0 if never.
+func (s *Store) PlayedAt(ctx context.Context, animeID int, epKey string) (int64, error) {
+	var at int64
+	err := s.r.QueryRowContext(ctx,
+		`SELECT coalesce(last_played_at, 0) FROM playback WHERE anime_id = ? AND ep_key = ?`, animeID, epKey).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return at, err
+}
+
 // ResumeAt returns where playback stopped, or zero once the episode was finished
 // so a rewatch starts over. Finished is the position, not the watched flag.
 func (s *Store) ResumeAt(ctx context.Context, animeID int, epKey string) (float64, error) {
@@ -432,7 +445,11 @@ func (s *Store) SavePlayback(ctx context.Context, p PlaybackState) (bool, error)
 	if p.Duration > 0 {
 		duration = p.Duration
 	}
-	step := max(0, min(p.Played, maxPlayedPerReport))
+	limit := maxPlayedPerReport
+	if p.Catchup {
+		limit = max(duration, limit)
+	}
+	step := max(0, min(p.Played, limit))
 	played += step
 	if step > 0 {
 		if _, err := tx.ExecContext(ctx, `

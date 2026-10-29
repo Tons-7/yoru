@@ -115,6 +115,10 @@ func TestVariantsArePerPlan(t *testing.T) {
 	if BaseID(a) != "5-1" || BaseID(a+"-burn2-0") != "5-1" || BaseID("-55-7-burn0-5") != "-55-7" || BaseID("5-1") != "5-1" {
 		t.Errorf("BaseID: %s", BaseID(a))
 	}
+	keep := variantID("5-1", h264, "", ParseCaps("hevc-10,ch2"), Want{Keep: true})
+	if kept := variantID("5-1", hevc, "", ParseCaps("hevc-10"), Want{Keep: true}); keep != "5-1-keep" || kept != a+"-keep" || BaseID(kept) != "5-1" {
+		t.Errorf("kept copies: %s %s", keep, kept)
+	}
 }
 
 // HDR is converted only by an ffmpeg that can tone-map; without one (or before it is found) it is sent as it is.

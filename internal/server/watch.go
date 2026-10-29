@@ -100,20 +100,18 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 // savePosition saves a page's report or the TV's estimate alike: the store decides what counts as watched
 // (as for mpv), so no client can claim it, and a newly watched episode goes to the trackers.
 func (s *Server) savePosition(ctx context.Context, animeID, episode int, position, duration, played float64) (bool, error) {
-	watched, err := s.store.SavePlayback(ctx, store.PlaybackState{
-		AnimeID:  animeID,
-		EpKey:    epKey(episode),
-		Position: position,
-		Duration: duration,
-		Played:   played,
-		Ending:   s.endingFor(ctx, animeID, episode),
-	})
+	return s.saveState(ctx, episode, store.PlaybackState{AnimeID: animeID, Position: position, Duration: duration, Played: played})
+}
+
+func (s *Server) saveState(ctx context.Context, episode int, p store.PlaybackState) (bool, error) {
+	p.EpKey, p.Ending = epKey(episode), s.endingFor(ctx, p.AnimeID, episode)
+	watched, err := s.store.SavePlayback(ctx, p)
 	if err != nil {
 		return false, err
 	}
 	if watched && s.syncer != nil {
-		if err := s.syncer.Watched(ctx, animeID, episode); err != nil {
-			s.log.Warn("sync watched", "anime", animeID, "err", err)
+		if err := s.syncer.Watched(ctx, p.AnimeID, episode); err != nil {
+			s.log.Warn("sync watched", "anime", p.AnimeID, "err", err)
 		}
 	}
 	return watched, nil

@@ -23,6 +23,8 @@ func (s *Session) canDecodeInHardware() bool {
 const (
 	// Twice realtime buffers ahead without racing to the end of the file.
 	readRate = 2.0
+	// A copy to keep, converted on the processor: faster, but not so fast the machine stutters.
+	keepReadRate = 4.0
 
 	// A head start so playback begins at once. Float: ffmpeg rejects an integer.
 	initialBurstSeconds = 60.0
@@ -54,10 +56,20 @@ func (s *Session) args(r *run) []string {
 	}
 
 	// Capped, or ffmpeg stutters the machine; the burst covers the start, the rate stays ahead of the viewer.
-	a = append(a,
-		"-readrate", fmt.Sprintf("%.1f", readRate),
-		"-readrate_initial_burst", fmt.Sprintf("%.0f", initialBurstSeconds),
-	)
+	rate := readRate
+	if s.want.Keep {
+		rate = keepReadRate
+		// Untouched, or converted on the graphics card, it holds the processor back little.
+		if s.Plan.VideoCopy || usesHardware(s.Plan.VideoCodec) {
+			rate = 0
+		}
+	}
+	if rate > 0 {
+		a = append(a,
+			"-readrate", fmt.Sprintf("%.1f", rate),
+			"-readrate_initial_burst", fmt.Sprintf("%.0f", initialBurstSeconds),
+		)
+	}
 
 	a = append(a, reconnectArgs(s.Source)...)
 	video := []string{"-map", "0:v:0"}

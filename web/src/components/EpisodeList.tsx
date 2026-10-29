@@ -7,6 +7,7 @@ import { clockTime, cx, relativeTime } from '../lib/format'
 import {
   refreshDownloads,
   refreshListState,
+  useAccess,
   useDownloadQueue,
   useDownloads,
   useNow,
@@ -15,6 +16,7 @@ import {
   useUpNextEdit,
 } from '../lib/queries'
 import { isUnaired } from '../lib/episodes'
+import { cannotSave, saveEpisodes } from '../lib/offline'
 import { Badge, ConfirmInline, inputClass, TextInput } from './ui'
 import { ListCheckGlyph, ListPlusGlyph } from './UpNext'
 import { useInUpNext } from '../lib/upnext'
@@ -78,6 +80,7 @@ export function EpisodeList({
   // Episodes already queued or arriving: a second Download would only queue them again.
   const queue = useDownloadQueue()
   const downloads = useDownloads()
+  const access = useAccess()
   const busy = useMemo(() => {
     const set = new Set<number>()
     // A failed entry is not busy: its Download button retries it.
@@ -299,6 +302,18 @@ export function EpisodeList({
                   }
                 />
                 <PageStep label="Cancel" disabled={download.isPending} onClick={stopSelecting} />
+                {access.data && !access.data.host && (
+                  <PageStep
+                    label="Save to this device"
+                    disabled={picked.size === 0}
+                    onClick={() => {
+                      const why = cannotSave()
+                      if (!why) saveEpisodes([...picked].sort((a, b) => a - b).map((episode) => ({ animeId, episode })))
+                      setNote(why ?? `Saving ${picked.size} to this device: see Downloads, On this device`)
+                      stopSelecting()
+                    }}
+                  />
+                )}
                 <button
                   onClick={() => download.mutate([...picked].sort((a, b) => a - b))}
                   disabled={picked.size === 0 || download.isPending}

@@ -33,6 +33,7 @@ import {
 } from '../lib/queries'
 import { joinRoom, overlayOn, parseTogether, saveSeat, savedSeat, useRoom, useTogetherSync } from '../lib/together'
 import { JoinCard, TogetherPanel, TogetherToasts } from '../components/Together'
+import { SaveToDevice } from '../components/SaveToDevice'
 import { Anime4KDialog } from '../components/Anime4KDialog'
 import { CharacterRail } from '../components/CharacterRail'
 import { EpisodeList } from '../components/EpisodeList'
@@ -922,6 +923,8 @@ export function Watch({
                   </Button>
 
                   {source && <Button onClick={() => setInApp(true)}>Open or save</Button>}
+
+                  {!playingInMpv && <SaveToDevice animeId={id} episode={ep} />}
 
                   {!together && !naming && !playingInMpv && (
                     <Button

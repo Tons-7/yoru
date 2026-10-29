@@ -23,6 +23,8 @@ type Caps struct {
 type Want struct {
 	Height, Rate int
 	Soften       bool
+	// Keep: a device's copy, read start to end in a session of its own so no viewer's encoder moves.
+	Keep bool
 }
 
 // Quality steps a device can cap its stream at: height, and bits a second for the picture.
@@ -64,6 +66,10 @@ func (c *Caps) Decodes(codec string, depth int) bool {
 
 // variantID: the episode's id for the any-browser plan, else one per plan, so devices never wipe each other's.
 func variantID(id string, info *MediaInfo, encoder string, caps *Caps, want Want) string {
+	if want.Keep {
+		want.Keep = false
+		return variantID(id, info, encoder, caps, want) + "-keep"
+	}
 	if caps == nil && want == (Want{}) {
 		return id
 	}

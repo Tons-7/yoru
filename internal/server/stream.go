@@ -75,9 +75,10 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		s.playback.SetStage(animeID, episode, library.Stage{Step: "start"})
 		defer s.playback.ClearStage(animeID, episode)
 	}
+	want := s.streamWant(r.Context(), animeID, r.URL.Query().Get("quality"))
+	want.Keep = r.URL.Query().Get("keep") == "1"
 	session, err := s.streams.OpenFor(r.Context(), id, source,
-		s.readablePath(r.Context(), animeID, episode, source), transcode.ParseCaps(r.URL.Query().Get("caps")),
-		s.streamWant(r.Context(), animeID, r.URL.Query().Get("quality")))
+		s.readablePath(r.Context(), animeID, episode, source), transcode.ParseCaps(r.URL.Query().Get("caps")), want)
 	if err != nil {
 		// Nothing plays, so the downloads Start paused for it go on; no close will come to resume them.
 		if s.playback != nil {
@@ -124,7 +125,10 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 
 	// Start the encoder now, at the resume point, rather than waiting to be asked:
 	// the client reads the playlist first, and starting at zero would be restarted.
-	go s.prestart(session, animeID, episode)
+	// A copy to keep reads from the start, not the resume point.
+	if !want.Keep {
+		go s.prestart(session, animeID, episode)
+	}
 
 	base := "/api/stream/" + id
 	body := map[string]any{
@@ -136,6 +140,7 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		"audio":      session.Info.Audio,
 		"audioTrack": session.AudioTrack(),
 		"sound":      session.Sound(),
+		"complete": s.sourceComplete(r.Context(), session),
 	}
 
 	// AirPlay's address for this session (an Apple TV can't carry the page's cookie), when a TV can reach it.
@@ -454,8 +459,12 @@ func (s *Server) streamInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// See WaitInit: starts a pass at the resume point only if none runs.
-	animeID, episode, _ := parseSessionID(session.ID)
-	path, err := session.WaitInit(r.Context(), s.resumeSegment(r.Context(), session, animeID, episode), 60*time.Second)
+	from := 0
+	if !session.Kept() {
+		animeID, episode, _ := parseSessionID(session.ID)
+		from = s.resumeSegment(r.Context(), session, animeID, episode)
+	}
+	path, err := session.WaitInit(r.Context(), from, 60*time.Second)
 	if err != nil {
 		if !unconvertible(w, err) {
 			s.fail(w, "stream init", err)
@@ -688,13 +697,11 @@ func (s *Server) sourceComplete(ctx context.Context, session *transcode.Session)
 	if err != nil {
 		return false
 	}
-	if !found {
-		return true
-	}
-	if s.store.FileComplete(ctx, rec.InfoHash, rec.FileIndex) {
-		return true
-	}
-	return s.cache != nil && s.cache.Finished(ctx, rec.InfoHash)
+	return !found || s.torrentWhole(ctx, rec)
+}
+
+func (s *Server) torrentWhole(ctx context.Context, rec store.TorrentRecord) bool {
+	return s.store.FileComplete(ctx, rec.InfoHash, rec.FileIndex) || s.cache != nil && s.cache.Finished(ctx, rec.InfoHash)
 }
 
 // streamThumbnails describes the scrub preview sheet, building it if not there

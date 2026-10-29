@@ -528,6 +528,8 @@ func (m *Manager) Peek(id string) (*Session, bool) {
 }
 
 // Holders is how many opens hold the session.
+func (s *Session) Kept() bool { return s.want.Keep }
+
 func (s *Session) Holders() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

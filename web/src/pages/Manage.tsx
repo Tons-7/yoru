@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, type DownloadFile, type Page } from '../lib/api'
 import { retryNote, sortDownloads } from '../lib/downloads'
 import { bytes, cx, relativeTime, speed } from '../lib/format'
 import {
   refreshDownloads,
+  useAccess,
   useDownloadQueue,
   useDownloads,
   useBetterCopies,
@@ -22,6 +23,7 @@ import {
   type BetterCopy,
 } from '../lib/queries'
 import { BetterCopyOffer } from '../components/BetterCopy'
+import { cannotSave, saveEpisodes, savedKey, useSaved } from '../lib/offline'
 import {
   Badge,
   Button,
@@ -202,6 +204,15 @@ function KeepGlyph({ filled }: { filled: boolean }) {
 
 const stroke = { stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } as const
 
+function DeviceGlyph({ saved }: { saved: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <rect x="7" y="2.5" width="10" height="19" rx="2" fill="none" {...stroke} />
+      <path d={saved ? 'm9.5 12 2 2 3.5-4' : 'M12 7.5v7m0 0-2.5-2.5m2.5 2.5 2.5-2.5'} fill="none" {...stroke} />
+    </svg>
+  )
+}
+
 function SwapGlyph() {
   return (
     <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
@@ -314,6 +325,12 @@ export function Downloads() {
   const { data, isPending, isError, error, refetch } = useDownloads()
   const queue = useDownloadQueue()
   const room = useDriveRoom()
+  const access = useAccess()
+  const here = useSaved()
+  const elsewhere = !!access.data && !access.data.host
+  const onDevice = new Set(here.saved.map((e) => e.key))
+  const savingHere = new Set(here.jobs.map((j) => savedKey(j.animeId, j.episode)))
+  const navigate = useNavigate()
   const holds = useReleaseHolds()
   const better = useBetterCopies()
   const takeNow = useMutation({
@@ -484,6 +501,19 @@ export function Downloads() {
     keep: (ds) => keep.mutate(ds),
     remove: (hashes) => remove.mutate(hashes),
     pauseResume: (d) => (d.paused ? resume : pause).mutate(d.infoHash),
+    toDevice: elsewhere
+      ? {
+          state: (d) => {
+            const keys = d.episodes.map((e) => savedKey(d.animeId ?? 0, Number(e)))
+            if (keys.every((k) => onDevice.has(k))) return 'saved'
+            return keys.some((k) => savingHere.has(k)) ? 'saving' : 'none'
+          },
+          save: (d) => {
+            if (cannotSave()) navigate('/saved')
+            else saveEpisodes(d.episodes.map((e) => ({ animeId: d.animeId!, episode: Number(e) })))
+          },
+        }
+      : undefined,
   }
 
   return (
@@ -504,6 +534,14 @@ export function Downloads() {
         }
         actions={
           <>
+            {elsewhere && !confirmClear && (
+              <LinkButton to="/saved">
+                On this device
+                {here.saved.length + here.jobs.length > 0 && (
+                  <span className="ml-1.5 text-base-400 tabular-nums">{here.saved.length + here.jobs.length}</span>
+                )}
+              </LinkButton>
+            )}
             {/* Only with something to pause, or already paused: otherwise the button does nothing visible. */}
             {!confirmClear && (queuePaused || active.length + searching.length + waiting > 0) && (
               <Button
@@ -763,6 +801,8 @@ interface RowActions {
   keep: (ds: Download[]) => void
   remove: (hashes: string[]) => void
   pauseResume: (d: Download) => void
+  /** Absent on the PC running Yoru, which has the files already. */
+  toDevice?: { state: (d: Download) => 'none' | 'saving' | 'saved'; save: (d: Download) => void }
 }
 
 function ConfirmDelete({ size, actions, onDelete }: { size: number; actions: RowActions; onDelete: () => void }) {
@@ -1004,6 +1044,10 @@ function DownloadRow({
             </button>
           )}
 
+          {actions.toDevice && !unfinished && !!d.animeId && d.episodes.length > 0 && (
+            <SaveHere d={d} to={actions.toDevice} />
+          )}
+
           {/* The badge says kept (Downloaded), the fill repeats it; "✓ Kept" as a label was a third time. */}
           <button
             onClick={() => actions.keep([d])}
@@ -1042,6 +1086,27 @@ function DownloadRow({
       {unfinished && <ProgressBar value={d.percent} className="mt-2" />}
       {d.episodes.length > 1 && <PackEpisodes hash={d.infoHash} />}
     </li>
+  )
+}
+
+function SaveHere({ d, to }: { d: Download; to: NonNullable<RowActions['toDevice']> }) {
+  const navigate = useNavigate()
+  const state = to.state(d)
+  const all = d.episodes.length > 1 ? ` all ${d.episodes.length} episodes` : ''
+  const label = state === 'saved' ? 'On this device' : state === 'saving' ? 'Saving to this device' : `Save${all} to this device`
+  return (
+    <button
+      onClick={() => (state === 'none' ? to.save(d) : navigate('/saved'))}
+      aria-label={label}
+      title={state === 'none' ? `${label}, to watch with the PC off` : `${label}: see On this device`}
+      className={cx(
+        iconButton,
+        state === 'saved' && 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 hover:text-emerald-200',
+        state === 'saving' && 'text-accent-300',
+      )}
+    >
+      <DeviceGlyph saved={state === 'saved'} />
+    </button>
   )
 }
 

@@ -571,7 +571,13 @@ export function Player({
     },
     [addTrack, showNotice],
   )
-  const jimakuSet = useQuery({ queryKey: ['jimaku'], queryFn: () => api.get<{ set: boolean }>('/api/jimaku') }).data?.set
+  // A saved copy plays without the PC, which casting, Jimaku, audio and sound changes need.
+  const saved = !!stream?.saved
+  const jimakuSet = useQuery({
+    queryKey: ['jimaku'],
+    queryFn: () => api.get<{ set: boolean }>('/api/jimaku'),
+    enabled: !saved,
+  }).data?.set
   // A skip of AniSkip's left standing is a vote that it was right.
   const autoSkipped = useAutoSkip(video, skips, autoSkip, (r) => {
     if (r.source === 'aniskip' && r.id) onSkipVote?.(r.id, true)
@@ -1338,11 +1344,11 @@ export function Player({
   const corners = pip.active ? '' : 'sm:rounded-xl'
   // Buttons on the bar, rows in the settings menu on a phone; the floating window has neither.
   const audioMenu =
-    !pip.active && stream?.audio && stream.audio.length > 1
+    !pip.active && !saved && stream?.audio && stream.audio.length > 1
       ? { tracks: stream.audio, value: audioTrack, onChange: switchAudio }
       : undefined
   const soundMenu =
-    !pip.active && stream && (stream.audio?.length ?? 0) > 0 ? { value: soundState, onChange: switchSound } : undefined
+    !pip.active && stream && !saved && (stream.audio?.length ?? 0) > 0 ? { value: soundState, onChange: switchSound } : undefined
 
   const body = (
     <div
@@ -1674,7 +1680,7 @@ export function Player({
                 look={onSubLook && { value: lookPreset, onChange: onSubLook }}
                 onLoadFile={(file) => void loadOwnFile(file)}
                 jimaku={
-                  jimakuSet
+                  jimakuSet && !saved
                     ? {
                         streamId: stream.id,
                         onPick: (f) =>
@@ -1708,7 +1714,7 @@ export function Player({
                   onOpen={holdForMenu}
                   onInfo={toggleInfo}
                 />
-                {!castImpossible() && (
+                {!castImpossible() && !saved && (
                   <CastButton
                     casting={casting}
                     device={castDevice}
@@ -1720,7 +1726,7 @@ export function Player({
                   />
                 )}
                 {/* Where Safari sees an Apple TV; without its link the TV can't reach Yoru, and says so. */}
-                {airplay.available && (
+                {airplay.available && !saved && (
                   <IconButton
                     label={airplay.active ? 'Playing on AirPlay' : 'AirPlay'}
                     onClick={() =>

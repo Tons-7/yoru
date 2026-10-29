@@ -65,3 +65,28 @@ func TestReconnectOnlyForHTTP(t *testing.T) {
 		t.Errorf("reconnect must come before -i: %v", args)
 	}
 }
+
+func TestACopyToKeepIsNotPacedForPlayback(t *testing.T) {
+	rate := func(s *Session) string {
+		args := s.args(&run{})
+		if i := slices.Index(args, "-readrate"); i >= 0 {
+			return args[i+1]
+		}
+		return "none"
+	}
+	copied := Plan{VideoCopy: true, AudioCopy: true}
+	for _, c := range []struct {
+		s    *Session
+		want string
+	}{
+		{&Session{Source: "a.mkv", Plan: copied}, "2.0"},
+		{&Session{Source: "a.mkv", Plan: copied, want: Want{Keep: true}}, "none"},
+		{&Session{Source: "a.mkv", Plan: Plan{VideoCodec: "libx264"}, want: Want{Keep: true}}, "4.0"},
+		{&Session{Source: "a.mkv", Plan: Plan{VideoCodec: "h264_nvenc"}, want: Want{Keep: true}}, "none"},
+		{&Session{Source: "a.mkv", Plan: Plan{VideoCodec: "h264_nvenc"}}, "2.0"},
+	} {
+		if got := rate(c.s); got != c.want {
+			t.Errorf("readrate %s, want %s (keep %v, copy %v)", got, c.want, c.s.want.Keep, c.s.Plan.VideoCopy)
+		}
+	}
+}
