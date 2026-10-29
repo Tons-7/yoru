@@ -25,6 +25,7 @@ import { Spinner } from '../components/ui'
 import { menuItems, useDismiss, useMediaQuery, useMenuButton, useRoomAbove, walkMenu } from '../lib/hooks'
 import { buttonClass } from '../lib/ui'
 import { copyText } from '../lib/downloads'
+import { attachVideo, detachVideo } from '../lib/miniplayer'
 import { actionFor, keyHint, keyScope, useKeymap, type KeyAction } from '../lib/keymap'
 import { getSleep, noteInput, setSleep, useSleep, type Sleep } from '../lib/watching'
 import { useAnime4K, type UpscaleTier } from './anime4k'
@@ -242,6 +243,8 @@ export interface PlayerProps {
   overlay?: ReactNode
   /** Casting draws the chosen subtitles into the picture instead of sending them as text. */
   castBurn?: boolean
+  /** Docked in a corner: picture only, pressed to expand. */
+  mini?: { onExpand: () => void }
 }
 
 export function Player({
@@ -277,6 +280,7 @@ export function Player({
   onPickRelease,
   overlay,
   castBurn = false,
+  mini,
 }: PlayerProps) {
   const [video, setVideo] = useState<HTMLVideoElement | null>(null)
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null)
@@ -290,6 +294,11 @@ export function Player({
     anchor.current?.append(host)
     return () => host.remove()
   }, [host])
+
+  useEffect(() => {
+    attachVideo(video)
+    return () => detachVideo(video)
+  }, [video])
 
   const [playing, setPlaying] = useState(false)
   const [waiting, setWaiting] = useState(true)
@@ -1235,6 +1244,7 @@ export function Player({
   )
 
   useKeyboard({
+    off: !!mini,
     video,
     togglePlay,
     seekBy,
@@ -1531,7 +1541,7 @@ export function Player({
       )}
 
       {/* Where Skip sits: an auto-skip offered back for a moment, and AniSkip's times open to a "wrong". */}
-      {offered && !activeSkip && (!offered.byHand || canCallWrong) && (
+      {!mini && offered && !activeSkip && (!offered.byHand || canCallWrong) && (
         <div className="absolute right-4 bottom-24 flex items-center gap-1 rounded-md bg-base-950/85 p-1 text-sm text-white ring-1 ring-white/20 backdrop-blur-sm">
           <span className="px-2 text-white/70">Skipped {skipKind(offered.range.kind) ?? 'ahead'}</span>
           {!offered.byHand && (
@@ -1562,7 +1572,7 @@ export function Player({
         </div>
       )}
 
-      {activeSkip && (
+      {!mini && activeSkip && (
         <button
           onClick={skipActive}
           className="absolute right-4 bottom-24 rounded-md bg-base-950/85 px-4 py-2 text-sm font-medium text-white ring-1 ring-white/20 backdrop-blur-sm transition-transform hover:scale-105 pointer-coarse:min-h-11"
@@ -1578,6 +1588,7 @@ export function Player({
           'pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent px-3 pt-10 pb-3 transition-opacity duration-200 sm:px-4',
           pip.active ? '' : 'sm:rounded-b-xl',
           controlsVisible ? 'opacity-100' : 'opacity-0',
+          mini && 'hidden',
         )}
       >
         <div className={cx(controlsVisible && 'pointer-events-auto')}>
@@ -1753,6 +1764,7 @@ export function Player({
           'pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/70 to-transparent transition-opacity duration-200',
           pip.active ? 'p-2' : 'p-4',
           controlsVisible ? 'opacity-100' : 'opacity-0',
+          mini && 'hidden',
         )}
       >
         {/* One line in the floating window, which is small and already titled. */}
@@ -1798,7 +1810,16 @@ export function Player({
         />
       )}
 
-      {overlay}
+      <div className={mini ? 'hidden' : 'contents'}>{overlay}</div>
+
+      {mini && (
+        <button
+          type="button"
+          onClick={mini.onExpand}
+          aria-label="Expand the player"
+          className="absolute inset-0 z-10 cursor-pointer focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:outline-none"
+        />
+      )}
     </div>
   )
 
@@ -2969,7 +2990,9 @@ function useKeyboard({
   toggleInfo,
   holdFast,
   mark,
+  off,
 }: {
+  off?: boolean
   video: HTMLVideoElement | null
   togglePlay: () => void
   seekBy: (n: number) => void
@@ -2999,6 +3022,7 @@ function useKeyboard({
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (off) return
       const target = e.target as HTMLElement | null
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
       // An open dialog or menu owns the keyboard, or Space wouldn't press its buttons.
@@ -3120,7 +3144,7 @@ function useKeyboard({
       extra?.removeEventListener('blur', release)
     }
   }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skip, cycleVoice, next, previous,
-    stepRate, stepFrame, cycleSubtitles, toggleInfo, holdFast, mark])
+    stepRate, stepFrame, cycleSubtitles, toggleInfo, holdFast, mark, off])
 }
 
 function IconButton({

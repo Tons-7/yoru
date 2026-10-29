@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   api,
   ApiError,
@@ -28,8 +28,11 @@ import {
   usePrefs,
   useRecommendations,
   useSetPref,
+  useTrackers,
   type Season,
 } from '../lib/queries'
+import { joinRoom, overlayOn, parseTogether, saveSeat, savedSeat, useRoom, useTogetherSync } from '../lib/together'
+import { JoinCard, TogetherPanel, TogetherToasts } from '../components/Together'
 import { Anime4KDialog } from '../components/Anime4KDialog'
 import { CharacterRail } from '../components/CharacterRail'
 import { EpisodeList } from '../components/EpisodeList'
@@ -48,6 +51,7 @@ import { deviceCaps } from '../player/decode'
 import { cellular, LOWER, SAVER, setOnMobile, setSitting, stepBytes, streamChoice, useNetwork } from '../player/network'
 import { MobileDataCard, NetworkNote } from '../components/MobileData'
 import { SUB_LOOKS, type SubLook } from '../player/subLook'
+import { currentVideo, togglePlay, useCurrentVideo, useDockDrag, usePlayingNow, type Corner } from '../lib/miniplayer'
 import {
   autoTier,
   deviceUpscale,
@@ -58,11 +62,29 @@ import {
   type AutoTier,
 } from '../player/anime4k'
 
-export function Watch() {
-  const { animeId, episode } = useParams()
+/** Mounted once by the layout: the watch page, or docked in a corner (mini) once left while playing. */
+export function Watch({
+  animeId,
+  episode,
+  mini = false,
+  onGo,
+  onClose,
+}: {
+  animeId: string
+  episode: string
+  mini?: boolean
+  onGo?: (path: string) => void
+  onClose?: () => void
+}) {
   const id = Number(animeId)
   const ep = Number(episode)
-  const navigate = useNavigate()
+  const routerNavigate = useNavigate()
+  // Docked, auto next stays docked.
+  const navigate = useCallback(
+    (path: string) => (mini && onGo && path.startsWith('/watch/') ? onGo(path) : routerNavigate(path)),
+    [mini, onGo, routerNavigate],
+  )
+  const dock = useDockDrag(mini)
   const qc = useQueryClient()
 
   const prefs = usePrefs(id)
@@ -110,12 +132,41 @@ export function Watch() {
   const wantAudio: AudioChoice =
     audio ?? ((effective['audio.prefer'] as AudioChoice | undefined) ?? 'sub')
 
-  // A release chosen by hand, for this episode only.
-  const [hashPick, setHashPick] = useState<{ key: string; hash: string } | null>(null)
+  // A release chosen by hand, for this episode only; a room's comes in the link.
+  const [params] = useSearchParams()
+  const [hashPick, setHashPick] = useState<{ key: string; hash: string } | null>(() => {
+    const hash = params.get('hash')
+    return hash ? { key: epKey, hash } : null
+  })
   const infoHash = hashPick?.key === epKey ? hashPick.hash : undefined
   const setInfoHash = (hash?: string) => setHashPick(hash ? { key: epKey, hash } : null)
   const [picking, setPicking] = useState(false)
   const [inApp, setInApp] = useState(false)
+
+  const [together, setTogether] = useState(() => parseTogether(params.get('together') ?? ''))
+  const [seat, setSeat] = useState(() => (together ? savedSeat(together) : null))
+  const [invite, setInvite] = useState(() => seat?.invite)
+  // A room link opened while this view stays mounted (docked, or another room).
+  const linkParam = params.get('together') ?? ''
+  const hashParam = params.get('hash')
+  useEffect(() => {
+    const next = parseTogether(linkParam)
+    if (!next || next.code === together?.code) return
+    const kept = savedSeat(next)
+    setTogether(next)
+    setSeat(kept)
+    setInvite(kept?.invite)
+    if (hashParam) setHashPick({ key: epKey, hash: hashParam })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkParam])
+  const room = useRoom(together, seat)
+  const inRoom = !!together && !!seat && room.status === 'in'
+  const isHost = !!room.me?.host
+  const [toasts, setToasts] = useState(overlayOn)
+  const trackers = useTrackers()
+  const account = (provider: string) => trackers.data?.trackers.find((t) => t.provider === provider)?.user
+  const trackerName = account('anilist') || account('mal') || ''
+  useTogetherSync(useCurrentVideo(), inRoom ? room : null)
 
   const play = useQuery({
     enabled: id !== 0 && ep > 0 && prefs.isSuccess,
@@ -132,6 +183,59 @@ export function Watch() {
   })
 
   const playingInMpv = !!play.data && play.data.player !== 'browser'
+
+  // Follow the room's episode and release; moved on here, tell the room.
+  const showTitleRef = useRef('')
+  const roomState = room.view?.state
+  const following = useRef(false)
+  useEffect(() => {
+    if (!inRoom || !together || !roomState || (roomState.animeId === id && roomState.episode === ep)) return
+    following.current = true
+    if (roomState.infoHash) setHashPick({ key: `${roomState.animeId}-${roomState.episode}`, hash: roomState.infoHash })
+    navigate(`/watch/${roomState.animeId}/${roomState.episode}?together=${encodeURIComponent(together.href)}`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inRoom, roomState?.animeId, roomState?.episode])
+  const playedHash = play.data?.infoHash
+  useEffect(() => {
+    if (!inRoom || !roomState || !playedHash) return
+    if (roomState.animeId === id && roomState.episode === ep) {
+      following.current = false
+      return
+    }
+    if (!following.current) void room.act('episode', { animeId: id, episode: ep, infoHash: playedHash }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inRoom, playedHash, id, ep])
+
+  const [naming, setNaming] = useState(false)
+  const startTogether = useMutation({
+    mutationFn: (name: string) =>
+      api.post<{ link: string; member: string; token: string }>('/api/together', {
+        name, animeId: id, episode: ep, infoHash: play.data?.infoHash, title: showTitleRef.current,
+        position: currentVideo()?.currentTime ?? 0, playing: !(currentVideo()?.paused ?? true),
+      }),
+    onSuccess: (r) => {
+      const shared = parseTogether(r.link)
+      if (!shared) return
+      // Our own address here, the public one only for the invite; in the URL so a reload keeps the room.
+      const href = `${window.location.origin}/together/${shared.code}?k=${shared.key}`
+      const here = { ...shared, base: window.location.origin, href }
+      const s = { member: r.member, token: r.token, invite: r.link }
+      saveSeat(here, s)
+      setTogether(here)
+      setSeat(s)
+      setInvite(r.link)
+      routerNavigate(`/watch/${id}/${ep}?together=${encodeURIComponent(href)}`, { replace: true })
+    },
+  })
+  // Back to full size, still in the room.
+  const watchHere = `/watch/${id}/${ep}${together ? `?together=${encodeURIComponent(together.href)}` : ''}`
+  const leaveTogether = () => {
+    void room.act('leave').catch(() => {})
+    if (together) saveSeat(together, null)
+    setTogether(null)
+    setSeat(null)
+    setInvite(undefined)
+  }
 
   // mpv opens the file itself and reports over its own IPC socket, so there is nothing here to transcode for.
   const source = playingInMpv ? undefined : play.data?.streamUrl
@@ -331,10 +435,11 @@ export function Watch() {
   // The release filename is what the server resolved; it is not what anyone
   // calls the episode. Fall back to it only when nothing better is known.
   const showTitle = detail.data?.title ?? play.data?.title ?? ''
+  showTitleRef.current = showTitle
   const episodeLabel = [`Episode ${current?.display ?? ep}`, current?.titleEn]
     .filter(Boolean)
     .join(' · ')
-  useDocumentTitle(showTitle ? `${showTitle} · Ep ${current?.display ?? ep}` : undefined)
+  useDocumentTitle(showTitle && !mini ? `${showTitle} · Ep ${current?.display ?? ep}` : undefined)
 
   const reportProgress = useCallback(
     (position: number, duration: number, played: number, final: boolean, paused: boolean) => {
@@ -445,7 +550,8 @@ export function Watch() {
                   ? 'next season'
                   : 'finale'
                 : 'none'
-  const autoNext = flag('playback.autonext')
+  // In a room only the host's countdown runs; the rest follow.
+  const autoNext = flag('playback.autonext') && (!inRoom || isHost)
   const sleep = useSleep()
   // Past the limit of untouched episodes the card asks instead of counting down; so does a timer gone off.
   const stillLimit = Number(effective['playback.still_watching'] ?? '3')
@@ -567,9 +673,11 @@ export function Watch() {
   const skipEd = flag('playback.autoskip_ed') && !bookend
   const skipRecap = flag('playback.autoskip_recap')
   const skipPreview = flag('playback.autoskip_preview')
+  // In a room only the host's auto-skips act, or each guest's settings would move everyone.
+  const guest = inRoom && !isHost
   const autoSkip = useMemo(
-    () => ({ op: skipOp, ed: skipEd, recap: skipRecap, preview: skipPreview }),
-    [skipOp, skipEd, skipRecap, skipPreview],
+    () => ({ op: skipOp && !guest, ed: skipEd && !guest, recap: skipRecap && !guest, preview: skipPreview && !guest }),
+    [skipOp, skipEd, skipRecap, skipPreview, guest],
   )
 
   // Per episode, unlike the toggles beside it: the saved default is untouched.
@@ -605,13 +713,24 @@ export function Watch() {
       ? (play.error.body as { rawAvailable?: boolean; rawTitle?: string; notOut?: boolean } | undefined)
       : undefined
 
+  // Docked, only classes change, never the tree, so the player isn't rebuilt.
   return (
-    <div className="bg-base-950">
-      <div className="mx-auto w-full max-w-[1600px] px-0 sm:px-6 sm:py-4">
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-          <div className="min-w-0">
+    <div
+      ref={dock.ref}
+      onPointerDownCapture={dock.onPointerDownCapture}
+      onClickCapture={dock.onClickCapture}
+      className={cx(
+        'bg-base-950',
+        mini &&
+          'fixed z-40 w-[22rem] cursor-grab touch-none rounded-xl shadow-2xl ring-1 shadow-black/60 ring-white/10 select-none active:cursor-grabbing max-sm:inset-x-2 max-sm:w-auto',
+        mini && DOCK[dock.corner],
+      )}
+    >
+      <div className={cx(!mini && 'mx-auto w-full max-w-[1600px] px-0 sm:px-6 sm:py-4')}>
+        <div className={cx(!mini && 'grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]')}>
+          <div className={cx('min-w-0', mini && 'max-sm:flex max-sm:items-center')}>
             {/* No overflow-hidden: clipping a composited video blacks it out. */}
-            <div className="relative bg-black sm:rounded-xl">
+            <div className={cx('relative bg-black', mini ? 'rounded-t-xl max-sm:w-36 max-sm:shrink-0 max-sm:rounded-l-xl max-sm:rounded-tr-none' : 'sm:rounded-xl')}>
               {play.isError && !streamed ? (
                 <NoRelease
                   message={(play.error as Error).message}
@@ -662,9 +781,11 @@ export function Watch() {
                   onSlowLink={slowLink}
                   onPickRelease={() => setPicking(true)}
                   castBurn={flag('cast.burn_subtitles')}
+                  mini={mini ? { onExpand: () => routerNavigate(watchHere) } : undefined}
                   // Inside the player, or fullscreen hides it; failures too, unless the player can recover.
                   overlay={<>
                     {networkNote}
+                    {inRoom && <TogetherToasts room={room} on={toasts} />}
                     {choice.card && !stream.data && !play.isError ? (
                       <MobileDataCard
                         card={choice.card}
@@ -763,6 +884,8 @@ export function Watch() {
               )}
             </div>
 
+            {/* Not drawn while docked: its lists and rails would keep fetching for nobody. */}
+            {!mini && (
             <div className="space-y-3 p-3 sm:px-0 sm:pt-4">
               <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
                 {/* What is playing, and the way back to its page. */}
@@ -800,6 +923,19 @@ export function Watch() {
 
                   {source && <Button onClick={() => setInApp(true)}>Open or save</Button>}
 
+                  {!together && !naming && !playingInMpv && (
+                    <Button
+                      onClick={() => {
+                        startTogether.reset()
+                        setNaming(true)
+                      }}
+                      disabled={!play.data}
+                      title="Watch in step with friends who have their own Yoru"
+                    >
+                      Watch together
+                    </Button>
+                  )}
+
                   {hasNext && (
                     <Button
                       variant="primary"
@@ -811,6 +947,42 @@ export function Watch() {
                   )}
                 </div>
               </div>
+
+              {startTogether.isError && (
+                <p className="flex flex-wrap items-center gap-2 text-sm text-recap">
+                  {(startTogether.error as Error).message}
+                  {startTogether.error instanceof ApiError && (startTogether.error.body as { needs?: string })?.needs === 'https' && (
+                    <LinkButton to="/settings?tab=Devices" size="sm">
+                      Set up HTTPS
+                    </LinkButton>
+                  )}
+                </p>
+              )}
+              {naming && !together && (
+                <JoinCard
+                  host
+                  title={showTitle}
+                  name={trackerName}
+                  // A failure closes the card for the message below, with its Set up HTTPS.
+                  onJoin={(name) => startTogether.mutateAsync(name).catch(() => {}).finally(() => setNaming(false))}
+                  onCancel={() => setNaming(false)}
+                />
+              )}
+              {together && !seat && (
+                <JoinCard
+                  title={showTitle}
+                  name={trackerName}
+                  onJoin={async (name) => {
+                    const s = await joinRoom(together, name)
+                    const kept = { member: s.member, token: s.token }
+                    saveSeat(together, kept)
+                    setSeat(kept)
+                  }}
+                />
+              )}
+              {together && seat && (
+                <TogetherPanel room={room} invite={invite} onLeave={leaveTogether} overlay={toasts} onOverlay={setToasts} />
+              )}
 
               {overBudget && (
                 <div
@@ -930,8 +1102,13 @@ export function Watch() {
               {/* The show's cast, not this episode's (MAL has none), as the heading says. */}
               <CharacterRail animeId={id} limit={8} title="Cast" />
             </div>
+            )}
+            {mini && (
+              <MiniBar title={showTitle} episode={episodeLabel} onExpand={() => routerNavigate(watchHere)} onClose={() => onClose?.()} />
+            )}
           </div>
 
+          {!mini && (
           <aside className="px-3 pb-8 sm:px-0">
             <h2 className="mb-2 section-title">
               Episodes
@@ -944,6 +1121,7 @@ export function Watch() {
               </p>
             )}
           </aside>
+          )}
         </div>
       </div>
 
@@ -1077,6 +1255,43 @@ function useStartingNote(animeId: number, episode: number, waiting: boolean): { 
         detail: `${seconds < 6 ? 'Checking the release sites under each of the show’s titles' : 'Still looking; searches are rate limited'}${clock}`,
       }
   }
+}
+
+// Clear of the header at the top; on a phone a full-width bar, above the tabs at the bottom.
+const DOCK: Record<Corner, string> = {
+  tl: 'top-20 left-4 max-sm:top-[4.5rem]',
+  tr: 'top-20 right-4 max-sm:top-[4.5rem]',
+  bl: 'bottom-4 left-4 max-sm:bottom-[calc(4.5rem+env(safe-area-inset-bottom))]',
+  br: 'right-4 bottom-4 max-sm:bottom-[calc(4.5rem+env(safe-area-inset-bottom))]',
+}
+
+function MiniBar({ title, episode, onExpand, onClose }: { title: string; episode: string; onExpand: () => void; onClose: () => void }) {
+  const playing = usePlayingNow()
+  const button =
+    'tap relative grid size-9 shrink-0 place-items-center rounded-full text-base-200 transition-colors hover:bg-base-800 hover:text-white'
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-1 px-3 py-2">
+      <button type="button" onClick={onExpand} className="min-w-0 flex-1 text-left">
+        <p className="truncate text-sm font-medium text-white">{title}</p>
+        <p className="truncate text-xs text-base-400">{episode}</p>
+      </button>
+      <button type="button" onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'} title={playing ? 'Pause' : 'Play'} className={button}>
+        <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
+          {playing ? <path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor" /> : <path d="M8 5.5v13l11-6.5-11-6.5Z" fill="currentColor" />}
+        </svg>
+      </button>
+      <button type="button" onClick={onExpand} aria-label="Expand the player" title="Expand" className={cx(button, 'max-sm:hidden')}>
+        <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
+          <path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      <button type="button" onClick={onClose} aria-label="Close the player" title="Close" className={button}>
+        <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
+          <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      </button>
+    </div>
+  )
 }
 
 function Searching({ note }: { note: { title: string; detail: string } }) {

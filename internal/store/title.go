@@ -1,6 +1,9 @@
 package store
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Romaji is AniList's Latin transliteration (Sousou no Frieren); native titles are never chosen.
 const (
@@ -40,6 +43,58 @@ func (s *Store) AniListForMal(ctx context.Context, malID int) int {
 	s.r.QueryRowContext(ctx, `SELECT id FROM anime WHERE mal_id = ?1
 		UNION ALL SELECT anime_id FROM corpus_anime WHERE mal_id = ?1 LIMIT 1`, malID).Scan(&id)
 	return id
+}
+
+// MalShow is a MyAnimeList show as Yoru knows it: its AniList id (0 if unknown) and list status, if listed.
+type MalShow struct {
+	ID     int
+	Status string
+	Year   int
+	// Title as the viewer reads titles, for a show Yoru has; "" for one only in the catalogue.
+	Title string
+}
+
+// ShowsForMal maps MyAnimeList ids at once, from shows seen and the catalogue, as AniListForMal does one.
+func (s *Store) ShowsForMal(ctx context.Context, malIDs []int) (map[int]MalShow, error) {
+	out := make(map[int]MalShow, len(malIDs))
+	if len(malIDs) == 0 {
+		return out, nil
+	}
+	ids, err := json.Marshal(malIDs)
+	if err != nil {
+		return nil, err
+	}
+	// Before the query: a read while its cursor holds a connection can deadlock the read pool.
+	mode := s.TitleMode(ctx, 0)
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT j.value, coalesce(a.id, c.anime_id, 0), coalesce(l.status, ''),
+		       coalesce(a.season_year, cast(substr(a.start_date, 1, 4) AS INTEGER), c.year, 0),
+		       coalesce(a.title_romaji, ''), a.title_english
+		FROM json_each(?) j
+		LEFT JOIN anime a         ON a.mal_id = j.value
+		LEFT JOIN corpus_anime c  ON a.id IS NULL AND c.mal_id = j.value
+		LEFT JOIN list_entry l    ON l.anime_id = coalesce(a.id, c.anime_id)`, string(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mal int
+		var show MalShow
+		var romaji string
+		var english *string
+		if err := rows.Scan(&mal, &show.ID, &show.Status, &show.Year, &romaji, &english); err != nil {
+			return nil, err
+		}
+		if romaji != "" {
+			show.Title = PickTitle(mode, romaji, english)
+		}
+		// A show seen twice (two catalogue rows): the listed one wins.
+		if was, ok := out[mal]; !ok || was.Status == "" && show.Status != "" {
+			out[mal] = show
+		}
+	}
+	return out, rows.Err()
 }
 
 // BannerOf is the show's wide picture, else its cover, for an alert; "" when there's neither.

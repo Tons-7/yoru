@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api'
 import { showLink } from '../lib/showLink'
+import { parseTogether, roomInfo } from '../lib/together'
 import { Spinner } from '../components/ui'
 
 // Where a pasted or shared AniList or MyAnimeList link lands (?url=, or the share target's title and text):
@@ -13,6 +14,21 @@ export function Open() {
   const [problem, setProblem] = useState('')
 
   useEffect(() => {
+    // A watch-together room: its episode, with the release it plays and the room to join.
+    const together = parseTogether(shared)
+    if (together) {
+      let cancelled = false
+      roomInfo(together)
+        .then(({ state }) => {
+          if (cancelled) return
+          const q = new URLSearchParams({ together: together.href, ...(state.infoHash ? { hash: state.infoHash } : {}) })
+          navigate(`/watch/${state.animeId}/${state.episode}?${q}`, { replace: true })
+        })
+        .catch((e: Error) => !cancelled && setProblem(e.message))
+      return () => {
+        cancelled = true
+      }
+    }
     const link = showLink(shared)
     if (!link) {
       navigate(shared ? `/browse?q=${encodeURIComponent(shared)}` : '/', { replace: true })
@@ -37,9 +53,11 @@ export function Open() {
       {problem ? (
         <>
           <p className="text-base-200">{problem}</p>
-          <Link to={`/browse?q=${encodeURIComponent(shared)}`} className="mt-3 inline-block text-accent-300 underline">
-            Search for it instead
-          </Link>
+          {!parseTogether(shared) && (
+            <Link to={`/browse?q=${encodeURIComponent(shared)}`} className="mt-3 inline-block text-accent-300 underline">
+              Search for it instead
+            </Link>
+          )}
         </>
       ) : (
         <>

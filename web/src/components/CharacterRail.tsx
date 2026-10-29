@@ -1,11 +1,16 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
+import { personName } from '../lib/format'
+import { realImage } from '../lib/people'
 import { usePrefs } from '../lib/queries'
 import { Rail } from './Rail'
 import { Skeleton } from './ui'
 
 export interface Voice {
+  /** Their MyAnimeList id, which their page opens by. */
+  id?: number
   name: string
   image?: string
   language: string
@@ -83,43 +88,66 @@ export function CharacterRail({
       }
     >
       {/* One poster-shaped portrait each, the actor's face a small avatar on it. */}
+      {/* Two ways in: the character (picture and name) and who voiced them (face and name). */}
       {shown.map((c) => {
         const voice = voiceOf(c)
+        const name = personName(c.name)
+        const voiceName = voice && personName(voice.name)
         return (
-          <div key={c.id} className="w-[116px] shrink-0 snap-start">
+          <div key={c.id} className="group/cast w-[116px] shrink-0 snap-start">
             <div className="relative overflow-hidden rounded-card shadow-card">
-              {c.image ? (
-                <img src={c.image} alt="" loading="lazy" className="h-[174px] w-[116px] object-cover" />
-              ) : (
-                <div className="h-[174px] w-[116px] bg-base-850" />
-              )}
+              <Link to={`/character/${c.id}`} tabIndex={-1} aria-hidden className="block">
+                {realImage(c.image) ? (
+                  <img
+                    src={c.image}
+                    alt=""
+                    loading="lazy"
+                    className="h-[174px] w-[116px] object-cover transition-transform duration-300 group-hover/cast:scale-105"
+                  />
+                ) : (
+                  <div className="h-[174px] w-[116px] bg-base-850" />
+                )}
+              </Link>
               {/* Only "Main" earns a badge: SUPPORTING on nine cards in ten says nothing. */}
               {c.role?.toUpperCase() === 'MAIN' && (
-                <span className="absolute top-1.5 left-1.5 rounded-full bg-accent-500/85 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">
+                <span className="pointer-events-none absolute top-1.5 left-1.5 rounded-full bg-accent-500/85 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">
                   Main
                 </span>
               )}
-              {voice?.image && (
-                <img
-                  src={voice.image}
-                  alt=""
-                  loading="lazy"
-                  title={`${voice.name} · ${voice.language}`}
-                  className="absolute right-1.5 bottom-1.5 size-9 rounded-full object-cover ring-2 ring-base-950/80"
-                />
+              {realImage(voice?.image) && voice?.id && (
+                <Link
+                  to={`/person/${voice.id}`}
+                  tabIndex={-1}
+                  aria-hidden
+                  title={`${voiceName} · ${voice.language}`}
+                  className="tap absolute right-1.5 bottom-1.5 rounded-full ring-2 ring-base-950/80 transition-transform hover:scale-110"
+                >
+                  <img src={voice.image} alt="" loading="lazy" className="size-9 rounded-full object-cover" />
+                </Link>
               )}
             </div>
-            <p className="mt-2 line-clamp-2 text-[13px] leading-snug font-medium text-base-100" title={c.name}>
-              {c.name}
-            </p>
-            {voice && (
-              <p
-                className="line-clamp-2 text-xs leading-snug text-base-500"
-                title={`${voice.name} · ${voice.language}`}
-              >
-                {voice.name}
-              </p>
-            )}
+            <Link
+              to={`/character/${c.id}`}
+              className="mt-2 line-clamp-2 text-[13px] leading-snug font-medium text-base-100 transition-colors hover:text-white"
+              title={name}
+            >
+              {name}
+            </Link>
+            {voice &&
+              (voice.id ? (
+                <Link
+                  to={`/person/${voice.id}`}
+                  aria-label={`${voiceName}, ${voice.language} voice`}
+                  className="line-clamp-2 text-xs leading-snug text-base-500 transition-colors hover:text-base-200"
+                  title={`${voiceName} · ${voice.language}`}
+                >
+                  {voiceName}
+                </Link>
+              ) : (
+                <p className="line-clamp-2 text-xs leading-snug text-base-500" title={`${voiceName} · ${voice.language}`}>
+                  {voiceName}
+                </p>
+              ))}
           </div>
         )
       })}

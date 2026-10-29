@@ -150,7 +150,7 @@ if (await until(() => auto.isVisible(), 30_000)) {
   await auto.click()
   const own = page.getByLabel('Wait for a better release')
   check(await until(() => own.isVisible()), 'auto-download on, the show page offers its own wait')
-  check(await own.locator('option[value=""]').innerText() === "As in Settings (don't wait)", 'following Settings until changed')
+  check(await own.locator('option[value=""]').innerText() === "Default (don't wait)", 'following Settings until changed')
   await own.selectOption('6')
   check(await until(async () => (await prefs(ANIME)).overrides?.['autodownload.wait_hours'] === '6'), 'the show keeps its own wait')
   await own.selectOption('')

@@ -28,11 +28,12 @@ const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 160)))
 
 await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
-const open = page.getByRole('button', { name: /Release groups for this show/ })
+const open = page.getByRole('button', { name: 'Edit release groups' })
 check(await until(() => open.isVisible()), 'the series page offers per-show groups')
+check(await page.getByText('Your choices from Settings').isVisible(), 'saying none of its own are set')
 await open.click()
 
-const field = page.getByLabel('Prefer for this show')
+const field = page.getByLabel('Prefer groups')
 check(await until(() => field.isVisible()), 'the field opens')
 await field.fill('SubsPlease, Erai-raws')
 await field.blur()
@@ -58,7 +59,7 @@ check(
 )
 
 // Avoided groups sit beside them, stored the same way.
-const avoid = page.getByLabel('Avoid for this show')
+const avoid = page.getByLabel('Avoid groups')
 check(await avoid.isVisible(), 'with a field for groups to avoid')
 await avoid.fill('BadGroup')
 await avoid.blur()
@@ -68,7 +69,10 @@ check(
 )
 
 await page.reload({ waitUntil: 'domcontentloaded' })
-check(await until(() => page.getByLabel('Prefer for this show').inputValue().then((v) => v === 'SubsPlease, Erai-raws')), 'it survives a reload')
+// Closed again, the row says what's set in a line; Edit opens the fields with it.
+check(await until(() => page.getByText('Prefer SubsPlease, Erai-raws · Avoid BadGroup').isVisible()), 'it survives a reload, summed up')
+await page.getByRole('button', { name: 'Edit release groups' }).click()
+check(await until(() => page.getByLabel('Prefer groups').inputValue().then((v) => v === 'SubsPlease, Erai-raws')), 'and in its field')
 
 await page.getByRole('button', { name: 'Clear' }).first().click()
 check(

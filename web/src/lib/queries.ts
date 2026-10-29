@@ -375,6 +375,8 @@ export interface Theme {
 }
 
 export interface Credit {
+  /** Their MyAnimeList id, which their page opens by. */
+  id?: number
   name: string
   role: string
   image?: string

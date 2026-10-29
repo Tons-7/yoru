@@ -397,6 +397,8 @@ type EpisodeFlags struct {
 
 // Voice is one performance, Japanese or English only, so a card can follow sub vs dub.
 type Voice struct {
+	// ID is the person's on MyAnimeList, which their page opens by.
+	ID       int    `json:"id,omitempty"`
 	Name     string `json:"name"`
 	Image    string `json:"image,omitempty"`
 	Language string `json:"language"`
@@ -427,6 +429,7 @@ type charactersResponse struct {
 		Favorites   int    `json:"favorites"`
 		VoiceActors []struct {
 			Person struct {
+				MalID  int    `json:"mal_id"`
 				Name   string `json:"name"`
 				Images struct {
 					JPG struct {
@@ -473,6 +476,7 @@ func (c *Client) Characters(ctx context.Context, malID int) ([]Character, error)
 					continue
 				}
 				ch.Voices = append(ch.Voices, Voice{
+					ID:       va.Person.MalID,
 					Name:     va.Person.Name,
 					Image:    va.Person.Images.JPG.ImageURL,
 					Language: va.Language,

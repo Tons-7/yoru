@@ -67,7 +67,7 @@ if (pip) {
   await pip.getByRole('button', { name: /Back to tab/ }).click()
   await page.waitForTimeout(1500)
   check(
-    await page.evaluate(() => !!document.querySelector('main video')),
+    await page.evaluate(() => !!document.querySelector('video')),
     'the player is back in the page',
   )
 }

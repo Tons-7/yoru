@@ -88,6 +88,12 @@ export function dayName(date: string, weekday: string, today: string | undefined
   return from === -1 ? 'Yesterday' : from === 1 ? 'Tomorrow' : weekday
 }
 
+/** MyAnimeList's "Fukuyama, Jun" as it's said: "Jun Fukuyama". Anything else stays as it is. */
+export function personName(name: string): string {
+  const parts = name.split(', ')
+  return parts.length === 2 && parts[0] && parts[1] ? `${parts[1]} ${parts[0]}` : name
+}
+
 /** "Oct 29", a schedule day's date in the viewer's own format. */
 export function dayDate(date: string): string {
   return new Date(`${date}T00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })

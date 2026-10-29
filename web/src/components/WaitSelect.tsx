@@ -23,7 +23,7 @@ export function WaitSelect({
   return (
     <Select value={value} onChange={onChange} aria-label="Wait for a better release">
       {inherit !== undefined && (
-        <option value="">As in Settings ({inherit === '0' ? "don't wait" : waitLabel(inherit)})</option>
+        <option value="">Default ({inherit === '0' ? "don't wait" : waitLabel(inherit)})</option>
       )}
       {WAITS.map((w) => (
         <option key={w.value} value={w.value}>

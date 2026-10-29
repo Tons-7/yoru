@@ -493,3 +493,35 @@ export function Select({
     </div>
   )
 }
+
+/** An on/off that takes effect at once, named by its row as a select is. */
+export function Switch({
+  on,
+  onChange,
+  disabled,
+  'aria-label': label,
+}: {
+  on: boolean
+  onChange: (on: boolean) => void
+  disabled?: boolean
+  'aria-label'?: string
+}) {
+  const rowLabel = useContext(ControlLabel)
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label ?? rowLabel}
+      disabled={disabled}
+      onClick={() => onChange(!on)}
+      className={cx(
+        'tap relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-60',
+        'focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400',
+        on ? 'bg-accent-500' : 'bg-base-700',
+      )}
+    >
+      <span className={cx('absolute top-0.5 size-4 rounded-full bg-white transition-all', on ? 'left-[1.125rem]' : 'left-0.5')} />
+    </button>
+  )
+}

@@ -120,6 +120,10 @@ type Server struct {
 	pairMu sync.Mutex
 	pairs  map[string]*pairing
 
+	// Watch together rooms (together.go), by their code.
+	togetherMu sync.Mutex
+	rooms      map[string]*togetherRoom
+
 	// The TV's queue (castqueue.go): episodes opening for it, where it has read each, pages' last reports.
 	tvMu         sync.Mutex
 	tvOpens      map[string]*tvOpen
@@ -225,6 +229,7 @@ func New(d Deps) *Server {
 		findTried:    map[string]time.Time{},
 		deriving:     map[int]struct{}{},
 		pairs:        map[string]*pairing{},
+		rooms:        map[string]*togetherRoom{},
 		tvOpens:      map[string]*tvOpen{},
 		tvSeen:       map[string]*tvWatch{},
 		pageReported: map[string]time.Time{},
@@ -277,6 +282,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/anime/{id}", s.anime)
 	mux.HandleFunc("GET /api/anime/from-mal", s.animeFromMal)
 	mux.HandleFunc("GET /api/anime/{id}/characters", s.characters)
+	mux.HandleFunc("POST /api/together", hostOnly(s.createTogether))
+	mux.HandleFunc("GET /api/together/{code}", s.togetherInfo)
+	mux.HandleFunc("POST /api/together/{code}/join", s.joinTogether)
+	mux.HandleFunc("GET /api/together/{code}/events", s.togetherEvents)
+	mux.HandleFunc("POST /api/together/{code}/act", s.togetherAct)
+	mux.HandleFunc("OPTIONS /api/together/{code}/{rest...}", s.togetherOptions)
+	mux.HandleFunc("OPTIONS /api/together/{code}", s.togetherOptions)
+	mux.HandleFunc("GET /together/{code}", s.togetherPage)
+	mux.HandleFunc("GET /api/person/{id}", s.person)
+	mux.HandleFunc("GET /api/character/{id}", s.character)
 	mux.HandleFunc("GET /api/anime/{id}/extra", s.extra)
 	mux.HandleFunc("GET /api/browse", s.browse)
 	mux.HandleFunc("GET /api/browse/count", s.browseCount)

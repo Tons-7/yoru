@@ -59,6 +59,7 @@ import {
   Select,
   Skeleton,
   Spinner,
+  Switch as UiSwitch,
   TextInput,
 } from '../components/ui'
 import { buttonClass, ControlLabel } from '../lib/ui'
@@ -466,26 +467,7 @@ function Row({
 }
 
 function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label?: string }) {
-  const rowLabel = useContext(RowLabel)
-  return (
-    <button
-      role="switch"
-      aria-checked={on}
-      aria-label={label ?? rowLabel}
-      onClick={() => onChange(!on)}
-      className={cx(
-        'tap relative h-5 w-9 shrink-0 rounded-full transition-colors',
-        on ? 'bg-accent-500' : 'bg-base-700',
-      )}
-    >
-      <span
-        className={cx(
-          'absolute top-0.5 size-4 rounded-full bg-white transition-all',
-          on ? 'left-[1.125rem]' : 'left-0.5',
-        )}
-      />
-    </button>
-  )
+  return <UiSwitch on={on} onChange={onChange} aria-label={label} />
 }
 
 function useFlag() {

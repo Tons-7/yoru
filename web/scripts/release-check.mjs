@@ -57,6 +57,9 @@ const CHECKS = [
   ['pair-check.mjs'],
   ['airplay-check.mjs'],
   ['picks-check.mjs', {}, ALONE],
+  ['people-check.mjs', {}, ALONE],
+  ['miniplayer-check.mjs'],
+  ['together-check.mjs', { YORU_TOGETHER_LOCAL: '1' }],
   ['over-budget-note-check.mjs'],
   ['pip-check.mjs'],
   // Real sites would compete with the local swarm's.

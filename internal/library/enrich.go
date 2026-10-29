@@ -27,6 +27,9 @@ type Enricher struct {
 	stilling map[int]struct{}
 	cast     map[int]castEntry
 	extra    map[int]extraEntry
+	// People and characters by their MyAnimeList ids, kept as long as a cast.
+	people     map[int]cached[metadata.Person]
+	characters map[int]cached[metadata.CharacterPage]
 	// When AniSkip was last asked about an episode: the player asks every few seconds while a search runs.
 	skipsAsked map[[2]int]time.Time
 	// One page lists every show the filler site covers, so it is worth keeping.
@@ -41,6 +44,9 @@ func NewEnricher(s *store.Store, m *metadata.Client, log *slog.Logger) *Enricher
 		stilling: map[int]struct{}{},
 		cast:     map[int]castEntry{},
 		extra:    map[int]extraEntry{},
+
+		people:     map[int]cached[metadata.Person]{},
+		characters: map[int]cached[metadata.CharacterPage]{},
 
 		skipsAsked: map[[2]int]time.Time{},
 	}
@@ -83,6 +89,40 @@ func prune[T any](m map[int]T, at func(T) time.Time, ttl time.Duration) {
 		}
 		delete(m, oldest)
 	}
+}
+
+type cached[T any] struct {
+	value T
+	at    time.Time
+}
+
+// cachedFetch answers from m for castTTL, else fetches and keeps the answer.
+func cachedFetch[T any](e *Enricher, m map[int]cached[T], id int, fetch func() (T, error)) (T, error) {
+	e.mu.Lock()
+	if hit, ok := m[id]; ok && time.Since(hit.at) < castTTL {
+		e.mu.Unlock()
+		return hit.value, nil
+	}
+	e.mu.Unlock()
+	value, err := fetch()
+	if err != nil {
+		return value, err
+	}
+	e.mu.Lock()
+	prune(m, func(c cached[T]) time.Time { return c.at }, castTTL)
+	m[id] = cached[T]{value: value, at: time.Now()}
+	e.mu.Unlock()
+	return value, nil
+}
+
+// Person is a voice actor or staff member's page, by their MyAnimeList id.
+func (e *Enricher) Person(ctx context.Context, malID int) (metadata.Person, error) {
+	return cachedFetch(e, e.people, malID, func() (metadata.Person, error) { return e.meta.PersonPage(ctx, malID) })
+}
+
+// Character is a character's page, by their MyAnimeList id.
+func (e *Enricher) Character(ctx context.Context, malID int) (metadata.CharacterPage, error) {
+	return cachedFetch(e, e.characters, malID, func() (metadata.CharacterPage, error) { return e.meta.CharacterDetail(ctx, malID) })
 }
 
 type castEntry struct {

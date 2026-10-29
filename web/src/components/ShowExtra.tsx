@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { personName } from '../lib/format'
 import { useAnimeExtra, type Theme } from '../lib/queries'
 
 /** Theme songs and credits; the trailer is the hero's Trailer button. */
@@ -33,7 +35,16 @@ export function ShowExtra({ animeId }: { animeId: number }) {
                   <span className="w-24 shrink-0 text-xs leading-tight text-base-500 sm:w-36 sm:truncate" title={c.role}>
                     {c.role}
                   </span>
-                  <span className="min-w-0 truncate text-base-200">{c.name}</span>
+                  {c.id ? (
+                    <Link
+                      to={`/person/${c.id}`}
+                      className="min-w-0 truncate text-base-200 underline-offset-2 transition-colors hover:text-white hover:underline pointer-coarse:min-h-11"
+                    >
+                      {personName(c.name)}
+                    </Link>
+                  ) : (
+                    <span className="min-w-0 truncate text-base-200">{personName(c.name)}</span>
+                  )}
                 </li>
               ))}
             </ul>

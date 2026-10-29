@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, statusLabel, type Bookmark, type DiscoverItem, type FollowState } from '../lib/api'
 import { bytes, clockTime, cx, readableTint, relativeTime, tint, youtubeID } from '../lib/format'
+import { ControlLabel } from '../lib/ui'
 import {
   refreshDownloads,
   useAnimeExtra,
@@ -41,6 +42,7 @@ import {
   LinkButton,
   SaveHint,
   Skeleton,
+  Switch,
   TextInput,
 } from '../components/ui'
 import { useAnchorBox, useDismiss, useDocumentTitle, useModalFocus } from '../lib/hooks'
@@ -582,9 +584,7 @@ export function Anime() {
             )}
 
             <ShowBetterCopy animeId={id} />
-            <NotifyMe animeId={id} state={detail.data?.notify} />
-            <AutoDownload animeId={id} />
-            <ShowGroups animeId={id} />
+            <ShowSettings animeId={id} notify={detail.data?.notify} />
             <SyncNote sync={detail.data?.sync} />
             {detail.isSuccess && (
               <ExternalLinks
@@ -689,8 +689,45 @@ const BECAUSE: Record<string, string> = {
   auto: 'On with auto-download',
 }
 
+// This show's own settings in one card, laid out as Settings' rows: a name, a line on it, its control.
+function ShowSettings({ animeId, notify }: { animeId: number; notify?: FollowState }) {
+  const prefs = usePrefs(animeId)
+  // Alerts don't need the prefs; the other rows wait for them.
+  if (!notify && !prefs.isSuccess) return null
+  return (
+    <section className="mt-5 max-w-xl rounded-xl bg-base-900/70 px-4 ring-1 ring-white/[0.07] backdrop-blur-sm">
+      <h2 className="pt-3 text-xs font-semibold tracking-wide text-base-400 uppercase">This show</h2>
+      <div className="divide-y divide-white/[0.06]">
+        {notify && <NotifyMe animeId={animeId} state={notify} />}
+        <AutoDownload animeId={animeId} />
+        <ShowGroups animeId={animeId} />
+      </div>
+    </section>
+  )
+}
+
+function ShowRow({ label, hint, control, children }: { label: string; hint?: ReactNode; control: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="py-3">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm text-base-100">{label}</p>
+          {hint && <p className="mt-0.5 text-xs text-base-500">{hint}</p>}
+        </div>
+        <ControlLabel.Provider value={label}>{control}</ControlLabel.Provider>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+// What a switch turned on brings, set in under it: it belongs to that switch, not beside the others.
+function ShowSubRow({ children }: { children: ReactNode }) {
+  return <div className="mt-2.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-l-2 border-base-700 pl-3 text-sm text-base-300">{children}</div>
+}
+
 // New-episode alerts for this show, saying why they're on; and an episode asked for from the player.
-function NotifyMe({ animeId, state }: { animeId: number; state?: FollowState }) {
+function NotifyMe({ animeId, state }: { animeId: number; state: FollowState }) {
   const qc = useQueryClient()
   const prefs = usePrefs(animeId)
   const update = (next: FollowState) =>
@@ -705,50 +742,38 @@ function NotifyMe({ animeId, state }: { animeId: number; state?: FollowState }) 
     mutationFn: () => api.post<FollowState>(`/api/anime/${animeId}/want`, { episode: 0 }),
     onSuccess: update,
   })
-  if (!state) return null
   const allOff = prefs.data?.defaults?.['notify.enabled'] === 'false'
   const words = allOff
-    ? 'Alerts are off for every show in Settings'
+    ? 'Off for every show in Settings'
     : state.on
       ? (BECAUSE[state.because ?? ''] ?? 'On')
       : 'Off'
   const error = (set.error ?? unwant.error) as Error | null
 
   return (
-    <div className="mt-3 space-y-1 text-xs text-base-400">
-      <button
-        role="switch"
-        aria-checked={state.on}
-        onClick={() => set.mutate(!state.on)}
-        disabled={set.isPending}
-        className="flex items-center gap-2 transition-colors hover:text-base-200 pointer-coarse:min-h-11"
-      >
-        <span className={cx('relative h-4 w-7 rounded-full transition-colors', state.on ? 'bg-accent-500' : 'bg-base-700')}>
-          <span
-            className={cx(
-              'absolute top-0.5 size-3 rounded-full bg-white transition-all',
-              state.on ? 'left-[0.875rem]' : 'left-0.5',
-            )}
-          />
-        </span>
-        Alert me about new episodes
-        <span className="text-base-500">· {words}</span>
-      </button>
+    <ShowRow
+      label="Alert me about new episodes"
+      hint={words}
+      control={<Switch on={state.on} onChange={(on) => set.mutate(on)} disabled={set.isPending} />}
+    >
       {allOff && (
-        <Link to="/settings?tab=Notifications" className="text-accent-300 hover:underline">
-          Turn alerts on
-        </Link>
+        <ShowSubRow>
+          Alerts are off in Settings
+          <LinkButton to="/settings?tab=Notifications" size="sm">
+            Turn alerts on
+          </LinkButton>
+        </ShowSubRow>
       )}
       {state.wanted ? (
-        <p className="flex flex-wrap items-center gap-2">
+        <ShowSubRow>
           Episode {state.wanted} downloads when it's out
-          <button onClick={() => unwant.mutate()} disabled={unwant.isPending} className="text-base-500 hover:text-base-200">
+          <Button size="sm" onClick={() => unwant.mutate()} disabled={unwant.isPending}>
             Cancel
-          </button>
-        </p>
+          </Button>
+        </ShowSubRow>
       ) : null}
-      {error && <p className="text-recap">{error.message}</p>}
-    </div>
+      {error && <p className="mt-2 text-xs text-recap">{error.message}</p>}
+    </ShowRow>
   )
 }
 
@@ -768,36 +793,28 @@ function AutoDownload({ animeId }: { animeId: number }) {
   if (!prefs.isSuccess) return null
 
   return (
-    <>
-      <button
-        role="switch"
-        aria-checked={on}
-        onClick={() => setPref.mutate({ animeId, key: 'autodownload.enabled', value: String(!on) })}
-        disabled={setPref.isPending}
-        className="mt-3 flex items-center gap-2 text-xs text-base-400 transition-colors hover:text-base-200 pointer-coarse:min-h-11"
-      >
-        <span className={cx('relative h-4 w-7 rounded-full transition-colors', on ? 'bg-accent-500' : 'bg-base-700')}>
-          <span
-            className={cx(
-              'absolute top-0.5 size-3 rounded-full bg-white transition-all',
-              on ? 'left-[0.875rem]' : 'left-0.5',
-            )}
-          />
-        </span>
-        {/* One fixed label; the switch says on or off. */}
-        Auto-download new episodes
-      </button>
+    <ShowRow
+      label="Auto-download new episodes"
+      hint="Each one is queued as soon as it's out."
+      control={
+        <Switch
+          on={on}
+          onChange={(next) => setPref.mutate({ animeId, key: 'autodownload.enabled', value: String(next) })}
+          disabled={setPref.isPending}
+        />
+      }
+    >
       {on && (
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-base-400">
+        <ShowSubRow>
           Wait for a better release
           <WaitSelect
             value={prefs.data.overrides?.['autodownload.wait_hours'] ?? ''}
             inherit={prefs.data.defaults?.['autodownload.wait_hours'] ?? '0'}
             onChange={(value) => setPref.mutate({ animeId, key: 'autodownload.wait_hours', value })}
           />
-        </div>
+        </ShowSubRow>
       )}
-    </>
+    </ShowRow>
   )
 }
 
@@ -813,9 +830,9 @@ function parseGroups(raw: string | undefined): string[] {
 // The show's own release lists, over the account-wide ones: groups to prefer (quality still decides first) or
 // avoid, and words to exclude.
 const SHOW_LISTS = [
-  { key: 'release.prefer_groups', label: 'Prefer for this show', fallback: 'SubsPlease' },
-  { key: 'release.avoid_groups', label: 'Avoid for this show', fallback: 'A group' },
-  { key: 'release.exclude_terms', label: 'Exclude words', fallback: 'x265 mini' },
+  { key: 'release.prefer_groups', label: 'Prefer groups', short: 'Prefer', fallback: 'SubsPlease' },
+  { key: 'release.avoid_groups', label: 'Avoid groups', short: 'Avoid', fallback: 'A group' },
+  { key: 'release.exclude_terms', label: 'Exclude words', short: 'Exclude', fallback: 'x265 mini' },
 ] as const
 
 function ShowGroups({ animeId }: { animeId: number }) {
@@ -823,31 +840,37 @@ function ShowGroups({ animeId }: { animeId: number }) {
   const [open, setOpen] = useState(false)
   if (!prefs.isSuccess) return null
 
-  const anySet = SHOW_LISTS.some((l) => parseGroups(prefs.data.overrides?.[l.key]).length > 0)
-  if (!open && !anySet) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="mt-2 block text-xs text-base-500 transition-colors hover:text-base-200 pointer-coarse:min-h-11"
-      >
-        Release groups for this show…
-      </button>
-    )
-  }
+  // What's set, in a line; the fields only while editing.
+  const set = SHOW_LISTS.map((l) => ({ ...l, own: parseGroups(prefs.data.overrides?.[l.key]) })).filter((l) => l.own.length > 0)
+  const summary = set.length
+    ? set.map((l) => `${l.short} ${l.own.join(', ')}`).join(' · ')
+    : 'Your choices from Settings'
   return (
-    <div className="mt-2 space-y-1.5">
-      {SHOW_LISTS.map((l) => (
-        <ShowList
-          key={l.key}
-          animeId={animeId}
-          setting={l.key}
-          label={l.label}
-          own={parseGroups(prefs.data.overrides?.[l.key])}
-          inherited={parseGroups(prefs.data.defaults?.[l.key])}
-          fallback={l.fallback}
-        />
-      ))}
-    </div>
+    <ShowRow
+      label="Release groups"
+      hint={summary}
+      control={
+        <Button size="sm" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-label="Edit release groups">
+          {open ? 'Done' : 'Edit'}
+        </Button>
+      }
+    >
+      {open && (
+        <div className="mt-3 space-y-2">
+          {SHOW_LISTS.map((l) => (
+            <ShowList
+              key={l.key}
+              animeId={animeId}
+              setting={l.key}
+              label={l.label}
+              own={parseGroups(prefs.data.overrides?.[l.key])}
+              inherited={parseGroups(prefs.data.defaults?.[l.key])}
+              fallback={l.fallback}
+            />
+          ))}
+        </div>
+      )}
+    </ShowRow>
   )
 }
 
@@ -884,8 +907,8 @@ function ShowList({
   const id = `${setting}-${animeId}`
 
   return (
-    <div className="flex flex-wrap items-center gap-2 text-xs text-base-400">
-      <label htmlFor={id} className="w-36">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-base-300">
+      <label htmlFor={id} className="w-28 shrink-0">
         {label}
       </label>
       <TextInput
@@ -895,7 +918,7 @@ function ShowList({
         onBlur={save}
         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
         placeholder={inherited.length > 0 ? inherited.join(', ') : fallback}
-        className="w-48"
+        className="min-w-40 flex-1"
       />
       <SaveHint state={setPref} />
       {own.length > 0 && (

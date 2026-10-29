@@ -210,6 +210,11 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		// Never inside another site's frame, where a click on top could hit host-only buttons.
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		// Watch-together friends come from their own Yoru, another site; the room's key is checked there.
+		if strings.HasPrefix(r.URL.Path, "/api/together/") || strings.HasPrefix(r.URL.Path, "/together/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// Any open page can POST here, and loopback needs no token.
 		if !safeMethod(r.Method) && !sameOrigin(r) {
 			send(w, http.StatusForbidden, map[string]any{"error": "cross-site request refused"})

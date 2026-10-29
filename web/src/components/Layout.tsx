@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Link,
@@ -36,6 +36,9 @@ import { SavedCopyNotice } from './SavedCopyNotice'
 import { menuItems, useDebounced, useDismiss, useMediaQuery, useModalFocus, walkMenu } from '../lib/hooks'
 import { useNewSettings } from '../lib/whatsNew'
 import { showLink } from '../lib/showLink'
+import { playingNow } from '../lib/miniplayer'
+import { parseTogether } from '../lib/together'
+import { Centered, Spinner } from './ui'
 
 const TABS = [
   { to: '/', label: 'Home', end: true },
@@ -119,6 +122,8 @@ export function Layout() {
       {/* Outside the per-page main: Back remounted them, and the pairing overlay vanished with its state. */}
       <Unpaired />
       <AccessRequests />
+      {/* Outside main, which remounts per page: the docked player must outlive the watch page. */}
+      <DockedWatch />
       <main
         ref={main}
         key={pageKey}
@@ -138,6 +143,45 @@ export function Layout() {
       </main>
       {!wide && <BottomTabs />}
     </div>
+  )
+}
+
+const Watch = lazy(() => import('../pages/Watch').then((m) => ({ default: m.Watch })))
+
+type WatchTarget = { animeId: string; episode: string }
+const watchPath = /^\/watch\/(-?\d+)\/(\d+)/
+
+/** The one watch view: the watch page, then docked in a corner after leaving it while playing. */
+function DockedWatch() {
+  const match = useMatch('/watch/:animeId/:episode')
+  const page = match ? { animeId: match.params.animeId!, episode: match.params.episode! } : null
+  const [shown, setShown] = useState<WatchTarget | null>(null)
+  const [docked, setDocked] = useState<WatchTarget | null>(null)
+  // Set while rendering, so the view never unmounts for a frame between page and dock.
+  if (page && (page.animeId !== shown?.animeId || page.episode !== shown?.episode)) {
+    setShown(page)
+    if (docked) setDocked(null)
+  } else if (!page && shown) {
+    setShown(null)
+    setDocked(playingNow() ? shown : null)
+  }
+  const target = page ?? docked
+  if (!target) return null
+  return (
+    <ErrorBoundary resetKey={`${target.animeId}-${target.episode}`}>
+      <Suspense fallback={page ? <Centered><Spinner className="size-8" /></Centered> : null}>
+        <Watch
+          animeId={target.animeId}
+          episode={target.episode}
+          mini={!page}
+          onGo={(path) => {
+            const m = watchPath.exec(path)
+            if (m) setDocked({ animeId: m[1], episode: m[2] })
+          }}
+          onClose={() => setDocked(null)}
+        />
+      </Suspense>
+    </ErrorBoundary>
   )
 }
 
@@ -297,8 +341,9 @@ function SearchBox() {
   const [active, setActive] = useState(-1)
   const close = useCallback(() => setOpen(false), [])
   const box = useDismiss<HTMLFormElement>(close, open)
-  // A pasted AniList or MyAnimeList show link opens that show rather than searching for its address.
-  const link = showLink(value)
+  // A pasted AniList or MyAnimeList show link, or a watch-together room, opens it rather than searching.
+  const room = parseTogether(value)
+  const link = showLink(value) ?? (room ? { site: 'room' as const, id: 0 } : null)
   const local = useQuery({
     enabled: q.length >= 2 && !link,
     queryKey: ['search', 'local', q],
@@ -452,7 +497,11 @@ function SearchBox() {
                 active === hits.length ? 'bg-base-800' : 'hover:bg-base-800',
               )}
             >
-              {link ? `Open this ${link.site === 'anilist' ? 'AniList' : 'MyAnimeList'} link` : `Search AniList for “${value.trim()}”`}
+              {link?.site === 'room'
+                ? 'Join this watch-together room'
+                : link
+                  ? `Open this ${link.site === 'anilist' ? 'AniList' : 'MyAnimeList'} link`
+                  : `Search AniList for “${value.trim()}”`}
             </button>
           </li>
         </ul>

@@ -6,7 +6,6 @@ import { Home } from './pages/Home'
 
 // The player pulls in hls.js and the subtitle renderer, which no other screen
 // needs; keeping it out of the initial bundle is most of the payload.
-const Watch = lazy(() => import('./pages/Watch').then((m) => ({ default: m.Watch })))
 const Anime = lazy(() => import('./pages/Anime').then((m) => ({ default: m.Anime })))
 const Browse = lazy(() => import('./pages/Browse').then((m) => ({ default: m.Browse })))
 const Library = lazy(() => import('./pages/Library').then((m) => ({ default: m.Library })))
@@ -23,6 +22,8 @@ const Downloads = lazy(() => import('./pages/Manage').then((m) => ({ default: m.
 const LocalFiles = lazy(() => import('./pages/Manage').then((m) => ({ default: m.LocalFiles })))
 const SetupPage = lazy(() => import('./pages/Setup').then((m) => ({ default: m.SetupPage })))
 const Open = lazy(() => import('./pages/Open').then((m) => ({ default: m.Open })))
+const Person = lazy(() => import('./pages/Person').then((m) => ({ default: m.Person })))
+const CharacterPage = lazy(() => import('./pages/Character').then((m) => ({ default: m.CharacterPage })))
 
 function Loading() {
   return (
@@ -38,9 +39,11 @@ export function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<Home />} />
-          {/* The player is full-bleed but keeps the nav, or you're stranded on it. */}
-          <Route path="watch/:animeId/:episode" element={<Watch />} />
+          {/* Drawn by the layout itself, so it can stay docked once you leave. */}
+          <Route path="watch/:animeId/:episode" element={null} />
           <Route path="anime/:animeId" element={<Anime />} />
+          <Route path="person/:personId" element={<Person />} />
+          <Route path="character/:characterId" element={<CharacterPage />} />
           <Route path="browse" element={<Browse />} />
           <Route path="schedule" element={<SchedulePage />} />
           <Route path="recent" element={<RecentPage />} />

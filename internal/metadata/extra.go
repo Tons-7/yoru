@@ -25,6 +25,8 @@ type Theme struct {
 
 // Credit is one person and what they did.
 type Credit struct {
+	// ID is the person's on MyAnimeList, which their page opens by.
+	ID    int    `json:"id,omitempty"`
 	Name  string `json:"name"`
 	Role  string `json:"role"`
 	Image string `json:"image,omitempty"`
@@ -56,6 +58,7 @@ type fullResponse struct {
 type staffResponse struct {
 	Data []struct {
 		Person struct {
+			MalID  int    `json:"mal_id"`
 			Name   string `json:"name"`
 			Images struct {
 				JPG struct {
@@ -170,6 +173,7 @@ func (c *Client) Extra(ctx context.Context, malID int) (Extra, error) {
 					seen[key] = true
 					kept++
 					out.Staff = append(out.Staff, Credit{
+						ID:    entry.Person.MalID,
 						Name:  entry.Person.Name,
 						Role:  role,
 						Image: entry.Person.Images.JPG.ImageURL,
