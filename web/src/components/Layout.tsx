@@ -37,6 +37,7 @@ import { menuItems, useDebounced, useDismiss, useMediaQuery, useModalFocus, walk
 import { useNewSettings } from '../lib/whatsNew'
 import { showLink } from '../lib/showLink'
 import { playingNow } from '../lib/miniplayer'
+import { useFocus } from '../lib/focus'
 import { parseTogether } from '../lib/together'
 import { Centered, Spinner } from './ui'
 
@@ -49,13 +50,9 @@ const TABS = [
 ]
 
 export function Layout() {
-  // The watch page sets its own width, so the player runs edge to edge on a phone.
   const fullBleed = useMatch('/watch/:animeId/:episode') !== null
-  // Tailwind's sm: below it the main places are tabs along the bottom.
   const wide = useMediaQuery('(min-width: 40rem)')
-
-  // Keyed on the path so each page animates in. Short enough that navigation
-  // still feels immediate; the point is to show that something changed.
+  const focus = useFocus()
   const { pathname } = useLocation()
 
   // Every episode is the same page; re-keying would tear the player down.
@@ -118,7 +115,7 @@ export function Layout() {
       <p role="status" className="sr-only">
         {arrived}
       </p>
-      <Header />
+      {!focus && <Header />}
       {/* Outside the per-page main: Back remounted them, and the pairing overlay vanished with its state. */}
       <Unpaired />
       <AccessRequests />
@@ -141,7 +138,7 @@ export function Layout() {
           <Outlet />
         </ErrorBoundary>
       </main>
-      {!wide && <BottomTabs />}
+      {!wide && !focus && <BottomTabs />}
     </div>
   )
 }
@@ -220,8 +217,7 @@ function Header() {
         {/* A rule, or the name reads as the first of six links. */}
         <span className="hidden h-6 w-px shrink-0 bg-base-800 sm:block" />
 
-        {/* A solid, lighter surface, so the group reads as a control, not loose text. */}
-        <nav className="hidden items-center gap-0.5 rounded-full bg-base-800 p-1 ring-1 ring-white/5 sm:flex">
+        <nav className="hidden items-center gap-1 self-stretch sm:flex">
           <Tabs />
         </nav>
 
@@ -303,10 +299,9 @@ function Tabs() {
           end={tab.end}
           className={({ isActive }) =>
             cx(
-              'shrink-0 rounded-full px-3 py-1.5 text-sm transition-colors',
-              isActive
-                ? 'bg-base-700 text-white shadow-card ring-1 ring-white/10'
-                : 'text-base-300 hover:bg-base-850 hover:text-white',
+              'relative flex shrink-0 items-center self-stretch px-3 text-sm font-medium transition-colors',
+              'after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:transition-colors',
+              isActive ? 'text-white after:bg-accent-400' : 'text-base-400 hover:text-white after:bg-transparent',
             )
           }
         >
@@ -510,41 +505,34 @@ function SearchBox() {
   )
 }
 
-/** English vs romaji titles; they resolve server-side, so every list is refetched. */
 function TitleLanguage() {
   const prefs = usePrefs()
   const setPref = useSetPref()
-
-  const mode = prefs.data?.effective['display.titles'] ?? 'english'
-
-  const choose = (next: string) => {
-    if (next === mode) return
-    // useSetPref refreshes every query for this key, as titles are picked server-side.
-    setPref.mutate({ key: 'display.titles', value: next })
-  }
+  const saved = prefs.data?.effective['display.titles'] === 'romaji'
+  const settling = setPref.isPending || (setPref.isSuccess && prefs.isFetching)
+  const japanese = settling ? setPref.variables?.value === 'romaji' : saved
 
   return (
-    <div className="hidden shrink-0 items-center rounded-full bg-base-850 p-0.5 sm:flex">
-      {[
-        { value: 'english', label: 'EN' },
-        { value: 'romaji', label: 'JP' },
-      ].map((option) => (
-        <button
-          key={option.value}
-          onClick={() => choose(option.value)}
-          aria-pressed={mode === option.value}
-          title={option.value === 'english' ? 'English titles' : 'Romaji titles'}
+    <button
+      type="button"
+      onClick={() => setPref.mutate({ key: 'display.titles', value: japanese ? 'english' : 'romaji' })}
+      disabled={settling}
+      aria-label={japanese ? 'Titles: JP. Switch to EN' : 'Titles: EN. Switch to JP'}
+      title={japanese ? 'Japanese (romaji) titles; click for English' : 'English titles; click for Japanese (romaji)'}
+      className="tap group/titles relative hidden shrink-0 items-center gap-0.5 rounded-lg p-0.5 text-xs font-semibold ring-1 ring-white/10 transition-colors hover:ring-white/20 sm:flex"
+    >
+      {['EN', 'JP'].map((label) => (
+        <span
+          key={label}
           className={cx(
-            'rounded-full px-2.5 py-1 text-xs font-semibold transition-colors',
-            mode === option.value
-              ? 'bg-accent-500 text-white'
-              : 'text-base-400 hover:text-base-100',
+            'rounded-md px-2 py-1 transition-colors',
+            (label === 'JP') === japanese ? 'bg-base-800 text-white' : 'text-base-500 group-hover/titles:text-base-300',
           )}
         >
-          {option.label}
-        </button>
+          {label}
+        </span>
       ))}
-    </div>
+    </button>
   )
 }
 

@@ -17,7 +17,8 @@ import {
   type UpNextItem,
   type VoiceLevel,
 } from '../lib/api'
-import { bytes, cx, relativeTime } from '../lib/format'
+import { airTime, bytes, cx, relativeTime } from '../lib/format'
+import { setFocus } from '../lib/focus'
 import {
   refreshDownloads,
   useAccess,
@@ -27,6 +28,8 @@ import {
   useNow,
   usePrefs,
   useRecommendations,
+  useSetNotify,
+  useAlertsOff,
   useSetPref,
   useTrackers,
   type Season,
@@ -51,7 +54,7 @@ import { Player } from '../player/Player'
 import { deviceCaps } from '../player/decode'
 import { cellular, LOWER, SAVER, setOnMobile, setSitting, stepBytes, streamChoice, useNetwork } from '../player/network'
 import { MobileDataCard, NetworkNote } from '../components/MobileData'
-import { SUB_LOOKS, type SubLook } from '../player/subLook'
+import { asSubLook, type SubLook } from '../player/subLook'
 import { currentVideo, togglePlay, useCurrentVideo, useDockDrag, usePlayingNow, type Corner } from '../lib/miniplayer'
 import {
   autoTier,
@@ -86,6 +89,23 @@ export function Watch({
     [mini, onGo, routerNavigate],
   )
   const dock = useDockDrag(mini)
+  const [focused, setFocused] = useState(false)
+  if (mini && focused) setFocused(false)
+  const focus = focused && !mini
+  useEffect(() => {
+    setFocus(focus)
+    return () => setFocus(false)
+  }, [focus])
+  useEffect(() => {
+    if (!focus) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || document.fullscreenElement) return
+      if (document.querySelector('[role="menu"], [role="dialog"], [role="listbox"]')) return
+      setFocused(false)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [focus])
   const qc = useQueryClient()
 
   const prefs = usePrefs(id)
@@ -512,6 +532,10 @@ export function Watch({
   )
   // Everywhere, not per show: a look is the viewer's eyes, not the release's.
   const setSubLook = useCallback((look: SubLook) => setPrefMutate({ key: 'subtitle.look', value: look }), [setPrefMutate])
+  const setSubRaised = useCallback(
+    (raised: boolean) => setPrefMutate({ key: 'subtitle.raise', value: String(raised) }),
+    [setPrefMutate],
+  )
   // The aired episode before this one, filler or not: going back is to rewatch, not to follow the list.
   const previous = [...list].reverse().find((e) => e.number < ep && !isUnaired(e, now))
   const previousPath = previous ? `/watch/${id}/${previous.number}` : undefined
@@ -727,11 +751,17 @@ export function Watch({
         mini && DOCK[dock.corner],
       )}
     >
-      <div className={cx(!mini && 'mx-auto w-full max-w-[1600px] px-0 sm:px-6 sm:py-4')}>
-        <div className={cx(!mini && 'grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]')}>
+      <div className={cx(!mini && 'mx-auto w-full px-0 sm:px-6 sm:py-4', !mini && !focus && 'max-w-[1600px]')}>
+        <div className={cx(!mini && !focus && 'grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]')}>
           <div className={cx('min-w-0', mini && 'max-sm:flex max-sm:items-center')}>
             {/* No overflow-hidden: clipping a composited video blacks it out. */}
-            <div className={cx('relative bg-black', mini ? 'rounded-t-xl max-sm:w-36 max-sm:shrink-0 max-sm:rounded-l-xl max-sm:rounded-tr-none' : 'sm:rounded-xl')}>
+            <div
+              className={cx(
+                'relative bg-black',
+                mini ? 'rounded-t-xl max-sm:w-36 max-sm:shrink-0 max-sm:rounded-l-xl max-sm:rounded-tr-none' : 'sm:rounded-xl',
+                focus && 'mx-auto w-full max-w-[calc((100dvh-8rem)*16/9)]',
+              )}
+            >
               {play.isError && !streamed ? (
                 <NoRelease
                   message={(play.error as Error).message}
@@ -762,8 +792,10 @@ export function Watch({
                   withDub={(['signs', 'off', 'same'] as const).find((v) => v === effective['subtitle.with_dub']) ?? 'signs'}
                   keptDelay={keptDelay}
                   onKeepDelay={group ? keepDelay : undefined}
-                  subLook={SUB_LOOKS.find((l) => l.value === effective['subtitle.look'])?.value ?? ''}
+                  subLook={asSubLook(effective['subtitle.look'])}
                   onSubLook={setSubLook}
+                  subRaised={flag('subtitle.raise')}
+                  onSubRaised={setSubRaised}
                   upscale={upscaling}
                   sound={soundProp}
                   title={showTitle}
@@ -887,9 +919,8 @@ export function Watch({
 
             {/* Not drawn while docked: its lists and rails would keep fetching for nobody. */}
             {!mini && (
-            <div className="space-y-3 p-3 sm:px-0 sm:pt-4">
+            <div className={cx('space-y-3 p-3 sm:px-0 sm:pt-4', focus && 'mx-auto max-w-[calc((100dvh-8rem)*16/9)]')}>
               <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
-                {/* What is playing, and the way back to its page. */}
                 <div className="mr-auto min-w-0">
                   <Link
                     to={`/anime/${id}`}
@@ -909,36 +940,16 @@ export function Watch({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <StatusMenu animeId={id} current={detail.data?.listStatus} />
-
-                  <Button onClick={() => setPicking(true)}>
-                    {infoHash ? 'Release chosen' : 'Choose release'}
-                  </Button>
-
-                  <Button
-                    onClick={() => download.mutate()}
-                    disabled={held || download.isPending || download.isSuccess}
-                  >
-                    {held ? 'Downloaded' : download.isSuccess ? 'Queued' : 'Download'}
-                  </Button>
-
-                  {source && <Button onClick={() => setInApp(true)}>Open or save</Button>}
-
-                  {!playingInMpv && <SaveToDevice animeId={id} episode={ep} />}
-
-                  {!together && !naming && !playingInMpv && (
-                    <Button
-                      onClick={() => {
-                        startTogether.reset()
-                        setNaming(true)
-                      }}
-                      disabled={!play.data}
-                      title="Watch in step with friends who have their own Yoru"
-                    >
-                      Watch together
+                  {focus && (
+                    <Button variant="ghost" onClick={() => setFocused(false)} aria-pressed title="Back to the whole page (Esc)">
+                      Exit focus
                     </Button>
                   )}
-
+                  {previous && (
+                    <Button onClick={goPrevious} title="The episode before">
+                      ‹ Episode {previous.display || previous.number}
+                    </Button>
+                  )}
                   {hasNext && (
                     <Button
                       variant="primary"
@@ -950,6 +961,46 @@ export function Watch({
                   )}
                 </div>
               </div>
+
+              {!focus && (
+                <div className="flex flex-wrap items-center gap-1">
+                  <StatusMenu animeId={id} current={detail.data?.listStatus} />
+                  <Button variant="ghost" onClick={() => setPicking(true)}>
+                    {infoHash ? 'Release chosen' : 'Choose release'}
+                  </Button>
+                  <Button variant="ghost" onClick={() => download.mutate()} disabled={held || download.isPending || download.isSuccess}>
+                    {held ? 'Downloaded' : download.isSuccess ? 'Queued' : 'Download'}
+                  </Button>
+                  {source && (
+                    <Button variant="ghost" onClick={() => setInApp(true)}>
+                      Open or save
+                    </Button>
+                  )}
+                  {!playingInMpv && <SaveToDevice animeId={id} episode={ep} variant="ghost" />}
+                  {!together && !naming && !playingInMpv && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        startTogether.reset()
+                        setNaming(true)
+                      }}
+                      disabled={!play.data}
+                      title="Watch in step with friends who have their own Yoru"
+                    >
+                      Watch together
+                    </Button>
+                  )}
+                  {!playingInMpv && (
+                    <Button variant="ghost" onClick={() => setFocused(true)} aria-pressed={false} title="Just the player; Esc leaves">
+                      Focus
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              {!focus && upcoming && !fromList && !next && (
+                <AiringNext key={id} animeId={id} upcoming={upcoming} alerting={!!detail.data?.notify?.on} />
+              )}
 
               {startTogether.isError && (
                 <p className="flex flex-wrap items-center gap-2 text-sm text-recap">
@@ -1003,8 +1054,7 @@ export function Watch({
                 </div>
               )}
 
-              {/* Until settings load every switch reads off, and a click would write wrong. */}
-              {!prefs.data ? (
+              {focus ? null : !prefs.data ? (
                 <Skeleton className="h-12 w-full rounded-lg" />
               ) : (
                 <>
@@ -1094,16 +1144,18 @@ export function Watch({
                 <p className="text-xs text-recap">{(download.error as Error).message}</p>
               )}
 
-              <EpisodeAbout
-                title={showTitle}
-                label={episodeLabel}
-                overview={current?.overview}
-                still={current?.still}
-                file={play.data?.title}
-              />
-
-              {/* The show's cast, not this episode's (MAL has none), as the heading says. */}
-              <CharacterRail animeId={id} limit={8} title="Cast" />
+              {!focus && (
+                <>
+                  <EpisodeAbout
+                    title={showTitle}
+                    label={episodeLabel}
+                    overview={current?.overview}
+                    still={current?.still}
+                    file={play.data?.title}
+                  />
+                  <CharacterRail animeId={id} limit={8} title="Cast" />
+                </>
+              )}
             </div>
             )}
             {mini && (
@@ -1111,7 +1163,7 @@ export function Watch({
             )}
           </div>
 
-          {!mini && (
+          {!mini && !focus && (
           <aside className="px-3 pb-8 sm:px-0">
             <h2 className="mb-2 section-title">
               Episodes
@@ -1268,6 +1320,38 @@ const DOCK: Record<Corner, string> = {
   br: 'right-4 bottom-4 max-sm:bottom-[calc(4.5rem+env(safe-area-inset-bottom))]',
 }
 
+function AiringNext({ animeId, upcoming, alerting }: { animeId: number; upcoming: Episode; alerting: boolean }) {
+  const alert = useSetNotify(animeId)
+  const alertsOff = useAlertsOff()
+  const at = upcoming.airDate
+  const when = at
+    ? `${new Date(at * 1000).toLocaleDateString(undefined, { weekday: 'long' })} ${airTime(at)} · ${relativeTime(at)}`
+    : 'later'
+  return (
+    <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-base-400">
+      <span>
+        Episode {upcoming.display || upcoming.number} airs <span className="text-base-200">{when}</span>
+      </span>
+      {alertsOff ? (
+        <Link to="/settings?tab=Notifications" className="text-xs font-medium text-base-400 hover:text-white">
+          Alerts are off in Settings
+        </Link>
+      ) : alerting ? (
+        <span className="text-xs font-medium text-emerald-300">Alerts on</span>
+      ) : (
+        <button
+          onClick={() => alert.mutate(true)}
+          disabled={alert.isPending}
+          className="tap relative text-sm font-medium text-accent-300 hover:text-accent-200 disabled:opacity-60"
+        >
+          Alert me
+        </button>
+      )}
+      {alert.isError && <span className="text-xs text-recap">{(alert.error as Error).message}</span>}
+    </p>
+  )
+}
+
 function MiniBar({ title, episode, onExpand, onClose }: { title: string; episode: string; onExpand: () => void; onClose: () => void }) {
   const playing = usePlayingNow()
   const button =
@@ -1309,39 +1393,45 @@ function Searching({ note }: { note: { title: string; detail: string } }) {
   )
 }
 
-// Not out yet, or raw only: an alert when it is, or the episode downloaded then.
 function WhenOut({ animeId, episode }: { animeId: number; episode: number }) {
   const qc = useQueryClient()
   const [done, setDone] = useState<'notify' | 'want' | null>(null)
-  const ask = useMutation({
+  const notify = useSetNotify(animeId)
+  const alertsOff = useAlertsOff()
+  const want = useMutation({
     meta: { inline: true },
-    mutationFn: (what: 'notify' | 'want') =>
-      what === 'notify'
-        ? api.post(`/api/anime/${animeId}/notify`, { on: true })
-        : api.post(`/api/anime/${animeId}/want`, { episode }),
-    onSuccess: (_, what) => {
-      setDone(what)
+    mutationFn: () => api.post(`/api/anime/${animeId}/want`, { episode }),
+    onSuccess: () => {
+      setDone('want')
       void qc.invalidateQueries({ queryKey: ['anime', animeId] })
     },
   })
+  const pending = notify.isPending || want.isPending
+  const failed = (notify.error ?? want.error) as Error | null
   if (done) {
     return (
       <p role="status" className="mt-4 text-sm text-base-200">
         {done === 'notify'
           ? 'You get an alert when it is out.'
-          : `Episode ${episode} downloads when it is out, and you get an alert.`}
+          : alertsOff
+            ? `Episode ${episode} downloads when it is out.`
+            : `Episode ${episode} downloads when it is out, and you get an alert.`}
       </p>
     )
   }
   return (
     <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-      <Button variant="primary" onClick={() => ask.mutate('notify')} disabled={ask.isPending}>
-        Tell me when it's out
-      </Button>
-      <Button onClick={() => ask.mutate('want')} disabled={ask.isPending}>
+      {alertsOff ? (
+        <LinkButton to="/settings?tab=Notifications">Alerts are off: turn them on</LinkButton>
+      ) : (
+        <Button variant="primary" onClick={() => notify.mutate(true, { onSuccess: () => setDone('notify') })} disabled={pending}>
+          Tell me when it's out
+        </Button>
+      )}
+      <Button variant={alertsOff ? 'primary' : 'secondary'} onClick={() => want.mutate()} disabled={pending}>
         Download it when it's out
       </Button>
-      {ask.isError && <p className="basis-full text-xs text-recap">{(ask.error as Error).message}</p>}
+      {failed && <p className="basis-full text-xs text-recap">{failed.message}</p>}
     </div>
   )
 }
@@ -1545,10 +1635,8 @@ function EndOfAired({
 }) {
   const qc = useQueryClient()
   const alertFor = upcoming ? animeId : sequel?.id
-  const alert = useMutation({
-    meta: { inline: true },
-    mutationFn: () => api.post(`/api/anime/${alertFor}/notify`, { on: true }),
-  })
+  const alert = useSetNotify(alertFor ?? 0)
+  const alertsOff = useAlertsOff()
   const plan = useMutation({
     meta: { inline: true },
     mutationFn: () => api.post('/api/status', { animeId: sequel!.id, status: 'PLANNING' }),
@@ -1595,12 +1683,14 @@ function EndOfAired({
             {plan.isSuccess ? 'In Planning' : 'Add to Planning'}
           </button>
         )}
-        {alertFor && upcoming && alerting ? (
+        {alertFor && alertsOff ? (
+          <span className="text-xs text-base-400">Alerts are off for every show in Settings.</span>
+        ) : alertFor && upcoming && alerting ? (
           <span className="text-xs text-base-400">Alerts are on for this show.</span>
         ) : (
           alertFor && (
             <button
-              onClick={() => alert.mutate()}
+              onClick={() => alert.mutate(true)}
               disabled={alert.isPending || alert.isSuccess}
               className={cx(button, 'bg-base-800 text-base-100 hover:bg-base-700 disabled:opacity-60')}
             >

@@ -8,19 +8,15 @@ import { StatusMenu } from './StatusMenu'
 import { Skeleton } from './ui'
 
 const ROTATE_MS = 9000
-
-// Artwork is fetched two slides ahead, time enough on a slow connection.
 const PRELOAD = 2
 
 export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boolean }) {
   const slides = (items ?? []).filter((a) => a.cover).slice(0, 10)
   const [picked, setIndex] = useState(0)
   const [paused, setPaused] = useState(false)
-  // Hover and focus pause it; a touch screen has neither, so it stops by hand. Reduced motion never moves.
   const [stopped, setStopped] = useState(false)
   const calm = useMediaQuery('(prefers-reduced-motion: reduce)')
   const timer = useRef<number | undefined>(undefined)
-  // A shorter list after a refetch would otherwise leave the index past the end.
   const index = picked < slides.length ? picked : 0
 
   useEffect(() => {
@@ -32,20 +28,16 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
     return () => window.clearInterval(timer.current)
   }, [paused, stopped, calm, slides.length])
 
-  // Every slide sits in the viewport at opacity zero, so lazy loading holds none back: fetched just ahead of
-  // the rotation, kept once arrived, and updated during render so no effect paints it a frame late.
   const [fetched, setFetched] = useState<number[]>([])
   const ahead = slides.length ? Array.from({ length: PRELOAD + 1 }, (_, step) => (index + step) % slides.length) : []
   if (ahead.some((i) => !fetched.includes(i))) setFetched([...new Set([...fetched, ...ahead])])
 
   if (loading) {
-    return <Skeleton className="h-[clamp(22rem,46vw,34rem)] w-full rounded-2xl" />
+    return <Skeleton className="-mx-4 -mt-4 h-[27rem] rounded-none sm:-mx-6 sm:h-[clamp(24rem,32vw,32rem)]" />
   }
-  // Trending failed or is empty: nothing to feature, and an endless skeleton reads as broken.
   if (slides.length === 0) return null
 
   const active = slides[index]
-  // Nothing to play: finished, unaired, or caught up with what has aired (PosterCard's rule).
   const aired = active.nextEpisode ? active.nextEpisode - 1 : active.episodes
   const caughtUp =
     active.listStatus === 'COMPLETED' ||
@@ -54,99 +46,84 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
 
   return (
     <section
-      className="relative h-[clamp(22rem,46vw,34rem)] overflow-hidden rounded-2xl bg-base-900 ring-1 ring-white/[0.06]"
+      className="relative -mx-4 -mt-4 h-[27rem] overflow-hidden sm:-mx-6 sm:h-[clamp(24rem,32vw,32rem)]"
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
-      // Keyboard too: rotating under focus sent Enter to a different show.
       onFocus={() => setPaused(true)}
       onBlur={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setPaused(false)
       }}
       aria-roledescription="carousel"
     >
-      {slides.map((anime, i) => (
-        <div
-          key={anime.id}
-          aria-hidden={i !== index}
-          className={cx(
-            'absolute inset-0 transition-opacity duration-700',
-            i === index ? 'opacity-100' : 'pointer-events-none opacity-0',
-          )}
-        >
-          {fetched.includes(i) &&
-            (anime.banner ? (
-              <img
-                src={anime.banner}
-                alt=""
-                decoding="async"
-                // A slow drift keeps the strip alive; reduced motion stops it.
-                className={cx(
-                  'size-full object-cover object-center transition-transform duration-[9000ms] ease-linear',
-                  i === index ? 'scale-105' : 'scale-100',
-                )}
-              />
-            ) : (
-              // No banner: stretched across a wide strip a poster is a smear, so there it becomes the
-              // backdrop. A narrow strip is about a poster's width, and shows it as it is.
+      <div className="absolute inset-0 min-[1700px]:[mask-image:linear-gradient(to_right,transparent,black_6rem,black_calc(100%-6rem),transparent)]">
+        {slides.map((anime, i) => (
+          <div
+            key={anime.id}
+            aria-hidden={i !== index}
+            className={cx(
+              'absolute inset-0 transition-opacity duration-700 [mask-image:linear-gradient(to_bottom,black_70%,transparent)]',
+              i === index ? 'opacity-100' : 'pointer-events-none opacity-0',
+            )}
+          >
+            {fetched.includes(i) &&
+              (anime.banner ? (
+                <picture>
+                  <source media="(min-width: 640px)" srcSet={anime.banner} />
+                  <img
+                    src={anime.coverLarge ?? anime.cover}
+                    alt=""
+                    decoding="async"
+                    className={cx(
+                      'size-full object-cover object-top transition-transform duration-[9000ms] ease-linear sm:object-center',
+                      i === index ? 'sm:scale-[1.03]' : 'scale-100',
+                    )}
+                  />
+                </picture>
+              ) : (
+                <img
+                  src={anime.coverLarge ?? anime.cover}
+                  alt=""
+                  decoding="async"
+                  className="size-full object-cover object-top sm:scale-125 sm:opacity-40 sm:blur-3xl"
+                />
+              ))}
+            <div className="absolute inset-0 bg-gradient-to-r from-base-950 via-base-950/70 to-transparent max-sm:hidden" />
+            <div className="absolute inset-0 bg-gradient-to-t from-base-950 via-base-950/75 via-50% to-transparent sm:via-base-950/10" />
+            {fetched.includes(i) && !anime.banner && (
               <img
                 src={anime.coverLarge ?? anime.cover}
                 alt=""
                 decoding="async"
-                className="size-full object-cover lg:scale-125 lg:opacity-60 lg:blur-2xl"
+                className={cx(
+                  'absolute inset-y-0 right-0 aspect-square h-full object-cover object-[center_20%] transition-transform duration-[9000ms] ease-linear [mask-image:linear-gradient(to_right,transparent,black_45%)] max-sm:hidden',
+                  i === index ? 'scale-[1.03]' : 'scale-100',
+                )}
               />
-            ))}
-          <div className="absolute inset-0 bg-gradient-to-r from-base-950 via-base-950/75 to-transparent" />
-          <div className="absolute inset-0 bg-gradient-to-t from-base-950 via-base-950/10 to-transparent" />
-          {/* And the poster itself, sharp, where the banner's subject would have been. */}
-          {fetched.includes(i) && !anime.banner && (
-            <img
-              src={anime.coverLarge ?? anime.cover}
-              alt=""
-              decoding="async"
-              // Smaller on a mid-width strip, where a tall poster would sit over the title.
-              className="absolute top-1/2 right-[6%] aspect-[2/3] h-[60%] -translate-y-1/2 rounded-xl object-cover shadow-lift ring-1 ring-white/10 max-lg:hidden xl:right-[12%] xl:h-[76%]"
-            />
-          )}
-          {/* The show's own colour, low in the corner. */}
-          <div
-            className="absolute inset-0"
-            style={{
-              background: `radial-gradient(60% 70% at 0% 100%, ${tint(anime.color, 0.35) ?? 'rgb(111 92 255 / 0.25)'}, transparent 70%)`,
-            }}
-          />
-        </div>
-      ))}
-
-      <div className="relative flex h-full flex-col justify-end p-5 sm:p-10">
-        <div className="max-w-2xl">
-          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-semibold">
-            <span className="rounded-md bg-accent-500 px-2 py-0.5 tracking-wider text-white uppercase">
-              #{index + 1} Trending
-            </span>
-            {active.format && (
-              <span className="rounded-md bg-base-950/60 px-2 py-0.5 text-base-100 uppercase ring-1 ring-white/10 backdrop-blur-md">
-                {active.format.replace('_', ' ')}
-              </span>
             )}
-            {active.episodes ? (
-              <span className="rounded-md bg-base-950/60 px-2 py-0.5 text-base-100 uppercase ring-1 ring-white/10 backdrop-blur-md">
-                {active.episodes} eps
-              </span>
-            ) : null}
-            {active.score ? (
-              <span className="rounded-md bg-base-950/60 px-2 py-0.5 text-amber-300 ring-1 ring-amber-400/30 backdrop-blur-md">
-                ★ {(active.score / 10).toFixed(1)}
-              </span>
-            ) : null}
+            <div
+              className="absolute inset-0"
+              style={{
+                background: `radial-gradient(60% 70% at 0% 100%, ${tint(anime.color, 0.35) ?? 'rgb(111 92 255 / 0.25)'}, transparent 70%)`,
+              }}
+            />
           </div>
+        ))}
+      </div>
 
-          <h1 className="font-display text-3xl leading-[1.05] font-bold tracking-tight text-white text-balance drop-shadow-lg sm:text-5xl lg:text-6xl">
+      <div className="relative mx-auto flex h-full max-w-[1600px] flex-col justify-end px-4 pb-5 sm:px-6 sm:pb-8 lg:px-10">
+        <div className="max-w-2xl">
+          <p className="mb-2 text-xs font-semibold tracking-[0.16em] text-accent-300 uppercase">Trending #{index + 1}</p>
+
+          <h1 className="line-clamp-2 font-display text-3xl leading-[1.05] font-bold tracking-tight text-white text-balance drop-shadow-lg sm:text-5xl lg:text-[3.5rem]">
             {active.title}
           </h1>
 
-          {active.Genres && active.Genres.length > 0 && (
-            <p className="mt-3 text-sm font-medium text-base-200">{active.Genres.slice(0, 4).join(' · ')}</p>
-          )}
+          <p className="mt-3 flex flex-wrap items-center gap-x-2 text-sm font-medium text-base-200">
+            {[active.format?.replace('_', ' '), active.episodes ? `${active.episodes} eps` : null, ...(active.Genres ?? []).slice(0, 3)]
+              .filter(Boolean)
+              .join(' · ')}
+            {active.score ? <span className="text-amber-300">★ {(active.score / 10).toFixed(1)}</span> : null}
+          </p>
           {active.description && (
             <p className="mt-2 line-clamp-2 max-w-xl text-sm leading-relaxed text-base-300 max-sm:hidden">
               {active.description.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()}
@@ -154,7 +131,6 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
           )}
 
           <div className="mt-6 flex items-center gap-2">
-            {/* No next episode to link to, so the show page decides. */}
             {caughtUp ? null : (
               <Link
                 to={`/watch/${active.id}/${(active.progress ?? 0) + 1}`}
@@ -175,14 +151,12 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
             >
               Details
             </Link>
-            {/* Keyed by slide: rotation must close a menu opened for the last one. */}
             <StatusMenu key={active.id} animeId={active.id} current={active.listStatus ?? null} compact />
           </div>
         </div>
 
         <div className="mt-4 flex" role="tablist" aria-label="Featured anime">
           {slides.map((slide, i) => (
-            // The bar is 4px; the button around it is what a finger has to hit.
             <button
               key={slide.id}
               role="tab"

@@ -429,6 +429,7 @@ export interface SubtitleLook {
   delay: number
   /** How dialogue is drawn over the file's own styling (see subLook.ts). */
   preset?: SubLook
+  raised?: boolean
 }
 
 type ASSStyle = Awaited<ReturnType<JASSUB['renderer']['getStyles']>>[number]
@@ -620,24 +621,25 @@ export function useSubtitles(
       }
       repaint.current = resync
 
-      // Made over from the file's own styles, reread after each refresh so steps never compound.
       let originals: ASSStyle[] | null = null
-      // Nothing applied yet: the first pass sets the styles, which also draws a paused picture's line.
+      const lookKey = (scale: number, preset: string, raised: boolean) => `${scale}|${preset}|${raised}`
       let applied = ''
       restyle.current = async () => {
-        const { scale, preset = '' } = lookRef.current
-        if (`${scale}|${preset}` === applied || cancelled) return
+        const { scale, preset = '', raised = false } = lookRef.current
+        const key = lookKey(scale, preset, raised)
+        if (key === applied || cancelled) return
         const worker = renderer.renderer
         originals ??= await worker.getStyles()
         if (!originals.length) originals = null
         await Promise.all(
           (originals ?? []).map((s, i) =>
-            TYPESET_STYLE.test(s.Name) ? undefined : worker.setStyle(restyleASS({ ...s, FontSize: s.FontSize * scale }, preset), i),
+            TYPESET_STYLE.test(s.Name)
+              ? undefined
+              : worker.setStyle(restyleASS({ ...s, FontSize: s.FontSize * scale }, preset, raised), i),
           ),
         )
-        applied = `${scale}|${preset}`
+        applied = key
         resync()
-        // A font loads as its line is first drawn, and JASSUB doesn't redraw then: a paused picture is redrawn.
         for (const ms of [300, 1500]) setTimeout(() => !cancelled && video.paused && resync(), ms)
       }
       resync()
@@ -648,7 +650,7 @@ export function useSubtitles(
       if (!track.whole) {
         void keepFilling(renderer, track.url, video, () => cancelled, () => {
           originals = null
-          applied = '1|'
+          applied = lookKey(1, '', false)
           void restyle.current?.().catch(() => {})
         }).catch(() => {})
       }
@@ -677,7 +679,7 @@ export function useSubtitles(
 
   useEffect(() => {
     void restyle.current?.().catch(() => {})
-  }, [look.scale, look.preset])
+  }, [look.scale, look.preset, look.raised])
 
   const track = trackIndex === null ? undefined : stream?.subtitles?.find((t) => t.index === trackIndex)
   return !stream || !track || readyFor === `${stream.id}|${track.index}`

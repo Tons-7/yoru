@@ -49,6 +49,7 @@ type scheduleItem struct {
 	Colour     *string `json:"colour,omitempty"`
 	Format     *string `json:"format,omitempty"`
 	OnList     bool    `json:"onList"`
+	Alerts     bool    `json:"alerts"`
 	Progress   int     `json:"progress"`
 	Behind     int     `json:"behind"`
 	Watched    bool    `json:"watched"`
@@ -163,6 +164,22 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.log.Warn("list progress", "err", err)
 	}
+	global, err := s.store.Prefs(r.Context(), 0)
+	alertsOn := grouped && err == nil && global.String("notify.enabled") != "false"
+	adultOK := err == nil && global.Bool("home.adult_picks")
+	alerting := map[int]bool{}
+	alerts := func(id int) bool {
+		if !alertsOn {
+			return false
+		}
+		on, seen := alerting[id]
+		if !seen {
+			f, _ := s.store.FollowOf(r.Context(), id)
+			on = f.On
+			alerting[id] = on
+		}
+		return on
+	}
 
 	mineOnly := q.Get("mine") == "true"
 	titles := s.store.TitleMode(r.Context(), 0)
@@ -170,7 +187,7 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 
 	for n, e := range entries {
 		progress, listed := onList[e.MediaID]
-		if mineOnly && !listed {
+		if mineOnly && !listed || e.Media.IsAdult && !listed && !adultOK {
 			continue
 		}
 
@@ -185,6 +202,7 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 			Colour:     e.Media.CoverImage.Color,
 			Format:     e.Media.Format,
 			OnList:     listed,
+			Alerts:     alerts(e.MediaID),
 			Progress:   progress,
 			Show:       &shows[n],
 		}

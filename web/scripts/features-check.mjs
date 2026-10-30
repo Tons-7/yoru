@@ -632,14 +632,19 @@ const upNextKeys = async () =>
   ((await api('/api/upnext')).body?.items ?? []).map((it) => `${it.animeId}:${it.episode}`).join(' ')
 await api('/api/upnext', { method: 'DELETE' })
 await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
-const addNine = page.getByRole('button', { name: 'Add episode 9 to Up next' })
-check(await until(() => addNine.isVisible(), 30_000), 'episode rows offer Add to Up next')
+const moreNine = page.getByRole('button', { name: 'More for episode 9', exact: true })
+check(await until(() => moreNine.isVisible(), 30_000), 'episode rows have a More menu')
+await moreNine.click()
+const addNine = page.getByRole('menuitem', { name: 'Add to Up next' })
+check(await until(() => addNine.isVisible()), 'which offers Add to Up next')
 await addNine.click()
-check(await until(async () => (await upNextKeys()) === `${ANIME}:9`), 'the + put episode 9 on the list', await upNextKeys())
+check(await until(async () => (await upNextKeys()) === `${ANIME}:9`), 'it put episode 9 on the list', await upNextKeys())
+await moreNine.click()
 check(
-  await until(() => page.getByRole('button', { name: 'Remove episode 9 from Up next' }).isVisible()),
-  'the row then offers to take it off',
+  await until(() => page.getByRole('menuitem', { name: 'Remove from Up next' }).isVisible()),
+  'the menu then offers to take it off',
 )
+await page.keyboard.press('Escape')
 check(await page.getByText('In Up next').first().isVisible(), 'the row says In Up next')
 await post('/api/upnext', { animeId: FRIEREN, episode: 1 })
 

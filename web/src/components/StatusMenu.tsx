@@ -6,35 +6,32 @@ import { useRemoveStatus, useSetStatus } from '../lib/queries'
 import { cx } from '../lib/format'
 import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 
-/** The bookmark control is the list status (watching, completed, …), not a separate flag. */
 export function StatusMenu({
   animeId,
   current,
   compact,
+  quiet,
   onDone,
 }: {
   animeId: number
   current?: string | null
   compact?: boolean
+  quiet?: boolean
   onDone?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
-  // The portalled menu ends the tab order, so opening moves focus in and closing returns it.
   const menuRef = useRef<HTMLDivElement>(null)
   useModalFocus(menuRef, open)
   const setStatus = useSetStatus({ inline: true })
-  // Rewatching starts the show over (progress and ticks reset), so it asks once.
   const [confirmRewatch, setConfirmRewatch] = useState(false)
-  // Removing also deletes the entry on AniList and MAL, so it asks once too.
   const remove = useRemoveStatus()
   const [confirmRemove, setConfirmRemove] = useState(false)
 
   const active = LIST_STATUSES.find((s) => s.value === current)
 
-  // A portal, as the cards and banner it sits in clip their contents.
   const box = useAnchorBox(trigger, open)
   const menu = box && {
     top: Math.min(box.bottom + 6, window.innerHeight - 290),
@@ -60,14 +57,12 @@ export function StatusMenu({
         }}
         className={cx(
           'flex items-center gap-1.5 font-medium transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-300',
-          compact ? 'tap relative size-8 justify-center rounded-md' : 'rounded-lg px-4 py-2 text-sm pointer-coarse:min-h-11',
-          // Over art, solid violet or a dark frosted chip: a faint tint vanished into a busy cover.
+          compact ? 'tap relative size-8 justify-center rounded-full' : 'rounded-lg px-4 py-2 text-sm pointer-coarse:min-h-11',
           compact
-            ? active
-              ? 'bg-accent-500 text-white shadow-md shadow-black/40 ring-1 ring-white/20 hover:bg-accent-400'
-              : 'bg-base-950/75 text-white ring-1 ring-white/15 backdrop-blur-sm hover:bg-base-800'
-            : // Beside Play, which is the solid one.
-              active
+            ? active && !quiet
+              ? 'bg-accent-500 text-white shadow-md shadow-black/40 hover:bg-accent-400'
+              : 'bg-base-950/55 text-white/90 backdrop-blur-sm hover:bg-base-950/80 hover:text-white'
+            : active
               ? 'bg-accent-500/25 text-accent-300 ring-1 ring-accent-400/60 hover:bg-accent-500/35'
               : 'bg-base-800/90 text-base-100 ring-1 ring-white/10 hover:bg-base-700',
         )}
@@ -92,13 +87,11 @@ export function StatusMenu({
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
-                // Rewatching resets progress, so it only ever goes through the confirm below.
                 if (status.value === 'REPEATING' && current !== 'REPEATING') {
                   setConfirmRewatch(true)
                   return
                 }
                 setConfirmRewatch(false)
-                // A failure keeps the menu open with the reason, not a silent no-op.
                 setStatus.mutate(
                   { animeId, status: status.value as ListStatus },
                   {
@@ -120,7 +113,6 @@ export function StatusMenu({
               {status.value === current && <CheckIcon />}
             </button>
           ))}
-          {/* A Cancel that takes focus: relabelled in place, a double tap confirmed what the first armed. */}
           {confirmRewatch && (
             <Confirming note="Progress and ticks reset">
               <ConfirmInline
@@ -189,7 +181,6 @@ export function StatusMenu({
   )
 }
 
-// A confirm step inside the menu; its clicks stay here, not with a card the menu belongs to.
 function Confirming({ note, children }: { note: string; children: ReactNode }) {
   return (
     <div

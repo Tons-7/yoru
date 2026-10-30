@@ -43,19 +43,37 @@ await page.route('**/api/download', (route) => {
 })
 
 await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
-const buttons = page.getByRole('button', { name: /^Download episode \d+$/ })
-check(await until(() => buttons.count().then((n) => n > 3)), 'episodes not on disk offer a download button')
-check((await page.getByRole('button', { name: 'Download episode 4' }).count()) === 0, 'an episode on disk has no download button')
-const waiting = page.getByRole('button', { name: 'Episode 7 queued' })
-check(await until(() => waiting.isVisible(), 10_000) && (await waiting.isDisabled()), 'an episode already in the queue shows as queued and cannot be queued again')
+const moreFor = (n) => page.getByRole('button', { name: `More for episode ${n}`, exact: true })
+const menuOf = (n) => page.getByRole('menu', { name: `Episode ${n}`, exact: true })
+const download = page.getByRole('menuitem', { name: 'Download', exact: true })
+const open = async (n) => {
+  await moreFor(n).click()
+  return until(() => menuOf(n).isVisible(), 5000)
+}
+check(await until(() => moreFor(1).isVisible()), 'episode rows have a More menu')
 
-// Whichever episode is first offered; the seed owns a few.
-const first = buttons.first()
-const n = Number((await first.getAttribute('aria-label')).match(/\d+/)[0])
-await first.click()
+check((await open(4)) && (await download.count()) === 0, 'an episode on disk offers no download')
+await page.keyboard.press('Escape')
+
+const waiting = page.getByRole('menuitem', { name: 'Queued for download' })
+check((await open(7)) && (await until(() => waiting.isVisible(), 10_000)) && (await waiting.isDisabled()),
+  'an episode already in the queue shows as queued and cannot be queued again')
+await page.keyboard.press('Escape')
+const row = (n) => page.locator('li', { has: page.getByRole('link', { name: new RegExp(`^Episode ${n}\\b`) }) })
+check(await row(7).getByText('Queued for download').isVisible(), 'and its row says so')
+
+let n = 0
+for (let i = 1; i <= 12 && !n; i++) {
+  if (!(await moreFor(i).isVisible()) || !(await open(i))) continue
+  if (await download.count()) {
+    await download.click()
+    n = i
+  } else await page.keyboard.press('Escape')
+}
+check(n > 0, 'an episode not on disk offers Download')
 check(await until(() => queued.length === 1), 'one click queues the episode', JSON.stringify(queued))
 check(queued[0]?.animeId === Number(ANIME) && queued[0]?.episode === n, 'with the right show and episode', JSON.stringify(queued[0]))
-check(await until(() => page.getByRole('button', { name: `Episode ${n} queued` }).isVisible()), 'the button says it is queued')
+check(await until(() => row(n).getByText('Queued for download').isVisible()), 'the row says it is queued')
 await page.screenshot({ path: `${SHOTS}/episode-download.png` })
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))

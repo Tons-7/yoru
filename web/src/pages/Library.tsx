@@ -165,9 +165,9 @@ export function Library() {
             {data.items.map((item) => (
               <PosterCard
                 key={item.id}
+                quietList
                 anime={{
                   ...toCard(item),
-                  // No announced total still gets a bar and count, against what has aired.
                   percent: total(item) ? (item.progress / total(item)!) * 100 : 0,
                   badge:
                     item.progress > 0 && total(item)

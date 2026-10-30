@@ -36,13 +36,17 @@ func TestSubtitleLanguagesForMpv(t *testing.T) {
 func TestSubtitleLookFollowsTheMpv(t *testing.T) {
 	newer := func(o string) bool { return o == "sub-outline-color" || o == "sub-border-style" }
 	older := func(o string) bool { return false }
-	if got := strings.Join(SubtitleLookArgs("yellow", newer), " "); !strings.Contains(got, "--sub-outline-color=#000000") || strings.Contains(got, "border") {
+	if got := strings.Join(SubtitleLookArgs("yellow", false, newer), " "); !strings.Contains(got, "--sub-outline-color=#000000") || strings.Contains(got, "border") {
 		t.Errorf("newer mpv: %s", got)
 	}
-	if got := strings.Join(SubtitleLookArgs("box", older), " "); !strings.Contains(got, "--sub-border-size=3") || strings.Contains(got, "background-box") {
+	if got := strings.Join(SubtitleLookArgs("box", false, older), " "); !strings.Contains(got, "--sub-border-size=3") || strings.Contains(got, "background-box") {
 		t.Errorf("older mpv, box asked: %s", got)
 	}
-	if got := SubtitleLookArgs("", newer); got != nil {
+	if got := strings.Join(SubtitleLookArgs("yellow-box", true, newer), " "); !strings.Contains(got, "#FFFF00") ||
+		!strings.Contains(got, "background-box") || !strings.Contains(got, "--sub-margin-y=70") {
+		t.Errorf("yellow on a box, raised: %s", got)
+	}
+	if got := SubtitleLookArgs("", false, newer); got != nil {
 		t.Errorf("as made: %v", got)
 	}
 }

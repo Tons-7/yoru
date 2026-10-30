@@ -79,7 +79,7 @@ function RankRow({ rank, anime }: { rank: number; anime: DiscoverItem }) {
     <li>
       <Link
         to={`/anime/${anime.id}`}
-        className="flex items-center gap-2.5 rounded-md p-1.5 transition-colors hover:bg-base-850"
+        className="flex items-center gap-3 rounded-lg p-2 transition-colors hover:bg-base-850"
       >
         <span
           className={cx(
@@ -94,14 +94,14 @@ function RankRow({ rank, anime }: { rank: number; anime: DiscoverItem }) {
             src={anime.thumb ?? anime.cover}
             alt=""
             loading="lazy"
-            className="h-12 w-9 shrink-0 rounded object-cover"
+            className="h-14 w-10 shrink-0 rounded object-cover"
           />
         ) : (
-          <div className="h-12 w-9 shrink-0 rounded bg-base-850" />
+          <div className="h-14 w-10 shrink-0 rounded bg-base-850" />
         )}
         <div className="min-w-0">
-          <p className="line-clamp-2 text-xs leading-snug text-base-200">{anime.title}</p>
-          <p className="mt-0.5 flex items-center gap-1 text-[11px] whitespace-nowrap text-base-500">
+          <p className="line-clamp-2 text-sm leading-snug text-base-100">{anime.title}</p>
+          <p className="mt-1 flex items-center gap-1 text-xs whitespace-nowrap text-base-500">
             {airing && <span className="size-1.5 shrink-0 rounded-full bg-emerald-400" title="Airing" />}
             {[anime.format?.replace('_', ' '), count].filter(Boolean).join(' · ')}
           </p>
@@ -120,6 +120,8 @@ export function ScheduleWidget() {
   const picked = days.findIndex((d) => d.date === selectedDate)
   const shownIndex = picked >= 0 ? picked : todayIndex
   const active = days[shownIndex]
+  const now = useNow() / 1000
+  const next = days.flatMap((d) => d.items).find((item) => item.airingAt > now)
 
   return (
     <Panel title="Schedule" action={<Link to="/schedule" className="text-xs text-base-400 hover:text-accent-400">Full week</Link>}>
@@ -149,28 +151,25 @@ export function ScheduleWidget() {
               </button>
             ))}
           </div>
-          <DayList day={active} />
+          <DayList day={active} next={next} />
         </>
       )}
     </Panel>
   )
 }
 
-function DayList({ day }: { day?: ScheduleDay }) {
+function DayList({ day, next }: { day?: ScheduleDay; next?: ScheduleDay['items'][number] }) {
   const list = useRef<HTMLUListElement>(null)
   const upcoming = useRef<HTMLLIElement>(null)
-
-  // Before the early returns: a hook that only sometimes runs crashes the render the moment the day changes.
   const now = useNow() / 1000
 
-  // Opens on the next episode to air, measured against the list's box (offsetTop is the page's).
+  // Measured against the list's box: offsetTop is the page's.
   useEffect(() => {
     const el = upcoming.current
     const box = list.current
     if (!el || !box) return
     box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top - 8
-    // Keyed on the date rather than the object: the list refetches on a timer,
-    // and rescrolling then would yank the column out from under a reader.
+    // Keyed on the date: the list refetches on a timer, and rescrolling would yank it from a reader.
   }, [day?.date])
 
   if (!day) return null
@@ -178,10 +177,11 @@ function DayList({ day }: { day?: ScheduleDay }) {
     return <p className="py-6 text-center text-xs text-base-500">Nothing airing</p>
   }
 
-  const next = day.items.find((item) => item.airingAt > now)
-
   return (
-    <ul ref={list} className="max-h-96 space-y-1 overflow-y-auto pr-1 scrollbar-thin">
+    <ul
+      ref={list}
+      className="no-scrollbar max-h-96 space-y-1 overflow-y-auto pb-6 [mask-image:linear-gradient(to_bottom,black_calc(100%-2.5rem),transparent)]"
+    >
       {day.items.map((item) => {
         const aired = item.airingAt <= now
         const isNext = item === next
@@ -191,26 +191,24 @@ function DayList({ day }: { day?: ScheduleDay }) {
           <Link
             to={`/anime/${item.animeId}`}
             className={cx(
-              'flex items-center gap-2.5 rounded-md p-1.5 transition-colors hover:bg-base-850',
-              // Set back, still readable: 45% dropped the text to about 2:1.
+              'flex items-center gap-3 rounded-lg p-2 transition-colors hover:bg-base-850',
               aired && 'opacity-70',
-              isNext && 'bg-accent-500/10 ring-1 ring-accent-500/40',
+              isNext && 'bg-accent-500/10 shadow-[inset_2px_0_0_var(--color-accent-400)]',
             )}
           >
-            {/* Small enough for the column, big enough to recognise before the title. */}
             {item.thumb ?? item.cover ? (
               <img
                 src={item.thumb ?? item.cover}
                 alt=""
                 loading="lazy"
-                className="h-10 w-7 shrink-0 rounded object-cover"
+                className="h-12 w-8 shrink-0 rounded object-cover"
               />
             ) : (
-              <div className="h-10 w-7 shrink-0 rounded bg-base-850" />
+              <div className="h-12 w-8 shrink-0 rounded bg-base-850" />
             )}
             <div className="min-w-0 flex-1">
-              <p className="line-clamp-1 text-xs text-base-200">{item.title}</p>
-              <p className="text-[11px] whitespace-nowrap text-base-500">
+              <p className="line-clamp-1 text-sm text-base-100">{item.title}</p>
+              <p className="mt-0.5 text-xs whitespace-nowrap text-base-500">
                 {airTime(item.airingAt)} · Ep {item.episode}
               </p>
             </div>
@@ -237,8 +235,8 @@ function Panel({
   children: React.ReactNode
 }) {
   return (
-    <section className="surface p-3">
-      <div className="mb-2 flex items-baseline justify-between">
+    <section className="surface p-4 sm:p-5">
+      <div className="mb-3 flex items-baseline justify-between">
         <h2 className="section-title">{title}</h2>
         {action}
       </div>

@@ -61,8 +61,11 @@ var Defaults = map[string]string{
 	"subtitle.with_dub": "signs",
 	// Per show only: {"group","delay"}, a subtitle delay kept for that show's releases from one group.
 	"subtitle.delay": "",
-	// How dialogue looks: "" as the file made it, "outline", "yellow" or "box" (signs keep theirs).
-	"subtitle.look": "",
+	// How dialogue looks: "" as the file made it, "outline", "yellow", "box" or "yellow-box" (signs keep theirs).
+	"subtitle.look":  "",
+	"subtitle.raise": "false",
+	"schedule.mine":  "false",
+	"recent.mine":    "false",
 	// Casting: subtitles drawn into the picture (look and signs kept, video re-encoded) over plain text.
 	"cast.burn_subtitles": "false",
 

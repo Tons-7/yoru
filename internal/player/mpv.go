@@ -54,8 +54,9 @@ type Options struct {
 	SubLanguages []string
 	// Sound is what to do to the audio: dialogue lift, night mode, headphones, mono.
 	Sound sound.Options
-	// SubLook is the settings' subtitle look ("", "outline", "yellow", "box"); see SubtitleLookArgs.
-	SubLook string
+	// SubLook is the settings' subtitle look ("", "outline", "yellow", "box", "yellow-box"); see SubtitleLookArgs.
+	SubLook  string
+	SubRaise bool
 	// SoftwareDecode turns off mpv's GPU decoding, which it otherwise uses where it's known safe.
 	SoftwareDecode bool
 	// Deband smooths the banding of flat gradients, which the high-quality profile no longer does.
@@ -66,9 +67,18 @@ type Options struct {
 }
 
 // SubtitleLookArgs: a look for mpv's text subtitles (ASS keeps its own), named as this mpv names its options.
-func SubtitleLookArgs(look string, takes func(option string) bool) []string {
-	if look == "box" && !takes("sub-border-style") {
-		look = "outline"
+func SubtitleLookArgs(look string, raise bool, takes func(option string) bool) []string {
+	var out []string
+	if raise {
+		out = append(out, "--sub-margin-y=70")
+	}
+	if !takes("sub-border-style") {
+		switch look {
+		case "box":
+			look = "outline"
+		case "yellow-box":
+			look = "yellow"
+		}
 	}
 	edge := "border"
 	if takes("sub-outline-color") {
@@ -80,11 +90,15 @@ func SubtitleLookArgs(look string, takes func(option string) bool) []string {
 		if look == "yellow" {
 			color = "#FFFF00"
 		}
-		return []string{"--sub-color=" + color, "--sub-" + edge + "-color=#000000", "--sub-" + edge + "-size=3", "--sub-shadow-offset=1"}
-	case "box":
-		return []string{"--sub-color=#FFFFFF", "--sub-border-style=background-box", "--sub-back-color=#99000000"}
+		return append(out, "--sub-color="+color, "--sub-"+edge+"-color=#000000", "--sub-"+edge+"-size=3", "--sub-shadow-offset=1")
+	case "box", "yellow-box":
+		color := "#FFFFFF"
+		if look == "yellow-box" {
+			color = "#FFFF00"
+		}
+		return append(out, "--sub-color="+color, "--sub-border-style=background-box", "--sub-back-color=#99000000")
 	}
-	return nil
+	return out
 }
 
 // AudioLanguages is mpv's --alang list for a preference, empty when either track will do.
@@ -259,7 +273,7 @@ func (m *MPV) Play(ctx context.Context, opts Options) error {
 		args = append(args, "--slang="+slang)
 	}
 	args = append(args, sound.MPVArgs(opts.Sound)...)
-	args = append(args, SubtitleLookArgs(opts.SubLook, m.takes)...)
+	args = append(args, SubtitleLookArgs(opts.SubLook, opts.SubRaise, m.takes)...)
 	// auto-safe: mpv's own list of GPU decoders that don't break playback; HEVC 10-bit off the CPU.
 	switch {
 	case opts.SoftwareDecode:

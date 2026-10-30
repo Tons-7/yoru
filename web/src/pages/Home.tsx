@@ -45,7 +45,7 @@ export function Home() {
     <div className="space-y-8">
       <Hero items={trending.data?.items} loading={trending.isPending} />
 
-      <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_22rem] xl:gap-10 2xl:grid-cols-[minmax(0,1fr)_24rem]">
         <div className="min-w-0 space-y-8">
           {rows.shown('upnext') && <UpNextRail onEdit={() => setEditing(true)} fold={rows.fold('upnext')} />}
 

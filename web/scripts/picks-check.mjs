@@ -93,7 +93,7 @@ try {
   await page.goto(`${BASE}/settings?tab=Language`, { waitUntil: 'domcontentloaded' })
   const forYouSwitch = page.getByRole('switch', { name: 'For you', exact: true })
   check(await until(() => forYouSwitch.isVisible()), 'Settings lists the rows on Home')
-  check((await page.getByRole('switch', { name: 'Adult titles in For you' }).getAttribute('aria-checked')) === 'false',
+  check((await page.getByRole('switch', { name: 'Adult titles', exact: true }).getAttribute('aria-checked')) === 'false',
     'adult titles in For you are off to begin with')
   await forYouSwitch.click()
   check(await until(async () => (await forYouSwitch.getAttribute('aria-checked')) === 'false'), 'For you switched off')
@@ -151,13 +151,20 @@ try {
     return route.fulfill({ response: res, json: body })
   })
   await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
-  const discuss = page.getByRole('link', { name: 'Discuss episode 1 on MyAnimeList' })
-  check(await until(() => discuss.isVisible()), 'a watched episode has a Discussion button')
+  const moreFor = (n) => page.getByRole('button', { name: `More for episode ${n}`, exact: true })
+  const discuss = page.getByRole('menuitem', { name: 'Discuss on MyAnimeList' })
+  check(await until(() => moreFor(1).isVisible()), 'a watched episode has a More menu')
+  await moreFor(1).click()
+  check(await until(() => discuss.isVisible()), 'with Discuss on MyAnimeList in it')
   check((await discuss.getAttribute('href')) === forum && (await discuss.getAttribute('target')) === '_blank',
     'opening its MyAnimeList thread in a new tab', await discuss.getAttribute('href'))
+  await page.keyboard.press('Escape')
   check(await page.getByText('★ 4.3').first().isVisible(), 'and its score, out of 5')
   check(await page.getByRole('link', { name: /^Episode 1\b.*rated 4\.3 of 5/ }).count() === 1, 'read out with the row')
-  check((await page.getByRole('link', { name: 'Discuss episode 2 on MyAnimeList' }).count()) === 0, 'an unwatched one has neither')
+  await moreFor(2).click()
+  check(await until(() => page.getByRole('menu', { name: 'Episode 2', exact: true }).isVisible()), "an unwatched one's menu opens")
+  check((await discuss.count()) === 0, 'and has no Discussion')
+  await page.keyboard.press('Escape')
   await page.close()
 
   // AniList by pasting a code: Connect opens AniList's page, the code goes back, and a wrong one says why.

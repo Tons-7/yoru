@@ -209,27 +209,6 @@ export function useRoomAbove(anchor: React.RefObject<HTMLElement | null>, open: 
   return open ? room : undefined
 }
 
-/** A switch this browser remembers between visits; private mode keeps it for the page. */
-export function useStoredFlag(key: string): [boolean, (on: boolean) => void] {
-  const [on, setOn] = useState(() => {
-    try {
-      return localStorage.getItem(key) === '1'
-    } catch {
-      return false
-    }
-  })
-  const set = (next: boolean) => {
-    setOn(next)
-    try {
-      if (next) localStorage.setItem(key, '1')
-      else localStorage.removeItem(key)
-    } catch {
-      // Unstorable: it lasts for the page.
-    }
-  }
-  return [on, set]
-}
-
 /** Whether a media query matches now, following it as the window changes. */
 export function useMediaQuery(query: string): boolean {
   // Kept per query: a new subscribe each render would drop and re-add the listener every time.

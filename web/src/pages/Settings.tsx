@@ -38,7 +38,7 @@ import { WhereThingsGo } from '../components/WhereThingsGo'
 import { WaitSelect } from '../components/WaitSelect'
 import { SHOW_SHORTCUTS } from '../components/keys'
 import { install, INSTALL_HELP, useInstall } from '../lib/install'
-import { SUB_LOOKS } from '../player/subLook'
+import { asSubLook, previewStyle, SUB_LOOKS } from '../player/subLook'
 import { ON_MOBILE, QUALITIES, setDeviceQuality, setOnMobile, useNetwork, type OnMobile, type Quality } from '../player/network'
 import { ENCODERS } from '../player/encoders'
 import { SEEN_KEY, useNewSettings } from '../lib/whatsNew'
@@ -728,13 +728,28 @@ function LanguageTab() {
           hint="For dialogue; signs and songs stay as made. Also on a TV, and in mpv for plain-text subtitles."
           keywords="subs captions style colour color outline box yellow readable"
         >
-          <Select value={f.value('subtitle.look')} onChange={(v) => f.set('subtitle.look', v)}>
-            {SUB_LOOKS.map((l) => (
-              <option key={l.value} value={l.value}>
-                {l.label}
-              </option>
-            ))}
-          </Select>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <span
+              aria-hidden
+              className="grid h-9 w-36 place-items-center rounded bg-[linear-gradient(135deg,#384868,#6e5546)] text-xs font-semibold"
+            >
+              <span style={previewStyle(asSubLook(f.value('subtitle.look')))}>Where to next?</span>
+            </span>
+            <Select value={f.value('subtitle.look')} onChange={(v) => f.set('subtitle.look', v)}>
+              {SUB_LOOKS.map((l) => (
+                <option key={l.value} value={l.value}>
+                  {l.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </Row>
+        <Row
+          label="Raise subtitles"
+          hint="Dialogue higher on the screen, clear of text burned into the picture. In mpv, plain-text subtitles only; not on a TV you cast to."
+          keywords="subs position height margin higher"
+        >
+          <Switch on={f.get('subtitle.raise')} onChange={(v) => f.set('subtitle.raise', String(v))} />
         </Row>
         <JimakuKey />
         <Row label="Show titles as" keywords="english romaji names">
@@ -764,7 +779,11 @@ function LanguageTab() {
 
       <Section title="Home">
         <HomeRowsRow f={f} />
-        <Row label="Adult titles in For you" hint="Off, For you never suggests 18+ shows." keywords="adult 18+ nsfw hentai recommendations">
+        <Row
+          label="Adult titles"
+          hint="Off, For you, Schedule and Recent leave out 18+ shows that aren't on your list."
+          keywords="adult 18+ nsfw hentai recommendations schedule recent"
+        >
           <Switch on={f.get('home.adult_picks')} onChange={(v) => f.set('home.adult_picks', String(v))} />
         </Row>
       </Section>

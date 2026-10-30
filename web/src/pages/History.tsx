@@ -2,9 +2,8 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api, beacon } from '../lib/api'
-import { clockTime, cx, groupByDay, relativeTime } from '../lib/format'
+import { clockTime, cx, groupByDay } from '../lib/format'
 import {
-  Badge,
   Button,
   ConfirmInline,
   Empty,
@@ -42,12 +41,9 @@ interface HistoryPage {
   hasMore: boolean
 }
 
-// The show page's resume button reads history too.
 const FORGET_REFRESHES = ['history', 'continue', 'watch-stats', 'episodes', 'anime', 'upnext']
 
-// Outside the page: its toast and Undo stay up after leaving it, so the wait does too.
 const pendingForgets = new Map<string, { timer: number; body: { animeId: number; epKey: string } }>()
-// Closing the tab inside the Undo window still forgets: a beacon outlives the page, a fetch does not.
 window.addEventListener('pagehide', () => {
   for (const [key, { timer, body }] of [...pendingForgets]) {
     window.clearTimeout(timer)
@@ -78,7 +74,6 @@ export function History() {
     },
   })
 
-  // A removed row goes at once but is only forgotten when its Undo runs out.
   const [hidden, setHidden] = useState<Set<string>>(() => new Set())
   const forgetSoon = (entry: HistoryEntry) => {
     const key = `${entry.animeId}-${entry.epKey}`
@@ -109,7 +104,6 @@ export function History() {
   }
   const items = (data?.items ?? []).filter((e) => !hidden.has(`${e.animeId}-${e.epKey}`))
   const goTo = (n: number) => setParams({ page: String(n) })
-  // Removing the last entry of a later page would strand the viewer on an empty "nothing watched".
   useClampPage(data?.items.length === 0, page, data?.total, 40, (n) => setParams({ page: String(n) }, { replace: true }))
 
   return (
@@ -120,7 +114,6 @@ export function History() {
         actions={
           items.length > 0 &&
           (confirmClear ? (
-            // What goes, said before it goes: there is no undo for all of it.
             <ConfirmInline
               note="Also clears resume points and episode ticks; AniList and MAL keep your progress."
               label="Clear everything"
@@ -135,14 +128,13 @@ export function History() {
       />
       <Stats />
 
-      {/* A failed refresh keeps the list it has, as the other pages do. */}
       {isError && data && <RefreshFailed retry={() => refetch()} />}
       {isError && !data ? (
         <ErrorState error={error} retry={() => refetch()} />
       ) : isPending ? (
         <div className="space-y-2">
-          {Array.from({ length: 8 }, (_, i) => (
-            <Skeleton key={i} className="h-20 w-full" />
+          {Array.from({ length: 6 }, (_, i) => (
+            <Skeleton key={i} className="h-28 w-full" />
           ))}
         </div>
       ) : items.length === 0 ? (
@@ -153,18 +145,13 @@ export function History() {
         />
       ) : (
         <>
-          {/* A timeline: when you watched is half of what history means. */}
           <div className="space-y-6">
             {groupByDay(items, (e) => e.lastPlayed).map(([label, group]) => (
               <section key={label}>
                 <h2 className="mb-2 text-xs font-semibold tracking-wider text-base-500 uppercase">{label}</h2>
-                <ul className="space-y-1.5">
-                  {group.map((entry) => (
-                    <Row
-                      key={`${entry.animeId}-${entry.epKey}`}
-                      entry={entry}
-                      onForget={() => forgetSoon(entry)}
-                    />
+                <ul className="space-y-2">
+                  {byShow(group).map((entries) => (
+                    <ShowCard key={entries[0].animeId} entries={entries} onForget={forgetSoon} />
                   ))}
                 </ul>
               </section>
@@ -192,7 +179,6 @@ function hours(seconds: number) {
   return h >= 10 ? `${Math.round(h)} h` : h >= 1 ? `${h.toFixed(1)} h` : `${Math.round(seconds / 60)} min`
 }
 
-// Time actually played, by window, with the last thirty days as a strip.
 function Stats() {
   const { data } = useQuery({
     queryKey: ['watch-stats'],
@@ -208,18 +194,25 @@ function Stats() {
         <Stat label="This week" value={hours(data.weekSeconds)} />
         <Stat label="This month" value={hours(data.monthSeconds)} />
         <Stat label="All time" value={hours(data.totalSeconds)} />
-        <Stat label="Episodes" value={String(data.episodes)} />
-        <Stat label="Completed" value={String(data.completed)} />
+        <Stat label="Episodes finished" value={String(data.episodes)} />
+        <Stat label="Shows completed" value={String(data.completed)} />
       </div>
-      <div className="mt-3 flex h-10 items-end gap-0.5" title="Last 30 days">
-        {data.days.map((d) => (
+      <div className="mt-4 flex h-10 items-end gap-0.5">
+        {data.days.map((d, i) => (
           <div
             key={d.day}
             title={`${d.day}: ${hours(d.seconds)}`}
-            className={cx('flex-1 rounded-sm', d.seconds > 0 ? 'bg-accent-500/70' : 'bg-base-800')}
+            className={cx(
+              'flex-1 rounded-sm',
+              d.seconds === 0 ? 'bg-base-800' : i === data.days.length - 1 ? 'bg-accent-400' : 'bg-accent-500/70',
+            )}
             style={{ height: `${Math.max(8, (d.seconds / peak) * 100)}%` }}
           />
         ))}
+      </div>
+      <div className="mt-1 flex justify-between text-[11px] text-base-600">
+        <span>30 days ago</span>
+        <span>Today</span>
       </div>
     </section>
   )
@@ -234,58 +227,100 @@ function Stat({ label, value }: { label: string; value: string }) {
   )
 }
 
-function Row({ entry, onForget }: { entry: HistoryEntry; onForget: () => void }) {
-  const art = entry.thumb ?? entry.cover
+function byShow(group: HistoryEntry[]) {
+  const shows = new Map<number, HistoryEntry[]>()
+  for (const e of group) {
+    let list = shows.get(e.animeId)
+    if (!list) shows.set(e.animeId, (list = []))
+    list.push(e)
+  }
+  return [...shows.values()]
+}
+
+function ShowCard({ entries, onForget }: { entries: HistoryEntry[]; onForget: (entry: HistoryEntry) => void }) {
+  const latest = entries[0]
+  const art = latest.thumb ?? latest.cover
+  const episodes = [...entries].sort((a, b) => b.episode - a.episode)
 
   return (
-    <li className="group surface flex items-center gap-3 p-2 transition-colors hover:bg-base-850/80">
-      <Link to={`/anime/${entry.animeId}`} className="shrink-0">
+    <li className="surface flex gap-3 p-3">
+      <Link to={`/anime/${latest.animeId}`} tabIndex={-1} aria-hidden className="shrink-0 self-start">
         {art ? (
-          <img src={art} alt="" loading="lazy" className="h-16 w-11 rounded object-cover" />
+          <img src={art} alt="" loading="lazy" className="aspect-[2/3] w-12 rounded-md object-cover sm:w-14" />
         ) : (
-          <div className="h-16 w-11 rounded bg-base-850" />
+          <div className="aspect-[2/3] w-12 rounded-md bg-base-850 sm:w-14" />
         )}
       </Link>
 
       <div className="min-w-0 flex-1">
         <Link
-          to={`/anime/${entry.animeId}`}
-          className="line-clamp-1 text-sm text-base-100 hover:text-white"
+          to={`/anime/${latest.animeId}`}
+          className="line-clamp-2 pt-0.5 text-sm font-medium text-base-100 hover:text-white"
         >
-          {entry.title}
+          {latest.title}
         </Link>
-        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-base-500">
-          <span>Episode {entry.episode}</span>
-          <span>·</span>
-          <span>{relativeTime(entry.lastPlayed)}</span>
-          {entry.playCount > 1 && <Badge>Watched {entry.playCount}×</Badge>}
-          {entry.watched ? (
-            <Badge tone="accent">Finished</Badge>
-          ) : (
-            <span>{clockTime(entry.position)}</span>
-          )}
-          {entry.dismissed && <Badge>Dismissed</Badge>}
-        </div>
-        {!entry.watched && entry.percent > 0 && (
-          <div className="mt-1.5 max-w-xs">
-            <ProgressBar value={entry.percent} />
-          </div>
-        )}
+        <ul className="mt-1">
+          {episodes.map((e) => (
+            <EpisodeLine key={e.epKey} entry={e} onForget={() => onForget(e)} />
+          ))}
+        </ul>
       </div>
+    </li>
+  )
+}
 
-      <LinkButton
+function EpisodeLine({ entry, onForget }: { entry: HistoryEntry; onForget: () => void }) {
+  const left = entry.duration ? entry.duration - entry.position : 0
+
+  return (
+    <li className="flex items-center gap-1 border-t border-base-800/60 first:border-t-0">
+      <Link
         to={`/watch/${entry.animeId}/${entry.episode}`}
-        size="sm"
-        variant={entry.watched ? 'secondary' : 'primary'}
+        className="group/line flex min-h-10 min-w-0 flex-1 items-center gap-2.5 text-xs pointer-coarse:min-h-11"
       >
-        {entry.watched ? 'Watch again' : 'Resume'}
-      </LinkButton>
+        <svg
+          viewBox="0 0 24 24"
+          className={cx(
+            'size-3.5 shrink-0 group-hover/line:text-accent-300',
+            entry.watched ? 'text-base-500' : 'text-accent-400',
+          )}
+          aria-hidden
+        >
+          <path d="M8 5.5v13l11-6.5-11-6.5Z" fill="currentColor" />
+        </svg>
+        <span className="shrink-0 font-medium text-base-200 group-hover/line:text-white">Episode {entry.episode}</span>
+        {entry.watched ? (
+          <span className="flex min-w-0 items-center gap-1 text-emerald-400">
+            <svg viewBox="0 0 24 24" className="size-3.5 shrink-0" aria-hidden>
+              <path d="m5 13 4 4L19 7" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span className="truncate">Finished{entry.playCount > 1 && ` · ${entry.playCount}×`}</span>
+          </span>
+        ) : entry.position > 0 ? (
+          <span className="flex min-w-0 items-center gap-2 text-accent-300">
+            <span className="hidden w-20 shrink-0 sm:block">
+              <ProgressBar value={entry.percent} />
+            </span>
+            <span className="truncate">
+              {left >= 60 ? `Resume · ${Math.round(left / 60)} min left` : `Resume at ${clockTime(entry.position)}`}
+              {entry.dismissed && <span className="text-base-500"> · removed from Continue watching</span>}
+            </span>
+          </span>
+        ) : (
+          <span className="truncate text-base-500">Not started</span>
+        )}
+        <span className="ml-auto shrink-0 text-base-500 tabular-nums">
+          {new Date(entry.lastPlayed * 1000).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+        </span>
+      </Link>
       <button
         onClick={onForget}
-        aria-label="Remove from history"
-        className="tap relative shrink-0 rounded-md px-2 py-1.5 text-base-600 transition-colors hover:bg-base-800 hover:text-base-200"
+        aria-label={`Remove episode ${entry.episode} from history`}
+        className="tap relative grid size-8 shrink-0 place-items-center rounded-md text-base-600 transition-colors hover:bg-base-800 hover:text-base-200"
       >
-        ✕
+        <svg viewBox="0 0 24 24" className="size-3.5" aria-hidden>
+          <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
       </button>
     </li>
   )

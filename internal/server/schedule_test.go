@@ -1,8 +1,14 @@
 package server
 
 import (
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"yoru/internal/config"
 )
 
 // A week is seven distinct weekdays; an eighth would repeat one in a strip keyed on the name.
@@ -106,5 +112,33 @@ func TestMidnightSnapsToLocalDayStart(t *testing.T) {
 	}
 	if got.After(at) {
 		t.Error("midnight must not land in the future")
+	}
+}
+
+func TestScheduleLeavesOutAdultShowsNotOnTheList(t *testing.T) {
+	at := strconv.FormatInt(time.Now().Unix(), 10)
+	entry := func(id int, adult bool) string {
+		n := strconv.Itoa(id)
+		return `{"id":` + n + `,"episode":1,"airingAt":` + at + `,"mediaId":` + n +
+			`,"media":{"id":` + n + `,"isAdult":` + strconv.FormatBool(adult) + `,"title":{"romaji":"Show ` + n + `"}}}`
+	}
+	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), "airingSchedules") {
+			io.WriteString(w, `{"data":{"Page":{"pageInfo":{"hasNextPage":false},"airingSchedules":[`+
+				entry(21, false)+`,`+entry(22, true)+`,`+entry(23, true)+`]}}}`)
+			return
+		}
+		fakeShows(w, body, map[int]string{})
+	})
+	seedList(t, h, map[int][2]any{23: {"CURRENT", 0}})
+
+	code, body := h.call(t, "GET", "/api/schedule?days=1", "")
+	shown := map[int]bool{}
+	for _, it := range body["items"].([]any) {
+		shown[int(it.(map[string]any)["animeId"].(float64))] = true
+	}
+	if code != http.StatusOK || !shown[21] || shown[22] || !shown[23] {
+		t.Fatalf("schedule: %d %v, want 21 and 23 (adult, on the list), never 22", code, shown)
 	}
 }

@@ -94,6 +94,24 @@ func TestAShowBeingWatchedIsFollowedWithoutAsking(t *testing.T) {
 	}
 }
 
+func TestAMutedShowIsOffDespiteAutoDownload(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedAnime(t, s, 2)
+	if err := s.SetAnimePref(ctx, 2, "autodownload.enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ := s.FollowOf(ctx, 2); !f.On {
+		t.Fatal("auto-download alone doesn't alert")
+	}
+	if err := s.SetNotify(ctx, 2, false); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ := s.FollowOf(ctx, 2); f.On {
+		t.Error("a show muted on its page still alerts, by its auto-download")
+	}
+}
+
 func mustFollows(t *testing.T, s *Store) []Follow {
 	t.Helper()
 	out, err := s.Follows(context.Background())

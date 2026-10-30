@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, statusLabel, type Bookmark, type DiscoverItem, type FollowState } from '../lib/api'
-import { bytes, clockTime, cx, readableTint, relativeTime, tint, youtubeID } from '../lib/format'
+import { bytes, clockTime, cx, relativeTime, tint, youtubeID } from '../lib/format'
 import { ControlLabel } from '../lib/ui'
 import {
   refreshDownloads,
@@ -17,6 +17,7 @@ import {
   useNow,
   usePrefs,
   useRecommendations,
+  useSetNotify,
   useSetPref,
   useSetStatus,
   type RelatedEntry,
@@ -121,7 +122,6 @@ const STATUS: Record<string, { label: string; tone: string; live?: boolean }> = 
   CANCELLED: { label: 'Cancelled', tone: 'text-red-300 ring-red-400/40' },
 }
 
-/** The facts under the title, as chips: what, how long, how far along, and how good. */
 function FactChips({ media, delay }: { media: AnimeDetail['anime']; delay?: AnimeDetail['delay'] }) {
   const now = useNow()
   const status = media.status ? STATUS[media.status] : undefined
@@ -134,47 +134,40 @@ function FactChips({ media, delay }: { media: AnimeDetail['anime']; delay?: Anim
         : aired
           ? `${aired} eps`
           : null
-  const chip = 'flex items-center gap-1.5 rounded-lg bg-base-950/60 px-2.5 py-1 ring-1 backdrop-blur-md'
+  const facts = [
+    media.averageScore ? <span key="score" className="text-amber-300">★ {(media.averageScore / 10).toFixed(1)}</span> : null,
+    media.format ? <span key="format">{media.format.replace('_', ' ')}</span> : null,
+    episodes ? <span key="episodes">{episodes}</span> : null,
+    media.duration ? <span key="duration">{media.duration} min</span> : null,
+    status ? (
+      <span key="status" className={cx('flex items-center gap-1.5', status.tone)}>
+        {status.live && <span className="size-1.5 rounded-full bg-emerald-400" />}
+        {status.label}
+      </span>
+    ) : null,
+    media.nextAiringEpisode && media.nextAiringEpisode.airingAt * 1000 > now ? (
+      <span key="next" className="text-emerald-300">
+        Ep {media.nextAiringEpisode.episode} {relativeTime(media.nextAiringEpisode.airingAt)}
+      </span>
+    ) : null,
+    delay ? (
+      <span key="delay" className="text-amber-300" title={`Was due ${new Date(delay.wasAt * 1000).toLocaleString()}`}>
+        Ep {delay.episode} delayed{delay.nowAt ? '' : ' · no new date yet'}
+      </span>
+    ) : null,
+  ].filter(Boolean)
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold">
-      {media.averageScore ? (
-        <span className={cx(chip, 'text-amber-300 ring-amber-400/30')}>★ {(media.averageScore / 10).toFixed(1)}</span>
-      ) : null}
-      {media.format && (
-        <span className={cx(chip, 'text-base-100 uppercase ring-white/10')}>{media.format.replace('_', ' ')}</span>
-      )}
-      {episodes && <span className={cx(chip, 'text-base-100 uppercase ring-white/10')}>{episodes}</span>}
-      {media.duration ? <span className={cx(chip, 'text-base-300 ring-white/10')}>{media.duration} min</span> : null}
-      {status && (
-        <span className={cx(chip, 'uppercase', status.tone)}>
-          {status.live && (
-            <span className="relative flex size-1.5">
-              <span className="absolute inset-0 animate-ping rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative size-1.5 rounded-full bg-emerald-400" />
-            </span>
-          )}
-          {status.label}
-        </span>
-      )}
-      {media.nextAiringEpisode && media.nextAiringEpisode.airingAt * 1000 > now && (
-        <span className={cx(chip, 'text-emerald-300 ring-emerald-400/30')}>
-          Ep {media.nextAiringEpisode.episode} {relativeTime(media.nextAiringEpisode.airingAt)}
-        </span>
-      )}
-      {/* AniList moved it later: said, with when it was due, so a missing episode isn't a mystery. */}
-      {delay && (
-        <span
-          className={cx(chip, 'text-amber-300 ring-amber-400/30')}
-          title={`Was due ${new Date(delay.wasAt * 1000).toLocaleString()}`}
-        >
-          Ep {delay.episode} delayed{delay.nowAt ? '' : ' · no new date yet'}
-        </span>
-      )}
+    <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-base-200">
+      {facts.map((fact, i) => (
+        <Fragment key={(fact as { key?: string }).key ?? i}>
+          {i > 0 && <span aria-hidden className="text-base-600">·</span>}
+          {fact}
+        </Fragment>
+      ))}
     </div>
   )
 }
 
-/** Aired, studio, source: the second things people look for, in one grid. */
 function FactGrid({ media }: { media: AnimeDetail['anime'] }) {
   const start = fuzzy(media.startDate)
   const end = fuzzy(media.endDate)
@@ -394,17 +387,12 @@ export function Anime() {
   return (
     <div className="space-y-8">
       <section
-        className={cx(
-          'tinted relative -mx-4 overflow-visible bg-base-950 sm:mx-0 sm:rounded-xl',
-          // Clipped, or the fixed-height banner hangs over the heading below a short synopsis.
-          banner && 'min-h-[26rem]',
-        )}
+        className={cx('tinted relative -mx-4 -mt-4 overflow-visible bg-base-950 sm:-mx-6', banner && 'min-h-[26rem]')}
         style={colour ? ({ '--tint': tint(colour, 0.22) } as React.CSSProperties) : undefined}
       >
-        {/* Its own fixed-height layer: menus aren't clipped, and the synopsis can't re-crop it. */}
-        {/* The banner, or the cover blurred into one. */}
+        {/* Its own layer, so menus aren't clipped and the synopsis can't re-crop it. */}
         {(banner || cover) && (
-          <div className="absolute inset-x-0 top-0 h-[26rem] overflow-hidden sm:rounded-t-2xl">
+          <div className="absolute inset-x-0 top-0 h-[26rem] overflow-hidden">
             <img
               src={banner ?? cover}
               alt=""
@@ -418,7 +406,7 @@ export function Anime() {
           </div>
         )}
 
-        <div className="relative flex flex-col gap-6 p-4 sm:flex-row sm:p-8 sm:pt-28">
+        <div className="relative mx-auto flex max-w-[1600px] flex-col gap-6 p-4 sm:flex-row sm:p-6 sm:pt-28 lg:px-10">
           {detail.isPending ? (
             <Skeleton className="h-72 w-48 shrink-0 rounded-card" />
           ) : cover ? (
@@ -452,12 +440,7 @@ export function Anime() {
                   <Link
                     key={genre}
                     to={`/browse?genres=${encodeURIComponent(genre)}`}
-                    className="rounded-full px-3 py-1 text-xs font-medium backdrop-blur-sm transition-colors hover:bg-white/10 hover:text-white"
-                    style={{
-                      color: readableTint(colour) ?? 'var(--color-accent-300)',
-                      background: tint(colour, 0.14) ?? 'rgb(111 92 255 / 0.14)',
-                      boxShadow: `inset 0 0 0 1px ${tint(colour, 0.45) ?? 'rgb(139 124 255 / 0.4)'}`,
-                    }}
+                    className="tap relative rounded-md px-2 py-0.5 text-xs font-medium text-base-300 ring-1 ring-white/10 transition-colors hover:bg-white/10 hover:text-white"
                   >
                     {genre}
                   </Link>
@@ -726,17 +709,12 @@ function ShowSubRow({ children }: { children: ReactNode }) {
   return <div className="mt-2.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-l-2 border-base-700 pl-3 text-sm text-base-300">{children}</div>
 }
 
-// New-episode alerts for this show, saying why they're on; and an episode asked for from the player.
 function NotifyMe({ animeId, state }: { animeId: number; state: FollowState }) {
   const qc = useQueryClient()
   const prefs = usePrefs(animeId)
   const update = (next: FollowState) =>
     qc.setQueryData<AnimeDetail>(['anime', animeId], (old) => (old ? { ...old, notify: next } : old))
-  const set = useMutation({
-    meta: { inline: true },
-    mutationFn: (on: boolean) => api.post<FollowState>(`/api/anime/${animeId}/notify`, { on }),
-    onSuccess: update,
-  })
+  const set = useSetNotify(animeId)
   const unwant = useMutation({
     meta: { inline: true },
     mutationFn: () => api.post<FollowState>(`/api/anime/${animeId}/want`, { episode: 0 }),

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Button, Centered, Empty, Spinner } from '../components/ui'
 import { bytes } from '../lib/format'
-import { SUB_LOOKS } from '../player/subLook'
+import { asSubLook } from '../player/subLook'
 import { noteWatched, resumeAt, useSaved, useWatched, type SavedEpisode } from '../lib/offline'
 import { Player } from '../player/Player'
 
@@ -49,6 +49,7 @@ export function SavedWatch({ offline = false }: { offline?: boolean }) {
           subLanguages={look.subLanguages}
           withDub={look.withDub}
           subLook={look.subLook}
+          subRaised={look.subRaised}
           title={e.title}
           subtitle={e.label}
           artwork={e.cover}
@@ -92,7 +93,8 @@ function lookFrom(e: SavedEpisode) {
   return {
     subLanguages,
     withDub: (['signs', 'off', 'same'] as const).find((v) => v === p['subtitle.with_dub']) ?? 'signs',
-    subLook: SUB_LOOKS.find((l) => l.value === p['subtitle.look'])?.value ?? '',
+    subLook: asSubLook(p['subtitle.look']),
+    subRaised: flag('subtitle.raise'),
     autoPlay: flag('playback.autoplay'),
     autoNext: flag('playback.autonext'),
     autoSkip: {

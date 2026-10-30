@@ -193,11 +193,12 @@ function PlayGlyph() {
   )
 }
 
-// A bookmark, filled once kept: the fill carries the state, so the row needs no second word for it.
+// A pin, not a bookmark: the bookmark is Add to list everywhere else. Filled once kept.
 function KeepGlyph({ filled }: { filled: boolean }) {
   return (
     <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
-      <path d="M6 4h12v17l-6-4.5L6 21V4Z" fill={filled ? 'currentColor' : 'none'} {...stroke} />
+      <path d="M9 3.5h6l-1 6 3.5 3.5v1.5h-11V13L10 9.5l-1-6Z" fill={filled ? 'currentColor' : 'none'} {...stroke} />
+      <path d="M12 14.5V21" fill="none" {...stroke} />
     </svg>
   )
 }

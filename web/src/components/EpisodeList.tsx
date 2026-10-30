@@ -18,9 +18,9 @@ import {
 import { isUnaired } from '../lib/episodes'
 import { cannotSave, saveEpisodes } from '../lib/offline'
 import { Badge, ConfirmInline, inputClass, TextInput } from './ui'
-import { ListCheckGlyph, ListPlusGlyph } from './UpNext'
+import { MoreMenu, type MoreItem } from './MoreMenu'
 import { useInUpNext } from '../lib/upnext'
-import { reveal, useRevealed } from '../lib/spoilers'
+import { conceal, reveal, useRevealed } from '../lib/spoilers'
 import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 
 const PAGE_SIZE = 50
@@ -184,17 +184,16 @@ export function EpisodeList({
   const at = Math.min(page, Math.max(0, pages - 1))
   const paged = pages > 1 ? filtered.slice(at * PAGE_SIZE, (at + 1) * PAGE_SIZE) : filtered
 
-  // Open on the page holding the episode being watched, once per episode (a refetch would undo manual
-  // paging), set during render so the first paint is already that page.
-  const [placedFor, setPlacedFor] = useState<number>()
-  if (current && placedFor !== current) {
-    const index = filtered.findIndex((e) => e.number === current)
+  const [placedFor, setPlacedFor] = useState<string>()
+  const place = current ?? upNext
+  const placeKey = current != null ? `${animeId} playing ${current}` : `${animeId} next`
+  if (place && placedFor !== placeKey) {
+    const index = filtered.findIndex((e) => e.number === place)
     if (index >= 0) {
-      setPlacedFor(current)
+      setPlacedFor(placeKey)
       setPage(Math.floor(index / PAGE_SIZE))
     }
   }
-  // A new search or filter starts at its first page, from the change itself rather than an effect after it.
   const search = (value: string) => {
     setTerm(value)
     setPage(0)
@@ -564,30 +563,22 @@ function EpisodeRow({
   animeId: number
   episode: Episode
   watched: boolean
-  /** On the Up next list; onUpNext adds or takes it off. */
   listed: boolean
   onUpNext: () => void
-  /** Not out yet, by the list's clock. */
   unaired: boolean
-  /** Ticking this one also marks every episode from here. */
   marksFrom?: number
-  /** Unticking this one also unwatches every episode up to this one. */
   unmarksTo?: number
   active: boolean
   upNext?: boolean
   compact?: boolean
   cover?: string | null
   selected?: boolean
-  /** In select mode a row toggles instead of opening the player. */
   onToggle?: () => void
-  /** Already in the queue or arriving, so not offered again. */
   queued?: boolean
-  /** The queue gave up on it; Download tries again. */
   failed?: boolean
 }) {
   const row = useRef<HTMLLIElement>(null)
 
-  // Bring the watched episode into view by scrolling the list, not scrollIntoView (which drags the page).
   useEffect(() => {
     if (!active || !compact) return
 
@@ -595,8 +586,6 @@ function EpisodeRow({
       const el = row.current
       const list = el?.closest('ul')
       if (!el || !list) return
-      // Relative to the list's box: offsetTop is from the nearest positioned
-      // ancestor (the page here), so scrolling by that lands at the bottom.
       const delta = el.getBoundingClientRect().top - list.getBoundingClientRect().top
       list.scrollTop += delta - list.clientHeight / 2 + el.clientHeight / 2
     })
@@ -604,31 +593,38 @@ function EpisodeRow({
   }, [active, compact])
 
   const number = episode.display || episode.number
-  // The one playing is never hidden: it's on screen anyway.
   const isRevealed = useRevealed()
   const hidden = !!episode.spoiler && !active && !isRevealed(animeId, episode.number)
-  // The number is on the thumbnail already; saying the title is hidden explains the blur.
   const title = hidden ? 'Title hidden' : episode.titleEn || episode.titleJa || `Episode ${number}`
-  // The server's rule, not the tick: a watched episode wound back is watched and resumable.
   const resumeAt = episode.resumable && typeof episode.position === 'number' && !unaired ? episode.position : undefined
   const played =
     resumeAt !== undefined && episode.duration ? Math.min(100, (resumeAt / episode.duration) * 100) : watched ? 100 : 0
 
   const qc = useQueryClient()
+  const fetch = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post<{ queued: boolean }>('/api/download', { animeId, episode: number }),
+    onSuccess: () => refreshDownloads(qc),
+  })
+  const resetFetch = fetch.reset
+  const wasQueued = useRef(queued)
+  useEffect(() => {
+    if (failed || (wasQueued.current && !queued)) resetFetch()
+    wasQueued.current = queued
+  }, [failed, queued, resetFetch])
+  const isQueued = (fetch.isSuccess && !failed) || queued
+  const canDownload = !unaired && !episode.onDisk && !episode.local
+
   const [confirming, setConfirming] = useState(false)
   const mark = useMutation({
     mutationFn: (next: boolean) =>
       api.post('/api/watched', { animeId, episode: episode.number, watched: next }),
-    // Settled, not success: a failure may still have changed something.
     onSettled: () => {
       setConfirming(false)
-      // Franchise too: marking the last one completes the show.
       refreshListState(qc)
     },
   })
 
-  // Always the same box, still or not: a recent episode often has none for
-  // days, and dropping the image reflows every row. Cover stands in, dimmed.
   const thumb = (
     <div
       className={cx(
@@ -644,9 +640,7 @@ function EpisodeRow({
           className={cx(
             'size-full object-cover transition-[transform,filter] duration-300 group-hover/ep:scale-105',
             !episode.still && 'opacity-30 blur-[1px]',
-            // Scaled up so the blur's soft edge stays inside the box.
             hidden && episode.still && 'scale-125 blur-xl',
-            // Watched and not the one playing: set back, not hidden.
             watched && !active && 'brightness-[0.55] saturate-50',
           )}
         />
@@ -654,13 +648,6 @@ function EpisodeRow({
       <span className="absolute top-1 left-1 rounded-md bg-base-950/80 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white tabular-nums backdrop-blur-sm">
         {compact ? number : `EP ${number}`}
       </span>
-      {watched && !active && (
-        <span className="absolute inset-0 grid place-items-center">
-          <span className="grid size-7 place-items-center rounded-full bg-accent-500/90 text-white shadow-lg">
-            <WatchedTick />
-          </span>
-        </span>
-      )}
       {!unaired && !onToggle && (
         <span className="absolute inset-0 grid place-items-center bg-base-950/40 opacity-0 transition-opacity duration-200 group-hover/ep:opacity-100">
           <span className="grid size-9 place-items-center rounded-full bg-white/95 text-base-950 shadow-lg">
@@ -701,7 +688,6 @@ function EpisodeRow({
       {!compact && episode.overview && (hidden ? (
         <p className="mt-1 hidden text-xs text-base-600 sm:block">Title and synopsis hidden to avoid spoilers</p>
       ) : (
-        // Not on a phone: squeezed beside the still it came out as a few words.
         <p className="mt-1 line-clamp-2 hidden text-xs leading-relaxed text-base-500 sm:block">{episode.overview}</p>
       ))}
       <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-base-500">
@@ -725,15 +711,17 @@ function EpisodeRow({
                 <DiskGlyph />
                 {compact ? <span className="sr-only">On disk</span> : 'Downloaded'}
               </span>
-            ) : (
-              episode.local && (
-                <span className="flex items-center gap-1 text-emerald-300" title="In one of your library folders">
-                  <DiskGlyph />
-                  {compact ? <span className="sr-only">In your library</span> : 'In your library'}
-                </span>
-              )
-            )}
-            {/* Nothing found: a number from the count, not an episode known to exist. */}
+            ) : episode.local ? (
+              <span className="flex items-center gap-1 text-emerald-300" title="In one of your library folders">
+                <DiskGlyph />
+                {compact ? <span className="sr-only">In your library</span> : 'In your library'}
+              </span>
+            ) : isQueued ? (
+              <span className="flex items-center gap-1 text-base-300">
+                <QueuedGlyph />
+                {compact ? <span className="sr-only">Queued for download</span> : 'Queued for download'}
+              </span>
+            ) : null}
             {episode.planned && !episode.onDisk && !episode.local && <Badge>Expected</Badge>}
           </>
         )}
@@ -742,19 +730,16 @@ function EpisodeRow({
     </div>
   )
 
-  // The row's link names the episode, so it says what the badges and dimming show too.
   const stateWords = [
     active ? 'playing' : upNext ? 'next' : '',
     watched ? 'watched' : '',
     resumeAt !== undefined ? `resume at ${clockTime(resumeAt)}` : '',
-    episode.onDisk ? 'downloaded' : episode.local ? 'in your library' : '',
+    episode.onDisk ? 'downloaded' : episode.local ? 'in your library' : isQueued ? 'queued for download' : '',
     listed ? 'in Up next' : '',
     episode.score ? `rated ${episode.score.toFixed(1)} of 5` : '',
   ].filter(Boolean)
 
-  // A tick reaching past this episode, either way, asks first: auto-delete and the trackers follow it.
   const spans = watched ? unmarksTo !== undefined : marksFrom !== undefined
-  // So does one that deletes the file at once ("right after watching"), which unticking doesn't bring back.
   const prefs = usePrefs()
   const deletes = !watched && !!episode.onDisk && prefs.data?.effective['cache.autodelete'] === 'now'
   const tickLabel = watched
@@ -765,7 +750,6 @@ function EpisodeRow({
       ? `Mark ${marksFrom} to ${number} watched`
       : 'Mark watched'
 
-  // Outside the link, or the tick opens the player. A failed tick says so in words, with the same press again.
   const tick =
     !unaired &&
     !onToggle &&
@@ -774,7 +758,6 @@ function EpisodeRow({
         what="Couldn't mark"
         why={(mark.error as Error).message}
         pending={mark.isPending}
-        // The same ask again: the refresh after a failure can flip watched, and !watched would undo it.
         onRetry={() => mark.mutate(mark.variables ?? !watched)}
       />
     ) : confirming ? (
@@ -806,99 +789,41 @@ function EpisodeRow({
           'tap relative grid size-8 shrink-0 place-items-center rounded-full transition-colors',
           watched
             ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
-            : 'text-base-500 ring-1 ring-base-700 hover:bg-base-800 hover:text-base-100',
+            : 'text-base-400 hover:bg-base-800 hover:text-base-100',
         )}
       >
         <WatchedTick />
       </button>
     ))
 
-  // One click to queue this episode, beside the tick; the select mode is for many at once.
-  const fetch = useMutation({
-    meta: { inline: true },
-    mutationFn: () => api.post<{ queued: boolean }>('/api/download', { animeId, episode: number }),
-    onSuccess: () => refreshDownloads(qc),
-  })
-  // A click that queued it, until the queue answers: it failed, or its entry, once there, has gone.
-  const resetFetch = fetch.reset
-  const wasQueued = useRef(queued)
-  useEffect(() => {
-    if (failed || (wasQueued.current && !queued)) resetFetch()
-    wasQueued.current = queued
-  }, [failed, queued, resetFetch])
-  const isQueued = (fetch.isSuccess && !failed) || queued
-  const download =
-    !unaired &&
-    !onToggle &&
-    !episode.onDisk &&
-    !episode.local &&
-    (fetch.isError ? (
-      <RetryButton
-        what="Couldn't queue"
-        why={(fetch.error as Error).message}
-        pending={fetch.isPending}
-        onRetry={() => fetch.mutate()}
-      />
-    ) : (
-      <button
-        type="button"
-        onClick={() => fetch.mutate()}
-        disabled={fetch.isPending || isQueued}
-        aria-label={isQueued ? `Episode ${number} queued` : `Download episode ${number}`}
-        title={isQueued ? 'Queued' : 'Download'}
-        className={cx(
-          'tap relative grid size-8 shrink-0 place-items-center rounded-full transition-colors',
-          isQueued ? 'text-emerald-300' : 'text-base-500 ring-1 ring-base-700 hover:bg-base-800 hover:text-base-100',
-        )}
-      >
-        {isQueued ? <QueuedGlyph /> : <DownloadArrow />}
-      </button>
-    ))
-
-  // Not in the player's narrow list, where a fourth button squeezes titles away; the show page has room.
-  const showSpoiler = hidden && !onToggle && !compact && (
-    <button
-      type="button"
-      onClick={() => reveal(animeId, episode.number)}
-      aria-label={`Show episode ${number}'s title and synopsis`}
-      title="Show title and synopsis"
-      className="tap relative grid size-8 shrink-0 place-items-center rounded-full text-base-500 ring-1 ring-base-700 transition-colors hover:bg-base-800 hover:text-base-100"
-    >
-      <EyeGlyph />
-    </button>
+  const queueFailed = fetch.isError && !onToggle && (
+    <RetryButton
+      what="Couldn't queue"
+      why={(fetch.error as Error).message}
+      pending={fetch.isPending}
+      onRetry={() => fetch.mutate()}
+    />
   )
 
-  // Watched rows only, so it takes the place the spoiler eye has on unwatched ones.
-  const discuss = episode.forumUrl && !onToggle && !compact && (
-    <a
-      href={episode.forumUrl}
-      target="_blank"
-      rel="noreferrer"
-      aria-label={`Discuss episode ${number} on MyAnimeList`}
-      title="Discussion on MyAnimeList"
-      className="tap relative grid size-8 shrink-0 place-items-center rounded-full text-base-500 ring-1 ring-base-700 transition-colors hover:bg-base-800 hover:text-base-100"
-    >
-      <TalkGlyph />
-    </a>
-  )
-
-  const queueUp = !unaired && !onToggle && (
-    <button
-      type="button"
-      onClick={onUpNext}
-      aria-pressed={listed}
-      aria-label={listed ? `Remove episode ${number} from Up next` : `Add episode ${number} to Up next`}
-      title={listed ? 'In Up next' : 'Add to Up next'}
-      // 32 px drawn, 44 px to a finger: three of these beside the title leave it room on a phone.
-      className={cx(
-        'tap relative grid size-8 shrink-0 place-items-center rounded-full transition-colors',
-        listed
-          ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
-          : 'text-base-500 ring-1 ring-base-700 hover:bg-base-800 hover:text-base-100',
-      )}
-    >
-      {listed ? <ListCheckGlyph /> : <ListPlusGlyph />}
-    </button>
+  const options: (MoreItem | false)[] = onToggle
+    ? []
+    : [
+        !unaired && { label: listed ? 'Remove from Up next' : 'Add to Up next', run: onUpNext },
+        canDownload && {
+          label: isQueued ? 'Queued for download' : fetch.isPending ? 'Queuing…' : 'Download',
+          run: () => fetch.mutate(),
+          disabled: fetch.isPending || isQueued,
+        },
+        !!episode.spoiler &&
+          !active && {
+            label: hidden ? 'Show title and synopsis' : 'Hide title and synopsis',
+            run: () => (hidden ? reveal : conceal)(animeId, episode.number),
+          },
+        !!episode.forumUrl && { label: 'Discuss on MyAnimeList', href: episode.forumUrl },
+      ]
+  const more = options.filter((item): item is MoreItem => !!item)
+  const menu = more.length > 0 && (
+    <MoreMenu label={`More for episode ${number}`} menuLabel={`Episode ${number}`} items={more} />
   )
 
   const shell = cx(
@@ -919,7 +844,7 @@ function EpisodeRow({
         <div className={cx(shell, 'cursor-default opacity-75')}>
           {thumb}
           {text}
-          {showSpoiler}
+          {menu}
         </div>
       ) : onToggle ? (
         <button
@@ -951,18 +876,15 @@ function EpisodeRow({
             {thumb}
             {text}
           </Link>
-          {showSpoiler}
-          {discuss}
-          {queueUp}
-          {download}
+          {queueFailed}
           {tick}
+          {menu}
         </div>
       )}
     </li>
   )
 }
 
-/** A failed row action in words, with Retry; the server's reason on hover and for a screen reader. */
 function RetryButton({ what, why, pending, onRetry }: { what: string; why: string; pending: boolean; onRetry: () => void }) {
   return (
     <span role="alert" className="flex shrink-0 items-center gap-1 text-xs text-recap" title={why}>
@@ -980,27 +902,11 @@ function RetryButton({ what, why, pending, onRetry }: { what: string; why: strin
   )
 }
 
-function DownloadArrow() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
-      <path
-        d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-
-// A clock: queued is waiting, unlike the tick beside it, which means watched.
 function QueuedGlyph() {
   return (
-    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
-      <circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="2" />
-      <path d="M12 8v4l2.5 2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" className="size-3" aria-hidden>
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2.6" />
+      <path d="M12 7.5v4.5l3 2" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" />
     </svg>
   )
 }
@@ -1024,36 +930,6 @@ function PlayGlyph() {
   return (
     <svg viewBox="0 0 24 24" className="size-4 translate-x-px" aria-hidden>
       <path d="M8 5.5v13l11-6.5-11-6.5Z" fill="currentColor" />
-    </svg>
-  )
-}
-
-// A filled check, a state: the arrow beside it on the next row is the Download action.
-function TalkGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
-      <path
-        d="M4.5 5.5h15v10h-8l-4.5 3.5v-3.5h-2.5Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-
-function EyeGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
-      <path
-        d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
-      <circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" strokeWidth="1.8" />
     </svg>
   )
 }

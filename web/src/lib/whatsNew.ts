@@ -19,7 +19,8 @@ export const NEW_SETTINGS: NewSetting[] = [
   { label: 'Streaming quality', since: '2026.10.25' },
   { label: 'Pair a device', since: '2026.10.28' },
   { label: 'Rows on Home', since: '2026.10.29' },
-  { label: 'Adult titles in For you', since: '2026.10.29' },
+  { label: 'Adult titles', since: '2026.10.29' },
+  { label: 'Raise subtitles', since: '2026.10.30.1' },
 ]
 
 // What works differently, with no setting of its own to show.
@@ -37,6 +38,8 @@ export const CHANGES: Change[] = [
     now: 'played as they are wherever the device decodes them',
     since: '2026.10.25',
   },
+  { what: 'Only my list, on Schedule and Recent', before: 'kept by each browser', now: 'the same on every device', since: '2026.10.30.1' },
+  { what: 'Adult titles', before: 'left out of For you only', now: 'left out of For you, Schedule and Recent', since: '2026.10.30.1' },
 ]
 
 /** a is a later version than b: 2026.10.24.1 after 2026.10.24, numbers compared, not text. */

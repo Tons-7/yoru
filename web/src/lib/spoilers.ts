@@ -1,15 +1,23 @@
 import { useSyncExternalStore } from 'react'
 
-// Episodes tapped open despite the spoiler rule, until the page reloads: one tap, not a setting.
 let revealed = new Set<string>()
 const listeners = new Set<() => void>()
 
-export function reveal(animeId: number, episode: number) {
-  revealed = new Set(revealed).add(`${animeId}-${episode}`)
+function publish(next: Set<string>) {
+  revealed = next
   for (const l of listeners) l()
 }
 
-/** Whether an episode the server flagged as a spoiler was opened by hand. */
+export function reveal(animeId: number, episode: number) {
+  publish(new Set(revealed).add(`${animeId}-${episode}`))
+}
+
+export function conceal(animeId: number, episode: number) {
+  const next = new Set(revealed)
+  next.delete(`${animeId}-${episode}`)
+  publish(next)
+}
+
 export function useRevealed(): (animeId: number, episode: number) => boolean {
   const set = useSyncExternalStore(
     (l) => {

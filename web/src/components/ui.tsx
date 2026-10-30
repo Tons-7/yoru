@@ -494,7 +494,15 @@ export function Select({
   )
 }
 
-/** An on/off that takes effect at once, named by its row as a select is. */
+export function LabelledSwitch({ label, on, onChange }: { label: string; on: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <label className="flex cursor-pointer items-center gap-2.5 text-sm text-base-200 pointer-coarse:min-h-11">
+      {label}
+      <Switch on={on} onChange={onChange} aria-label={label} />
+    </label>
+  )
+}
+
 export function Switch({
   on,
   onChange,

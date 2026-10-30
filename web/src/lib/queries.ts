@@ -12,6 +12,7 @@ import {
   query,
   type DiscoverItem,
   type Episode,
+  type FollowState,
   type LibraryItem,
   type ListStatus,
   type Page,
@@ -55,12 +56,41 @@ export function useDiscover(sort: string, perPage = 24) {
   })
 }
 
-export function useSchedule(days = 7, mine = false) {
+export function useSetNotify(animeId: number) {
+  const qc = useQueryClient()
+  type Week = { days: ScheduleDay[]; items: ScheduleItem[] }
+  const mark = (on: boolean) => (item: ScheduleItem) => (item.animeId === animeId ? { ...item, alerts: on } : item)
+  return useMutation({
+    meta: { inline: true },
+    mutationFn: (on: boolean) => api.post<FollowState>(`/api/anime/${animeId}/notify`, { on }),
+    onMutate: async (on) => {
+      await qc.cancelQueries({ queryKey: ['schedule'] })
+      const before = qc.getQueriesData<Week>({ queryKey: ['schedule'] })
+      qc.setQueriesData<Week>({ queryKey: ['schedule'] }, (old) =>
+        old && { ...old, items: old.items.map(mark(on)), days: old.days.map((d) => ({ ...d, items: d.items.map(mark(on)) })) },
+      )
+      return { before }
+    },
+    onError: (_error, _on, context) => {
+      for (const [key, data] of context?.before ?? []) qc.setQueryData(key, data)
+    },
+    onSuccess: (state) => qc.setQueryData<{ notify?: FollowState }>(['anime', animeId], (old) => (old ? { ...old, notify: state } : old)),
+    onSettled: () => void qc.invalidateQueries({ queryKey: ['schedule'] }),
+  })
+}
+
+export function useSchedule(days = 7, mine = false, back = 0, enabled = true) {
   return useQuery({
-    queryKey: ['schedule', days, mine],
+    enabled,
+    queryKey: ['schedule', days, mine, back],
     queryFn: () =>
       api.get<{ days: ScheduleDay[]; items: ScheduleItem[] }>(
-        `/api/schedule${query({ tz: tzOffset(), days, mine: mine || undefined })}`,
+        `/api/schedule${query({
+          tz: tzOffset(),
+          days: days + back,
+          mine: mine || undefined,
+          start: back ? Math.floor(Date.now() / 1000) - back * 86_400 : undefined,
+        })}`,
       ),
     staleTime: 5 * 60_000,
     // Which episode is next changes with the clock, not with any user action.
@@ -424,6 +454,18 @@ export function useSpeedUnit(): SpeedUnit {
   return usePrefs().data?.effective['display.speed'] === 'mbs' ? 'mbs' : 'mbps'
 }
 
+export function usePrefFlag(key: string): [boolean, (on: boolean) => void, boolean] {
+  const prefs = usePrefs()
+  const setPref = useSetPref()
+  const settling = setPref.variables?.key === key && (setPref.isPending || (setPref.isSuccess && prefs.isFetching))
+  const on = settling ? setPref.variables?.value === 'true' : prefs.data?.effective[key] === 'true'
+  return [on, (next) => setPref.mutate({ key, value: String(next) }), !prefs.isPending]
+}
+
+export function useAlertsOff() {
+  return usePrefs().data?.effective['notify.enabled'] === 'false'
+}
+
 export function useSetPref() {
   const qc = useQueryClient()
   return useMutation({
@@ -437,6 +479,10 @@ export function useSetPref() {
       }
       void qc.invalidateQueries({ queryKey: ['prefs'] })
       void qc.invalidateQueries({ queryKey: ['settings'] })
+      if (v.key === 'home.adult_picks' || v.key === 'notify.enabled') {
+        void qc.invalidateQueries({ queryKey: ['schedule'] })
+        void qc.invalidateQueries({ queryKey: ['aired'] })
+      }
     },
   })
 }

@@ -233,6 +233,7 @@ export interface ScheduleItem {
   colour?: string
   format?: string
   onList: boolean
+  alerts: boolean
   progress: number
   behind: number
   watched: boolean

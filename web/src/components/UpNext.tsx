@@ -3,11 +3,12 @@ import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import type { UpNextItem } from '../lib/api'
 import { clockTime, cx } from '../lib/format'
-import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
+import { useDismiss, useModalFocus } from '../lib/hooks'
 import { useUpNext, useUpNextEdit } from '../lib/queries'
 import { toast } from '../lib/toast'
 import { buttonClass } from '../lib/ui'
 import { upNextSummary, useInUpNext } from '../lib/upnext'
+import { MoreMenu } from './MoreMenu'
 import { Rail, RailItem } from './Rail'
 import { ConfirmInline, ProgressBar } from './ui'
 
@@ -83,7 +84,6 @@ export function UpNextRail({ onEdit, fold }: { onEdit: () => void; fold?: { fold
 
 function UpNextCard({ item, place }: { item: UpNextItem; place: number }) {
   const { add, remove } = useUpNextEdit()
-  // At once, with an Undo: the ✕ beside it on Continue watching asks, and this one used to just go.
   const drop = () => {
     const v = { animeId: item.animeId, episode: item.episode }
     remove.mutate(v, {
@@ -105,13 +105,13 @@ function UpNextCard({ item, place }: { item: UpNextItem; place: number }) {
         disabled={remove.isPending}
         aria-label={`Remove ${item.title} episode ${item.episode} from Up next`}
         title="Remove from Up next"
-        className="tap absolute top-1.5 right-1.5 z-10 grid size-7 place-items-center rounded-md bg-base-950/80 text-base-300 ring-1 ring-white/10 backdrop-blur-sm transition-colors hover:bg-base-800 hover:text-white"
+        className="tap absolute top-1.5 right-1.5 z-10 grid size-7 place-items-center rounded-full bg-base-950/55 text-white/90 backdrop-blur-sm transition-colors hover:bg-base-950/80 hover:text-white"
       >
         <CrossGlyph />
       </button>
 
-      <Link to={watch} aria-label={`Play ${item.title} episode ${item.episode}`} className="block">
-        <div className="relative aspect-video overflow-hidden rounded-card bg-base-850 ring-1 ring-base-800">
+      <Link to={watch} aria-label={`Play ${item.title} episode ${item.episode}`} title={`Number ${place} in Up next`} className="block">
+        <div className="relative aspect-video overflow-hidden rounded-card bg-base-850">
           {item.cover && (
             <img
               src={item.cover}
@@ -120,25 +120,14 @@ function UpNextCard({ item, place }: { item: UpNextItem; place: number }) {
               className="size-full object-cover object-center transition-transform duration-300 group-hover/upnext:scale-105"
             />
           )}
-          <div className="absolute inset-0 bg-gradient-to-t from-base-950 via-base-950/30 to-transparent" />
-          <span className="absolute top-2 left-2 flex gap-1">
-            <span className="grid h-5 min-w-5 place-items-center rounded-md bg-accent-500 px-1 text-[11px] font-bold text-white tabular-nums">
-              {place}
-            </span>
-            <span className="rounded-md bg-base-950/80 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white backdrop-blur-sm">
-              EP {item.episode}
-            </span>
+          <span className="absolute top-2 left-2 rounded-md bg-base-950/70 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white backdrop-blur-sm">
+            EP {item.episode}
           </span>
-          <div className="absolute inset-x-0 bottom-0 p-2.5">
-            <p className="mb-1.5 text-[11px] font-medium text-base-200">
-              {started
-                ? `${clockTime(Math.max(0, item.duration! - item.position!))} left`
-                : item.minutes
-                  ? `${item.minutes} min`
-                  : ''}
-            </p>
-            {percent > 0 && <ProgressBar value={percent} className="h-1.5 bg-white/15" />}
-          </div>
+          {percent > 0 && (
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-base-950/80 to-transparent p-2 pt-5">
+              <ProgressBar value={percent} className="bg-white/15" />
+            </div>
+          )}
         </div>
       </Link>
 
@@ -146,8 +135,13 @@ function UpNextCard({ item, place }: { item: UpNextItem; place: number }) {
         <p className="line-clamp-1 text-sm leading-snug text-base-200 transition-colors hover:text-white">{item.title}</p>
       </Link>
       <p className="mt-0.5 line-clamp-1 text-xs text-base-500">
-        Episode {item.episode}
-        {item.episodeTitle && !item.spoiler ? ` · ${item.episodeTitle}` : ''}
+        {[
+          `Episode ${item.episode}`,
+          started ? `${clockTime(Math.max(0, item.duration! - item.position!))} left` : item.minutes ? `${item.minutes} min` : null,
+          item.episodeTitle && !item.spoiler ? item.episodeTitle : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
       </p>
     </div>
   )
@@ -431,7 +425,6 @@ function ShowRow({
   )
 }
 
-/** One "…" per show: the moves a drag makes, for remotes, keyboards and anyone who can't drag. */
 function RowMenu({
   title,
   first,
@@ -449,76 +442,18 @@ function RowMenu({
   onDown: () => void
   onRemove: () => void
 }) {
-  const [open, setOpen] = useState(false)
-  const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close, open)
-  const trigger = useRef<HTMLButtonElement>(null)
-  const box = useAnchorBox(trigger, open)
-
-  const items = [
-    { label: 'Move to top', run: onTop, disabled: first },
-    { label: 'Move up', run: onUp, disabled: first },
-    { label: 'Move down', run: onDown, disabled: last },
-    { label: 'Remove', run: onRemove, disabled: false },
-  ]
-
   return (
-    <div ref={ref} className="relative shrink-0">
-      <button
-        ref={trigger}
-        type="button"
-        data-focus="menu"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={`More for ${title}`}
-        onClick={() => setOpen((v) => !v)}
-        className="tap relative grid size-7 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white"
-      >
-        <MoreGlyph />
-      </button>
-      {open &&
-        box &&
-        createPortal(
-          <div
-            role="menu"
-            data-portal-menu
-            aria-label={`${title} in Up next`}
-            onKeyDown={(e) => {
-              if (e.key !== 'Escape') return
-              // Only the menu: the sheet around it stays, Esc's close request included.
-              e.preventDefault()
-              e.stopPropagation()
-              setOpen(false)
-              trigger.current?.focus()
-            }}
-            style={{
-              top: Math.min(box.bottom + 6, window.innerHeight - 196),
-              left: Math.max(8, Math.min(box.right - 176, window.innerWidth - 184)),
-            }}
-            className="fixed z-[60] w-44 animate-rise rounded-xl border border-base-750 bg-base-850 p-1 shadow-panel"
-          >
-            {items.map((item, i) => (
-              <button
-                key={item.label}
-                role="menuitem"
-                autoFocus={i === items.findIndex((x) => !x.disabled)}
-                disabled={item.disabled}
-                onClick={() => {
-                  setOpen(false)
-                  item.run()
-                }}
-                className={cx(
-                  'flex min-h-10 w-full items-center rounded-lg px-2.5 text-left text-sm transition-colors disabled:opacity-40',
-                  item.label === 'Remove' ? 'text-red-300 hover:bg-red-500/10' : 'text-base-200 hover:bg-base-800',
-                )}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>,
-          document.body,
-        )}
-    </div>
+    <MoreMenu
+      label={`More for ${title}`}
+      menuLabel={`${title} in Up next`}
+      className="size-7 rounded-md"
+      items={[
+        { label: 'Move to top', run: onTop, disabled: first },
+        { label: 'Move up', run: onUp, disabled: first },
+        { label: 'Move down', run: onDown, disabled: last },
+        { label: 'Remove', run: onRemove, danger: true },
+      ]}
+    />
   )
 }
 
@@ -537,7 +472,7 @@ export function ListPlusGlyph({ className = 'size-4' }: { className?: string }) 
 }
 
 /** The list with a tick: this episode is on it. */
-export function ListCheckGlyph({ className = 'size-4' }: { className?: string }) {
+function ListCheckGlyph({ className = 'size-4' }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden>
       <path
@@ -569,16 +504,6 @@ function GripGlyph() {
           <circle cx="15" cy={y} r="1.6" />
         </g>
       ))}
-    </svg>
-  )
-}
-
-function MoreGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" fill="currentColor" aria-hidden>
-      <circle cx="5" cy="12" r="1.8" />
-      <circle cx="12" cy="12" r="1.8" />
-      <circle cx="19" cy="12" r="1.8" />
     </svg>
   )
 }

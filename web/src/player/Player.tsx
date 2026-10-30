@@ -56,7 +56,7 @@ import { useNativeCaptions } from './captions'
 import { QUALITIES, setDeviceQuality, useNetwork } from './network'
 import { ENCODERS } from './encoders'
 import { readSubtitleFile } from './ownSubs'
-import { castStyle, SUB_LOOKS, subLookLabel, type SubLook } from './subLook'
+import { castStyle, previewStyle, SUB_LOOKS, subLookLabel, type SubLook } from './subLook'
 
 // An iPhone has no element fullscreen, only the video's own.
 function toggleFullscreen(shell: HTMLElement | null, video: HTMLVideoElement | null) {
@@ -205,6 +205,8 @@ export interface PlayerProps {
   /** How dialogue is drawn, from settings; onSubLook changes it there. */
   subLook?: SubLook
   onSubLook?: (look: SubLook) => void
+  subRaised?: boolean
+  onSubRaised?: (raised: boolean) => void
   /** A subtitle delay kept for this show's releases from the playing one's group. */
   keptDelay?: number
   /** Keeps a delay for the rest of the show; absent when the release names no group. */
@@ -262,6 +264,8 @@ export function Player({
   onKeepDelay,
   subLook: lookPreset = '',
   onSubLook,
+  subRaised = false,
+  onSubRaised,
   upscale,
   sound,
   title,
@@ -546,7 +550,10 @@ export function Player({
   }, [extraTracks])
   useEffect(() => () => blobs.current.forEach((url) => URL.revokeObjectURL(url)), [])
   // Picture in picture moves the player to another document, so the subtitle canvas is rebuilt there.
-  const subLook = useMemo(() => ({ scale: subScale, delay: subDelay, preset: lookPreset }), [subScale, subDelay, lookPreset])
+  const subLook = useMemo(
+    () => ({ scale: subScale, delay: subDelay, preset: lookPreset, raised: subRaised }),
+    [subScale, subDelay, lookPreset, subRaised],
+  )
   const subtitlesReady = useSubtitles(video, subtitleStream, track, fonts, pip.active, subLook, (problem) =>
     showNotice(problem, 6000),
   )
@@ -1677,7 +1684,7 @@ export function Player({
                 onDelay={setSubDelay}
                 keptDelay={keptDelay}
                 onKeepDelay={onKeepDelay}
-                look={onSubLook && { value: lookPreset, onChange: onSubLook }}
+                look={onSubLook && { value: lookPreset, onChange: onSubLook, raised: subRaised, onRaised: onSubRaised }}
                 onLoadFile={(file) => void loadOwnFile(file)}
                 jimaku={
                   jimakuSet && !saved
@@ -2105,7 +2112,7 @@ function SubtitlePicker({
   keptDelay?: number
   /** Keeps the delay for the rest of the show, from the same group; absent when nothing can say the group. */
   onKeepDelay?: (delay: number) => void
-  look?: { value: SubLook; onChange: (look: SubLook) => void }
+  look?: { value: SubLook; onChange: (look: SubLook) => void; raised?: boolean; onRaised?: (raised: boolean) => void }
   onLoadFile: (file: File) => void
   /** Jimaku's files for this episode, offered once a key is set. */
   jimaku?: { streamId: string; onPick: (file: JimakuFile) => void }
@@ -2242,11 +2249,29 @@ function SubtitlePicker({
               {look && !active?.pictures && (
                 <>
                   <p className="px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wider text-base-500 uppercase">Look</p>
+                  <div
+                    aria-hidden
+                    className="mx-3 mb-1 flex h-14 items-end justify-center rounded bg-[linear-gradient(135deg,#384868,#6e5546)] pb-2 text-sm font-semibold"
+                    style={look.raised ? { paddingBottom: '1.4rem' } : undefined}
+                  >
+                    <span style={previewStyle(look.value)}>Where to next?</span>
+                  </div>
                   {SUB_LOOKS.map((l) => (
                     <MenuRow key={l.value} selected={look.value === l.value} onClick={() => look.onChange(l.value)}>
                       {l.label}
                     </MenuRow>
                   ))}
+                  {look.onRaised && (
+                    <>
+                      <p className="px-3 pt-2 pb-1 text-[10px] font-semibold tracking-wider text-base-500 uppercase">Height</p>
+                      <MenuRow selected={!look.raised} onClick={() => look.onRaised?.(false)}>
+                        Normal
+                      </MenuRow>
+                      <MenuRow selected={!!look.raised} onClick={() => look.onRaised?.(true)}>
+                        Raised, above burned-in text
+                      </MenuRow>
+                    </>
+                  )}
                 </>
               )}
             </div>

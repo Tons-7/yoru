@@ -1,12 +1,11 @@
 import { useState } from 'react'
-import { useStoredFlag } from '../lib/hooks'
-import { useAired, useNow } from '../lib/queries'
+import { useAired, useNow, usePrefFlag } from '../lib/queries'
 import { groupByDay } from '../lib/format'
 import { ReleasedCard } from '../components/ReleasedCard'
 import {
   Empty,
   ErrorState,
-  FilterToggle,
+  LabelledSwitch,
   PageHeader,
   RefreshFailed,
   Segmented,
@@ -22,7 +21,7 @@ const WINDOWS = [
 /** What just came out, newest first: episodes ready now, where the schedule says when things air. */
 export function RecentPage() {
   const [hours, setHours] = useState<string>('72')
-  const [mine, setMine] = useStoredFlag('yoru.recent.mine')
+  const [mine, setMine] = usePrefFlag('recent.mine')
 
   const now = useNow() / 1000
   const { data, isPending, isError, error, refetch } = useAired(Number(hours))
@@ -42,9 +41,7 @@ export function RecentPage() {
         actions={
           <>
             <Segmented options={WINDOWS} value={hours} onChange={setHours} />
-            <FilterToggle on={mine} onChange={setMine}>
-              Only my list
-            </FilterToggle>
+            <LabelledSwitch label="Only my list" on={mine} onChange={setMine} />
           </>
         }
       />

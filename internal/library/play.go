@@ -1138,6 +1138,7 @@ func (p *Playback) launch(ctx context.Context, req PlayRequest, s *Session) erro
 		Boost: prefs.String("playback.boost"),
 	}
 	opts.SubLook = prefs.String("subtitle.look")
+	opts.SubRaise = prefs.Bool("subtitle.raise")
 	opts.SoftwareDecode = !prefs.Bool("playback.mpv_hwdec")
 	opts.Deband = prefs.Bool("playback.mpv_deband")
 	opts.Soften = prefs.Bool("playback.soften_flashing")

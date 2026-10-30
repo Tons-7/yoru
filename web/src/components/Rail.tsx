@@ -106,7 +106,7 @@ export function Rail({
           {more && (
             <Link
               to={more.to}
-              className="tap relative flex items-center gap-1 rounded-full bg-base-900 px-3 py-1 text-xs font-semibold text-base-300 ring-1 ring-white/[0.07] transition-colors hover:bg-base-800 hover:text-white"
+              className="tap relative flex items-center gap-1 px-1 py-1 text-sm font-medium text-base-400 transition-colors hover:text-white"
             >
               {more.label ?? 'See all'}
               <svg viewBox="0 0 24 24" className="size-3.5" aria-hidden>
@@ -179,7 +179,7 @@ function ArrowButton({
       aria-label={direction === 1 ? 'Scroll right' : 'Scroll left'}
       // Always there once a rail can scroll: appearing on hover left a hole
       // beside "See all" and made the row look broken until you moved onto it.
-      className="grid size-8 place-items-center rounded-full bg-base-850/80 text-base-300 shadow-card backdrop-blur-sm transition-colors hover:bg-base-750 hover:text-white disabled:pointer-events-none disabled:opacity-30"
+      className="grid size-8 place-items-center rounded-md text-base-400 ring-1 ring-white/[0.08] transition-colors hover:bg-base-850 hover:text-white disabled:pointer-events-none disabled:opacity-30"
     >
       <svg viewBox="0 0 24 24" className={cx('size-4', direction === -1 && 'rotate-180')} aria-hidden>
         <path

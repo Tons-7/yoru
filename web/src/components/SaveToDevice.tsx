@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { cannotSave, saveEpisodes, savedKey, useSaved, type SaveStatus } from '../lib/offline'
 import { useAccess } from '../lib/queries'
+import type { ButtonVariant } from '../lib/ui'
 import { Button, LinkButton } from './ui'
 
 function saveWords(s?: SaveStatus): string {
@@ -18,20 +19,30 @@ function saveWords(s?: SaveStatus): string {
   }
 }
 
-export function SaveToDevice({ animeId, episode }: { animeId: number; episode: number }) {
+export function SaveToDevice({ animeId, episode, variant }: { animeId: number; episode: number; variant?: ButtonVariant }) {
   const access = useAccess()
   const navigate = useNavigate()
   const { saved, jobs, status } = useSaved()
   if (!access.data || access.data.host) return null
   const key = savedKey(animeId, episode)
-  if (saved.some((e) => e.key === key)) return <LinkButton to="/saved">On this device</LinkButton>
+  if (saved.some((e) => e.key === key)) {
+    return (
+      <LinkButton to="/saved" variant={variant}>
+        On this device
+      </LinkButton>
+    )
+  }
   if (jobs.some((j) => savedKey(j.animeId, j.episode) === key)) {
-    return <LinkButton to="/saved">{saveWords(status.get(key))}</LinkButton>
+    return (
+      <LinkButton to="/saved" variant={variant}>
+        {saveWords(status.get(key))}
+      </LinkButton>
+    )
   }
   return (
     <Button
+      variant={variant}
       onClick={() => {
-        // That page says what's missing.
         if (cannotSave()) navigate('/saved')
         else saveEpisodes([{ animeId, episode }])
       }}
