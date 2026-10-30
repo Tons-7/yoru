@@ -105,7 +105,7 @@ const played = () => page.waitForResponse((r) => r.url().endsWith('/api/play') &
 
 // 1. The series page readies the first episode: one search, nothing in the engine.
 await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
-const watch = page.getByRole('link', { name: /^Watch episode 1/ })
+const watch = page.getByRole('link', { name: /^Play Ep 1\b/ })
 check(await until(() => watch.isVisible(), 60_000), 'the series page offers episode 1')
 check(await until(() => prepared.includes(1)), 'and asks for it to be readied')
 check(await until(async () => (await searches()) > 0, 60_000), 'which searches the site')
@@ -130,8 +130,8 @@ await page.goto('about:blank')
 await sleep(1500)
 for (let i = 0; i < 2; i++) await post('/api/progress', { animeId: ANIME, episode: 1, position: 179, duration: 180, played: 100 })
 await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
-const cont = page.getByRole('link', { name: /^Continue episode 2/ })
-const offered = () => page.getByRole('link', { name: /episode \d/ }).first().textContent().catch(() => '?')
+const cont = page.getByRole('link', { name: /^Play Ep 2\b/ })
+const offered = () => page.getByRole('link', { name: /Ep \d/ }).first().textContent().catch(() => '?')
 check(await until(() => cont.isVisible(), 60_000), 'the series page offers Continue with episode 2', await offered())
 check(await until(() => prepared.includes(2)), 'and asks for it to be readied')
 await sleep(3000)
@@ -148,8 +148,7 @@ check((await downloads()).length === 3, 'still one download per episode', String
 
 // 4. Next in the player: the same, by the other route.
 await page.mouse.move(640, 400)
-// The player's control; the up-next card offers one too.
-const next = page.getByRole('button', { name: 'Next episode' }).first()
+const next = page.getByRole('button', { name: /^Next: Episode/ }).first()
 check(await until(() => next.isVisible()), 'the player offers the next episode')
 session = played()
 await next.click()

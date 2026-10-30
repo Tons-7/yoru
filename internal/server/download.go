@@ -10,6 +10,7 @@ import (
 
 	"yoru/internal/disk"
 	"yoru/internal/library"
+	"yoru/internal/parse"
 )
 
 // detached scopes work outliving its request: a download must survive the tab moving on.
@@ -286,6 +287,10 @@ func (s *Server) downloads(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.fail(w, "downloads", err)
 		return
+	}
+	for i := range items {
+		rel := parse.Parse(items[i].Name)
+		items[i].Group, items[i].Resolution, items[i].Codec = rel.Group, rel.Resolution, rel.Codec
 	}
 
 	// bytes_on_disk is full length from the start, so percentages come from the engine.

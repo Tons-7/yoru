@@ -1212,8 +1212,9 @@ func (p *Playback) skipRanges(ctx context.Context, req PlayRequest, source strin
 // autoSkip is what skips by itself, as in the browser: a first opening and a finale's ending kept if asked.
 func (p *Playback) autoSkip(ctx context.Context, req PlayRequest, prefs store.Prefs) player.AutoSkip {
 	a := player.AutoSkip{
-		Opening: prefs.Bool("playback.autoskip_op"), Ending: prefs.Bool("playback.autoskip_ed"),
-		Recap: prefs.Bool("playback.autoskip_recap"), Preview: prefs.Bool("playback.autoskip_preview"),
+		Opening: prefs.SkipMode("playback.autoskip_op") == store.SkipAuto,
+		Ending:  prefs.SkipMode("playback.autoskip_ed") == store.SkipAuto,
+		Recap:   prefs.Bool("playback.autoskip_recap"), Preview: prefs.Bool("playback.autoskip_preview"),
 	}
 	if prefs.Bool("playback.skip_keep_bookends") {
 		total, _ := p.store.EpisodeCount(ctx, req.AnimeID)

@@ -72,12 +72,19 @@ const open = async (episode, at) => {
   }, at)
   await sleep(2500)
 }
-const subtitlesButton = page.getByRole('button', { name: /^Subtitles: / })
-const menu = page.getByRole('menu', { name: 'Subtitles' })
+const subtitlesButton = page.getByRole('region', { name: 'Video player' }).getByRole('button', { name: 'Audio & subtitles' })
+const menu = page.getByRole('dialog', { name: 'Audio & subtitles' })
+const trackGroup = menu.getByRole('radiogroup', { name: 'Subtitle track' })
 const openMenu = async () => {
+  if (await menu.isVisible()) return
   await page.mouse.move(640, 400)
   await subtitlesButton.click()
   await menu.waitFor({ timeout: 3000 })
+}
+const closeMenu = async () => {
+  if (!(await menu.isVisible())) return
+  await menu.getByRole('button', { name: 'Done', exact: true }).click()
+  await menu.waitFor({ state: 'hidden', timeout: 3000 })
 }
 
 // ---------------------------------------------------------------- a file from this device, and the look
@@ -87,12 +94,14 @@ const middle = (text) =>
   `[Script Info]\nScriptType: v4.00+\nPlayResX: 1280\nPlayResY: 720\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,60,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:03:00.00,Default,,0,0,0,,${text}\n`
 const turnOff = async () => {
   await openMenu()
-  await menu.getByRole('menuitemradio', { name: 'Off' }).click()
+  await trackGroup.getByRole('radio', { name: 'Off', exact: true }).click()
+  await closeMenu()
   await sleep(1000)
   return count(TEXT)
 }
 await page.goto(`${BASE}/settings?tab=Language`, { waitUntil: 'domcontentloaded' })
-await page.getByRole('combobox', { name: 'Subtitle look' }).selectOption({ label: 'Yellow, outlined' })
+await page.getByRole('combobox', { name: 'Subtitle look' }).click()
+await page.getByRole('option', { name: 'Yellow, outlined', exact: true }).click()
 check(await until(async () => (await api('/api/prefs')).effective?.['subtitle.look'] === 'yellow'), 'Settings sets the subtitle look')
 await open(1, 13)
 const off = await turnOff()
@@ -104,24 +113,25 @@ await page.locator('input[type=file][accept*=".srt"]').setInputFiles({
   buffer: Buffer.from('1\n00:00:00,000 --> 00:03:00,000\n<i>A line</i> from this device, long enough to see\n'),
 })
 // A file with no line Yoru can read is refused, so the .srt taken is one converted.
-check(await until(async () => /Subtitles: mine\.srt/.test((await subtitlesButton.getAttribute('aria-label')) ?? '')), 'a loaded .srt becomes the track')
+check(await until(() => trackGroup.getByRole('radio', { name: 'mine.srt', checked: true }).isVisible()), 'a loaded .srt becomes the track')
 await openMenu()
 await page.locator('input[type=file][accept*=".srt"]').setInputFiles({
   name: 'mine.ass',
   mimeType: 'text/plain',
   buffer: Buffer.from(middle('MY OWN FILE MY OWN FILE')),
 })
+await closeMenu()
 // The outline hides some of the pattern's own yellow bar, so the look is judged against the line as made.
 check(await until(async () => Math.abs((await count(YELLOW)) - offYellow) > 500), 'a loaded .ass is drawn')
 await sleep(1500)
 const yellow = await count(YELLOW)
 await page.screenshot({ path: `${SHOTS}/subtitles-own-file.png` })
 await openMenu()
-await menu.getByRole('menuitemradio', { name: 'As made' }).click()
-check(await until(async () => (await api('/api/prefs')).effective?.['subtitle.look'] === ''), "the player's menu sets the look too")
+await menu.getByRole('radiogroup', { name: 'Subtitle look' }).getByRole('radio', { name: 'As made' }).click()
+check(await until(async () => (await api('/api/prefs')).effective?.['subtitle.look'] === ''), "the player's panel sets the look too")
+await closeMenu()
 check(await until(async () => (await count(TEXT)) > off + 1000 && (await count(YELLOW)) < yellow - 600),
   'yellow as set, white again as made', `${off} → ${await count(TEXT)} white; ${yellow} → ${await count(YELLOW)} yellow pixels`)
-await page.keyboard.press('Escape')
 
 // ---------------------------------------------------------------- Jimaku, its site stood in for
 const jimakuASS = middle('JIMAKU LINE JIMAKU LINE')
@@ -135,21 +145,25 @@ await open(1, 13)
 const none = await turnOff()
 await openMenu()
 check(await until(() => menu.getByText('Jimaku · Japanese').isVisible()), 'with a key, the menu lists Jimaku')
-await menu.getByRole('menuitemradio', { name: 'Show - 01.ja.ass' }).click()
-check(await until(async () => /Jimaku · Show - 01\.ja\.ass/.test((await subtitlesButton.getAttribute('aria-label')) ?? '')),
-  'a Jimaku file becomes the track', await subtitlesButton.getAttribute('aria-label'))
+await menu.getByRole('radiogroup', { name: 'Jimaku subtitles' }).getByRole('radio', { name: 'Show - 01.ja.ass' }).click()
+const picked = () => trackGroup.getByRole('radio', { checked: true }).innerText({ timeout: 1000 }).catch(() => '')
+check(await until(() => trackGroup.getByRole('radio', { name: 'Jimaku · Show - 01.ja.ass', checked: true }).isVisible()),
+  'a Jimaku file becomes the track', await picked())
+await closeMenu()
 check(await until(async () => (await count(TEXT)) > none + 1000), 'and is drawn', `${none} → ${await count(TEXT)}`)
 await page.unroute('**/api/jimaku')
 
 // ---------------------------------------------------------------- PGS pictures
 if (pictures) {
   await open(4, 30)
-  const label = (await subtitlesButton.getAttribute('aria-label')) ?? ''
-  check(/^Subtitles: (?!off)/.test(label), 'a PGS track is picked like any other', label)
+  await openMenu()
+  check(await until(async () => /^(?!Off\b)\S/.test(await picked())), 'a PGS track is picked like any other', await picked())
+  await closeMenu()
   check(await until(async () => (await count(WHITE)) > 6000, 20_000), 'its picture, the white box, is drawn over the video', String(await count(WHITE)))
   await page.screenshot({ path: `${SHOTS}/subtitles-pgs.png` })
   await openMenu()
-  await menu.getByRole('menuitemradio', { name: 'Off' }).click()
+  await trackGroup.getByRole('radio', { name: 'Off', exact: true }).click()
+  await closeMenu()
   check(await until(async () => (await count(WHITE)) < 3000), 'and off, it goes', String(await count(WHITE)))
 }
 

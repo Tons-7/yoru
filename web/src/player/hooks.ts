@@ -898,14 +898,12 @@ function wanted(kind: SkipName | undefined, on: AutoSkip): boolean {
   }
 }
 
-/** What was just jumped over, offered back for a moment; byHand: Skip was pressed, so no "Watch it". */
 export type Skipped = { range: SkipRange; at: number; byHand?: boolean }
 
 // A tap this soon after the offer shows is the second half of a double tap on Skip, in the same place.
 export const SKIPPED_GUARD = 500
 
-// How long "Watch it" stays: long enough to reach for, short enough not to sit over the picture.
-const SKIPPED_FOR = 3000
+const SKIPPED_FOR = 5000
 
 // Each range skips once: seeking back into one is deliberate. onKept hears of a skip left standing (no
 // "Watch it", no "Wrong skip") once its moment has passed.

@@ -47,21 +47,27 @@ if (pick) {
 }
 
 await page.goto(`${BASE}/browse?q=${encodeURIComponent('Chainsaw Man')}`, { waitUntil: 'domcontentloaded' })
-const card = page.locator(`a[href="/anime/${ANIME}"]`).first()
-check(await until(() => card.isVisible()), 'the card is on the browse page')
-// Forced: the info panel the hover opens covers the card, which Playwright reads as interception.
-await card.hover({ force: true })
+const row = page.locator(`a[href="/anime/${ANIME}"]`).first()
+check(await until(() => row.isVisible()), 'the show is in the search results')
+check(await until(async () => /Completed/.test(await row.innerText())), 'its row says it is completed',
+  (await row.innerText().catch(() => '')).replace(/\s+/g, ' '))
 
-const tag = page.locator(`:below(a[href="/anime/${ANIME}"])`)
-const bookmark = page
-  .locator('div')
-  .filter({ has: page.locator(`a[href="/anime/${ANIME}"]`) })
-  .getByRole('button', { name: /Listed as|Add to list/ })
-  .first()
-check(await until(() => bookmark.isVisible()), 'the bookmark shows on hover')
-const label = await bookmark.getAttribute('aria-label')
-check(label === 'Listed as Completed', 'the bookmark says it is already completed', String(label))
-void tag
+if (pick) {
+  await page.goto(`${BASE}/browse?sort=trending`, { waitUntil: 'domcontentloaded' })
+  const card = page.locator(`a[href="/anime/${pick.id}"]`).first()
+  check(await until(() => card.isVisible()), 'a listed show is on the browse grid')
+  await card.hover({ force: true })
+  const bookmark = page
+    .locator(
+      `xpath=//a[@href="/anime/${pick.id}"]/ancestor::div[.//button[starts-with(@aria-label,"Listed as") or @aria-label="Add to list"]][1]`,
+    )
+    .first()
+    .getByRole('button', { name: /Listed as|Add to list/ })
+    .first()
+  check(await until(() => bookmark.isVisible()), 'the bookmark shows on hover')
+  const label = await bookmark.getAttribute('aria-label')
+  check(label === 'Listed as On hold', 'the bookmark says which list it is on', String(label))
+}
 
 // A show with no announced total: the card measures against what has aired.
 const lib = await (await fetch(`${BASE}/api/library?status=&perPage=50`)).json()
@@ -71,7 +77,7 @@ if (ongoing) {
   const row = page.locator('div').filter({ has: page.locator(`a[href="/anime/${ongoing.id}"]`) }).first()
   check(await until(() => row.isVisible()), 'the ongoing show is in the library')
   const text = (await row.innerText()).replace(/\s+/g, ' ')
-  check(/\d+ aired/.test(text), 'its card counts what has aired', text.slice(0, 80))
+  check(/Ep [\d,]+ next|Not started · [\d,]+ eps|left/.test(text), 'its card says where you are against what has aired', text.slice(0, 80))
 } else {
   console.log('note  no show without an episode total in this library; skipped that half')
 }

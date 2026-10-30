@@ -56,7 +56,7 @@ check(!before.paused && before.width > 0, 'playing in the page', JSON.stringify(
 // The player's own button, as a viewer would: the mouse wakes the hidden controls first.
 await page.mouse.move(700, 400)
 await page.mouse.move(720, 420)
-await page.getByRole('button', { name: 'Fullscreen' }).click()
+await page.getByRole('button', { name: 'Full screen', exact: true }).click()
 await page.waitForTimeout(2000)
 const inside = await report()
 check(inside.fullscreen, 'fullscreen entered', JSON.stringify(inside))

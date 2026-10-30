@@ -57,7 +57,7 @@ const choose = async (label, option) => {
 
 await page.goto(`${BASE}/browse`, { waitUntil: 'domcontentloaded' })
 check(await until(() => cards.count().then((n) => n > 5), 60_000), 'Browse lists anime before any filter')
-check(await page.getByText('No filters', { exact: false }).isVisible(), 'and says nothing narrows it')
+check((await page.getByRole('button', { name: /^Remove / }).count()) === 0, 'and nothing narrows it')
 
 // Two genres at once: both sent, and the count shrinks.
 await choose('Genre', 'romance')

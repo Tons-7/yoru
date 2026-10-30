@@ -49,10 +49,12 @@ const closing =page.locator('[data-row]', { has: page.getByText('When the window
 if (process.platform === 'win32') {
   check(await until(() => closing.isVisible(), 15_000), 'Playback says what closing the window does')
   check(await closing.getByText('Yoru exits').isVisible(), 'by default Yoru exits with it')
-  await closing.getByRole('combobox').selectOption('tray')
+  await closing.getByRole('combobox').click()
+  await page.getByRole('option', { name: 'Keep running in the tray', exact: true }).click()
   check(await until(async () => (await prefs())['window.on_close'] === 'tray'), 'keeping it in the tray is saved')
   check(await until(() => closing.getByText(/tray icon opens or exits it/).isVisible()), 'and says where Yoru then is')
-  await closing.getByRole('combobox').selectOption('exit')
+  await closing.getByRole('combobox').click()
+  await page.getByRole('option', { name: 'Exit Yoru', exact: true }).click()
   check(await until(async () => (await prefs())['window.on_close'] === 'exit'), 'back to exiting')
 } else {
   check(!(await closing.isVisible()), 'no tray choice where there is no tray')

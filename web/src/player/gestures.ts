@@ -9,7 +9,6 @@ export interface Gestures {
   scrub: (seconds: number, done: boolean) => void
   /** Two fingers spread (true) or pinched (false), once per touch. */
   pinch: (spread: boolean) => void
-  /** In fullscreen, a long drag down (true) or up (false). */
   swipe: (down: boolean) => void
 }
 
@@ -22,7 +21,7 @@ const SWIPE = 70
 type Kind = 'none' | 'hold' | 'scrub' | 'pinch' | 'swipe' | 'over'
 
 /** The picture's pointer handlers; used() says the touch that just ended was a gesture, not a tap. */
-export function useTouchGestures(g: Gestures, opts: { fullscreen: boolean; secondsAcross: number }) {
+export function useTouchGestures(g: Gestures, opts: { swipes: boolean; secondsAcross: number }) {
   const points = useRef(new Map<number, { x0: number; y0: number; x: number; y: number }>())
   const kind = useRef<Kind>('none')
   const spent = useRef(false)
@@ -98,7 +97,7 @@ export function useTouchGestures(g: Gestures, opts: { fullscreen: boolean; secon
         window.clearTimeout(timer.current)
         kind.current = 'scrub'
         spent.current = true
-      } else if (o.fullscreen && Math.abs(dy) > SLOP && Math.abs(dy) > Math.abs(dx) * 1.5) {
+      } else if (o.swipes && Math.abs(dy) > SLOP && Math.abs(dy) > Math.abs(dx) * 1.5) {
         window.clearTimeout(timer.current)
         kind.current = 'swipe'
         spent.current = true

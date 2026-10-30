@@ -1,22 +1,34 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
+import { Fragment, useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode, type Ref } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, statusLabel, type Bookmark, type DiscoverItem, type FollowState } from '../lib/api'
-import { bytes, clockTime, cx, relativeTime, tint, youtubeID } from '../lib/format'
+import {
+  api,
+  LIST_STATUSES,
+  statusLabel,
+  type Bookmark,
+  type DiscoverItem,
+  type Episode,
+  type FollowState,
+  type ListStatus,
+} from '../lib/api'
+import { bytes, clockTime, cx, relativeTime, youtubeID } from '../lib/format'
 import { ControlLabel } from '../lib/ui'
+import { cannotSave, saveEpisodes } from '../lib/offline'
 import {
   refreshDownloads,
+  useAccess,
+  useAlertsOff,
   useAnimeExtra,
+  useBetterCopies,
   useDownloadQueue,
   useDownloads,
-  useBetterCopies,
   useDriveRoom,
   useEpisodes,
   useFranchise,
   useNow,
   usePrefs,
   useRecommendations,
+  useRemoveStatus,
   useSetNotify,
   useSetPref,
   useSetStatus,
@@ -24,13 +36,15 @@ import {
   type Season,
 } from '../lib/queries'
 import { CharacterRail } from '../components/CharacterRail'
-import { ShowExtra } from '../components/ShowExtra'
+import { ShowCredits } from '../components/ShowCredits'
 import { EpisodeList } from '../components/EpisodeList'
 import { isUnaired } from '../lib/episodes'
 import { PlayIcon, PosterCard } from '../components/PosterCard'
 import { toCard } from '../lib/cards'
 import { Rail, RailItem } from '../components/Rail'
-import { StatusMenu } from '../components/StatusMenu'
+import { PopSheet } from '../components/PopSheet'
+import { SeasonSwitch } from '../components/SeasonSwitch'
+import { Sheet } from '../components/Sheet'
 import { WaitSelect } from '../components/WaitSelect'
 import { BetterCopyOffer } from '../components/BetterCopy'
 import { TrailerOverlay } from '../components/TrailerOverlay'
@@ -46,9 +60,8 @@ import {
   Switch,
   TextInput,
 } from '../components/ui'
-import { useAnchorBox, useDismiss, useDocumentTitle, useModalFocus } from '../lib/hooks'
+import { useDocumentTitle, useMediaQuery } from '../lib/hooks'
 
-/** AniList and Jikan describe an anime differently; only the overlap is used. */
 interface AnimeDetail {
   id: number
   source: 'anilist' | 'myanimelist' | 'corpus'
@@ -57,45 +70,39 @@ interface AnimeDetail {
   listStatus?: string
   progress?: number
   episodeCount?: number
-  /** Finished rewatches, what the trackers show as "rewatched N times". */
   repeat?: number
-  /** 0-100, the trackers' raw scale; 0 is unrated. */
   score?: number
   bookmark?: Bookmark
-  /** An episode left part way, which beats the tracker's count for "continue". */
   resume?: { episode: number; position: number; duration: number }
-  /** Which trackers hold this title at all. The catalogues do not fully overlap. */
   sync?: { anilist: boolean; mal: boolean }
-  /** An unaired episode AniList moved later: when it was due, and when it airs (null for no date). */
   delay?: { episode: number; wasAt: number; nowAt: number | null }
-  /** Whether new episodes alert, and why; an episode to download when it's out. */
   notify?: FollowState
   malId?: number
-  anime: {
-    trailer?: { id?: string; site?: string } | null
-    title?: { romaji?: string; english?: string; native?: string }
-    description?: string
-    coverImage?: { extraLarge?: string; color?: string }
-    bannerImage?: string
-    episodes?: number
-    format?: string
-    status?: string
-    genres?: string[]
-    averageScore?: number
-    season?: string
-    seasonYear?: number
-    // AniList carries ids (linkable to Browse); Jikan only names.
-    studios?: { nodes?: { id: number; name: string }[] } | string[]
-    source?: string
-    duration?: number
-    startDate?: FuzzyDate
-    endDate?: FuzzyDate
-    nextAiringEpisode?: { episode: number; airingAt: number } | null
-    // Jikan shape
-    romaji?: string
-    cover?: string
-    Description?: string
-  }
+  anime: Media
+}
+
+interface Media {
+  trailer?: { id?: string; site?: string } | null
+  title?: { romaji?: string; english?: string; native?: string }
+  description?: string
+  coverImage?: { extraLarge?: string; color?: string }
+  bannerImage?: string
+  episodes?: number
+  format?: string
+  status?: string
+  genres?: string[]
+  averageScore?: number
+  season?: string
+  seasonYear?: number
+  studios?: { nodes?: { id: number; name: string }[] } | string[]
+  source?: string
+  duration?: number
+  startDate?: FuzzyDate
+  endDate?: FuzzyDate
+  nextAiringEpisode?: { episode: number; airingAt: number } | null
+  romaji?: string
+  cover?: string
+  Description?: string
 }
 
 interface FuzzyDate {
@@ -103,6 +110,13 @@ interface FuzzyDate {
   month?: number | null
   day?: number | null
 }
+
+type Lead =
+  | { kind: 'play'; label: string; done?: number }
+  | { kind: 'rewatch' }
+  | { kind: 'wait'; label: string }
+
+const DAY = 86_400_000
 
 function fuzzy(d?: FuzzyDate): string | null {
   if (!d?.year) return null
@@ -114,107 +128,94 @@ function fuzzy(d?: FuzzyDate): string | null {
   })
 }
 
-const STATUS: Record<string, { label: string; tone: string; live?: boolean }> = {
-  RELEASING: { label: 'Airing', tone: 'text-emerald-300 ring-emerald-400/40', live: true },
-  FINISHED: { label: 'Finished', tone: 'text-base-200 ring-white/15' },
-  NOT_YET_RELEASED: { label: 'Upcoming', tone: 'text-sky-300 ring-sky-400/40' },
-  HIATUS: { label: 'On hiatus', tone: 'text-amber-300 ring-amber-400/40' },
-  CANCELLED: { label: 'Cancelled', tone: 'text-red-300 ring-red-400/40' },
+const STATUS: Record<string, { label: string; tone: string }> = {
+  RELEASING: { label: 'Airing', tone: 'text-sky-300' },
+  FINISHED: { label: 'Finished', tone: 'text-base-300' },
+  NOT_YET_RELEASED: { label: 'Upcoming', tone: 'text-sky-300' },
+  HIATUS: { label: 'On hiatus', tone: 'text-amber-300' },
+  CANCELLED: { label: 'Cancelled', tone: 'text-base-400' },
 }
 
-function FactChips({ media, delay }: { media: AnimeDetail['anime']; delay?: AnimeDetail['delay'] }) {
-  const now = useNow()
-  const status = media.status ? STATUS[media.status] : undefined
-  const aired = media.nextAiringEpisode ? media.nextAiringEpisode.episode - 1 : null
-  const episodes =
-    media.status === 'RELEASING' && aired && media.episodes && aired < media.episodes
-      ? `${aired}/${media.episodes} eps`
-      : media.episodes
-        ? `${media.episodes} ${media.episodes === 1 ? 'ep' : 'eps'}`
-        : aired
-          ? `${aired} eps`
-          : null
-  const facts = [
-    media.averageScore ? <span key="score" className="text-amber-300">★ {(media.averageScore / 10).toFixed(1)}</span> : null,
-    media.format ? <span key="format">{media.format.replace('_', ' ')}</span> : null,
-    episodes ? <span key="episodes">{episodes}</span> : null,
-    media.duration ? <span key="duration">{media.duration} min</span> : null,
-    status ? (
-      <span key="status" className={cx('flex items-center gap-1.5', status.tone)}>
-        {status.live && <span className="size-1.5 rounded-full bg-emerald-400" />}
-        {status.label}
-      </span>
-    ) : null,
-    media.nextAiringEpisode && media.nextAiringEpisode.airingAt * 1000 > now ? (
-      <span key="next" className="text-emerald-300">
-        Ep {media.nextAiringEpisode.episode} {relativeTime(media.nextAiringEpisode.airingAt)}
-      </span>
-    ) : null,
-    delay ? (
-      <span key="delay" className="text-amber-300" title={`Was due ${new Date(delay.wasAt * 1000).toLocaleString()}`}>
-        Ep {delay.episode} delayed{delay.nowAt ? '' : ' · no new date yet'}
-      </span>
-    ) : null,
-  ].filter(Boolean)
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-base-200">
-      {facts.map((fact, i) => (
-        <Fragment key={(fact as { key?: string }).key ?? i}>
-          {i > 0 && <span aria-hidden className="text-base-600">·</span>}
-          {fact}
-        </Fragment>
-      ))}
-    </div>
-  )
+const FORMATS: Record<string, string> = {
+  TV: 'TV',
+  TV_SHORT: 'TV short',
+  MOVIE: 'Movie',
+  SPECIAL: 'Special',
+  OVA: 'OVA',
+  ONA: 'ONA',
+  MUSIC: 'Music video',
 }
 
-function FactGrid({ media }: { media: AnimeDetail['anime'] }) {
+const isFilm = (media: Media) => media.format?.toUpperCase() === 'MOVIE'
+
+function seasonName(media: Media): string | null {
+  if (media.season && media.seasonYear) {
+    return `${media.season.charAt(0)}${media.season.slice(1).toLowerCase()} ${media.seasonYear}`
+  }
+  return media.seasonYear ? String(media.seasonYear) : null
+}
+
+function airLabel(unix: number, now: number): string {
+  if (unix * 1000 - now < DAY) return relativeTime(unix)
+  return new Date(unix * 1000).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+}
+
+function outLabel(unix: number, now: number): string {
+  const ms = unix * 1000 - now
+  if (ms < DAY) return relativeTime(unix)
+  return new Date(unix * 1000).toLocaleDateString(undefined, ms < 6 * DAY ? { weekday: 'short' } : { day: 'numeric', month: 'short' })
+}
+
+function resumeLabel(episode: number, resume: { position: number; duration: number }): string {
+  const left = resume.duration - resume.position
+  return resume.duration > 0 && left > 0
+    ? `Resume Ep ${episode} · ${Math.max(1, Math.round(left / 60))} min left`
+    : `Resume Ep ${episode} · ${clockTime(resume.position)}`
+}
+
+function otherTitles(media: Media, title?: string): string[] {
+  const names = [media.title?.native, media.title?.romaji ?? media.romaji, media.title?.english]
+  return [...new Set(names.filter((n): n is string => !!n && n !== title))]
+}
+
+function airedWords(media: Media): string | null {
   const start = fuzzy(media.startDate)
   const end = fuzzy(media.endDate)
-  const aired = start ? (media.status === 'RELEASING' ? `${start} – now` : end && end !== start ? `${start} – ${end}` : start) : null
-  const rows: Array<[string, ReactNode]> = []
-  if (aired) rows.push(['Aired', aired])
-  if (media.studios && (Array.isArray(media.studios) ? media.studios.length : media.studios.nodes?.length))
-    rows.push(['Studio', <Studios key="s" studios={media.studios} bare />])
-  if (media.source) rows.push(['Source', media.source.replace(/_/g, ' ').toLowerCase()])
-  if (media.season && media.seasonYear)
-    rows.push(['Season', `${media.season.charAt(0)}${media.season.slice(1).toLowerCase()} ${media.seasonYear}`])
-  if (rows.length === 0) return null
-  return (
-    <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
-      {rows.map(([label, value]) => (
-        <div key={label} className="min-w-0">
-          <dt className="text-[10px] font-semibold tracking-wider text-base-500 uppercase">{label}</dt>
-          <dd className="mt-0.5 truncate text-base-100 capitalize">{value}</dd>
-        </div>
-      ))}
-    </dl>
-  )
+  if (!start) return null
+  if (media.status === 'RELEASING') return `${start} to now`
+  if (media.status === 'NOT_YET_RELEASED') return `Starts ${start}`
+  return end && end !== start ? `${start} to ${end}` : start
 }
 
-/** Who made it; an AniList studio opens its other work in Browse. */
-function Studios({
-  studios,
-  bare,
-}: {
-  studios?: { nodes?: { id: number; name: string }[] } | string[]
-  /** Without the leading separator, for use in a labelled grid. */
-  bare?: boolean
-}) {
-  const list = Array.isArray(studios)
-    ? studios.map((name) => ({ id: 0, name }))
-    : (studios?.nodes ?? [])
-  if (list.length === 0) return null
+function sourceName(source?: string): string | null {
+  if (!source) return null
+  const said = source.replace(/_/g, ' ').toLowerCase()
+  if (said === 'other' || said === 'unknown') return null
+  return said.charAt(0).toUpperCase() + said.slice(1)
+}
+
+function sourceWords(source?: string): string | null {
+  const name = sourceName(source)
+  if (!name) return null
+  if (name === 'Original') return 'Original story'
+  if (name === 'Anime') return 'From another anime'
+  return `From the ${name.toLowerCase()}`
+}
+
+function studioList(studios: Media['studios']) {
+  return Array.isArray(studios) ? studios.map((name) => ({ id: 0, name })) : (studios?.nodes ?? [])
+}
+
+function Studios({ studios }: { studios: Media['studios'] }) {
   return (
-    <span>
-      {!bare && '· '}
-      {list.map((s, i) => (
-        <span key={`${s.id}-${s.name}`}>
+    <>
+      {studioList(studios).map((s, i) => (
+        <Fragment key={`${s.id}-${s.name}`}>
           {i > 0 && ', '}
           {s.id ? (
             <Link
               to={`/browse?studio=${s.id}&studioName=${encodeURIComponent(s.name)}`}
-              className="text-base-200 underline decoration-base-600 underline-offset-2 transition-colors hover:text-white hover:decoration-accent-400"
+              className="tap relative text-base-200 underline decoration-base-600 underline-offset-2 transition-colors hover:text-white hover:decoration-accent-300"
               title={`More from ${s.name}`}
             >
               {s.name}
@@ -222,13 +223,133 @@ function Studios({
           ) : (
             s.name
           )}
-        </span>
+        </Fragment>
       ))}
-    </span>
+    </>
   )
 }
 
-/** The synopsis, clamped, with a toggle only when there is more to read. */
+function MetaLine({ media, delay, repeat }: { media: Media; delay?: AnimeDetail['delay']; repeat?: number }) {
+  const now = useNow()
+  const status = media.status ? STATUS[media.status] : undefined
+  const aired = media.nextAiringEpisode ? media.nextAiringEpisode.episode - 1 : null
+  const film = isFilm(media)
+  const episodes = film
+    ? null
+    : media.status === 'RELEASING' && aired && media.episodes && aired < media.episodes
+      ? `${aired} of ${media.episodes} out`
+      : media.episodes
+        ? `${media.episodes} ${media.episodes === 1 ? 'ep' : 'eps'}`
+        : aired
+          ? `${aired} out`
+          : null
+  const next = media.nextAiringEpisode && media.nextAiringEpisode.airingAt * 1000 > now ? media.nextAiringEpisode : null
+  const season = seasonName(media)
+
+  const facts: Array<[string, ReactNode]> = []
+  if (media.averageScore) facts.push(['score', <span key="score" className="text-amber-300">★ {(media.averageScore / 10).toFixed(1)}</span>])
+  if (media.format) facts.push(['format', FORMATS[media.format] ?? media.format.replace(/_/g, ' ')])
+  if (season) facts.push(['season', season])
+  if (episodes) facts.push(['episodes', episodes])
+  if (film && media.duration) facts.push(['duration', `${media.duration} min`])
+  if (repeat) facts.push(['repeat', <span key="repeat" title="Completed rewatches, as counted on your list">Rewatched ×{repeat}</span>])
+  if (status) {
+    facts.push([
+      'status',
+      <span key="status" className={cx('inline-flex items-center gap-1.5', status.tone)}>
+        {media.status === 'RELEASING' && <span aria-hidden className="size-1.5 rounded-full bg-sky-300" />}
+        {status.label}
+        {next ? ` · Ep ${next.episode} ${airLabel(next.airingAt, now)}` : ''}
+      </span>,
+    ])
+  }
+  if (delay) {
+    facts.push([
+      'delay',
+      <span key="delay" className="text-amber-300" title={`Was due ${new Date(delay.wasAt * 1000).toLocaleString()}`}>
+        Ep {delay.episode} delayed{delay.nowAt ? '' : ' · no new date yet'}
+      </span>,
+    ])
+  }
+  if (facts.length === 0) return null
+
+  return (
+    <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[15px] text-base-300 tabular-nums">
+      {facts.map(([key, fact], i) => (
+        <Fragment key={key}>
+          {key === 'status' && i > 0 && <span aria-hidden className="-my-0.5 basis-full sm:hidden" />}
+          {i > 0 && <span aria-hidden className={cx('text-base-600', key === 'status' && 'max-sm:hidden')}>·</span>}
+          {fact}
+        </Fragment>
+      ))}
+    </p>
+  )
+}
+
+function FactsLine({ media }: { media: Media }) {
+  const parts: Array<[string, ReactNode]> = []
+  const source = sourceWords(media.source)
+  if (source) parts.push(['source', source])
+  if (studioList(media.studios).length > 0) parts.push(['studio', <Studios key="studio" studios={media.studios} />])
+  const aired = airedWords(media)
+  if (aired) parts.push(['aired', aired])
+  if (media.duration && !isFilm(media)) parts.push(['length', `${media.duration} min episodes`])
+  if (parts.length === 0) return null
+  return (
+    <p className="mt-3 max-w-[45rem] text-sm text-base-400">
+      {parts.map(([key, part], i) => (
+        <Fragment key={key}>
+          {i > 0 && ' · '}
+          {part}
+        </Fragment>
+      ))}
+    </p>
+  )
+}
+
+function FactList({ media }: { media: Media }) {
+  const rows: Array<[string, ReactNode]> = []
+  const aired = airedWords(media)
+  if (aired) rows.push(['Aired', aired])
+  const studios = studioList(media.studios)
+  if (studios.length > 0) rows.push([studios.length > 1 ? 'Studios' : 'Studio', <Studios key="studio" studios={media.studios} />])
+  const source = sourceName(media.source)
+  if (source) rows.push(['Source', source])
+  const season = seasonName(media)
+  if (season) rows.push(['Season', season])
+  if (media.duration) rows.push(['Length', isFilm(media) ? `${media.duration} min` : `${media.duration} min per episode`])
+  if (rows.length === 0) return null
+  return (
+    <section>
+      <h3 className="mb-2 text-sm font-semibold text-base-100">About</h3>
+      <dl className="grid grid-cols-[5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
+        {rows.map(([label, value]) => (
+          <Fragment key={label}>
+            <dt className="text-[13px] font-semibold text-base-400">{label}</dt>
+            <dd className="min-w-0 text-base-100">{value}</dd>
+          </Fragment>
+        ))}
+      </dl>
+    </section>
+  )
+}
+
+function Genres({ genres }: { genres: string[] }) {
+  return (
+    <div className="no-scrollbar -mx-4 mt-3 flex gap-2 overflow-x-auto px-4 py-1.5 sm:mx-0 sm:max-w-[45rem] sm:flex-wrap sm:overflow-visible sm:px-0">
+      {genres.map((genre) => (
+        <Link
+          key={genre}
+          to={`/browse?genres=${encodeURIComponent(genre)}`}
+          className="tap relative flex h-8 shrink-0 items-center rounded-poster bg-base-800 px-3 text-[13px] font-medium text-base-200 transition-colors hover:bg-base-750 hover:text-white"
+        >
+          {genre}
+        </Link>
+      ))}
+    </div>
+  )
+}
+
 function Synopsis({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
   const [clamped, setClamped] = useState(false)
@@ -244,20 +365,23 @@ function Synopsis({ text }: { text: string }) {
   }, [text])
 
   return (
-    <div className="mt-3 max-w-3xl">
+    <div className="mt-4 max-w-[45rem]">
       <p
         ref={body}
+        onClick={() => clamped && setOpen(true)}
         className={cx(
-          'text-sm leading-relaxed text-base-300',
-          !open && 'line-clamp-4',
+          'text-[15px] leading-relaxed text-base-300 sm:text-sm',
+          !open && 'line-clamp-3',
+          clamped && !open && 'cursor-pointer',
         )}
       >
         {text}
       </p>
       {(clamped || open) && (
         <button
+          type="button"
           onClick={() => setOpen((v) => !v)}
-          className="mt-1 text-xs font-medium text-accent-400 transition-colors hover:text-accent-300 pointer-coarse:min-h-11"
+          className="tap relative mt-1 text-sm font-medium text-accent-300 hover:underline"
         >
           {open ? 'Show less' : 'Show more'}
         </button>
@@ -266,10 +390,26 @@ function Synopsis({ text }: { text: string }) {
   )
 }
 
-// A status in the action row reads as text: drawn like the buttons beside it, it was tapped and did nothing.
-const STATUS_TEXT = 'flex items-center gap-2 py-2 text-sm text-base-300'
+function TrailerButton({ videoId, className }: { videoId: string; className?: string }) {
+  const [showing, setShowing] = useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setShowing(true)}
+        className={cx(
+          'press flex h-11 items-center gap-1.5 rounded-card bg-base-950/70 px-4 text-sm font-medium text-white ring-1 ring-white/[0.06] backdrop-blur-sm transition-[background-color,transform] hover:bg-base-950/90',
+          className,
+        )}
+      >
+        <PlayIcon className="size-4" />
+        Trailer
+      </button>
+      {showing && <TrailerOverlay videoId={videoId} onClose={() => setShowing(false)} />}
+    </>
+  )
+}
 
-// A 1080p TV episode, for a show with nothing downloaded yet to measure by.
 const EPISODE_BYTES_GUESS = 1.5 * 1024 ** 3
 
 export function Anime() {
@@ -283,78 +423,40 @@ export function Anime() {
   })
 
   const episodes = useEpisodes(id)
-  // The one trailer entry point is the hero's: AniList's, else MyAnimeList's.
   const extra = useAnimeExtra(id)
   const franchise = useFranchise(id !== 0 ? id : undefined)
   const recommended = useRecommendations(id > 0 ? id : undefined)
-
-  const qc = useQueryClient()
-
-  // The queue works one at a time, so the button counts this show's waiting episodes.
-  const queue = useDownloadQueue()
-  const waiting = queue.data?.waiting?.[String(id)] ?? 0
-  // Polled while anything downloads, so episodes finishing here get their on-disk mark.
-  const downloads = useDownloads()
-  const room = useDriveRoom()
-  const [confirmSpace, setConfirmSpace] = useState(false)
-
-  const refreshQueue = () => refreshDownloads(qc)
+  const wide = useMediaQuery('(min-width: 80rem)')
 
   const clock = useNow()
-  // Aired, not on disk or in a library folder: the unwatched, or all of them when all are watched (a rewatch).
-  const missing = (episodes.data?.items ?? []).filter((e) => !isUnaired(e, clock) && !e.onDisk && !e.local)
-  const unwatched = missing.filter((e) => !e.watched)
-  const toDownload = (unwatched.length ? unwatched : missing).map((e) => e.number)
-  const onlyUnwatched = toDownload.length < missing.length
-  const downloadAll = useMutation({
-    meta: { inline: true },
-    mutationFn: () =>
-      api.post<{ queued: number }>('/api/download/episodes', { animeId: id, episodes: toDownload }),
-    onSuccess: refreshQueue,
-  })
-  // Asked first when the show won't fit: this show's own downloads say its size best, else a typical episode.
-  const sized = (downloads.data?.items ?? []).filter((d) => d.animeId === id && d.episodes.length > 0 && d.totalBytes > 0)
-  const perEpisode = sized.length
-    ? sized.reduce((n, d) => n + d.totalBytes / d.episodes.length, 0) / sized.length
-    : EPISODE_BYTES_GUESS
-  const need = toDownload.length * perEpisode
-  const free = room.data?.freeBytes
-  const wontFit = free != null && need > free
-
-  const cancelAll = useMutation({
-    mutationFn: () => api.del(`/api/download/all/${id}`),
-    onSuccess: refreshQueue,
-  })
-  const [confirmStop, setConfirmStop] = useState(false)
-
   const list = episodes.data?.items ?? []
   const progress = detail.data?.progress ?? 0
   const resume = detail.data?.resume
   const now = clock / 1000
   const next = list.find((e) => e.number > progress)
   const total = detail.data?.episodeCount || detail.data?.anime.episodes || list.length
-  // An episode stopped part way comes first: the tracker's count can already
-  // be past it, and "Continue episode 3" pointed away from minute 18 of 2.
   const first = resume?.episode ?? next?.number ?? (Math.min(progress + 1, list.length || progress + 1) || 1)
   const firstLabel = list.find((e) => e.number === first)?.display ?? first
   const finished =
     !resume &&
     (detail.data?.listStatus === 'COMPLETED' || (progress > 0 && total > 0 && progress >= total && !next))
   const unaired = !resume && !finished && progress > 0 && !!next?.airDate && next.airDate > now
-  const action = resume
-    ? { kind: 'play' as const, label: `Continue episode ${firstLabel} · ${clockTime(resume.position)}` }
+  const lead: Lead = resume
+    ? {
+        kind: 'play',
+        label: resumeLabel(firstLabel, resume),
+        done: resume.duration > 0 ? Math.min(1, resume.position / resume.duration) : undefined,
+      }
     : finished
-      ? { kind: 'rewatch' as const }
+      ? { kind: 'rewatch' }
       : unaired
-        ? { kind: 'wait' as const, label: `Episode ${next!.display} airs ${relativeTime(next!.airDate!)}` }
-        : { kind: 'play' as const, label: `${progress > 0 ? 'Continue' : 'Watch'} episode ${firstLabel}` }
-  // Settled, not succeeded: a failed episode list still leaves Play (episode 1) and the list controls.
-  const ready = detail.isSuccess && !episodes.isPending
+        ? { kind: 'wait', label: `Ep ${next!.display} out ${outLabel(next!.airDate!, clock)}` }
+        : { kind: 'play', label: `Play Ep ${firstLabel}` }
+  const ready = !!detail.data && !episodes.isPending
 
   const navigate = useNavigate()
   useDocumentTitle(detail.data?.title)
   const rewatch = useSetStatus()
-  // Rewatching resets progress and ticks, so it asks once, as the status menu does.
   const [confirmRewatch, setConfirmRewatch] = useState(false)
   const startRewatch = () => {
     if (!confirmRewatch) return setConfirmRewatch(true)
@@ -364,16 +466,14 @@ export function Anime() {
     )
   }
 
-  // Finding a release is play's slow half, so it starts while the page is read; above the early returns.
   useEffect(() => {
-    if (!ready || !Number.isFinite(id) || !id || !first || action.kind !== 'play') return
+    if (!ready || !Number.isFinite(id) || !id || !first || lead.kind !== 'play') return
     void api.post('/api/prepare', { animeId: id, episode: first }).catch(() => {})
-  }, [ready, id, first, action.kind])
+  }, [ready, id, first, lead.kind])
 
   if (!Number.isFinite(id) || id === 0) {
     return <ErrorState error={new Error('Unknown anime')} />
   }
-  // A failed refresh keeps the page it already has (and any note being typed).
   if (detail.isError && !detail.data) {
     return <ErrorState error={detail.error} retry={() => detail.refetch()} />
   }
@@ -381,337 +481,862 @@ export function Anime() {
   const media = detail.data?.anime
   const cover = media?.coverImage?.extraLarge ?? media?.cover
   const banner = media?.bannerImage
-  const colour = media?.coverImage?.color
+  const art = banner ?? cover
   const description = (media?.description ?? media?.Description ?? '').replace(/<[^>]+>/g, '')
+  const trailer =
+    (media?.trailer?.site?.toLowerCase() === 'youtube' ? media.trailer.id : undefined) ??
+    youtubeID(extra.data?.trailer) ??
+    undefined
+  const anilist = detail.data?.source === 'anilist' ? id : undefined
+  const mal = detail.data?.malId
+  const others = media ? otherTitles(media, detail.data?.title) : []
 
   return (
     <div className="space-y-8">
-      <section
-        className={cx('tinted relative -mx-4 -mt-4 overflow-visible bg-base-950 sm:-mx-6', banner && 'min-h-[26rem]')}
-        style={colour ? ({ '--tint': tint(colour, 0.22) } as React.CSSProperties) : undefined}
-      >
-        {/* Its own layer, so menus aren't clipped and the synopsis can't re-crop it. */}
-        {(banner || cover) && (
-          <div className="absolute inset-x-0 top-0 h-[26rem] overflow-hidden">
+      <section className={cx('relative -mx-4 -mt-4 sm:-mx-6', art && 'sm:min-h-[26rem]')}>
+        {art && (
+          <div className="relative aspect-video overflow-hidden sm:absolute sm:top-0 sm:right-[calc(50%_-_min(50vw,1425px))] sm:left-[calc(50%_-_min(50vw,1425px))] sm:aspect-auto sm:h-[26rem] min-[1700px]:[mask-image:linear-gradient(to_right,transparent,black_6rem,black_calc(100%-6rem),transparent)]">
             <img
-              src={banner ?? cover}
+              src={art}
               alt=""
               className={cx(
-                'size-full object-cover object-center',
-                !banner && 'scale-125 opacity-50 blur-2xl',
+                'size-full object-cover max-sm:[view-transition-name:show-art]',
+                banner ? 'object-center' : 'object-[center_20%] sm:scale-125 sm:opacity-50 sm:blur-2xl',
               )}
             />
-            <div className="absolute inset-0 bg-gradient-to-t from-base-950 via-base-950/80 to-base-950/30" />
-            <div className="absolute inset-0 bg-gradient-to-r from-base-950/70 to-transparent" />
+            <div className="absolute inset-0 bg-gradient-to-t from-base-950 to-transparent to-40% sm:hidden" />
+            <div className="absolute inset-0 hidden bg-gradient-to-t from-base-950 via-base-950/80 to-base-950/30 sm:block" />
+            <div className="absolute inset-0 hidden bg-gradient-to-r from-base-950/70 to-transparent sm:block" />
+            {trailer && <TrailerButton videoId={trailer} className="absolute right-4 bottom-3 z-10 sm:hidden" />}
           </div>
         )}
 
-        <div className="relative mx-auto flex max-w-[1600px] flex-col gap-6 p-4 sm:flex-row sm:p-6 sm:pt-28 lg:px-10">
+        <div
+          className={cx(
+            'relative mx-auto flex max-w-[1600px] flex-col gap-6 px-4 sm:flex-row sm:p-6',
+            art ? 'pt-1 sm:pt-28' : 'pt-4 sm:pt-8',
+          )}
+        >
+          {art && trailer && <TrailerButton videoId={trailer} className="absolute top-4 right-6 z-10 max-sm:hidden" />}
           {detail.isPending ? (
-            <Skeleton className="h-72 w-48 shrink-0 rounded-card" />
+            <Skeleton className="hidden h-72 w-48 shrink-0 rounded-card sm:block" />
           ) : cover ? (
             <img
               src={cover}
               alt=""
-              className="h-72 w-48 shrink-0 rounded-card object-cover shadow-lift ring-1 ring-white/10"
-              style={colour ? { boxShadow: `0 24px 60px -20px ${tint(colour, 0.55)}` } : undefined}
+              loading="lazy"
+              className="hidden h-72 w-48 shrink-0 rounded-card object-cover shadow-lift ring-1 ring-white/[0.06] sm:block sm:[view-transition-name:show-art]"
             />
           ) : null}
 
           <div className="min-w-0 flex-1 sm:pt-4">
             {detail.isPending ? (
-              <Skeleton className="h-10 w-2/3" />
+              <Skeleton className="h-9 w-2/3" />
             ) : (
-              <h1 className="font-display text-3xl leading-[1.1] font-bold tracking-tight text-white text-balance sm:text-5xl">
+              <h1 className="max-w-4xl font-display text-[26px] leading-[30px] font-bold tracking-tight text-balance text-white sm:text-4xl sm:leading-[1.08] lg:text-5xl lg:leading-[1.05]">
                 {detail.data?.title}
               </h1>
             )}
-
-            {media && <FactChips media={media} delay={detail.data?.delay} />}
+            {others.length > 0 && <p className="mt-1.5 max-w-4xl text-sm text-base-400">{others.join(' · ')}</p>}
+            {media && <MetaLine media={media} delay={detail.data?.delay} repeat={detail.data?.repeat} />}
             {detail.data?.source === 'corpus' && (
               <p className="mt-2">
-                <Badge>Limited info: MyAnimeList unreachable</Badge>
+                <Badge tone="warning">Limited info: MyAnimeList unreachable</Badge>
               </p>
             )}
 
-            {media?.genres && media.genres.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {media.genres.slice(0, 6).map((genre) => (
-                  <Link
-                    key={genre}
-                    to={`/browse?genres=${encodeURIComponent(genre)}`}
-                    className="tap relative rounded-md px-2 py-0.5 text-xs font-medium text-base-300 ring-1 ring-white/10 transition-colors hover:bg-white/10 hover:text-white"
-                  >
-                    {genre}
-                  </Link>
-                ))}
-              </div>
-            )}
-
-            {description && <Synopsis text={description} />}
-            {media && <FactGrid media={media} />}
-
-            <div className="mt-5 flex flex-wrap items-center gap-2">
-              {/* The right button is unknown until the list and episodes are in. */}
+            <div className="mt-4 flex flex-col gap-3 sm:mt-5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-2">
               {!ready ? (
-                <>
-                  <Skeleton className="h-10 w-52 rounded-xl" />
-                  <Skeleton className="h-9 w-28" />
-                </>
-              ) : action.kind === 'play' ? (
+                <Skeleton className="h-12 w-full rounded-card sm:h-11 sm:w-56" />
+              ) : lead.kind === 'play' ? (
                 <LinkButton
                   to={`/watch/${id}/${first}`}
                   variant="primary"
                   size="lg"
-                  className="gap-2 font-semibold"
-                  style={colour ? { boxShadow: `0 0 24px ${tint(colour, 0.35)}` } : undefined}
+                  className="relative overflow-hidden font-semibold max-sm:w-full"
                 >
                   <PlayIcon />
-                  {action.label}
+                  {lead.label}
+                  {lead.done !== undefined && (
+                    <span aria-hidden className="absolute inset-x-0 bottom-0 h-[3px] bg-black/25">
+                      <span className="block h-full bg-white" style={{ width: `${lead.done * 100}%` }} />
+                    </span>
+                  )}
                 </LinkButton>
-              ) : action.kind === 'rewatch' && confirmRewatch ? (
-                // A Cancel that takes focus: a second click on the same spot used to reset everything.
-                <ConfirmInline
-                  label={rewatch.isPending ? 'Starting…' : 'Restart from episode 1'}
-                  note="Progress and ticks reset"
-                  tone="accent"
-                  size="lg"
-                  pending={rewatch.isPending}
-                  onConfirm={startRewatch}
-                  onCancel={() => setConfirmRewatch(false)}
-                />
-              ) : action.kind === 'rewatch' ? (
+              ) : lead.kind === 'rewatch' && confirmRewatch ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <ConfirmInline
+                    label={rewatch.isPending ? 'Starting…' : 'Restart from Ep 1'}
+                    note="Progress and ticks reset"
+                    tone="accent"
+                    size="lg"
+                    pending={rewatch.isPending}
+                    onConfirm={startRewatch}
+                    onCancel={() => setConfirmRewatch(false)}
+                  />
+                </div>
+              ) : lead.kind === 'rewatch' ? (
                 <Button
                   onClick={startRewatch}
                   title="Marks the show as rewatching, which counts progress from the start again"
                   variant="primary"
                   size="lg"
-                  className="gap-2 font-semibold"
-                  style={colour ? { boxShadow: `0 0 24px ${tint(colour, 0.35)}` } : undefined}
+                  className="font-semibold max-sm:w-full"
                 >
                   <RewatchIcon />
-                  Rewatch from episode 1
+                  Rewatch from Ep 1
                 </Button>
               ) : (
-                <span
+                <p
                   title="You are caught up. The next episode has not aired yet."
-                  className={cx(STATUS_TEXT, 'font-medium text-base-200')}
+                  className="flex min-h-11 items-center gap-2 text-[15px] font-medium text-sky-300 max-sm:justify-center"
                 >
                   <ClockIcon />
-                  {action.label}
-                </span>
+                  {lead.label}
+                </p>
               )}
 
-              {ready && <StatusMenu animeId={id} current={detail.data?.listStatus} />}
-              {detail.isSuccess && <ScoreSelect animeId={id} score={detail.data.score ?? 0} />}
-              {detail.isSuccess && (
-                <FavouriteButton animeId={id} bookmark={detail.data.bookmark} />
+              {ready && detail.data ? (
+                <div className="grid grid-cols-4 gap-2 sm:flex sm:flex-wrap">
+                  <ListAction animeId={id} current={detail.data.listStatus} />
+                  <RateAction animeId={id} score={detail.data.score ?? 0} />
+                  <FavouriteAction animeId={id} bookmark={detail.data.bookmark} />
+                  <DownloadAction animeId={id} episodes={list} />
+                </div>
+              ) : (
+                <div className="grid grid-cols-4 gap-2 sm:flex">
+                  {Array.from({ length: 4 }, (_, i) => (
+                    <Skeleton key={i} className="h-16 rounded-card sm:h-10 sm:w-28" />
+                  ))}
+                </div>
               )}
-
-              {(detail.data?.repeat ?? 0) > 0 && (
-                <span title="Completed rewatches, as counted on your list" className={STATUS_TEXT}>
-                  Rewatched ×{detail.data!.repeat}
-                </span>
-              )}
-
-              {waiting > 0 ? (
-                // Count as a status, Stop as its own step that asks: one tap on the pill emptied the queue.
-                <span className="flex flex-wrap items-center gap-2">
-                  <span className={STATUS_TEXT}>
-                    <span className="size-2 animate-pulse rounded-full bg-accent-400" />
-                    {waiting} queued
-                  </span>
-                  {confirmStop ? (
-                    <ConfirmInline
-                      label={cancelAll.isPending ? 'Stopping…' : `Stop ${waiting === 1 ? 'the download' : `${waiting} downloads`}`}
-                      note="The one in progress too"
-                      pending={cancelAll.isPending}
-                      onConfirm={() => cancelAll.mutate(undefined, { onSettled: () => setConfirmStop(false) })}
-                      onCancel={() => setConfirmStop(false)}
-                    />
-                  ) : (
-                    <Button onClick={() => setConfirmStop(true)} title="Stops this show's downloads, the one in progress included">
-                      Stop
-                    </Button>
-                  )}
-                </span>
-              ) : toDownload.length > 0 && confirmSpace ? (
-                // A line of its own, so the question sits with its answers rather than beside Favourite.
-                <span className="flex basis-full flex-wrap items-center gap-2">
-                  <ConfirmInline
-                    tone="accent"
-                    label={downloadAll.isPending ? 'Queuing…' : 'Download anyway'}
-                    note={`${toDownload.length === 1 ? 'It needs' : `These ${toDownload.length} need`} about ${bytes(need)}, and ${room.data?.drive} has ${bytes(free ?? 0)} free.`}
-                    pending={downloadAll.isPending}
-                    onConfirm={() => downloadAll.mutate(undefined, { onSettled: () => setConfirmSpace(false) })}
-                    onCancel={() => setConfirmSpace(false)}
-                  />
-                </span>
-              ) : toDownload.length > 0 ? (
-                <Button
-                  onClick={() => (wontFit ? setConfirmSpace(true) : downloadAll.mutate())}
-                  disabled={downloadAll.isPending}
-                  title={`Queues episodes ${toDownload[0]}–${toDownload[toDownload.length - 1]}, one at a time`}
-                >
-                  {downloadAll.isPending
-                    ? 'Queuing…'
-                    : onlyUnwatched
-                      ? `Download ${toDownload.length} unwatched`
-                      : `Download ${toDownload.length === 1 ? '1 episode' : `all ${toDownload.length}`}`}
-                </Button>
-              ) : null}
             </div>
 
-            {downloadAll.isError && (
-              <p className="mt-2 text-xs text-recap">{(downloadAll.error as Error).message}</p>
-            )}
-
             <ShowBetterCopy animeId={id} />
-            <ShowSettings animeId={id} notify={detail.data?.notify} />
-            <SyncNote sync={detail.data?.sync} />
-            {detail.isSuccess && (
-              <ExternalLinks
-                anilist={detail.data.source === 'anilist' ? id : undefined}
-                mal={detail.data.malId}
-                trailer={
-                  (media?.trailer?.site?.toLowerCase() === 'youtube' ? media.trailer.id : undefined) ??
-                  youtubeID(extra.data?.trailer) ??
-                  undefined
-                }
+            {description && <Synopsis text={description} />}
+            {media && !wide && <FactsLine media={media} />}
+            {media?.genres && media.genres.length > 0 && <Genres genres={media.genres} />}
+            {trailer && !art && <TrailerButton videoId={trailer} className="mt-3 bg-base-800 ring-0 hover:bg-base-750" />}
+            {detail.data && !wide && (
+              <ThisShowRow
+                animeId={id}
+                notify={detail.data.notify}
+                bookmark={detail.data.bookmark}
+                sync={detail.data.sync}
               />
             )}
-            {detail.isSuccess && <Note animeId={id} bookmark={detail.data.bookmark} />}
           </div>
         </div>
       </section>
 
-      {(franchise.data?.seasons?.length ?? 0) > 1 && (
-        <Rail title="Seasons">
-          {franchise.data!.seasons.map((season) => (
-            <SeasonChip key={season.id} season={season} current={season.id === id} />
-          ))}
-        </Rail>
-      )}
+      <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_21.25rem] xl:items-start xl:gap-10">
+        <div className="min-w-0 space-y-8">
+          {(franchise.data?.seasons?.length ?? 0) > 1 && (
+            <Rail title="Seasons">
+              {franchise.data!.seasons.map((season) => (
+                <SeasonChip key={season.id} season={season} current={season.id === id} />
+              ))}
+            </Rail>
+          )}
 
-      <RelatedRails entries={franchise.data?.related ?? []} />
+          <section>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+              <h2 className="section-title">Episodes</h2>
+              <SeasonSwitch seasons={franchise.data?.seasons ?? []} current={id} />
+            </div>
 
+            {episodes.isPending ? (
+              <Skeleton className="h-80 w-full" />
+            ) : episodes.isError && !episodes.data ? (
+              <ErrorState error={episodes.error} retry={() => void episodes.refetch()} />
+            ) : list.length === 0 ? (
+              <div className="surface p-6 text-center">
+                <p className="text-sm text-base-400">No episode list for this show yet.</p>
+                <LinkButton to={`/watch/${id}/1`} className="mt-3">
+                  Try episode 1 anyway
+                </LinkButton>
+              </div>
+            ) : (
+              <EpisodeList
+                animeId={id}
+                episodes={list}
+                upNext={lead.kind === 'play' ? first : undefined}
+                selectable
+              />
+            )}
+          </section>
 
-      <section>
-        <div className="mb-3 flex items-baseline justify-between">
-          <h2 className="section-title">Episodes</h2>
-          {list.length > 0 && <span className="text-xs text-base-500">{list.length} total</span>}
+          <CharacterRail animeId={id} />
+          <RelatedRails entries={franchise.data?.related ?? []} />
+          <ShowCredits animeId={id} />
+
+          {(recommended.data?.items?.length ?? 0) > 0 && (
+            <Rail title={recommended.data?.source === 'genre' ? 'Similar genres' : 'More like this'}>
+              {recommended.data!.items.map((anime: DiscoverItem) => (
+                <RailItem key={anime.id}>
+                  <PosterCard anime={toCard(anime)} />
+                </RailItem>
+              ))}
+            </Rail>
+          )}
+
+          {!wide && (anilist || mal) && (
+            <section className="space-y-3">
+              <h2 className="section-title">Links</h2>
+              <ShowLinks anilist={anilist} mal={mal} className="sm:max-w-xl" />
+            </section>
+          )}
         </div>
 
-        {episodes.isPending ? (
-          <Skeleton className="h-80 w-full" />
-        ) : episodes.isError && !episodes.data ? (
-          <ErrorState error={episodes.error} retry={() => void episodes.refetch()} />
-        ) : list.length === 0 ? (
-          <div className="surface p-6 text-center">
-            <p className="text-sm text-base-400">No episode list for this show yet.</p>
-            <LinkButton to={`/watch/${id}/1`} className="mt-3">
-              Try episode 1 anyway
-            </LinkButton>
-          </div>
-        ) : (
-          <EpisodeList
-            animeId={id}
-            episodes={list}
-            cover={banner ?? cover}
-            upNext={action.kind === 'play' ? first : undefined}
-            selectable
-          />
+        {wide && detail.data && (
+          <aside
+            aria-label="This show"
+            className="sticky top-20 max-h-[calc(100dvh-6rem)] space-y-6 overflow-y-auto rounded-card bg-base-900 p-4 scrollbar-thin"
+          >
+            <section>
+              <h2 className="text-base font-semibold text-base-100">This show</h2>
+              <ShowSettings
+                animeId={id}
+                notify={detail.data.notify}
+                bookmark={detail.data.bookmark}
+                sync={detail.data.sync}
+              />
+            </section>
+            <FactList media={detail.data.anime} />
+            {(anilist || mal) && (
+              <section>
+                <h3 className="mb-2 text-sm font-semibold text-base-100">Links</h3>
+                <ShowLinks anilist={anilist} mal={mal} tone="bg-base-800 hover:bg-base-750" />
+              </section>
+            )}
+          </aside>
         )}
-      </section>
-
-      {/* Below the episodes, which are why the page was opened. */}
-      <CharacterRail animeId={id} />
-      <ShowExtra animeId={id} />
-
-      {(recommended.data?.items?.length ?? 0) > 0 && (
-        <Rail title={recommended.data?.source === 'genre' ? 'Similar genres' : 'More like this'}>
-          {recommended.data!.items.map((anime: DiscoverItem) => (
-            <RailItem key={anime.id}>
-              <PosterCard anime={toCard(anime)} />
-            </RailItem>
-          ))}
-        </Rail>
-      )}
+      </div>
     </div>
   )
 }
 
-function RewatchIcon() {
+const TILE =
+  'press flex min-h-16 min-w-0 flex-col items-center justify-center gap-1 rounded-card bg-base-800 px-1 py-2 text-center text-[13px] leading-tight font-medium text-base-100 transition-[background-color,color,transform] hover:bg-base-750 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-base-950 disabled:opacity-50 sm:h-10 sm:min-h-0 sm:flex-row sm:gap-1.5 sm:px-4 sm:py-0 sm:text-sm sm:whitespace-nowrap sm:pointer-coarse:min-h-11'
+
+function Tile({
+  ref,
+  icon,
+  label,
+  caption,
+  wide,
+  chevron,
+  className,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  ref?: Ref<HTMLButtonElement>
+  icon: ReactNode
+  label: ReactNode
+  caption?: ReactNode
+  wide?: ReactNode
+  chevron?: boolean
+}) {
   return (
-    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
-      <path
-        d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 0 1-13.7 5.6L4 15.5M4 20v-4.5h4.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+    <button ref={ref} type="button" className={cx(TILE, className)} {...props}>
+      {icon}
+      <span className="flex items-center gap-0.5 sm:hidden">
+        {label}
+        {chevron && <ChevronDown />}
+      </span>
+      {caption && <span className="text-xs font-normal text-base-400 sm:hidden">{caption}</span>}
+      <span className="hidden items-center gap-1.5 sm:flex">
+        {wide ?? label}
+        {chevron && <ChevronDown />}
+      </span>
+    </button>
+  )
+}
+
+const CHOICE =
+  'flex min-h-11 w-full items-center justify-between gap-3 rounded-lg px-3 text-left text-[15px] transition-colors hover:bg-base-700 disabled:opacity-50 sm:min-h-10 sm:text-sm'
+
+function Confirming({ note, children }: { note: string; children: ReactNode }) {
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-2 rounded-lg bg-base-800 px-3 py-2.5">
+      <span className="basis-full text-[13px] text-base-300">{note}</span>
+      {children}
+    </div>
+  )
+}
+
+function ListAction({ animeId, current }: { animeId: number; current?: string }) {
+  const [open, setOpen] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const setStatus = useSetStatus({ inline: true })
+  const remove = useRemoveStatus()
+  const [confirm, setConfirm] = useState<'rewatch' | 'remove' | null>(null)
+  const active = LIST_STATUSES.find((s) => s.value === current)
+  const close = () => {
+    setOpen(false)
+    setConfirm(null)
+  }
+  const choose = (status: ListStatus) => {
+    if (status === 'REPEATING' && current !== 'REPEATING') return setConfirm('rewatch')
+    setConfirm(null)
+    setStatus.mutate({ animeId, status }, { onSuccess: close })
+  }
+  const error = (setStatus.error ?? remove.error) as Error | null
+
+  return (
+    <>
+      <Tile
+        ref={trigger}
+        icon={<BookmarkIcon filled={!!active} />}
+        label={active?.label ?? 'Add to list'}
+        chevron
+        aria-label={active ? `Listed as ${active.label}` : 'Add to list'}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => {
+          setConfirm(null)
+          setStatus.reset()
+          remove.reset()
+          setOpen(true)
+        }}
       />
-    </svg>
+      <PopSheet open={open} onClose={close} title="Your list" anchor={trigger} width={256}>
+        <div role="menu" aria-label="Your list">
+          {LIST_STATUSES.map((status) => (
+            <button
+              key={status.value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={status.value === current}
+              disabled={setStatus.isPending}
+              onClick={() => choose(status.value)}
+              className={cx(CHOICE, status.value === current ? 'text-accent-300' : 'text-base-100')}
+            >
+              {status.label}
+              {status.value === current && <CheckIcon />}
+            </button>
+          ))}
+        </div>
+        {confirm === 'rewatch' && (
+          <Confirming note="Progress and ticks reset">
+            <ConfirmInline
+              label={setStatus.isPending ? 'Starting…' : 'Rewatch'}
+              tone="accent"
+              size="sm"
+              pending={setStatus.isPending}
+              onConfirm={() => setStatus.mutate({ animeId, status: 'REPEATING' }, { onSuccess: close })}
+              onCancel={() => setConfirm(null)}
+            />
+          </Confirming>
+        )}
+        {current &&
+          (confirm === 'remove' ? (
+            <Confirming note="Also removes it from AniList and MyAnimeList">
+              <ConfirmInline
+                label={remove.isPending ? 'Removing…' : 'Remove'}
+                size="sm"
+                pending={remove.isPending}
+                onConfirm={() => remove.mutate(animeId, { onSuccess: close })}
+                onCancel={() => setConfirm(null)}
+              />
+            </Confirming>
+          ) : (
+            <button type="button" onClick={() => setConfirm('remove')} className={cx(CHOICE, 'mt-1 text-red-300 hover:bg-recap/15')}>
+              Remove from list
+            </button>
+          ))}
+        {error && (
+          <p className="mt-1 flex flex-wrap items-center gap-2 px-3 py-2 text-sm text-red-300">
+            {error.message}
+            <Button
+              size="sm"
+              onClick={() =>
+                setStatus.isError && setStatus.variables
+                  ? setStatus.mutate(setStatus.variables, { onSuccess: close })
+                  : remove.mutate(animeId, { onSuccess: close })
+              }
+            >
+              Try again
+            </Button>
+          </p>
+        )}
+      </PopSheet>
+    </>
   )
 }
 
-function ClockIcon() {
+function RateAction({ animeId, score }: { animeId: number; score: number }) {
+  const qc = useQueryClient()
+  const set = useMutation({
+    mutationFn: (value: number) => api.post('/api/score', { animeId, score: value }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['anime', animeId] })
+      void qc.invalidateQueries({ queryKey: ['library'] })
+    },
+  })
+  const tens = Math.round(score / 10)
+  const [open, setOpen] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const pick = (n: number) => {
+    set.mutate(n * 10)
+    setOpen(false)
+  }
+
   return (
-    <svg viewBox="0 0 24 24" className="size-4 text-base-400" aria-hidden>
-      <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
+    <>
+      <Tile
+        ref={trigger}
+        icon={<StarIcon filled={tens > 0} />}
+        label={tens > 0 ? `${tens}/10` : 'Rate'}
+        aria-label="Your score"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen(true)}
+      />
+      <PopSheet open={open} onClose={() => setOpen(false)} title="Your score" anchor={trigger} width={272}>
+        <div role="menu" aria-label="Your score" className="grid grid-cols-5 gap-1.5 sm:p-1">
+          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+            <button
+              key={n}
+              type="button"
+              role="menuitemradio"
+              aria-checked={n === tens}
+              autoFocus={n === tens}
+              disabled={set.isPending}
+              onClick={() => pick(n)}
+              className={cx(
+                'h-12 rounded-lg text-base font-semibold tabular-nums transition-colors sm:h-10 sm:text-sm',
+                n === tens ? 'bg-accent-500 text-white' : 'bg-base-800 text-base-100 hover:bg-base-700',
+              )}
+            >
+              {n}
+            </button>
+          ))}
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={tens === 0}
+            disabled={set.isPending}
+            onClick={() => pick(0)}
+            className={cx(
+              'col-span-5 h-12 rounded-lg text-[15px] font-medium transition-colors sm:h-10 sm:text-sm',
+              tens === 0 ? 'bg-base-700 text-base-100' : 'bg-base-800 text-base-300 hover:bg-base-700',
+            )}
+          >
+            Unrated
+          </button>
+        </div>
+      </PopSheet>
+    </>
   )
 }
 
-// Per show, overriding the global default, so one series can auto-download alone.
+function useSetBookmark(animeId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (b: Partial<Bookmark>) => api.post('/api/bookmarks', { animeId, ...b }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['anime', animeId] })
+      void qc.invalidateQueries({ queryKey: ['bookmarks'] })
+    },
+  })
+}
+
+function FavouriteAction({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
+  const set = useSetBookmark(animeId)
+  const on = !!bookmark?.favourite
+  return (
+    <Tile
+      icon={<HeartIcon filled={on} />}
+      label="Favourite"
+      aria-pressed={on}
+      title={on ? 'Remove from favourites' : 'Add to favourites'}
+      disabled={set.isPending}
+      onClick={() => set.mutate({ favourite: !on })}
+    />
+  )
+}
+
+const OPTION =
+  'flex min-h-14 w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-base-700 disabled:opacity-50'
+
+function DownloadAction({ animeId, episodes }: { animeId: number; episodes: Episode[] }) {
+  const qc = useQueryClient()
+  const clock = useNow()
+  const queue = useDownloadQueue()
+  const downloads = useDownloads()
+  const room = useDriveRoom()
+  const access = useAccess()
+  const [open, setOpen] = useState(false)
+  const [step, setStep] = useState<'choose' | 'space' | 'stop'>('choose')
+  const [note, setNote] = useState<string | null>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+
+  const waiting = queue.data?.waiting?.[String(animeId)] ?? 0
+  const aired = episodes.filter((e) => !isUnaired(e, clock))
+  const missing = aired.filter((e) => !e.onDisk && !e.local)
+  const unwatched = missing.filter((e) => !e.watched)
+  const toDownload = (unwatched.length ? unwatched : missing).map((e) => e.number)
+  const what =
+    toDownload.length === 1
+      ? '1 episode'
+      : toDownload.length < missing.length
+        ? `${toDownload.length} unwatched`
+        : `all ${toDownload.length}`
+  const sized = (downloads.data?.items ?? []).filter((d) => d.animeId === animeId && d.episodes.length > 0 && d.totalBytes > 0)
+  const perEpisode = sized.length
+    ? sized.reduce((n, d) => n + d.totalBytes / d.episodes.length, 0) / sized.length
+    : EPISODE_BYTES_GUESS
+  const need = toDownload.length * perEpisode
+  const free = room.data?.freeBytes
+  const wontFit = free != null && need > free
+  const guest = !!access.data && !access.data.host
+  const unseen = aired.filter((e) => !e.watched)
+  const toSave = (unseen.length ? unseen : aired).map((e) => e.number)
+  const why = guest ? cannotSave() : null
+
+  const close = () => {
+    setOpen(false)
+    setStep('choose')
+  }
+  const refresh = () => refreshDownloads(qc)
+  const downloadAll = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post<{ queued: number }>('/api/download/episodes', { animeId, episodes: toDownload }),
+    onSuccess: refresh,
+  })
+  const cancelAll = useMutation({
+    mutationFn: () => api.del(`/api/download/all/${animeId}`),
+    onSuccess: refresh,
+  })
+  const queueAll = () =>
+    downloadAll.mutate(undefined, {
+      onSuccess: close,
+      onError: () => {
+        setStep('choose')
+        setOpen(true)
+      },
+    })
+  const start = () => (wontFit ? setStep('space') : queueAll())
+  const back = () => (guest ? setStep('choose') : close())
+  const press = () => {
+    setNote(null)
+    downloadAll.reset()
+    if (!guest && waiting > 0) setStep('stop')
+    else if (!guest && toDownload.length > 0) {
+      if (!wontFit) return queueAll()
+      setStep('space')
+    } else setStep('choose')
+    setOpen(true)
+  }
+
+  const idle = waiting === 0 && toDownload.length === 0
+  const done = idle && aired.length > 0
+  const wideLabel = downloadAll.isPending
+    ? 'Queuing…'
+    : waiting > 0
+      ? `${waiting} queued`
+      : toDownload.length > 0
+        ? `Download ${what}`
+        : done
+          ? 'All on the PC'
+          : episodes.length > 0
+            ? 'Nothing out yet'
+            : 'No episodes yet'
+  const caption = downloadAll.isPending ? (
+    'Queuing…'
+  ) : waiting > 0 ? (
+    `${waiting} queued`
+  ) : toDownload.length > 0 ? (
+    what.charAt(0).toUpperCase() + what.slice(1)
+  ) : done ? (
+    <span className="text-emerald-300">All on PC</span>
+  ) : episodes.length > 0 ? (
+    'Not out yet'
+  ) : (
+    'No episodes'
+  )
+
+  return (
+    <>
+      <Tile
+        ref={trigger}
+        icon={done ? <CheckIcon className="size-6 shrink-0 text-emerald-300 sm:size-4" /> : <DownloadIcon />}
+        label={<span className={cx(idle && !done && 'text-base-600')}>Download</span>}
+        caption={caption}
+        wide={
+          idle && !done ? (
+            <>
+              <span className="text-base-600">Download</span>
+              <span className="font-normal text-base-400">{wideLabel}</span>
+            </>
+          ) : (
+            wideLabel
+          )
+        }
+        aria-label={wideLabel}
+        aria-haspopup={guest || waiting > 0 || wontFit || idle ? 'dialog' : undefined}
+        disabled={downloadAll.isPending}
+        onClick={press}
+      />
+      <PopSheet open={open} onClose={close} title="Download" anchor={trigger} width={320}>
+        {step === 'space' ? (
+          <div className="flex flex-wrap items-center gap-2 sm:p-1.5">
+            <ConfirmInline
+              tone="accent"
+              label={downloadAll.isPending ? 'Queuing…' : 'Download anyway'}
+              note={`${toDownload.length === 1 ? 'It needs' : `These ${toDownload.length} need`} about ${bytes(need)}, and ${room.data?.drive} has ${bytes(free ?? 0)} free.`}
+              pending={downloadAll.isPending}
+              onConfirm={queueAll}
+              onCancel={back}
+            />
+          </div>
+        ) : step === 'stop' ? (
+          <div className="flex flex-wrap items-center gap-2 sm:p-1.5">
+            <ConfirmInline
+              label={cancelAll.isPending ? 'Stopping…' : `Stop ${waiting === 1 ? 'the download' : `${waiting} downloads`}`}
+              note="The one in progress too"
+              pending={cancelAll.isPending}
+              onConfirm={() => cancelAll.mutate(undefined, { onSettled: close })}
+              onCancel={back}
+            />
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {waiting > 0 ? (
+              <div className="flex min-h-14 items-center gap-3 px-3 py-2">
+                <DownloadIcon className="size-5 shrink-0 text-base-300" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium text-base-100">{waiting} queued on the PC</span>
+                  <span className="block text-[13px] text-base-400">They download one at a time</span>
+                </span>
+                <Button size="sm" onClick={() => setStep('stop')}>
+                  Stop
+                </Button>
+              </div>
+            ) : toDownload.length > 0 ? (
+              <button type="button" onClick={start} disabled={downloadAll.isPending} className={OPTION}>
+                <DownloadIcon className="size-5 shrink-0 text-base-300" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium text-base-100">
+                    {downloadAll.isPending ? 'Queuing…' : `Download ${what} to the PC`}
+                  </span>
+                  <span className="block text-[13px] text-base-400">About {bytes(need)}, one at a time</span>
+                </span>
+              </button>
+            ) : done ? (
+              <Link to="/downloads" className={OPTION}>
+                <CheckIcon className="size-5 shrink-0 text-emerald-300" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium text-base-100">Every episode out is on the PC</span>
+                  <span className="block text-[13px] text-base-400">Open Downloads</span>
+                </span>
+              </Link>
+            ) : (
+              <p className="px-3 py-2 text-sm text-base-400">
+                {episodes.length > 0
+                  ? 'Nothing is out yet. Auto-download in This show gets each episode as it comes out.'
+                  : 'Yoru has no episode list for this show yet.'}
+              </p>
+            )}
+
+            {guest &&
+              aired.length > 0 &&
+              (why ? (
+                <Link to="/saved" className={OPTION}>
+                  <DeviceIcon className="size-5 shrink-0 text-base-600" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium text-base-600">Save to this device</span>
+                    <span className="block text-[13px] text-base-400">{why}</span>
+                  </span>
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  className={OPTION}
+                  onClick={() => {
+                    saveEpisodes(toSave.map((episode) => ({ animeId, episode })))
+                    setNote(`Saving ${toSave.length} to this device: see Downloads, On this device`)
+                  }}
+                >
+                  <DeviceIcon className="size-5 shrink-0 text-base-300" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium text-base-100">
+                      Save {toSave.length === 1 ? '1 episode' : toSave.length} to this device
+                    </span>
+                    <span className="block text-[13px] text-base-400">Watch with the PC off</span>
+                  </span>
+                </button>
+              ))}
+
+            {note && <p className="px-3 py-2 text-sm text-base-300">{note}</p>}
+            {downloadAll.isError && (
+              <p className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm text-red-300">
+                {(downloadAll.error as Error).message}
+                <Button size="sm" onClick={start}>
+                  Try again
+                </Button>
+              </p>
+            )}
+          </div>
+        )}
+      </PopSheet>
+    </>
+  )
+}
+
+function ShowLinks({
+  anilist,
+  mal,
+  tone = 'bg-base-900 hover:bg-base-800',
+  className,
+}: {
+  anilist?: number
+  mal?: number
+  tone?: string
+  className?: string
+}) {
+  const links = [
+    anilist ? { name: 'AniList', href: `https://anilist.co/anime/${anilist}` } : null,
+    mal ? { name: 'MyAnimeList', href: `https://myanimelist.net/anime/${mal}` } : null,
+  ].filter((l) => l !== null)
+  if (links.length === 0) return null
+  return (
+    <ul className={cx('space-y-1.5', className)}>
+      {links.map((l) => (
+        <li key={l.name}>
+          <a
+            href={l.href}
+            target="_blank"
+            rel="noreferrer"
+            className={cx(
+              'flex min-h-11 items-center justify-between gap-3 rounded-card px-4 text-sm font-medium text-base-100 transition-colors',
+              tone,
+            )}
+          >
+            {l.name}
+            <span aria-hidden className="text-base-400">
+              ↗
+            </span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 const BECAUSE: Record<string, string> = {
   watching: "On because it's on Watching",
   followed: 'On',
   auto: 'On with auto-download',
 }
 
-// This show's own settings in one card, laid out as Settings' rows: a name, a line on it, its control.
-function ShowSettings({ animeId, notify }: { animeId: number; notify?: FollowState }) {
+function ThisShowRow({
+  animeId,
+  notify,
+  bookmark,
+  sync,
+}: {
+  animeId: number
+  notify?: FollowState
+  bookmark?: Bookmark
+  sync?: AnimeDetail['sync']
+}) {
   const prefs = usePrefs(animeId)
-  // Alerts don't need the prefs; the other rows wait for them.
-  if (!notify && !prefs.isSuccess) return null
+  const [open, setOpen] = useState(false)
+  const allOff = useAlertsOff()
+  const auto = prefs.data?.effective['autodownload.enabled'] === 'true'
+  const words = [
+    notify && (allOff ? 'Alerts off in Settings' : notify.on ? 'Alerts on' : 'Alerts off'),
+    prefs.data && (auto ? 'Auto-download on' : 'Auto-download off'),
+    notify?.wanted ? `Ep ${notify.wanted} downloads when out` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
   return (
-    <section className="mt-5 max-w-xl rounded-xl bg-base-900/70 px-4 ring-1 ring-white/[0.07] backdrop-blur-sm">
-      <h2 className="pt-3 text-xs font-semibold tracking-wide text-base-400 uppercase">This show</h2>
+    <>
+      <button
+        type="button"
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
+        className="press mt-4 flex min-h-14 w-full items-center gap-3 rounded-card bg-base-900 px-4 py-2.5 text-left transition-[background-color,transform] hover:bg-base-800 sm:max-w-xl"
+      >
+        <BellIcon on={!!notify?.on && !allOff} />
+        <span className="min-w-0 flex-1">
+          <span className="block text-[15px] font-medium text-base-100 sm:text-sm">This show</span>
+          <span className="block text-[13px] text-base-400">{words || 'Alerts, auto-download, release groups, your note'}</span>
+          {bookmark?.note && <span className="block truncate text-[13px] text-base-400">Note: {bookmark.note}</span>}
+        </span>
+        <span className="flex shrink-0 items-center gap-0.5 text-sm font-medium text-accent-300">
+          Change
+          <ChevronRight />
+        </span>
+      </button>
+      <Sheet open={open} onClose={() => setOpen(false)} title="This show">
+        <ShowSettings animeId={animeId} notify={notify} bookmark={bookmark} sync={sync} />
+      </Sheet>
+    </>
+  )
+}
+
+function ShowSettings({
+  animeId,
+  notify,
+  bookmark,
+  sync,
+}: {
+  animeId: number
+  notify?: FollowState
+  bookmark?: Bookmark
+  sync?: AnimeDetail['sync']
+}) {
+  const prefs = usePrefs(animeId)
+  return (
+    <>
       <div className="divide-y divide-white/[0.06]">
         {notify && <NotifyMe animeId={animeId} state={notify} />}
         <AutoDownload animeId={animeId} />
         <ShowGroups animeId={animeId} />
       </div>
-    </section>
+      {prefs.isError && !prefs.data && (
+        <p className="flex flex-wrap items-center gap-2 py-2 text-sm text-red-300">
+          Couldn't load this show's settings.
+          <Button size="sm" onClick={() => void prefs.refetch()}>
+            Try again
+          </Button>
+        </p>
+      )}
+      <Note animeId={animeId} bookmark={bookmark} />
+      <SyncNote sync={sync} />
+    </>
   )
 }
 
 function ShowRow({ label, hint, control, children }: { label: string; hint?: ReactNode; control: ReactNode; children?: ReactNode }) {
   return (
-    <div className="py-3">
-      <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-sm text-base-100">{label}</p>
-          {hint && <p className="mt-0.5 text-xs text-base-500">{hint}</p>}
-        </div>
+    <div className="pb-1">
+      <label className="flex min-h-14 cursor-pointer items-center justify-between gap-4 py-2">
+        <span className="min-w-0">
+          <span className="block text-[15px] text-base-100 sm:text-sm">{label}</span>
+          {hint && <span className="mt-0.5 block text-[13px] text-base-400">{hint}</span>}
+        </span>
         <ControlLabel.Provider value={label}>{control}</ControlLabel.Provider>
-      </div>
+      </label>
       {children}
     </div>
   )
 }
 
-// What a switch turned on brings, set in under it: it belongs to that switch, not beside the others.
 function ShowSubRow({ children }: { children: ReactNode }) {
-  return <div className="mt-2.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-l-2 border-base-700 pl-3 text-sm text-base-300">{children}</div>
+  return (
+    <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg bg-base-800 px-3 py-2 text-sm text-base-300">
+      {children}
+    </div>
+  )
 }
 
 function NotifyMe({ animeId, state }: { animeId: number; state: FollowState }) {
   const qc = useQueryClient()
-  const prefs = usePrefs(animeId)
   const update = (next: FollowState) =>
     qc.setQueryData<AnimeDetail>(['anime', animeId], (old) => (old ? { ...old, notify: next } : old))
   const set = useSetNotify(animeId)
@@ -720,7 +1345,7 @@ function NotifyMe({ animeId, state }: { animeId: number; state: FollowState }) {
     mutationFn: () => api.post<FollowState>(`/api/anime/${animeId}/want`, { episode: 0 }),
     onSuccess: update,
   })
-  const allOff = prefs.data?.defaults?.['notify.enabled'] === 'false'
+  const allOff = useAlertsOff()
   const words = allOff
     ? 'Off for every show in Settings'
     : state.on
@@ -750,17 +1375,26 @@ function NotifyMe({ animeId, state }: { animeId: number; state: FollowState }) {
           </Button>
         </ShowSubRow>
       ) : null}
-      {error && <p className="mt-2 text-xs text-recap">{error.message}</p>}
+      {error && (
+        <p className="mb-2 flex flex-wrap items-center gap-2 text-sm text-red-300">
+          {error.message}
+          <Button
+            size="sm"
+            onClick={() => (set.isError ? set.mutate(set.variables ?? !state.on) : unwant.mutate())}
+          >
+            Try again
+          </Button>
+        </p>
+      )}
     </ShowRow>
   )
 }
 
-// SeaDex's best over this show's kept episodes, offered where they're downloaded from.
 function ShowBetterCopy({ animeId }: { animeId: number }) {
   const better = useBetterCopies(animeId)
   const offer = better.data?.items[0]
   if (!offer) return null
-  return <BetterCopyOffer offer={offer} showTitle={false} className="mt-3 rounded-lg border border-base-800 p-3" />
+  return <BetterCopyOffer offer={offer} showTitle={false} className="surface mt-4 p-3 sm:max-w-xl" />
 }
 
 function AutoDownload({ animeId }: { animeId: number }) {
@@ -805,8 +1439,6 @@ function parseGroups(raw: string | undefined): string[] {
   }
 }
 
-// The show's own release lists, over the account-wide ones: groups to prefer (quality still decides first) or
-// avoid, and words to exclude.
 const SHOW_LISTS = [
   { key: 'release.prefer_groups', label: 'Prefer groups', short: 'Prefer', fallback: 'SubsPlease' },
   { key: 'release.avoid_groups', label: 'Avoid groups', short: 'Avoid', fallback: 'A group' },
@@ -818,7 +1450,6 @@ function ShowGroups({ animeId }: { animeId: number }) {
   const [open, setOpen] = useState(false)
   if (!prefs.isSuccess) return null
 
-  // What's set, in a line; the fields only while editing.
   const set = SHOW_LISTS.map((l) => ({ ...l, own: parseGroups(prefs.data.overrides?.[l.key]) })).filter((l) => l.own.length > 0)
   const summary = set.length
     ? set.map((l) => `${l.short} ${l.own.join(', ')}`).join(' · ')
@@ -834,7 +1465,7 @@ function ShowGroups({ animeId }: { animeId: number }) {
       }
     >
       {open && (
-        <div className="mt-3 space-y-2">
+        <div className="mb-2 space-y-2">
           {SHOW_LISTS.map((l) => (
             <ShowList
               key={l.key}
@@ -868,7 +1499,6 @@ function ShowList({
   fallback: string
 }) {
   const setPref = useSetPref()
-  // The field follows the saved list when it changes, set during render rather than an effect after it.
   const saved = own.join(', ')
   const [text, setText] = useState(saved)
   const [shown, setShown] = useState(saved)
@@ -877,11 +1507,19 @@ function ShowList({
     setText(saved)
   }
 
+  const sent = useRef(saved)
   const save = () => {
     const items = text.split(',').map((g) => g.trim()).filter(Boolean)
-    if (items.join(',') === own.join(',')) return
+    const value = items.join(',')
+    if (value === own.join(',') || value === sent.current) return
+    sent.current = value
     setPref.mutate({ animeId, key: setting, value: items.length > 0 ? JSON.stringify(items) : '' })
   }
+  const latest = useRef(save)
+  useEffect(() => {
+    latest.current = save
+  })
+  useEffect(() => () => latest.current(), [])
   const id = `${setting}-${animeId}`
 
   return (
@@ -901,11 +1539,13 @@ function ShowList({
       <SaveHint state={setPref} />
       {own.length > 0 && (
         <button
+          type="button"
           onClick={() => {
             setText('')
+            sent.current = ''
             setPref.mutate({ animeId, key: setting, value: '' })
           }}
-          className="text-base-500 transition-colors hover:text-base-200"
+          className="tap relative text-base-400 transition-colors hover:text-base-100"
         >
           Clear
         </button>
@@ -914,183 +1554,51 @@ function ShowList({
   )
 }
 
-// Where the show lives elsewhere, and the trailer without leaving the page.
-function ExternalLinks({ anilist, mal, trailer }: { anilist?: number; mal?: number; trailer?: string }) {
-  const [showing, setShowing] = useState(false)
-  if (!anilist && !mal && !trailer) return null
-  const link =
-    'inline-flex items-center rounded-md bg-base-850/80 px-2.5 py-1 text-xs text-base-300 transition-colors hover:bg-base-750 hover:text-white pointer-coarse:min-h-11'
-
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-1.5">
-      {trailer && (
-        <button onClick={() => setShowing(true)} className={link}>
-          ▶ Trailer
-        </button>
-      )}
-      {anilist && (
-        <a href={`https://anilist.co/anime/${anilist}`} target="_blank" rel="noreferrer" className={link}>
-          AniList ↗
-        </a>
-      )}
-      {mal && (
-        <a href={`https://myanimelist.net/anime/${mal}`} target="_blank" rel="noreferrer" className={link}>
-          MyAnimeList ↗
-        </a>
-      )}
-      {showing && trailer && <TrailerOverlay videoId={trailer} onClose={() => setShowing(false)} />}
-    </div>
-  )
-}
-
-// Show rating, 1-10 over the trackers' 0-100 scale.
-function ScoreSelect({ animeId, score }: { animeId: number; score: number }) {
-  const qc = useQueryClient()
-  const set = useMutation({
-    mutationFn: (value: number) => api.post('/api/score', { animeId, score: value }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['anime', animeId] })
-      void qc.invalidateQueries({ queryKey: ['library'] })
-    },
-  })
-  const tens = Math.round(score / 10)
-
-  // Not a native select: the OS paints those white on white here.
-  const [open, setOpen] = useState(false)
-  const close = useCallback(() => setOpen(false), [])
-  const ref = useDismiss<HTMLDivElement>(close, open)
-  const trigger = useRef<HTMLButtonElement>(null)
-  const box = useAnchorBox(trigger, open)
-  // Portalled to the end of the page: without this, Tab went on through the page, never into the menu.
-  const menuRef = useRef<HTMLDivElement>(null)
-  useModalFocus(menuRef, open)
-
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        ref={trigger}
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label="Your score"
-        onClick={() => setOpen((v) => !v)}
-        className={cx(
-          'flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium backdrop-blur-sm transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400 pointer-coarse:min-h-11',
-          tens > 0
-            ? 'bg-accent-500/20 text-accent-400 hover:bg-accent-500/30'
-            : 'bg-base-800/90 text-base-200 hover:bg-base-700',
-        )}
-      >
-        <span>★</span>
-        <span>{tens > 0 ? `${tens}/10` : 'Rate'}</span>
-      </button>
-
-      {open && box &&
-        createPortal(
-          <div
-            ref={menuRef}
-            role="menu"
-            data-portal-menu
-            style={{
-              top: Math.min(box.bottom + 6, window.innerHeight - 340),
-              left: Math.max(8, Math.min(box.left, window.innerWidth - 120)),
-            }}
-            className="fixed z-50 w-28 animate-rise overflow-hidden rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/50"
-          >
-            {Array.from({ length: 11 }, (_, i) => 10 - i).map((n) => (
-              <button
-                key={n}
-                role="menuitemradio"
-                aria-checked={n === tens}
-                autoFocus={n === tens}
-                disabled={set.isPending}
-                onClick={() => {
-                  set.mutate(n * 10)
-                  close()
-                }}
-                className={cx(
-                  'flex w-full items-center justify-between px-3 py-1.5 text-left text-sm tabular-nums transition-colors',
-                  n === tens ? 'text-accent-400' : 'text-base-200 hover:bg-base-750',
-                )}
-              >
-                {n === 0 ? 'Unrated' : n}
-                {n === tens && n > 0 && <span>★</span>}
-              </button>
-            ))}
-          </div>,
-          document.body,
-        )}
-    </div>
-  )
-}
-
-function useSetBookmark(animeId: number) {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (b: Partial<Bookmark>) => api.post('/api/bookmarks', { animeId, ...b }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['anime', animeId] })
-      void qc.invalidateQueries({ queryKey: ['bookmarks'] })
-    },
-  })
-}
-
-// Local only: a favourite is a shelf in Yoru, not a list status on a tracker.
-function FavouriteButton({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
-  const set = useSetBookmark(animeId)
-  const on = !!bookmark?.favourite
-
-  return (
-    <button
-      onClick={() => set.mutate({ favourite: !on })}
-      disabled={set.isPending}
-      aria-pressed={on}
-      title={on ? 'Remove from favourites' : 'Add to favourites'}
-      className={cx(
-        'rounded-lg px-4 py-2 text-sm font-medium backdrop-blur-sm transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400 pointer-coarse:min-h-11',
-        on ? 'bg-accent-500/20 text-accent-300' : 'bg-base-800/90 text-base-200 hover:bg-base-700',
-      )}
-    >
-      {on ? '♥ Favourite' : '♡ Favourite'}
-    </button>
-  )
-}
-
-// A private note saved on blur, sent alone so a Favourite click with the blur can't revert it.
 function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
   const set = useSetBookmark(animeId)
   const saved = bookmark?.note ?? ''
   const [text, setText] = useState(saved)
   const [open, setOpen] = useState(!!saved)
-  // The note follows the saved one when it changes, set during render rather than an effect after it.
   const [shown, setShown] = useState(saved)
   if (shown !== saved) {
     setShown(saved)
     setText(saved)
   }
 
+  const sent = useRef(saved)
+  const save = () => {
+    if (text === saved || text === sent.current) return
+    sent.current = text
+    set.mutate({ note: text })
+  }
+  const latest = useRef(save)
+  useEffect(() => {
+    latest.current = save
+  })
+  useEffect(() => () => latest.current(), [])
+  const id = `note-${animeId}`
+
   if (!open) {
     return (
-      <button
-        onClick={() => setOpen(true)}
-        className="mt-2 text-xs text-base-500 transition-colors hover:text-base-200 pointer-coarse:min-h-11"
-      >
+      <Button size="sm" className="mt-3" onClick={() => setOpen(true)}>
+        <PencilIcon />
         Add a note
-      </button>
+      </Button>
     )
   }
   return (
-    <div className="mt-3 max-w-xl space-y-1">
+    <div className="mt-3 space-y-1">
+      <label htmlFor={id} className="block text-[13px] font-semibold text-base-400">
+        Your note
+      </label>
       <textarea
+        id={id}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        onBlur={() => {
-          if (text !== (bookmark?.note ?? '')) set.mutate({ note: text })
-        }}
-        aria-label="Note"
+        onBlur={save}
         placeholder="Your note (only you see it)"
         rows={2}
-        className={cx(inputClass, 'block w-full')}
+        className={cx(inputClass, 'block h-auto w-full py-2 pointer-coarse:h-auto')}
       />
       <SaveHint state={set} />
     </div>
@@ -1105,7 +1613,6 @@ const KIND_LABELS: Record<string, string> = {
   SUMMARY: 'Recap',
 }
 
-// Display order. An unlisted label sorts last rather than vanishing.
 const KIND_ORDER = [
   'Movie',
   'Special',
@@ -1124,7 +1631,6 @@ function rank(kind: string): number {
   return i === -1 ? KIND_ORDER.length : i
 }
 
-/** Films, OVAs and spin-offs: one rail for a handful, one per kind for a franchise like Conan. */
 function RelatedRails({ entries }: { entries: RelatedEntry[] }) {
   if (entries.length === 0) return null
 
@@ -1151,7 +1657,6 @@ function RelatedRails({ entries }: { entries: RelatedEntry[] }) {
   )
 }
 
-// No Show all: the rail scrolls, and the heading carries the count.
 function RelatedRail({
   title,
   entries,
@@ -1175,7 +1680,6 @@ function plural(kind: string): string {
   return kind === 'Alternative' ? 'Alternatives' : `${kind}s`
 }
 
-// A film says "Movie"; the edge type shows only when the format doesn't say what it is.
 function label(e: RelatedEntry): string {
   if (e.format === 'MOVIE') return 'Movie'
   if (e.kind === 'SUMMARY') return 'Recap'
@@ -1194,63 +1698,194 @@ function SeasonChip({
   current: boolean
   kind?: string
 }) {
-  // The tag first, as a season marked completed has no progress count to infer from.
   const tag = statusLabel(season.listStatus)
-  const watched =
-    season.progress > 0
-      ? season.episodes && season.progress >= season.episodes
-        ? 'Finished'
-        : `${season.progress} watched`
-      : ''
+  const finished = !!season.episodes && season.progress >= season.episodes
+  const watched = season.progress > 0 ? (finished ? 'Finished' : `${season.progress} watched`) : ''
+  const done = season.listStatus === 'COMPLETED' || (!tag && finished)
 
   return (
     <Link
       to={`/anime/${season.id}`}
+      aria-current={current ? 'page' : undefined}
       className={cx(
-        'flex w-56 shrink-0 items-center gap-2.5 rounded-lg border p-2 transition-colors',
-        current
-          ? 'border-accent-500/50 bg-accent-500/10'
-          : 'border-base-850 bg-base-900/40 hover:bg-base-850',
+        'flex w-56 shrink-0 items-center gap-2.5 rounded-card p-2 transition-colors',
+        current ? 'bg-accent-500/15' : 'bg-base-900 hover:bg-base-800',
       )}
     >
       {season.cover ? (
-        <img src={season.cover} alt="" loading="lazy" className="h-14 w-10 shrink-0 rounded object-cover" />
+        <img src={season.cover} alt="" loading="lazy" className="h-14 w-10 shrink-0 rounded-md object-cover" />
       ) : (
-        <div className="h-14 w-10 shrink-0 rounded bg-base-850" />
+        <div className="h-14 w-10 shrink-0 rounded-md bg-base-800" />
       )}
       <div className="min-w-0">
-        {kind && (
-          <p className="text-[10px] font-semibold tracking-wider text-base-500 uppercase">{kind}</p>
-        )}
-        <p className="line-clamp-2 text-xs leading-snug text-base-100">
+        {kind && <p className="text-xs font-semibold text-base-400">{kind}</p>}
+        <p className="line-clamp-2 text-[13px] leading-snug text-base-100" title={season.english || season.romaji || undefined}>
           {season.english || season.romaji || `Anime ${season.id}`}
         </p>
-        <p className="mt-0.5 text-[11px] text-base-500">
+        <p className="mt-0.5 text-xs text-base-500 tabular-nums">
           {season.year ?? 'TBA'}
-          {season.episodes ? ` · ${season.episodes} ep` : ''}
+          {season.episodes ? ` · ${season.episodes} eps` : ''}
         </p>
         {(tag || watched) && (
-          <p className="text-[11px] text-accent-400">{tag || watched}</p>
+          <p className={cx('text-xs', done ? 'text-emerald-300' : 'text-accent-300')}>{tag || watched}</p>
         )}
       </div>
     </Link>
   )
 }
 
-// AniList and MyAnimeList hold different catalogues, so a show can be missing
-// from one. Saying so explains why progress reaches only one tracker.
 function SyncNote({ sync }: { sync?: { anilist: boolean; mal: boolean } }) {
   if (!sync) return null
-
   const targets = [sync.anilist && 'AniList', sync.mal && 'MyAnimeList'].filter(Boolean)
-  if (targets.length === 0) {
-    return <p className="mt-3 text-xs text-base-500">Not on either tracker, so progress stays in Yoru.</p>
-  }
-
   return (
-    <p className="mt-3 text-xs text-base-500">
-      Syncs to {targets.join(' and ')}
-      {targets.length === 1 && ' only'}.
+    <p className="mt-3 text-[13px] text-base-400">
+      {targets.length === 0
+        ? 'Not on either tracker, so progress stays in Yoru.'
+        : `Syncs to ${targets.join(' and ')}${targets.length === 1 ? ' only' : ''}.`}
     </p>
+  )
+}
+
+const ICON = 'size-6 shrink-0 sm:size-4'
+
+function BookmarkIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className={ICON} aria-hidden>
+      <path
+        d="M6 4.5A1.5 1.5 0 0 1 7.5 3h9A1.5 1.5 0 0 1 18 4.5v16l-6-4-6 4v-16Z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function StarIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className={ICON} aria-hidden>
+      <path
+        d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9L12 3.5Z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function HeartIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className={cx(ICON, filled && 'text-accent-300')} aria-hidden>
+      <path
+        d="M12 20s-7.5-4.6-7.5-10.1A4.4 4.4 0 0 1 12 7.2a4.4 4.4 0 0 1 7.5 2.7C19.5 15.4 12 20 12 20Z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function DownloadIcon({ className = ICON }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden>
+      <path
+        d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function DeviceIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden>
+      <rect x="7" y="3" width="10" height="18" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M11 18h2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function BellIcon({ on }: { on: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className="size-5 shrink-0 text-base-300" aria-hidden>
+      <path
+        d="M6 16.5V11a6 6 0 1 1 12 0v5.5l1.5 1.5h-15L6 16.5ZM10 20.5a2 2 0 0 0 4 0"
+        fill={on ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function PencilIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4 shrink-0" aria-hidden>
+      <path
+        d="M4.5 19.5h4l10-10a2.1 2.1 0 0 0-3-3l-10 10v3Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function ChevronDown() {
+  return (
+    <svg viewBox="0 0 20 20" className="size-3.5 shrink-0 text-base-400" aria-hidden>
+      <path d="M6 8l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function ChevronRight() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4 shrink-0" aria-hidden>
+      <path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function CheckIcon({ className = 'size-4 shrink-0' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden>
+      <path d="m5 13 4 4L19 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function RewatchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <path
+        d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 0 1-13.7 5.6L4 15.5M4 20v-4.5h4.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function ClockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M12 7.5V12l3 2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
   )
 }

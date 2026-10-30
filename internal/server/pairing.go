@@ -189,9 +189,9 @@ Pair a device:</p><div class="code">` + code[:3] + "-" + code[3:] + `</div><p cl
 			` · the code lasts 10 minutes. This page opens Yoru as soon as it's entered.</p>`
 	}
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b0d12">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b0c10">
 <title>Pair with Yoru</title><style>
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d12;color:#d6dbe6;font:18px/1.5 system-ui,sans-serif}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0c10;color:#d6dbe6;font:18px/1.5 system-ui,sans-serif}
 main{max-width:30rem;padding:2rem;text-align:center}h1{font-size:1.5rem;margin:0 0 .75rem}p{margin:0;color:#8b93a7}
 .code{margin:1.5rem 0;font:600 3.5rem/1 ui-monospace,monospace;letter-spacing:.15em;color:#fff}.small{font-size:.9rem}
 </style></head><body><main><h1>Pair this device</h1>` + shown + `</main>

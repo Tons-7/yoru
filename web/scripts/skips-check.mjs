@@ -86,23 +86,23 @@ const playing = () => until(() => video.evaluate((v) => !v.paused && v.currentTi
 await page.goto(`${BASE}/watch/${ANIME}/8`, { waitUntil: 'domcontentloaded' })
 await playing()
 const perShow = page.waitForRequest((r) => r.url().endsWith('/api/prefs') && r.postDataJSON()?.key === 'playback.autoskip_op')
-await page.getByRole('switch', { name: 'Skip opening' }).click()
+await page.getByRole('button', { name: 'Audio & subtitles', exact: true }).last().click()
+await page.getByRole('radiogroup', { name: 'Skip openings' }).getByRole('radio', { name: 'Auto' }).click()
 const sent = (await perShow).postDataJSON()
-check(sent.value === 'true' && sent.animeId === ANIME, 'the watch page sets Skip opening for this show', JSON.stringify(sent))
+check(sent.value === 'auto' && sent.animeId === ANIME, 'the watch page sets Skip openings to Auto for this show', JSON.stringify(sent))
 await sleep(800)
 
-// Auto-skip, then "Watch it" for a moment, which goes back and plays it through.
 await page.goto(`${BASE}/watch/${ANIME}/8`, { waitUntil: 'domcontentloaded' })
 await playing()
 await video.evaluate((v, at) => (v.currentTime = at), found.start - 1.5)
-const watchIt = page.getByRole('button', { name: 'Watch it' })
-check(await until(() => watchIt.isVisible(), 15_000), 'after skipping the opening it offers to watch it',
+const undo = page.getByRole('button', { name: 'Undo', exact: true })
+check(await until(() => undo.isVisible(), 15_000), 'after skipping the opening it offers Undo',
   await video.evaluate((v, s) => `at ${v.currentTime.toFixed(1)}s paused=${v.paused} ready=${v.readyState}, opening from ${s}`, found.start))
-await page.screenshot({ path: `${SHOTS}/skips-watch-it.png` })
+await page.screenshot({ path: `${SHOTS}/skips-undo.png` })
 // Its first half second ignores taps: the second of a double tap on Skip.
 await sleep(600)
-await watchIt.click()
-check(await until(() => video.evaluate((v, s) => v.currentTime >= s - 1 && v.currentTime < s + 6, found.start)), 'Watch it goes back to the song')
+await undo.click()
+check(await until(() => video.evaluate((v, s) => v.currentTime >= s - 1 && v.currentTime < s + 6, found.start)), 'Undo goes back to the song')
 await sleep(2500)
 check(await video.evaluate((v, s) => v.currentTime > s + 1, found.start), 'and plays it rather than skipping again')
 
@@ -110,8 +110,8 @@ check(await video.evaluate((v, s) => v.currentTime > s + 1, found.start), 'and p
 await page.goto(`${BASE}/watch/${ANIME}/8`, { waitUntil: 'domcontentloaded' })
 await playing()
 await video.evaluate((v, at) => (v.currentTime = at), found.start - 1.5)
-await until(() => watchIt.isVisible(), 15_000)
-check(await until(async () => !(await watchIt.isVisible()), 6000), 'Watch it goes after about three seconds')
+await until(() => undo.isVisible(), 15_000)
+check(await until(async () => !(await undo.isVisible()), 8000), 'Undo goes after about five seconds')
 
 // Marking your own ending from the player's skip times menu.
 await page.mouse.move(640, 400)

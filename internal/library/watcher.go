@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +16,6 @@ import (
 	"yoru/internal/store"
 )
 
-// Watcher polls followed shows for new episodes, raises notifications, and optionally grabs them.
 type Watcher struct {
 	store   *store.Store
 	finder  *Finder
@@ -23,18 +23,101 @@ type Watcher struct {
 	queue   *Downloader
 	log     *slog.Logger
 
-	// waiting: episodes found only in audio the notifications don't ask for, and when last searched.
-	waitMu  sync.Mutex
-	waiting map[[2]int]time.Time
-	// lookedAt: when a taken episode was last searched for a better release.
-	lookedAt map[[2]int]time.Time
+	waitMu     sync.Mutex
+	waiting    map[[2]int]time.Time
+	lookedAt   map[[2]int]time.Time
+	searchedAt map[[2]int]time.Time
 }
 
-// How long such an episode waits before it is searched again: a dub comes days after the sub, and searching
-// it every poll spends each site's budget on nothing. A var so tests need not wait.
+func (w *Watcher) searched(animeID, episode int) {
+	w.waitMu.Lock()
+	defer w.waitMu.Unlock()
+	if w.searchedAt == nil {
+		w.searchedAt = map[[2]int]time.Time{}
+	}
+	w.searchedAt[[2]int{animeID, episode}] = time.Now()
+}
+
+func (w *Watcher) CheckedAt(animeID, episode int) (time.Time, bool) {
+	w.waitMu.Lock()
+	defer w.waitMu.Unlock()
+	at, ok := w.searchedAt[[2]int{animeID, episode}]
+	return at, ok
+}
+
+const searchedFor = 7 * 24 * time.Hour
+
+func (w *Watcher) pruneSearched(follows []store.Follow) {
+	followed := map[int]bool{}
+	for _, f := range follows {
+		followed[f.AnimeID] = true
+	}
+	w.waitMu.Lock()
+	defer w.waitMu.Unlock()
+	for key, at := range w.searchedAt {
+		if !followed[key[0]] || time.Since(at) > searchedFor {
+			delete(w.searchedAt, key)
+		}
+	}
+}
+
+type Coverage struct {
+	Latest, Progress, Episodes, First, Wanted int
+	Auto                                      bool
+}
+
+func (c Coverage) wantedOut() bool {
+	return c.Wanted > 0 && c.Wanted <= c.Latest
+}
+
+func (c Coverage) inWindow() bool {
+	return c.Latest > c.Progress && c.Latest <= c.Progress+maxBacklog && (c.Episodes <= 0 || c.Latest <= c.Episodes)
+}
+
+func (c Coverage) catchesUp(episode int) bool {
+	return c.Auto && c.First > 0 && episode > max(c.Progress, c.First) && episode < c.Latest
+}
+
+func (c Coverage) Searches(episode int) bool {
+	if c.Wanted > 0 && episode == c.Wanted {
+		return c.wantedOut()
+	}
+	return c.inWindow() && (episode == c.Latest || c.catchesUp(episode))
+}
+
+func (w *Watcher) Coverage(ctx context.Context) map[int]Coverage {
+	out := map[int]Coverage{}
+	global, err := w.store.Prefs(ctx, 0)
+	if err != nil {
+		return out
+	}
+	rows, err := w.store.WatchRows(ctx)
+	if err != nil {
+		w.log.Warn("release watch coverage", "err", err)
+		return out
+	}
+	flag := func(own, key string) bool {
+		if own != "" {
+			return own == "true"
+		}
+		return global.Bool(key)
+	}
+	now := time.Now().Unix()
+	for _, r := range rows {
+		notify, auto := flag(r.Notify, "notify.enabled"), flag(r.Auto, "autodownload.enabled")
+		wanted, _ := strconv.Atoi(r.Want)
+		if !notify && !auto && wanted <= 0 {
+			continue
+		}
+		out[r.AnimeID] = Coverage{
+			Latest: r.Latest(now), Progress: r.Progress, Episodes: r.Episodes, First: r.First, Wanted: wanted, Auto: auto,
+		}
+	}
+	return out
+}
+
 var recheckWanted = 6 * time.Hour
 
-// waitingFor reports an episode searched lately without what the notifications want; seen marks it so.
 func (w *Watcher) waitingFor(animeID, episode int) bool {
 	w.waitMu.Lock()
 	defer w.waitMu.Unlock()
@@ -60,7 +143,6 @@ func NewWatcher(s *store.Store, f *Finder, idx indexer.Source, log *slog.Logger)
 	return &Watcher{store: s, finder: f, indexer: idx, log: log}
 }
 
-// WithDownloader enables auto-download. Without it the watcher only notifies.
 func (w *Watcher) WithDownloader(d *Downloader) *Watcher { w.queue = d; return w }
 
 type WatchReport struct {
@@ -77,7 +159,6 @@ func (w *Watcher) Poll(ctx context.Context) (WatchReport, error) {
 	if err != nil {
 		return rep, err
 	}
-	// Notifications and auto-download are separate; either is reason to look.
 	notifyOn := prefs.Bool("notify.enabled")
 	want := audioFilter(prefs.String("notify.releases"))
 
@@ -89,8 +170,6 @@ func (w *Watcher) Poll(ctx context.Context) (WatchReport, error) {
 
 	for _, f := range follows {
 		auto := w.autoDownload(ctx, f.AnimeID)
-		// The global switch, which a show's page can turn off for it alone; and one episode asked for from the
-		// player, downloaded when out without auto-downloading the rest.
 		notifyOn, wanted := notifyOn, 0
 		if p, err := w.store.Prefs(ctx, f.AnimeID); err == nil {
 			notifyOn, wanted = p.Bool("notify.enabled"), p.Int("autodownload.want")
@@ -100,20 +179,19 @@ func (w *Watcher) Poll(ctx context.Context) (WatchReport, error) {
 		}
 		rep.Checked++
 
-		// News is the last episode aired and only that: the backlog is known, a long-finished show is silent.
 		latest := f.Latest(time.Now().Unix())
+		c := Coverage{Latest: latest, Progress: f.Progress, Episodes: f.Episodes, Wanted: wanted, Auto: auto}
 		if auto {
 			w.settle(ctx, f, latest, &rep)
 		}
-		// The asked episode itself once aired, not the latest: a raw-only week or Yoru being off parts them.
-		if wanted > 0 && wanted <= latest {
+		if c.wantedOut() {
 			w.fetchWanted(ctx, f.AnimeID, wanted, notifyOn, want, &rep)
 		}
-		if latest <= f.Progress || latest > f.Progress+maxBacklog || (f.Episodes > 0 && latest > f.Episodes) {
+		if !c.inWindow() {
 			continue
 		}
 		if auto {
-			w.catchUp(ctx, f, latest, want, &rep)
+			w.catchUp(ctx, f.AnimeID, c, want, &rep)
 		}
 		if seen, _ := w.store.AlreadyNotified(ctx, "", f.AnimeID, latest); seen || w.waitingFor(f.AnimeID, latest) {
 			continue
@@ -121,23 +199,21 @@ func (w *Watcher) Poll(ctx context.Context) (WatchReport, error) {
 		w.check(ctx, f.AnimeID, latest, notifyOn, auto, want, &rep)
 	}
 	w.dropOrphanWaits(ctx, follows)
+	w.pruneSearched(follows)
 	return rep, nil
 }
 
-// fetchWanted downloads the one episode asked for from the player, and forgets the ask once it's taken.
 func (w *Watcher) fetchWanted(ctx context.Context, animeID, episode int, notifyOn bool, want func(parse.Release) bool, rep *WatchReport) {
 	forget := func() { w.store.SetAnimePref(ctx, animeID, "autodownload.want", "") }
 	switch {
 	case w.store.HeldEpisode(ctx, animeID, episode):
 		forget()
 	case !w.store.EpisodeFetched(ctx, animeID, episode):
-		// Found and confirmed first: queued blind, a raw-only episode would only fail in the queue.
 		w.check(ctx, animeID, episode, notifyOn, true, want, rep)
 		if w.store.EpisodeFetched(ctx, animeID, episode) {
 			forget()
 		}
 	default:
-		// Announced before it was asked for, so check would take it as done.
 		if w.download(ctx, animeID, episode, nil) {
 			rep.Downloaded++
 			forget()
@@ -145,7 +221,6 @@ func (w *Watcher) fetchWanted(ctx context.Context, animeID, episode int, notifyO
 	}
 }
 
-// dropOrphanWaits ends holds no settle will reach: auto-download turned off, or the show no longer followed.
 func (w *Watcher) dropOrphanWaits(ctx context.Context, follows []store.Follow) {
 	waits, err := w.store.Waits(ctx, 0)
 	if err != nil || len(waits) == 0 {
@@ -162,7 +237,6 @@ func (w *Watcher) dropOrphanWaits(ctx context.Context, follows []store.Follow) {
 	}
 }
 
-// announceDelays tells of followed shows' episodes AniList moved later; the rest are let go, said to no one.
 func (w *Watcher) announceDelays(ctx context.Context, follows []store.Follow, notifyOn bool, rep *WatchReport) {
 	delays, err := w.store.UnannouncedDelays(ctx)
 	if err != nil || len(delays) == 0 {
@@ -201,28 +275,21 @@ func (w *Watcher) announceDelays(ctx context.Context, follows []store.Follow, no
 	}
 }
 
-// How far past progress an episode can be and still be news; beyond it the catalogue is suspect.
 const maxBacklog = 200
 
-// Earlier episodes one poll fetches per show, so a long absence costs the sites a few searches a run.
 const catchUpPerPoll = 4
 
-// catchUp queues what the watch missed since it first saw the show, before the latest, oldest first and with
-// no bell; a backlog from before then is Download all's. One found nowhere waits like an unwanted one.
-func (w *Watcher) catchUp(ctx context.Context, f store.Follow, latest int, want func(parse.Release) bool, rep *WatchReport) {
-	first := w.store.FirstRecorded(ctx, f.AnimeID)
-	if first == 0 {
-		return
-	}
+func (w *Watcher) catchUp(ctx context.Context, animeID int, c Coverage, want func(parse.Release) bool, rep *WatchReport) {
+	c.First = w.store.FirstRecorded(ctx, animeID)
 	tried := 0
-	for ep := max(f.Progress, first) + 1; ep < latest && tried < catchUpPerPoll; ep++ {
-		if w.store.EpisodeFetched(ctx, f.AnimeID, ep) || w.waitingFor(f.AnimeID, ep) || w.store.HeldEpisode(ctx, f.AnimeID, ep) {
+	for ep := max(c.Progress, c.First) + 1; c.catchesUp(ep) && tried < catchUpPerPoll; ep++ {
+		if w.store.EpisodeFetched(ctx, animeID, ep) || w.waitingFor(animeID, ep) || w.store.HeldEpisode(ctx, animeID, ep) {
 			continue
 		}
 		tried++
-		w.check(ctx, f.AnimeID, ep, false, true, want, rep)
-		if !w.store.EpisodeFetched(ctx, f.AnimeID, ep) {
-			w.setWaiting(f.AnimeID, ep, true)
+		w.check(ctx, animeID, ep, false, true, want, rep)
+		if !w.store.EpisodeFetched(ctx, animeID, ep) {
+			w.setWaiting(animeID, ep, true)
 		}
 	}
 }
@@ -231,15 +298,14 @@ func (w *Watcher) check(ctx context.Context, animeID, episode int, notifyOn, aut
 	found, err := w.finder.Find(ctx, Request{
 		AnimeID: animeID,
 		Episode: episode,
-		// Season left to the finder, which reads it from the title.
-		Prefs: w.prefsFor(ctx, animeID),
+		Prefs:   w.prefsFor(ctx, animeID),
 	})
 	if err != nil {
 		w.log.Warn("watch poll", "anime", animeID, "episode", episode, "err", err)
 		return
 	}
+	w.searched(animeID, episode)
 
-	// Confirmed only, or a guessed pack announces an unreleased episode; notify and fetch filter separately.
 	var announce, fetch *score.Result
 	for i := range found.Results {
 		r := &found.Results[i]
@@ -260,7 +326,6 @@ func (w *Watcher) check(ctx context.Context, animeID, episode int, notifyOn, aut
 		return
 	}
 	rep.Found++
-	// Downloaded once per episode, whichever release (or later announcement) comes first.
 	fetchedBefore := w.store.EpisodeFetched(ctx, animeID, episode)
 
 	switch {
@@ -269,7 +334,6 @@ func (w *Watcher) check(ctx context.Context, animeID, episode int, notifyOn, aut
 			w.log.Warn("record release", "err", err)
 		}
 	case announce == nil:
-		// Nothing the notifications ask for yet (a sub, when they want a dub): it stays news for a later one.
 		if err := w.store.RecordFetched(ctx, fetch.Torrent.InfoHash, animeID, episode); err != nil {
 			w.log.Warn("record release", "err", err)
 		}
@@ -283,13 +347,11 @@ func (w *Watcher) check(ctx context.Context, animeID, episode int, notifyOn, aut
 		}
 	}
 
-	// Held while the show waits for a preferred group or a higher resolution; settle takes it after.
 	if auto && !fetchedBefore && !w.holding(ctx, animeID, episode, *fetch) && w.download(ctx, animeID, episode, nil) {
 		rep.Downloaded++
 	}
 }
 
-// asked is the episode the player asked to download when it's out, 0 for none.
 func (w *Watcher) asked(ctx context.Context, animeID int) int {
 	p, err := w.store.Prefs(ctx, animeID)
 	if err != nil {
@@ -298,7 +360,6 @@ func (w *Watcher) asked(ctx context.Context, animeID int) int {
 	return p.Int("autodownload.want")
 }
 
-// waitFor is how long the show's auto-download holds a new episode for a better release; 0 takes the first.
 func (w *Watcher) waitFor(ctx context.Context, animeID int) time.Duration {
 	p, err := w.store.Prefs(ctx, animeID)
 	if err != nil {
@@ -307,9 +368,7 @@ func (w *Watcher) waitFor(ctx context.Context, animeID int) time.Duration {
 	return time.Duration(max(0, p.Int64("autodownload.wait_hours"))) * time.Hour
 }
 
-// holding starts or continues the episode's wait for a better release than best; true while it lasts.
 func (w *Watcher) holding(ctx context.Context, animeID, episode int, best score.Result) bool {
-	// An episode asked for from the player is taken as found: only auto-download's own picks wait.
 	wait := w.waitFor(ctx, animeID)
 	if wait == 0 || !w.autoDownload(ctx, animeID) || w.asked(ctx, animeID) == episode ||
 		score.Ideal(best, w.prefsFor(ctx, animeID)) {
@@ -327,14 +386,11 @@ func (w *Watcher) holding(ctx context.Context, animeID, episode int, best score.
 	return true
 }
 
-// How long after taking a release the watch looks for a better one, and how often: a v2 lands within a day.
 const (
 	lookAgainFor   = 48 * time.Hour
 	lookAgainEvery = 6 * time.Hour
 )
 
-// settle takes held episodes when their wait ends or the release they wait for lands. And while a taken episode
-// is unwatched, it swaps it for the group's fixed v2, or, with a wait set, for a release that ranks above it.
 func (w *Watcher) settle(ctx context.Context, f store.Follow, latest int, rep *WatchReport) {
 	prefs := w.prefsFor(ctx, f.AnimeID)
 	wait := w.waitFor(ctx, f.AnimeID)
@@ -345,7 +401,6 @@ func (w *Watcher) settle(ctx context.Context, f store.Follow, latest int, rep *W
 	held := map[int]bool{}
 	for _, h := range waits {
 		held[h.Episode] = true
-		// Watched, or taken another way meanwhile (played, picked by hand): nothing left to wait for.
 		if h.Episode <= f.Progress || w.store.HeldEpisode(ctx, f.AnimeID, h.Episode) {
 			w.store.EndWait(ctx, f.AnimeID, h.Episode)
 			continue
@@ -371,7 +426,6 @@ func (w *Watcher) settle(ctx context.Context, f store.Follow, latest int, rep *W
 			continue
 		}
 		taken, ok, err := w.store.TorrentForEpisode(ctx, f.AnimeID, epKey(ep))
-		// Only auto-download's own take is swapped: not one picked by hand, nor one already being watched.
 		if err != nil || !ok || taken.Manual {
 			continue
 		}
@@ -399,17 +453,16 @@ func (w *Watcher) settle(ctx context.Context, f store.Follow, latest int, rep *W
 	}
 }
 
-// find ranks the episode's releases, nil when the sites can't be asked.
 func (w *Watcher) find(ctx context.Context, animeID, episode int, prefs scorePrefs) []score.Result {
 	found, err := w.finder.Find(ctx, Request{AnimeID: animeID, Episode: episode, Prefs: prefs})
 	if err != nil {
 		w.log.Warn("watch poll", "anime", animeID, "episode", episode, "err", err)
 		return nil
 	}
+	w.searched(animeID, episode)
 	return found.Results
 }
 
-// firstConfirmed is the best release that states the episode and may start on its own.
 func firstConfirmed(ranked []score.Result) *score.Result {
 	for i := range ranked {
 		if ranked[i].AutoPick && ranked[i].Confirmed {
@@ -434,20 +487,16 @@ func (w *Watcher) looked(animeID, episode int) {
 	w.lookedAt[[2]int{animeID, episode}] = time.Now()
 }
 
-// PreviewRow is what auto-download would do next for one show, and why.
 type PreviewRow struct {
 	AnimeID int    `json:"animeId"`
 	Title   string `json:"title"`
 	Episode int    `json:"episode,omitempty"`
-	// download, wait, blocked, none (nothing found), have (on disk), queued, taken (found once, not on disk),
-	// current (nothing new aired).
 	State   string `json:"state"`
 	Release string `json:"release,omitempty"`
 	Size    int64  `json:"size,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 }
 
-// Preview says, show by show, what auto-download would take next and why, taking and recording nothing.
 func (w *Watcher) Preview(ctx context.Context) ([]PreviewRow, error) {
 	follows, err := w.store.Follows(ctx)
 	if err != nil {
@@ -480,7 +529,6 @@ func (w *Watcher) Preview(ctx context.Context) ([]PreviewRow, error) {
 		case queued[[2]int{f.AnimeID, latest}]:
 			row.State, row.Episode = "queued", latest
 		case !holds[[2]int{f.AnimeID, latest}] && w.store.EpisodeFetched(ctx, f.AnimeID, latest):
-			// Found once already: the watch takes an episode one time, so it won't fetch this one again.
 			row.State, row.Episode = "taken", latest
 		default:
 			row.Episode = latest
@@ -488,7 +536,6 @@ func (w *Watcher) Preview(ctx context.Context) ([]PreviewRow, error) {
 		}
 		out = append(out, row)
 	}
-	// A few at a time: one by one, a long follow list keeps the page waiting; all at once, the sites limit.
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, previewSearches)
 	for _, i := range search {
@@ -502,7 +549,6 @@ func (w *Watcher) Preview(ctx context.Context) ([]PreviewRow, error) {
 	return out, nil
 }
 
-// previewSearches is how many shows Preview searches at once.
 const previewSearches = 3
 
 func (w *Watcher) previewEpisode(ctx context.Context, row *PreviewRow) {
@@ -531,20 +577,15 @@ func plainHours(d time.Duration) string {
 	return "1 hour"
 }
 
-// Per-anime prefs overlay the global switch.
 func (w *Watcher) autoDownload(ctx context.Context, animeID int) bool {
 	prefs, err := w.store.Prefs(ctx, animeID)
 	return err == nil && prefs.Bool("autodownload.enabled")
 }
 
-// Queued, so many shows updating at once don't start as many downloads, and behind manual ones. A pick is
-// the release to take, over a copy already held; nil lets the queue choose.
 func (w *Watcher) download(ctx context.Context, animeID, episode int, pick *score.Result) bool {
 	if w.queue == nil {
 		return false
 	}
-	// Season 0: the finder derives it from the title, as the manual path does.
-	// Forcing 1 makes it reject every season-2 release it just announced.
 	var err error
 	if pick != nil {
 		err = w.store.EnqueueRelease(ctx, animeID, 0, episode, pick.Torrent.InfoHash, pick.Torrent.Title)
@@ -583,7 +624,6 @@ func (w *Watcher) prefsFor(ctx context.Context, animeID int) scorePrefs {
 	return prefsFromSettings(p)
 }
 
-// A dual-audio release satisfies both preferences; the track is chosen at playback.
 func audioFilter(pref string) func(parse.Release) bool {
 	switch strings.ToLower(pref) {
 	case "dub":
@@ -593,14 +633,12 @@ func audioFilter(pref string) func(parse.Release) bool {
 	case "either", "both":
 		return func(parse.Release) bool { return true }
 	default:
-		// Subbed releases carry no marker, so only an explicitly dub-only one is excluded.
 		return func(r parse.Release) bool {
 			return r.DualAudio || !mentionsDub(r)
 		}
 	}
 }
 
-// The original filename, as Title has lost bracketed tags like "[Dual Audio]".
 func mentionsDub(r parse.Release) bool {
 	lower := strings.ToLower(r.Raw)
 	return strings.Contains(lower, "dub") || strings.Contains(lower, "english audio")

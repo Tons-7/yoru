@@ -1,4 +1,3 @@
-// Package disk says how much room the drive holding a folder has left.
 package disk
 
 import (
@@ -6,13 +5,16 @@ import (
 	"runtime"
 )
 
-// Free is the space left for this user on the drive holding dir, and the name people know that drive by.
 func Free(dir string) (bytes int64, drive string, err error) {
-	bytes, err = free(dir)
+	bytes, _, err = space(dir)
 	return bytes, Drive(dir), err
 }
 
-// Drive is "D:" on Windows, else the folder itself, which is what a person would look for.
+func Space(dir string) (free, total int64, drive string, err error) {
+	free, total, err = space(dir)
+	return free, total, Drive(dir), err
+}
+
 func Drive(dir string) string {
 	if runtime.GOOS == "windows" {
 		if v := filepath.VolumeName(dir); v != "" {

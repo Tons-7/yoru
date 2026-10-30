@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useState } from 'react'
 import type { Anime4KPipeline } from 'anime4k-webgpu'
+import { readKey, writeKey } from '../lib/storage'
 
 /** Anime4K via WebGPU, with mpv's mode names; best-effort, every failure plays plain. */
 export function webgpuAvailable(): boolean {
@@ -17,35 +18,19 @@ const DEVICE_KEY = 'yoru.anime4k'
 const AUTO_KEY = 'yoru.anime4k.auto'
 const TIERS: readonly string[] = ['light', 'balanced', 'full']
 
-const read = (key: string) => {
-  try {
-    return localStorage.getItem(key)
-  } catch {
-    return null
-  }
-}
-const write = (key: string, value: string | null) => {
-  try {
-    if (value === null) localStorage.removeItem(key)
-    else localStorage.setItem(key, value)
-  } catch {
-    // Private mode: the choice lasts for the page.
-  }
-}
-
 export function deviceUpscale(): DeviceUpscale {
-  const v = read(DEVICE_KEY)
+  const v = readKey(DEVICE_KEY)
   // "on" is what the first per-device version stored.
   if (v === 'on') return 'full'
   return v === 'off' || TIERS.includes(v ?? '') ? (v as DeviceUpscale) : 'auto'
 }
-export const setDeviceUpscale = (choice: DeviceUpscale) => write(DEVICE_KEY, choice === 'auto' ? null : choice)
+export const setDeviceUpscale = (choice: DeviceUpscale) => writeKey(DEVICE_KEY, choice === 'auto' ? null : choice)
 
 export function autoTier(): AutoTier | null {
-  const v = read(AUTO_KEY)
+  const v = readKey(AUTO_KEY)
   return v === 'off' || TIERS.includes(v ?? '') ? (v as AutoTier) : null
 }
-export const setAutoTier = (tier: AutoTier | null) => write(AUTO_KEY, tier)
+export const setAutoTier = (tier: AutoTier | null) => writeKey(AUTO_KEY, tier)
 
 /** One step down from tier; past light it is off. */
 export const lowerTier = (tier: UpscaleTier): AutoTier => (tier === 'full' ? 'balanced' : tier === 'balanced' ? 'light' : 'off')

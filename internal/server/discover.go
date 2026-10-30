@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"yoru/internal/anilist"
 )
 
@@ -17,7 +19,7 @@ type discoverItem struct {
 	Title   string  `json:"title"`
 	Romaji  string  `json:"romaji"`
 	English *string `json:"english,omitempty"`
-	// Sized per use: a row thumbnail loading the full cover cost tens of MB. CoverLarge is for dense screens.
+
 	Cover      *string `json:"cover,omitempty"`
 	CoverLarge *string `json:"coverLarge,omitempty"`
 	Thumb      *string `json:"thumb,omitempty"`
@@ -31,15 +33,14 @@ type discoverItem struct {
 	Score      *int    `json:"score,omitempty"`
 	Popularity *int    `json:"popularity,omitempty"`
 	Genres     []string
-	// Carried so a card can answer "what is this" without opening the show.
+
 	Description *string `json:"description,omitempty"`
 	OnList      bool    `json:"onList"`
 	Progress    int     `json:"progress"`
-	// Its list status (Status is airing state), so a card tells "completed" from "never added".
-	ListStatus *string `json:"listStatus,omitempty"`
 
-	// For the hover card: episodes out so far (next minus one while airing),
-	// when it started, who made it, and where it lives on MyAnimeList.
+	ListStatus *string `json:"listStatus,omitempty"`
+	AlertOn    *bool   `json:"alertOn,omitempty"`
+
 	MalID        *int             `json:"malId,omitempty"`
 	NextEpisode  int              `json:"nextEpisode,omitempty"`
 	NextAiringAt int64            `json:"nextAiringAt,omitempty"`
@@ -49,7 +50,6 @@ type discoverItem struct {
 	Studios      []anilist.Studio `json:"studios,omitempty"`
 }
 
-// isoDate is a FuzzyDate as far as it is known: 2021-04-11, 2021-04 or 2021.
 func isoDate(d anilist.FuzzyDate) string {
 	switch {
 	case d.Year == nil:
@@ -62,20 +62,23 @@ func isoDate(d anilist.FuzzyDate) string {
 	return fmt.Sprintf("%04d-%02d-%02d", *d.Year, *d.Month, *d.Day)
 }
 
-// Each window costs ~30s of upstream calls, too long to sit behind a tab click.
 func (s *Server) WarmRankings(ctx context.Context) {
 	for {
 		for _, sort := range []string{anilist.SortWeek, anilist.SortMonth} {
 			days, _ := anilist.RisingWindow(sort)
-			result, err := s.anilist.Rising(ctx, days, 30)
+			_, err := s.rising.compute(sort, func() (anilist.DiscoverPage, error) {
+				result, err := s.anilist.Rising(ctx, days, 30)
+				if err == nil {
+					s.rising.put(sort, result)
+				}
+				return result, err
+			})
 			if err != nil {
 				if ctx.Err() != nil {
 					return
 				}
 				s.log.Warn("warm ranking", "sort", sort, "err", err)
-				continue
 			}
-			s.rising.put(sort, result)
 		}
 
 		select {
@@ -86,7 +89,6 @@ func (s *Server) WarmRankings(ctx context.Context) {
 	}
 }
 
-// The computed windows ignore paging: the list is the whole result.
 func (s *Server) ranked(r *http.Request, sort string, page, perPage int) (anilist.DiscoverPage, error) {
 	days, computed := anilist.RisingWindow(sort)
 	if !computed {
@@ -96,21 +98,27 @@ func (s *Server) ranked(r *http.Request, sort string, page, perPage int) (anilis
 	if hit, ok := s.rising.get(sort); ok {
 		return hit, nil
 	}
-	result, err := s.anilist.Rising(r.Context(), days, max(perPage, 30))
+	return s.rising.compute(sort, func() (anilist.DiscoverPage, error) {
+		result, err := s.anilist.Rising(r.Context(), days, max(perPage, 30))
+		if err == nil && !anilist.UsedSaved(r.Context()) {
+			s.rising.put(sort, result)
+		}
+		return result, err
+	})
+}
+
+type risingCache struct {
+	mu     sync.Mutex
+	page   map[string]risingEntry
+	flight singleflight.Group
+}
+
+func (c *risingCache) compute(key string, fetch func() (anilist.DiscoverPage, error)) (anilist.DiscoverPage, error) {
+	v, err, _ := c.flight.Do(key, func() (any, error) { return fetch() })
 	if err != nil {
 		return anilist.DiscoverPage{}, err
 	}
-	// Held for hours, so only a live answer.
-	if !anilist.UsedSaved(r.Context()) {
-		s.rising.put(sort, result)
-	}
-	return result, nil
-}
-
-// The trend data behind these only changes once a day.
-type risingCache struct {
-	mu   sync.Mutex
-	page map[string]risingEntry
+	return v.(anilist.DiscoverPage), nil
 }
 
 type risingEntry struct {
@@ -125,7 +133,7 @@ func (c *risingCache) get(key string) (anilist.DiscoverPage, bool) {
 	defer c.mu.Unlock()
 
 	e, ok := c.page[key]
-	if !ok || time.Since(e.at) > risingTTL {
+	if !ok || time.Since(e.at) > risingTTL+10*time.Minute {
 		return anilist.DiscoverPage{}, false
 	}
 	return e.result, true
@@ -141,8 +149,6 @@ func (c *risingCache) put(key string, result anilist.DiscoverPage) {
 	c.page[key] = risingEntry{result: result, at: time.Now()}
 }
 
-// discover ranks anime by trending, popularity, season or score. Week and month
-// are computed from popularity gained inside the window, not AniList orderings.
 func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -153,7 +159,6 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(q.Get("page"))
 	perPage, _ := strconv.Atoi(q.Get("perPage"))
 
-	// 400 only for a sort Yoru does not know; the catalogue being down is a 502, as everywhere else.
 	if !slices.Contains(anilist.Sorts(), sort) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "unknown sort " + sort, "sorts": anilist.Sorts()})
 		return
@@ -164,7 +169,6 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The shared builder, so list status shows on every grid.
 	items := s.decorate(r, result.Media)
 
 	if page <= 0 {
@@ -183,7 +187,6 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// anilistRecheck backs "Try now" on the saved-copy notice: one live question, whatever the down window.
 func (s *Server) anilistRecheck(w http.ResponseWriter, r *http.Request) {
 	if err := s.anilist.Recheck(r.Context()); err != nil {
 		send(w, http.StatusOK, map[string]any{"live": false, "error": err.Error()})

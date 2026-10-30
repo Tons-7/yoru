@@ -45,7 +45,7 @@ if (pip) {
       playing: !!v && !v.paused,
       subtitleCanvas: document.querySelectorAll('canvas').length,
       back: !!Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.includes('Back to tab')),
-      fullscreenButton: !!document.querySelector('button[aria-label="Fullscreen"]'),
+      fullscreenButton: !!document.querySelector('button[aria-label="Full screen"]'),
       fontsLoaded: document.fonts.check('12px "Inter Variable"'),
     }
   })

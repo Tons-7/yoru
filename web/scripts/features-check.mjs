@@ -93,7 +93,7 @@ await page.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
 // A show with several downloads is one closed card; its rows are inside.
 const group = page.getByRole('button', { name: /^Show downloads of / }).first()
 if (await until(() => group.isVisible(), 5000)) await group.click()
-const packRow = page.locator('li:not(:has(li))', { hasText: 'Batch' })
+const packRow = page.locator('li:not(:has(li))', { hasText: /episodes 4, 5/i })
 check(await until(() => packRow.count().then((n) => n === 1)), 'a season pack is one row')
 check(
   // A finished row states its size once; "of" belongs to what is still arriving.
@@ -243,33 +243,41 @@ check(await until(() => page.getByLabel('Preferred release groups').inputValue()
 
 // ---------------------------------------------------------------- settings: speed limit and sharing
 const effective = async () => (await api('/api/prefs')).body?.effective ?? {}
-const speedLimit = page.getByLabel('Download speed limit')
-await speedLimit.selectOption({ label: '5 Mbps' })
+const pick = async (box, name) => {
+  await box.click()
+  await page.getByRole('option', { name, exact: true }).click()
+}
+const speedLimit = page.getByRole('combobox', { name: 'Download speed limit' })
+await pick(speedLimit, '5 Mbps')
 check(await until(async () => (await effective())['downloads.limit_bytes'] === '625000'), 'speed limit saved in bytes a second')
 check(await until(() => page.getByText(/plays faster than it downloads/).isVisible()), 'a cap under a 1080p stream says playback waits')
 // Megabytes instead: the limits read in them, and one picked in megabits stays chosen.
-const unit = page.getByLabel('Show speeds in')
-await unit.selectOption('mbs')
+const unit = page.getByRole('combobox', { name: 'Show speeds in' })
+await pick(unit, 'MB/s')
 check(await until(async () => (await effective())['display.speed'] === 'mbs'), 'speeds set to MB/s')
-check(await until(async () => (await speedLimit.locator('option:checked').innerText()) === '0.6 MB/s'), 'the 5 Mbps cap now reads in MB/s',
-  await speedLimit.locator('option:checked').innerText())
+check(await until(async () => (await speedLimit.innerText()) === '0.6 MB/s'), 'the 5 Mbps cap now reads in MB/s',
+  await speedLimit.innerText())
 check(await until(() => page.getByText(/Under about 1 MB\/s/).isVisible()), 'the warning names its speed in MB/s too')
-await speedLimit.selectOption({ label: '2 MB/s' })
+await pick(speedLimit, '2 MB/s')
 check(await until(async () => (await effective())['downloads.limit_bytes'] === '2097152'), 'a cap in MB/s saved in bytes a second')
-await unit.selectOption('mbps')
-check(await until(async () => (await speedLimit.locator('option:checked').innerText()) === '16.8 Mbps'), 'and back in Mbps it reads 16.8 Mbps',
-  await speedLimit.locator('option:checked').innerText())
-await page.getByLabel('Sharing').selectOption('never')
+await pick(unit, 'Mbps')
+check(await until(async () => (await speedLimit.innerText()) === '16.8 Mbps'), 'and back in Mbps it reads 16.8 Mbps',
+  await speedLimit.innerText())
+const sharing = page.getByRole('combobox', { name: 'Sharing', exact: true })
+await pick(sharing, 'Never')
 check(await until(async () => (await effective())['downloads.upload'] === 'never'), 'sharing set to never')
 check(await until(() => page.getByText(/Downloads get slower/).isVisible()), 'never sharing says downloads get slower')
 // This machine's adapters, VPN or not, with Any network as the default.
-const torrentNet = page.getByLabel('Network for torrents')
+const torrentNet = page.getByRole('combobox', { name: 'Network for torrents' })
 check(await until(() => torrentNet.isVisible()), 'the network for torrents is offered here, on the host')
-check((await torrentNet.inputValue()) === '', 'torrents use any network by default')
-check((await torrentNet.locator('option').count()) >= 2, 'this machine\'s adapters are listed', String(await torrentNet.locator('option').count()))
+check((await torrentNet.innerText()) === 'Any network', 'torrents use any network by default')
+await torrentNet.click()
+const adapters = page.getByRole('listbox', { name: 'Network for torrents' }).getByRole('option')
+check(await until(async () => (await adapters.count()) >= 2), 'this machine\'s adapters are listed', String(await adapters.count()))
+await page.keyboard.press('Escape')
 // Back to the defaults, so the checks after this download at full speed.
-await speedLimit.selectOption('0')
-await page.getByLabel('Sharing').selectOption('while_downloading')
+await pick(speedLimit, 'No limit')
+await pick(sharing, 'While downloading')
 check(
   await until(async () => {
     const e = await effective()
@@ -374,8 +382,8 @@ await search.press('ArrowDown')
 await search.press('Enter')
 check(await until(() => page.url().endsWith(`/anime/${ANIME}`)), 'keyboard pick opens the series page', page.url())
 await search.fill('zzzz nothing')
-check(await until(() => page.getByText(/^Nothing saved matches/).isVisible()), 'no local match says so')
-check(await page.getByRole('option', { name: /Search AniList for/ }).isVisible(), 'AniList search offered as the last row')
+check(await until(() => page.getByText(/^Nothing matches/).isVisible(), 30_000), 'no match says so')
+check(await page.getByRole('option', { name: /See all results for/ }).isVisible(), 'all results offered as the last row')
 await search.press('Escape')
 
 // ---------------------------------------------------------------- external links + trailer
@@ -434,7 +442,7 @@ check(
   'up-next card sits inside the player',
 )
 check(await until(() => upNext.innerText().then((t) => /Episode 3/.test(t))), 'up next is episode 3, not the filler', await upNext.innerText().catch(() => ''))
-check(await upNext.getByRole('button', { name: 'Play next' }).isVisible(), 'without auto-next it only offers a button')
+check(await upNext.getByRole('button', { name: 'Play now' }).isVisible(), 'without auto-next it only offers a button')
 await upNext.getByRole('button', { name: 'Dismiss' }).click()
 check(await until(() => upNext.isVisible().then((v) => !v)), 'dismiss hides the card')
 
@@ -445,7 +453,7 @@ await video.evaluate((v) => {
   v.currentTime = v.duration - 0.5
 })
 check(await until(() => upNext.isVisible(), 20_000), 'countdown card appears with auto-next on')
-check(await until(() => upNext.innerText().then((t) => /Play now · [1-5]/.test(t))), 'card counts down from 5')
+check(await until(() => upNext.getByRole('timer', { name: /Plays in [1-5] seconds/ }).isVisible()), 'card counts down from 5')
 await upNext.getByRole('button', { name: 'Cancel' }).click()
 await sleep(6500)
 check(page.url().endsWith(`/watch/${ANIME}/1`), 'cancel stops the countdown', page.url())
@@ -605,7 +613,7 @@ const android = await browser.newContext({
 })
 const ap = await android.newPage()
 await ap.goto(`${BASE}/watch/${ANIME}/9`, { waitUntil: 'domcontentloaded' })
-const openInApp = ap.getByRole('button', { name: 'Open or save' })
+const openInApp = ap.getByRole('button', { name: /^(Open or save|Open)$/ })
 check(await until(() => openInApp.isVisible(), 60_000), 'open or save is offered')
 await openInApp.click()
 const chooser = ap.getByRole('link', { name: 'Choose an app' })
@@ -645,7 +653,7 @@ check(
   'the menu then offers to take it off',
 )
 await page.keyboard.press('Escape')
-check(await page.getByText('In Up next').first().isVisible(), 'the row says In Up next')
+check(await until(() => page.getByText('In Up next').first().isVisible()), 'the row says In Up next')
 await post('/api/upnext', { animeId: FRIEREN, episode: 1 })
 
 await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
@@ -695,12 +703,11 @@ check(await until(() => phoneEdit.isVisible(), 15_000), 'the phone shows the Up 
 await phoneEdit.click()
 const phoneSheet = upp.getByRole('dialog', { name: 'Edit Up next' })
 check(await until(() => phoneSheet.isVisible()), 'the phone opens the sheet')
-const phoneBox = await phoneSheet.boundingBox()
-check(
-  phoneBox && Math.abs(phoneBox.y + phoneBox.height - 844) < 2 && phoneBox.width >= 389,
-  'on a phone it is a bottom sheet',
-  JSON.stringify(phoneBox),
-)
+const atBottom = async () => {
+  const b = await phoneSheet.boundingBox()
+  return !!b && Math.abs(b.y + b.height - 844) < 2 && b.width >= 389
+}
+check(await until(atBottom), 'on a phone it is a bottom sheet', JSON.stringify(await phoneSheet.boundingBox()))
 await upNextPhone.close()
 
 // The end of an episode offers the list's next, not the show's, and says what follows.
@@ -714,13 +721,13 @@ await video.evaluate((v) => {
 check(await until(() => upNext.isVisible(), 20_000), 'the end card appears')
 const cardText = async () => (await upNext.innerText().catch(() => '')).replace(/\s+/g, ' ')
 check(
-  await until(async () => /from your list/i.test(await cardText()) && /Episode 9/.test(await cardText())),
+  await until(async () => /Next: Episode 9\b|Up next: .+ · Ep 9\b/.test(await cardText())),
   'the card offers the list\'s episode 9, not the show\'s next',
   await cardText(),
 )
 check(/Then .+ · Ep 1/.test(await cardText()), 'and says what plays after it', await cardText())
-await upNext.getByRole('button', { name: 'Play next' }).click()
-check(await until(() => page.url().endsWith(`/watch/${ANIME}/9`)), 'Play next goes to the list\'s episode', page.url())
+await upNext.getByRole('button', { name: 'Play now' }).click()
+check(await until(() => page.url().endsWith(`/watch/${ANIME}/9`)), 'Play now goes to the list\'s episode', page.url())
 
 // Watched episodes leave by themselves.
 await post('/api/progress', { animeId: ANIME, episode: 9, position: 175, duration: 180, played: 100, final: true })
@@ -740,7 +747,11 @@ await sheet.getByRole('button', { name: 'Clear list' }).click()
 await sheet.getByRole('button', { name: 'Clear list' }).click()
 check(await until(async () => (await upNextKeys()) === ''), 'Clear list empties it', await upNextKeys())
 await page.keyboard.press('Escape')
-check(await until(() => upNextRail.isVisible().then((v) => !v)), 'an empty list leaves Home without the row')
+check(
+  await until(async () =>
+    !(await upNextRail.isVisible()) || (await upNextRail.getByRole('button', { name: 'Line up episodes' }).isVisible())),
+  'an empty list leaves no queued episodes on Home',
+)
 await post('/api/prefs', { key: 'playback.autonext', value: 'true' })
 
 // ---------------------------------------------------------------- hentai filter

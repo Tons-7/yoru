@@ -40,7 +40,7 @@ try {
     const body = await res.json().catch(() => ({}))
     check(res.ok && Array.isArray(body.items), `/api/home/${kind} answers a list`, `${res.status} ${JSON.stringify(body).slice(0, 80)}`)
   }
-  const shows = (await get('/api/discover?sort=trending&perPage=4')).items ?? []
+  const shows = (await get('/api/discover?sort=upcoming&perPage=4')).items ?? []
   check(shows.length === 4, 'four shows to stand in for the picks', String(shows.length))
 
   let page = await fresh()
@@ -66,16 +66,19 @@ try {
   forYouFails = false
   await rail('For you').getByRole('button', { name: 'Try again' }).click()
   check(await until(async () => (await cards('For you').count()) >= 2), 'and Try again fills it')
-  // Folded by its heading, a row keeps only that, here and after a reload, until opened again.
-  const heading = (title) => rail(title).getByRole('button', { name: title, exact: true })
-  await heading('Sequels you missed').click()
-  check(await until(async () => (await heading('Sequels you missed').getAttribute('aria-expanded')) === 'false' &&
-    !(await cards('Sequels you missed').first().isVisible())), 'a row folds to its heading')
+  await page.getByRole('button', { name: 'Edit Home', exact: true }).click()
+  const editor = page.getByRole('dialog', { name: 'Edit Home' })
+  check(await until(() => editor.isVisible()), 'Edit Home opens its sheet')
+  await editor.getByRole('button', { name: 'Move Sequels you missed', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Fold to its heading' }).click()
+  await editor.getByRole('button', { name: 'Close', exact: true }).click()
+  const unfold = page.getByRole('button', { name: 'Show Sequels you missed', exact: true })
+  check(await until(async () => (await unfold.isVisible()) && !(await cards('Sequels you missed').first().isVisible())),
+    'a row folds to its heading')
   await page.reload({ waitUntil: 'domcontentloaded' })
-  check(await until(async () => (await heading('Sequels you missed').getAttribute('aria-expanded')) === 'false'),
-    'and stays folded on this device')
-  await heading('Sequels you missed').click()
-  check(await until(() => cards('Sequels you missed').first().isVisible()), 'pressed again, it opens')
+  check(await until(() => unfold.isVisible()), 'and stays folded on this device')
+  await unfold.click()
+  check(await until(() => cards('Sequels you missed').first().isVisible()), 'Show opens it again')
   // A card's bookmark: the tag picked shows at once, as anywhere else.
   await rail('Sequels you missed').getByRole('button', { name: 'Add to list' }).first().click()
   await page.getByRole('menuitem', { name: 'Plan to watch' }).click()
@@ -99,7 +102,7 @@ try {
   check(await until(async () => (await forYouSwitch.getAttribute('aria-checked')) === 'false'), 'For you switched off')
   forYouAsked = 0
   await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
-  await until(() => page.getByRole('heading', { name: 'Trending now', exact: true }).isVisible())
+  await until(() => page.getByRole('heading', { name: 'Top 10', exact: true }).isVisible())
   check((await page.getByRole('heading', { name: 'For you', exact: true }).count()) === 0 && forYouAsked === 0,
     'and it leaves Home, nothing asked for it', `asked ${forYouAsked}`)
   await fetch(`${BASE}/api/prefs`, { method: 'POST', body: JSON.stringify({ key: 'home.hidden', value: '[]' }) })
@@ -108,7 +111,7 @@ try {
   page = await fresh()
   await page.route('**/api/home/{sequels,for-you}', (route) => route.fulfill({ json: { items: [] } }))
   await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
-  await until(() => page.getByRole('heading', { name: 'Trending now', exact: true }).isVisible())
+  await until(() => page.getByRole('heading', { name: 'Top 10', exact: true }).isVisible())
   check((await page.getByRole('heading', { name: /^(Sequels you missed|For you)$/ }).count()) === 0, 'with nothing to show, neither rail is there')
   await page.close()
 

@@ -1,5 +1,3 @@
-// The home rails at the bottom: what is airing now and what is coming next,
-// and their "See all" links landing on the matching browse filters.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -56,15 +54,14 @@ await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
 const rail = (title) => page.locator('section', { has: page.getByText(title, { exact: true }) }).first()
 
 check(await until(() => rail('Upcoming').isVisible()), 'the Upcoming row is on the home page')
-const trendingBox = await rail('Trending now').boundingBox()
+const trendingBox = await rail('Top 10').boundingBox()
 const upcomingBox = await rail('Upcoming').boundingBox()
-check((upcomingBox?.y ?? 0) > (trendingBox?.y ?? 0), 'and sits below Trending now',
+check((upcomingBox?.y ?? 0) > (trendingBox?.y ?? 0), 'and sits below Top 10',
   `trending ${Math.round(trendingBox?.y ?? 0)} vs upcoming ${Math.round(upcomingBox?.y ?? 0)}`)
 check(await rail('Upcoming').locator('a[href^="/anime/"]').first().isVisible(), 'with cards in it')
 await page.screenshot({ path: `${SHOTS}/home-upcoming.png`, fullPage: true })
 
-// See all used to drop the season and land on "most popular of all time".
-const seeAll = (title) => rail(title).getByRole('link', { name: /see all/i }).first()
+const seeAll = (title) => rail(title).getByRole('link', { name: title, exact: true }).first()
 const seasonHref = await seeAll('This season').getAttribute('href')
 check(seasonHref === `/browse?season=${here.season}&year=${here.year}&sort=popular`,
   'This season → browse filtered to this season', String(seasonHref))

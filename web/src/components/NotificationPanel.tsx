@@ -3,8 +3,9 @@ import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import { cx, relativeTime } from '../lib/format'
+import { cx, whenLabel } from '../lib/format'
 import { useNotifications, type Notification } from '../lib/queries'
+import { feedTitle, type FeedItem } from '../lib/alerts'
 import { ConfirmInline } from './ui'
 import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 import { desktopNotifyWanted, notificationTarget } from '../lib/notifications'
@@ -56,7 +57,12 @@ export function NotificationPanel() {
       >
         <BellIcon />
         {unread > 0 && (
-          <span className="absolute top-1.5 right-1.5 size-2 rounded-full bg-accent-500 ring-2 ring-base-950" />
+          <span
+            aria-hidden
+            className="absolute -top-0.5 -right-0.5 h-4 min-w-4 rounded-full bg-sky-400 px-1 text-center text-[10px] leading-4 font-bold text-base-950 tabular-nums ring-2 ring-base-950"
+          >
+            {unread > 9 ? '9+' : unread}
+          </span>
         )}
       </button>
 
@@ -67,7 +73,6 @@ export function NotificationPanel() {
             role="dialog"
             aria-label="Notifications"
             data-portal-menu
-            // Under the bell, but never past either edge of a narrow phone.
             style={{
               top: box.bottom + 8,
               width: Math.min(320, window.innerWidth - 16),
@@ -76,13 +81,13 @@ export function NotificationPanel() {
                 window.innerWidth - 8 - Math.min(320, window.innerWidth - 16),
               ),
             }}
-            className="fixed z-50 animate-rise overflow-hidden rounded-xl border border-base-750 bg-base-850 shadow-panel"
+            className="fixed z-50 animate-rise overflow-hidden rounded-sheet bg-base-750 shadow-panel"
           >
             <div className="flex items-center justify-between gap-2 border-b border-base-750 px-3 py-2">
               <p className="text-sm font-medium text-base-100">
                 Notifications
                 {unread > 0 && (
-                  <span className="ml-1.5 rounded bg-accent-500/25 px-1.5 text-[11px] text-accent-200">
+                  <span className="ml-1.5 rounded bg-sky-400/20 px-1.5 text-xs text-sky-200">
                     {unread}
                   </span>
                 )}
@@ -91,7 +96,7 @@ export function NotificationPanel() {
                 {unread > 0 && !confirmClear && (
                   <button
                     onClick={() => markRead.mutate(undefined)}
-                    className="rounded px-1.5 py-0.5 text-[11px] text-base-400 transition-colors hover:bg-base-800 hover:text-white pointer-coarse:min-h-11 pointer-coarse:px-3"
+                    className="rounded px-1.5 py-0.5 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white pointer-coarse:min-h-11 pointer-coarse:px-3"
                   >
                     Mark all read
                   </button>
@@ -111,7 +116,7 @@ export function NotificationPanel() {
                   ) : (
                     <button
                       onClick={() => setConfirmClear(true)}
-                      className="rounded px-1.5 py-0.5 text-[11px] text-base-400 transition-colors hover:bg-base-800 hover:text-recap pointer-coarse:min-h-11 pointer-coarse:px-3"
+                      className="rounded px-1.5 py-0.5 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-recap pointer-coarse:min-h-11 pointer-coarse:px-3"
                     >
                       Clear
                     </button>
@@ -121,7 +126,7 @@ export function NotificationPanel() {
 
             {items.length === 0 ? (
               <p className="px-3 py-6 text-center text-xs text-base-500">
-                Nothing new. Follow a show and its episodes turn up here.
+                Nothing new yet. Tap Alert on a show to hear when new episodes are out.
               </p>
             ) : (
               <ul className="max-h-80 divide-y divide-base-800 overflow-y-auto scrollbar-thin">
@@ -158,7 +163,7 @@ function Row({
   onOpen,
   onRemove,
 }: {
-  item: Notification
+  item: FeedItem
   onOpen: () => void
   onRemove: () => void
 }) {
@@ -169,15 +174,15 @@ function Row({
         onClick={onOpen}
         className={cx(
           'block px-3 py-2 pr-8 transition-colors hover:bg-base-800',
-          !item.read && 'bg-accent-500/[0.06]',
+          !item.read && 'bg-sky-400/[0.05]',
         )}
       >
         <div className="flex items-start gap-2">
-          {!item.read && <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-accent-500" />}
+          {!item.read && <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-sky-400" />}
           <div className="min-w-0">
-            <p className="line-clamp-1 text-xs font-medium text-base-100">{item.title}</p>
-            <p className="mt-0.5 line-clamp-1 text-[11px] text-base-500">
-              {item.body} · {relativeTime(item.createdAt)}
+            <p className="line-clamp-2 text-xs font-medium text-base-100">{feedTitle(item)}</p>
+            <p className="mt-0.5 line-clamp-1 text-xs text-base-500">
+              {item.kind === 'release' || !item.body ? whenLabel(item.createdAt) : `${item.body} · ${whenLabel(item.createdAt)}`}
             </p>
           </div>
         </div>

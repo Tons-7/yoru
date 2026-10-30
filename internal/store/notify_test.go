@@ -96,6 +96,61 @@ func TestNotifiedReleaseIsRecordedOnce(t *testing.T) {
 	}
 }
 
+func TestFollowsOfAgreesWithFollowOf(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for id := 1; id <= 10; id++ {
+		seedAnime(t, s, id)
+	}
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(s.SetFollow(ctx, 1, true))
+	must(s.SetFollow(ctx, 2, true))
+	must(s.SetListStatus(ctx, 2, "COMPLETED", -1))
+	must(s.SetListStatus(ctx, 3, StatusCurrent, -1))
+	must(s.Unfollow(ctx, 3))
+	must(s.SetListStatus(ctx, 4, StatusRepeating, -1))
+	must(s.Unfollow(ctx, 4))
+	must(s.SetListStatus(ctx, 5, StatusCurrent, -1))
+	must(s.SetFollow(ctx, 5, true))
+	must(s.SetAnimePref(ctx, 5, "notify.enabled", "false"))
+	must(s.SetAnimePref(ctx, 6, "autodownload.enabled", "true"))
+	must(s.SetAnimePref(ctx, 7, "autodownload.enabled", "true"))
+	must(s.SetListStatus(ctx, 7, "DROPPED", -1))
+	must(s.SetAnimePref(ctx, 8, "autodownload.want", "3"))
+	must(s.SetListStatus(ctx, 9, "PLANNING", -1))
+	must(s.Unfollow(ctx, 9))
+
+	want := map[int]bool{1: true, 2: false, 3: true, 4: true, 5: false, 6: true, 7: false, 8: true, 9: false, 10: false, 11: false}
+	ids := make([]int, 0, len(want))
+	for id := range want {
+		ids = append(ids, id)
+	}
+	got, err := s.FollowsOf(ctx, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, on := range want {
+		one, err := s.FollowOf(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if one.On != on {
+			t.Errorf("show %d: FollowOf on = %v, want %v", id, one.On, on)
+		}
+		if got[id] != one.On {
+			t.Errorf("show %d: FollowsOf on = %v, FollowOf on = %v", id, got[id], one.On)
+		}
+	}
+	if none, err := s.FollowsOf(ctx, nil); err != nil || len(none) != 0 {
+		t.Errorf("no ids: %v, %v", none, err)
+	}
+}
+
 func TestFollowRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

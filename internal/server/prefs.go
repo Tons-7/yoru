@@ -40,9 +40,11 @@ var allowed = map[string][]string{
 	// Episodes auto next plays unattended before asking whether anyone is watching; 0 never asks.
 	"playback.still_watching": {"0", "2", "3", "5"},
 	// The share of an episode that counts as watching it, or where its ending starts.
-	"sync.progress_at":  {"0.8", "0.85", "0.9", "0.95", store.EndingThreshold},
-	"subtitle.with_dub": {"signs", "off", "same"},
-	"subtitle.look":     {"outline", "yellow", "box", "yellow-box"},
+	"sync.progress_at":     {"0.8", "0.85", "0.9", "0.95", store.EndingThreshold},
+	"subtitle.with_dub":    {"signs", "off", "same"},
+	"subtitle.look":        {"outline", "yellow", "box", "yellow-box"},
+	"playback.autoskip_op": store.SkipValues,
+	"playback.autoskip_ed": store.SkipValues,
 	// Hours auto-download holds a new episode for a preferred group or a higher resolution; 0 takes the first.
 	"autodownload.wait_hours": {"0", "1", "3", "6", "12"},
 }
@@ -202,7 +204,7 @@ func (s *Server) notifications(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	count, _ := s.store.UnreadCount(r.Context())
-	send(w, http.StatusOK, map[string]any{"items": items, "unread": count})
+	send(w, http.StatusOK, map[string]any{"items": s.withShows(r, items), "unread": count})
 }
 
 func (s *Server) markRead(w http.ResponseWriter, r *http.Request) {

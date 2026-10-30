@@ -108,7 +108,7 @@ export function OpenInApp({ source, open, onClose }: { source: string; open: boo
                 aria-label="Link to the episode"
                 value={link.data.url}
                 onFocus={(e) => e.currentTarget.select()}
-                className="min-h-11 min-w-0 flex-1 rounded-lg bg-base-950 px-3 font-mono text-xs text-base-300 ring-1 ring-white/[0.07]"
+                className="min-h-11 min-w-0 flex-1 rounded-lg bg-base-800 px-3 font-mono text-xs text-base-300"
               />
               <button onClick={copy} className={cx(buttonClass(), 'min-h-11')}>
                 Copy link

@@ -122,7 +122,7 @@ async function expectUnconfigured(page, label) {
     60000,
   )
   check(told, `${label}: playing says to add sources and restart`)
-  await page.getByRole('button', { name: 'Choose a release' }).click().catch(() => {})
+  await page.getByRole('button', { name: 'Try another release' }).click().catch(() => {})
   check(
     await until(
       () => page.getByRole('dialog').getByText(/no release sources configured/i).isVisible().catch(() => false),

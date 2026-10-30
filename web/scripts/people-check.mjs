@@ -70,7 +70,7 @@ try {
   const other = page.locator('section', { has: page.getByRole('heading', { name: /^Supporting roles/ }) })
   check((await other.getByRole('link', { name: 'Newer Show' }).getAttribute('href') ?? '').startsWith('/open?url='),
     'a show Yoru hasn\'t met opens through Open, by its MyAnimeList number')
-  check(await page.getByText('Theme Song Performance · 2020').isVisible(), 'staff work says the position and year')
+  check(await page.getByText('Theme song · 2020').isVisible(), 'staff work says the position in plain words and the year')
   const more = page.getByRole('button', { name: 'Show more' })
   await more.click()
   check(await until(() => page.getByRole('button', { name: 'Show less' }).isVisible()), 'a long bio folds, Show more unfolds it')

@@ -430,6 +430,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/notifications", s.notifications)
 	mux.HandleFunc("POST /api/notifications/read", s.markRead)
 	mux.HandleFunc("DELETE /api/notifications", s.deleteNotification)
+	mux.HandleFunc("GET /api/alerts", s.alertShows)
 	mux.HandleFunc("POST /api/follow", s.setFollow)
 	mux.HandleFunc("POST /api/anime/{id}/notify", s.setNotify)
 	mux.HandleFunc("POST /api/anime/{id}/want", s.wantEpisode)
@@ -530,6 +531,7 @@ func (s *Server) library(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page, err := s.store.Library(r.Context(), store.LibraryFilter{
 		Status: q.Get("status"), Query: q.Get("q"), Sort: q.Get("sort"),
+		Favourite: q.Get("fav") == "1" || q.Get("fav") == "true",
 	}, store.ParsePaging(q, 60, 200))
 	if err != nil {
 		s.fail(w, "library", err)

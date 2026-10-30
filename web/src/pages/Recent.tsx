@@ -1,80 +1,95 @@
-import { useState } from 'react'
-import { useAired, useNow, usePrefFlag } from '../lib/queries'
+import type { ReactNode } from 'react'
+import { Navigate } from 'react-router-dom'
+import { usePrefFlag } from '../lib/queries'
 import { groupByDay } from '../lib/format'
+import { byShow, RANGES, useOutNow, type Range } from '../lib/aired'
 import { ReleasedCard } from '../components/ReleasedCard'
-import {
-  Empty,
-  ErrorState,
-  LabelledSwitch,
-  PageHeader,
-  RefreshFailed,
-  Segmented,
-  Skeleton,
-} from '../components/ui'
+import { SwitchHeader } from '../components/ViewSwitch'
+import { ChipDivider, ChipRow, ChoiceChips, ToggleChip } from '../components/Chips'
+import { Empty, ErrorState, RefreshFailed, Skeleton } from '../components/ui'
 
-const WINDOWS = [
-  { value: '24', label: 'Last day' },
-  { value: '72', label: 'Last 3 days' },
-  { value: '168', label: 'Last week' },
-] as const
-
-/** What just came out, newest first: episodes ready now, where the schedule says when things air. */
 export function RecentPage() {
-  const [hours, setHours] = useState<string>('72')
+  return <Navigate to="/schedule?view=out" replace />
+}
+
+const GRID =
+  'grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 min-[1800px]:grid-cols-6 min-[2200px]:grid-cols-7'
+
+export function RecentView({
+  range,
+  onRange,
+  switcher,
+}: {
+  range: Range
+  onRange: (range: Range) => void
+  switcher: ReactNode
+}) {
   const [mine, setMine] = usePrefFlag('recent.mine')
-
-  const now = useNow() / 1000
-  const { data, isPending, isError, error, refetch } = useAired(Number(hours))
-
-  // The window's own start too: the last window's answer is shown while the new one loads.
-  const since = now - Number(hours) * 3600
-  const items = (data?.items ?? [])
-    .filter((item) => item.airingAt <= now && item.airingAt >= since && (!mine || item.onList))
-    .sort((a, b) => b.airingAt - a.airingAt)
+  const { query, aired } = useOutNow(range)
+  const { data, isPending, isError, error, refetch } = query
+  const items = aired.filter((item) => !mine || item.onList)
+  const days = groupByDay(items, (i) => i.airingAt).map(([label, group]) => [label, byShow(group)] as const)
+  const shows = (list: typeof aired) => new Set(list.map((item) => item.animeId)).size
+  const hidden = mine ? shows(aired) - shows(items) : 0
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="Recently released"
-        subtitle="Episodes that have aired and can be watched now."
-        meta={data ? `${items.length} episodes` : undefined}
-        actions={
-          <>
-            <Segmented options={WINDOWS} value={hours} onChange={setHours} />
-            <LabelledSwitch label="Only my list" on={mine} onChange={setMine} />
-          </>
-        }
-      />
+    <div className="space-y-4">
+      <SwitchHeader beside title="Schedule" switcher={switcher} />
+      <div className="space-y-1.5">
+        <ChipRow>
+          <ToggleChip on={mine} onChange={setMine}>
+            Only my list
+          </ToggleChip>
+          <ChipDivider />
+          <ChoiceChips label="How far back" options={RANGES} value={range} onChange={onRange} />
+        </ChipRow>
+        {hidden > 0 && (
+          <p className="text-[13px] text-base-400">
+            Your list · {shows(items)} of {shows(aired)} shows.{' '}
+            <button
+              type="button"
+              onClick={() => setMine(false)}
+              className="relative tap font-medium text-accent-300 underline-offset-2 hover:underline"
+            >
+              Show all
+            </button>
+          </p>
+        )}
+      </div>
 
       {isError && data && <RefreshFailed retry={() => refetch()} />}
       {isError && !data ? (
         <ErrorState error={error} retry={() => refetch()} />
       ) : isPending ? (
-        <div className="grid grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
-          {Array.from({ length: 10 }, (_, i) => (
-            <div key={i}>
-              <Skeleton className="aspect-video w-full" />
-              <Skeleton className="mt-2 h-4 w-3/4" />
-            </div>
-          ))}
+        <div className="max-h-[calc(100dvh-14rem)] overflow-hidden">
+          <div className={GRID}>
+            {Array.from({ length: 28 }, (_, i) => (
+              <div key={i}>
+                <Skeleton className="aspect-video w-full" />
+                <Skeleton className="mt-2 h-4 w-3/4" />
+                <Skeleton className="mt-1.5 h-3 w-1/2" />
+              </div>
+            ))}
+          </div>
         </div>
       ) : items.length === 0 ? (
         <Empty
           title="Nothing has aired in this window"
-          hint={mine ? 'Nothing from your list, at least. Try widening it.' : 'Try a wider window.'}
+          hint={mine ? 'Nothing from your list, at least. Try a wider window, or show every show.' : 'Try a wider window.'}
         />
       ) : (
-        // By day: a week of episodes in one grid had no sense of when.
         <div className="space-y-8">
-          {groupByDay(items, (i) => i.airingAt).map(([label, group]) => (
+          {days.map(([label, group]) => (
             <section key={label}>
               <h2 className="mb-3 section-title">
                 {label}
-                <span className="text-sm font-normal text-base-500">{group.length}</span>
+                <span className="text-sm font-normal text-base-500">
+                  {group.length} {group.length === 1 ? 'show' : 'shows'}
+                </span>
               </h2>
-              <div className="grid grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
-                {group.map((item) => (
-                  <ReleasedCard key={`${item.animeId}-${item.episode}`} item={item} tags addable />
+              <div className={GRID}>
+                {group.map((show) => (
+                  <ReleasedCard key={show.key} item={show.first} episodes={show.episodes} />
                 ))}
               </div>
             </section>

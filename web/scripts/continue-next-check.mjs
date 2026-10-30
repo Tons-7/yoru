@@ -1,4 +1,3 @@
-// Continue watching offers the next episode of a show partway through, a rewatch included.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -55,15 +54,12 @@ const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 160)))
 
 await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
-const rail = page.locator('section', { has: page.getByText('Continue watching', { exact: true }) })
-check(await until(() => rail.first().isVisible()), 'the Continue watching row is on the home page')
+const rail = page.locator('section', { has: page.getByText('Up next', { exact: true }) })
+check(await until(() => rail.first().isVisible()), 'the Up next row is on the home page')
 const card = rail.locator(`a[href="/watch/${ANIME}/2"]`).first()
 check(await until(() => card.isVisible()), 'its card links straight to episode 2')
-check(
-  /\b(ep|episode) 2\b/i.test(await card.innerText().catch(() => '')),
-  'and says which episode',
-  (await card.innerText().catch(() => '')).split('\n').join(' | '),
-)
+const named = (await card.getAttribute('aria-label').catch(() => '')) ?? ''
+check(/\bepisode 2\b/i.test(named), 'and says which episode', named)
 
 // Finishing the show takes it off the row; there is no next episode.
 await post('/api/watched', { animeId: ANIME, episode: 12 })

@@ -1,10 +1,13 @@
 import {
   createContext,
+  Fragment,
+  isValidElement,
   memo,
   useCallback,
   useContext,
   useDeferredValue,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -12,9 +15,9 @@ import {
   type ReactNode,
 } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api, ApiError, withToken, type Tracker } from '../lib/api'
-import { bytes, cx, relativeTime, speedLimit, waitLabel, type SpeedUnit } from '../lib/format'
+import { bytes, cx, relativeTime, speedLimit, WAITS, waitLabel, type SpeedUnit } from '../lib/format'
 import { castImpossible } from '../player/cast'
 import {
   refreshDownloads,
@@ -35,10 +38,11 @@ import { ComponentState } from '../components/ComponentState'
 import { ReleaseNotesList, type Notes } from '../components/ReleaseNotes'
 import { SitesEditor } from '../components/SitesEditor'
 import { WhereThingsGo } from '../components/WhereThingsGo'
-import { WaitSelect } from '../components/WaitSelect'
+import { ValueMenu } from '../components/ValueMenu'
 import { SHOW_SHORTCUTS } from '../components/keys'
 import { install, INSTALL_HELP, useInstall } from '../lib/install'
 import { asSubLook, previewStyle, SUB_LOOKS } from '../player/subLook'
+import { SKIP_MODES, skipMode } from '../player/skipMode'
 import { ON_MOBILE, QUALITIES, setDeviceQuality, setOnMobile, useNetwork, type OnMobile, type Quality } from '../player/network'
 import { ENCODERS } from '../player/encoders'
 import { SEEN_KEY, useNewSettings } from '../lib/whatsNew'
@@ -56,50 +60,54 @@ import {
   SaveHint,
   SearchInput,
   Segmented,
-  Select,
   Skeleton,
   Spinner,
   Switch as UiSwitch,
   TextInput,
 } from '../components/ui'
 import { buttonClass, ControlLabel } from '../lib/ui'
-import { useDebounced, useHeldData } from '../lib/hooks'
+import { useDebounced, useHeldData, useMediaQuery } from '../lib/hooks'
 import { copyText } from '../lib/downloads'
 
-// The id is what ?tab= says; the label is what a person reads.
 const TABS = [
-  // Only after an update brought settings (see whatsNew.ts).
-  { id: 'New', label: 'New' },
-  { id: 'Playback', label: 'Playback' },
-  { id: 'Language', label: 'Language & display' },
-  { id: 'Sound', label: 'Sound & picture' },
-  { id: 'Downloads', label: 'Downloads' },
-  { id: 'Storage', label: 'Storage' },
-  { id: 'Accounts', label: 'Accounts' },
-  { id: 'Library', label: 'Library' },
-  { id: 'Notifications', label: 'Notifications' },
-  { id: 'Devices', label: 'Devices' },
-  { id: 'Computer', label: 'This computer' },
-  { id: 'About', label: 'About' },
+  { id: 'New', label: 'New', summary: '', tile: '' },
+  { id: 'Playback', label: 'Playback', summary: 'Auto next, skipping, player', tile: 'bg-accent-600' },
+  { id: 'Language', label: 'Language and display', summary: 'Audio, subtitles, titles, Home rows', tile: 'bg-[#2b8fbf]' },
+  { id: 'Sound', label: 'Sound and picture', summary: 'Voice boost, night mode, Anime4K', tile: 'bg-[#c0623a]' },
+  { id: 'Accounts', label: 'Accounts', summary: 'AniList, MyAnimeList, Discord', tile: 'bg-[#3c9a6b]' },
+  { id: 'Library', label: 'Library', summary: 'Local files, backup', tile: 'bg-[#8a6bd0]' },
+  { id: 'Notifications', label: 'Notifications', summary: 'New episode alerts', tile: 'bg-[#c9a23a]' },
+  { id: 'Downloads', label: 'Downloads', summary: 'Sites, quality, auto-download, speed', tile: 'bg-[#2f7d5b]' },
+  { id: 'Storage', label: 'Storage', summary: 'Space, cache, folders', tile: 'bg-[#4b7fa8]' },
+  { id: 'Devices', label: 'Devices', summary: 'Phones, TVs, pairing, install', tile: 'bg-[#5d6475]' },
+  { id: 'Computer', label: 'This computer', summary: 'Window, startup, sleep', tile: 'bg-[#5d6475]' },
+  { id: 'About', label: 'About', summary: 'Version, updates, log', tile: 'bg-[#3b4152]' },
 ] as const
 type Tab = (typeof TABS)[number]['id']
-// Tabs before the regrouping, still in links, bookmarks and update notices.
+type Category = Exclude<Tab, 'New'>
+type CategoryInfo = Extract<(typeof TABS)[number], { id: Category }>
+const CATEGORIES = TABS.filter((t): t is CategoryInfo => t.id !== 'New')
+const CATEGORY = Object.fromEntries(CATEGORIES.map((t) => [t.id, t])) as Record<Category, CategoryInfo>
+const GROUPS: ReadonlyArray<{ title: string; tabs: readonly Category[] }> = [
+  { title: 'Watching', tabs: ['Playback', 'Language', 'Sound'] },
+  { title: 'You', tabs: ['Accounts', 'Library', 'Notifications'] },
+  { title: 'This PC', tabs: ['Downloads', 'Storage', 'Devices', 'Computer', 'About'] },
+]
 const RENAMED: Record<string, Tab> = { Quality: 'Downloads', Trackers: 'Accounts', Access: 'Devices', Jobs: 'About' }
 const isTab = (v: string | null): v is Tab => TABS.some((t) => t.id === v)
+const NEW_TITLE = 'New since your update'
 
 export function Settings() {
-  // The OAuth callback and update notifications land here on their tab (?tab=).
   const [params, setParams] = useSearchParams()
+  const wide = useMediaQuery('(min-width: 40rem)')
   const connected = params.get('connected')
   const wanted = params.get('tab')
   const renamed = wanted ? RENAMED[wanted] : undefined
   const fresh = useNewSettings()
-  const tabs = TABS.filter((t) => t.id !== 'New' || fresh.rows.length + fresh.changes.length > 0)
-  // The URL holds the tab: a reload keeps it, and a link to another one always switches.
-  const asked: Tab = isTab(wanted) ? wanted : (renamed ?? (connected ? 'Accounts' : 'Playback'))
-  const tab: Tab = tabs.some((t) => t.id === asked) ? asked : 'Playback'
-  // So does the search (?q=), so a link can open on the setting it is about. The field keeps its own text:
-  // a router update lands in a transition, a keystroke behind, which moved the caret and dropped letters.
+  const news = fresh.rows.length + fresh.changes.length
+  const hasNew = news > 0
+  const asked: Tab | undefined = isTab(wanted) ? wanted : (renamed ?? (connected ? 'Accounts' : undefined))
+  const tab: Tab = asked && (asked !== 'New' || hasNew) ? asked : 'Playback'
   const [text, setText] = useState(params.get('q') ?? '')
   const typed = useDebounced(text, 300)
   useEffect(() => {
@@ -111,21 +119,18 @@ export function Settings() {
   }, [typed])
   const fromURL = params.get('q') ?? ''
   useEffect(() => {
-    // A link or a tab change rewrote it; not our own write, which would land mid-word.
     if (fromURL !== typed) setText(fromURL)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromURL])
   const query = text.trim().toLowerCase()
-  // Every tab renders under a search; deferred, typing stays quick while the results catch up.
   const shownQuery = useDeferredValue(query)
   const setTab = (t: Tab) => {
     const next = new URLSearchParams(params)
     next.set('tab', t)
     next.delete('q')
     setText('')
-    setParams(next, { replace: true })
+    setParams(next, { replace: window.matchMedia('(min-width: 40rem)').matches })
   }
-  // The latest handlers behind steady ones, or the memoised results would redraw on every keystroke anyway.
   const handlers = useRef({ setTab, clear: () => setText('') })
   useLayoutEffect(() => {
     handlers.current = { setTab, clear: () => setText('') }
@@ -133,57 +138,72 @@ export function Settings() {
   const openTab = useCallback((t: Tab) => handlers.current.setTab(t), [])
   const clearSearch = useCallback(() => handlers.current.clear(), [])
 
-  return (
-    // Centred as one block: the slack becomes margins, not a gulf between every label and its control.
-    <div className="mx-auto max-w-[59rem] space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
-        <PageHeader title="Settings" />
-        <SearchInput
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => e.key === 'Escape' && setText('')}
-          placeholder="Search settings"
-          aria-label="Search settings"
-          className="w-full sm:w-72"
-        />
-      </div>
+  const view = wide ? 'wide' : query ? 'search' : asked ? tab : 'list'
+  useEffect(() => {
+    if (view !== 'wide') window.scrollTo(0, 0)
+  }, [view])
 
-      {connected && (
-        <div className="animate-fade-in flex items-center justify-between gap-4 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2">
-          <p className="text-sm text-accent-200">
-            Connected to {connected === 'mal' ? 'MyAnimeList' : 'AniList'}.
-          </p>
-          <button
-            onClick={() => setParams({ tab }, { replace: true })}
-            aria-label="Dismiss"
-            className="tap relative rounded px-2 text-accent-300/70 hover:text-accent-100"
-          >
-            ✕
-          </button>
+  const search = (
+    <SearchInput
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onKeyDown={(e) => e.key === 'Escape' && setText('')}
+      placeholder="Search settings"
+      aria-label="Search settings"
+      className="w-full"
+    />
+  )
+
+  const banner = connected && (
+    <div className="animate-fade-in flex items-center justify-between gap-4 rounded-lg border border-accent-500/40 bg-accent-500/10 px-3 py-2">
+      <p className="text-sm text-accent-200">Connected to {connected === 'mal' ? 'MyAnimeList' : 'AniList'}.</p>
+      <button
+        onClick={() => setParams({ tab }, { replace: true })}
+        aria-label="Dismiss"
+        className="tap relative rounded px-2 text-accent-300/70 hover:text-accent-100"
+      >
+        ✕
+      </button>
+    </div>
+  )
+
+  if (!wide && asked && !query) {
+    return (
+      <div className="space-y-4">
+        <h1 className="page-title">{tab === 'New' ? NEW_TITLE : CATEGORY[tab].label}</h1>
+        {banner}
+        <div className="animate-fade-in">
+          <TabBody tab={tab} />
         </div>
-      )}
+      </div>
+    )
+  }
 
-      {query ? (
-        <SearchResults query={shownQuery || query} onOpen={openTab} onClear={clearSearch} />
-      ) : (
-        <>
-          {/* Beside the settings on a desktop; on a phone a menu, as a strip hid the last tabs off-screen. */}
-          <Select value={tab} onChange={(v) => setTab(v as Tab)} aria-label="Settings section" className="lg:hidden">
-            {tabs.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.id === 'New' && fresh.unseen ? 'New ●' : t.label}
-              </option>
-            ))}
-          </Select>
+  if (!wide) {
+    return (
+      <div className="space-y-3">
+        <h1 className="page-title">Settings</h1>
+        {banner}
+        {search}
+        {query ? (
+          <SearchResults query={shownQuery || query} onOpen={openTab} onClear={clearSearch} />
+        ) : (
+          <CategoryList news={hasNew ? news : 0} unseen={fresh.unseen} />
+        )}
+      </div>
+    )
+  }
 
-          <div className="flex gap-6">
-            <SideTabs tab={tab} tabs={tabs} unseen={fresh.unseen} onChange={setTab} />
-            <div className="animate-fade-in w-full max-w-[47rem] min-w-0">
-              <TabBody tab={tab} />
-            </div>
-          </div>
-        </>
-      )}
+  return (
+    <div className="mx-auto w-full max-w-[63rem] space-y-5">
+      <PageHeader title="Settings" />
+      {banner}
+      <div className="flex gap-6 lg:gap-8">
+        <SideTabs tab={query ? undefined : tab} news={hasNew ? news : 0} unseen={fresh.unseen} search={search} onChange={setTab} />
+        <div className="animate-fade-in w-full max-w-[47rem] min-w-0">
+          {query ? <SearchResults query={shownQuery || query} onOpen={openTab} onClear={clearSearch} /> : <TabBody tab={tab} />}
+        </div>
+      </div>
     </div>
   )
 }
@@ -217,11 +237,8 @@ function TabBody({ tab }: { tab: Tab }) {
   }
 }
 
-// The search: lower-cased words, every one of which a setting's words must hold.
 const SearchQuery = createContext('')
-// The New tab: the labels of the rows it keeps.
 const OnlyRows = createContext<Set<string> | null>(null)
-// The section's own title matched, so all of it shows.
 const SectionMatched = createContext(false)
 
 function matches(query: string, ...texts: Array<string | undefined>) {
@@ -229,7 +246,6 @@ function matches(query: string, ...texts: Array<string | undefined>) {
   return query.split(/\s+/).every((w) => words.includes(w))
 }
 
-// Every tab at once, each showing only its matching settings; a tab with none drops out.
 const SearchResults = memo(function SearchResults({
   query,
   onOpen,
@@ -241,14 +257,14 @@ const SearchResults = memo(function SearchResults({
 }) {
   return (
     <SearchQuery.Provider value={query}>
-      <div className="animate-fade-in mx-auto max-w-[47rem] space-y-6 [&:not(:has([data-shown])):not(:has([data-loading]))>[data-empty]]:block">
-        {TABS.filter((t) => t.id !== 'New').map((t) => (
+      <div className="animate-fade-in space-y-6 [&:not(:has([data-shown])):not(:has([data-loading]))>[data-empty]]:block">
+        {CATEGORIES.map((t) => (
           <div key={t.id} className="space-y-3 [&:not(:has([data-shown]))]:hidden">
             <button
               onClick={() => onOpen(t.id)}
-              className="flex items-center gap-2 rounded-md text-sm font-medium text-base-300 transition-colors hover:text-white"
+              className="flex min-h-11 items-center gap-2.5 rounded-lg text-[15px] font-semibold text-base-100 transition-colors hover:text-white focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400 sm:text-sm"
             >
-              <TabIcon tab={t.id} />
+              <Tile tab={t.id} small />
               {t.label} ›
             </button>
             <SectionMatched.Provider value={matches(query, t.label)}>
@@ -267,59 +283,136 @@ const SearchResults = memo(function SearchResults({
   )
 })
 
-function SideTabs({ tab, tabs, unseen, onChange }: { tab: Tab; tabs: readonly (typeof TABS)[number][]; unseen: boolean; onChange: (t: Tab) => void }) {
+function NewMark({ news, unseen }: { news: number; unseen: boolean }) {
   return (
-    // Stays beside a long tab instead of scrolling away with its top.
-    <div role="tablist" className="sticky top-20 hidden w-44 shrink-0 flex-col gap-0.5 self-start lg:flex">
-      {tabs.map((t) => (
-        <button
-          key={t.id}
-          role="tab"
-          aria-selected={t.id === tab}
-          onClick={() => onChange(t.id)}
-          className={cx(
-            'flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors',
-            t.id === tab
-              ? 'bg-accent-500/15 font-medium text-accent-200 shadow-[inset_2px_0_0_var(--color-accent-500)]'
-              : 'text-base-400 hover:bg-base-900 hover:text-base-100',
-          )}
-        >
-          <TabIcon tab={t.id} />
-          {t.label}
-          {t.id === 'New' && unseen && <span aria-label="not seen yet" className="ml-auto size-2 rounded-full bg-accent-400" />}
-        </button>
-      ))}
-    </div>
+    <>
+      <span className="min-w-0 flex-1 py-1">
+        {NEW_TITLE} · {news}
+      </span>
+      {unseen && <span role="img" aria-label="not seen yet" className="size-2 shrink-0 rounded-full bg-accent-400" />}
+    </>
   )
 }
 
-// What this update added to Settings, as the real controls, and what changed with no setting of its own.
+function CategoryList({ news, unseen }: { news: number; unseen: boolean }) {
+  const row =
+    'flex min-h-14 items-center gap-3 px-4 py-2 transition-colors active:bg-base-850 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:ring-inset'
+  return (
+    <nav aria-label="Settings sections" className="flex flex-col gap-3">
+      {news > 0 && (
+        <ul className="overflow-hidden rounded-card bg-base-900">
+          <li>
+            <Link to="?tab=New" className={cx(row, 'text-[15px] font-medium text-accent-300')}>
+              <NewMark news={news} unseen={unseen} />
+              <Chevron />
+            </Link>
+          </li>
+        </ul>
+      )}
+      {GROUPS.map((g) => (
+        <Fragment key={g.title}>
+          <h2 className="px-1 pt-1 text-[13px] font-semibold text-base-400">{g.title}</h2>
+          <ul className="divide-y divide-white/5 overflow-hidden rounded-card bg-base-900">
+            {g.tabs.map((id) => (
+              <li key={id}>
+                <Link to={`?tab=${id}`} className={row}>
+                  <Tile tab={id} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[15px] font-medium text-base-100">{CATEGORY[id].label}</span>
+                    <span className="block truncate text-[13px] text-base-400">{CATEGORY[id].summary}</span>
+                  </span>
+                  <Chevron />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Fragment>
+      ))}
+    </nav>
+  )
+}
+
+function SideTabs({
+  tab,
+  news,
+  unseen,
+  search,
+  onChange,
+}: {
+  tab?: Tab
+  news: number
+  unseen: boolean
+  search: ReactNode
+  onChange: (t: Tab) => void
+}) {
+  const ids = useId()
+  const base =
+    'flex min-h-10 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-sm transition-colors pointer-coarse:min-h-11 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:ring-inset'
+  const item = (selected: boolean) =>
+    cx(base, selected ? 'bg-base-800 font-semibold text-base-100' : 'text-base-400 hover:bg-base-900 hover:text-base-100')
+  return (
+    <nav
+      aria-label="Settings sections"
+      className="sticky top-20 -m-1 flex max-h-[calc(100dvh-6rem)] w-[13.5rem] shrink-0 flex-col gap-1 self-start overflow-y-auto p-1 pb-3 no-scrollbar lg:w-[14.5rem]"
+    >
+      {search}
+      {news > 0 && (
+        <div role="tablist" aria-label="New" aria-orientation="vertical" className="mt-2">
+          <button
+            role="tab"
+            aria-selected={tab === 'New'}
+            onClick={() => onChange('New')}
+            className={cx(base, 'font-semibold text-accent-300', tab === 'New' ? 'bg-base-800' : 'hover:bg-base-900')}
+          >
+            <NewMark news={news} unseen={unseen} />
+          </button>
+        </div>
+      )}
+      {GROUPS.map((g, i) => (
+        <div key={g.title}>
+          <p id={`${ids}-${i}`} className="px-2.5 pt-4 pb-1 text-[13px] font-semibold text-base-400">
+            {g.title}
+          </p>
+          <div role="tablist" aria-labelledby={`${ids}-${i}`} aria-orientation="vertical" className="flex flex-col gap-0.5">
+            {g.tabs.map((id) => (
+              <button key={id} role="tab" aria-selected={id === tab} onClick={() => onChange(id)} className={item(id === tab)}>
+                <Tile tab={id} small />
+                {CATEGORY[id].label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </nav>
+  )
+}
+
 function NewSettings() {
   const fresh = useNewSettings()
   const setPref = useSetPref()
   const rows = useMemo(() => new Set(fresh.rows.map((r) => r.label)), [fresh.rows])
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <Section title={`Since ${fresh.from}`} hint="New and changed in the updates since the version you had. Tweak them here or in their own tabs.">
         {fresh.changes.map((c) => (
           <div key={c.what} data-row className="py-3">
-            <p className="text-sm text-base-100">{c.what}</p>
-            <p className="mt-0.5 text-xs text-base-500">
+            <p className="text-[15px] font-medium text-base-100 sm:text-sm">{c.what}</p>
+            <p className="mt-0.5 text-[13px] leading-snug text-base-400 sm:text-xs">
               Before: {c.before} · Now: {c.now}
             </p>
           </div>
         ))}
-        <div data-row className="py-3">
+        <div data-row className="flex min-h-14 items-center py-3">
           <Button size="sm" disabled={!fresh.unseen} onClick={() => setPref.mutate({ key: SEEN_KEY, value: fresh.current })}>
             {fresh.unseen ? 'Seen them' : 'Seen'}
           </Button>
         </div>
       </Section>
       <OnlyRows.Provider value={rows}>
-        {TABS.filter((t) => t.id !== 'New').map((t) => (
+        {CATEGORIES.map((t) => (
           <div key={t.id} className="space-y-3 [&:not(:has([data-shown]))]:hidden">
-            <p className="flex items-center gap-2 text-sm font-medium text-base-300">
-              <TabIcon tab={t.id} />
+            <p className="flex items-center gap-2.5 text-[15px] font-semibold text-base-100 sm:text-sm">
+              <Tile tab={t.id} small />
               {t.label}
             </p>
             <TabBody tab={t.id} />
@@ -330,71 +423,67 @@ function NewSettings() {
   )
 }
 
-// One line icon per tab, drawn as the app's other glyphs are (24 grid, 1.6 stroke).
-const TAB_ICONS: Record<Tab, ReactNode> = {
-  New: <path d="M12 3.5 13.8 9l5.7.1-4.6 3.4 1.7 5.5L12 14.7 7.4 18l1.7-5.5-4.6-3.4 5.7-.1L12 3.5Z" strokeLinejoin="round" />,
-  Playback: <path d="M8.5 5.5v13l10-6.5-10-6.5Z" strokeLinejoin="round" />,
+const TAB_ICONS: Record<Category, ReactNode> = {
+  Playback: <path d="M8 5.5v13l11-6.5-11-6.5Z" fill="currentColor" stroke="none" />,
   Language: (
     <>
-      <circle cx="12" cy="12" r="8.5" />
-      <path d="M3.5 12h17M12 3.5c2.3 2.3 3.5 5.3 3.5 8.5s-1.2 6.2-3.5 8.5c-2.3-2.3-3.5-5.3-3.5-8.5s1.2-6.2 3.5-8.5Z" />
+      <rect x="3" y="5" width="18" height="14" rx="3" />
+      <path d="M7 14h4M13 14h4M7 10.5h10" strokeLinecap="round" />
     </>
   ),
-  Computer: (
+  Sound: <path d="M4 10v4h4l5 4V6L8 10H4ZM16.5 9a4 4 0 0 1 0 6" strokeLinejoin="round" strokeLinecap="round" />,
+  Accounts: (
     <>
-      <rect x="3.5" y="4.5" width="17" height="11.5" rx="1.5" />
-      <path d="M9 20h6M12 16v4" strokeLinecap="round" />
+      <circle cx="12" cy="8.5" r="3.8" />
+      <path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6" strokeLinecap="round" />
     </>
   ),
-  Sound: (
-    <>
-      <path d="M4.5 9.5h3l4-3.5v12l-4-3.5h-3v-5Z" strokeLinejoin="round" />
-      <path d="M15 9.5a3.5 3.5 0 0 1 0 5M17.5 7a7 7 0 0 1 0 10" strokeLinecap="round" />
-    </>
-  ),
-  Downloads: <path d="M12 4v10m0 0 4-4m-4 4-4-4M5 18.5h14" strokeLinecap="round" strokeLinejoin="round" />,
+  Library: <path d="M5 4h4v16H5zM10.5 4h4v16h-4zM16 5.5l3.6-1 3 14.6-3.6.9z" strokeLinejoin="round" />,
+  Notifications: <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16ZM10 20.5a2 2 0 0 0 4 0" strokeLinejoin="round" />,
+  Downloads: <path d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14" strokeLinecap="round" strokeLinejoin="round" />,
   Storage: (
     <>
       <ellipse cx="12" cy="6.5" rx="7" ry="2.5" />
       <path d="M5 6.5v11c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-11M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" />
     </>
   ),
-  Accounts: (
-    <>
-      <circle cx="12" cy="8.5" r="3.5" />
-      <path d="M5 20c1-3.5 3.8-5 7-5s6 1.5 7 5" strokeLinecap="round" />
-    </>
-  ),
-  Library: (
-    <path
-      d="M4 7.5A1.5 1.5 0 0 1 5.5 6h3.4a1.5 1.5 0 0 1 1.2.6l.9 1.2h7.5A1.5 1.5 0 0 1 20 9.3v8.2a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5v-10Z"
-      strokeLinejoin="round"
-    />
-  ),
-  Notifications: (
-    <>
-      <path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 1.5H5l1.5-1.5Z" strokeLinejoin="round" />
-      <path d="M10 20.5a2 2 0 0 0 4 0" strokeLinecap="round" />
-    </>
-  ),
   Devices: (
     <>
-      <rect x="7.5" y="3.5" width="9" height="17" rx="1.5" />
+      <rect x="7" y="3" width="10" height="18" rx="2" />
       <path d="M11 17.5h2" strokeLinecap="round" />
+    </>
+  ),
+  Computer: (
+    <>
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M8 20h8M12 16v4" strokeLinecap="round" />
     </>
   ),
   About: (
     <>
       <circle cx="12" cy="12" r="8.5" />
-      <path d="M12 11v5.5M12 7.75v.25" strokeLinecap="round" />
+      <path d="M12 11v5M12 8h.01" strokeWidth="2.2" strokeLinecap="round" />
     </>
   ),
 }
 
-function TabIcon({ tab }: { tab: Tab }) {
+function Tile({ tab, small }: { tab: Category; small?: boolean }) {
   return (
-    <svg viewBox="0 0 24 24" className="size-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
-      {TAB_ICONS[tab]}
+    <span
+      aria-hidden
+      className={cx('grid shrink-0 place-items-center text-white', CATEGORY[tab].tile, small ? 'size-6 rounded-md' : 'size-7 rounded-lg')}
+    >
+      <svg viewBox="0 0 24 24" className={small ? 'size-3.5' : 'size-4'} fill="none" stroke="currentColor" strokeWidth="1.9">
+        {TAB_ICONS[tab]}
+      </svg>
+    </span>
+  )
+}
+
+function Chevron() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4 shrink-0 text-base-500" aria-hidden>
+      <path d="m9.5 6 6 6-6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -403,65 +492,73 @@ function Section({ title, hint, keywords, children }: { title: string; hint?: st
   const query = useContext(SearchQuery)
   const tabMatched = useContext(SectionMatched)
   const only = useContext(OnlyRows)
-  // Searching (or in New), an unmatched section keeps only its matching rows, and goes when none is left.
   const all = only ? false : !query || tabMatched || matches(query, title, hint, keywords)
   return (
-    <section
-      data-shown={query && all ? '' : undefined}
-      className={cx('surface p-5', !all && '[&:not(:has([data-shown]))]:hidden')}
-    >
-      <h2 className="font-display text-base font-semibold text-white">{title}</h2>
-      {hint && <p className="mt-1 text-xs leading-relaxed text-base-500">{hint}</p>}
-      {/* A rule per row: a two-line hint otherwise runs into the row below it. */}
-      <div className={cx('mt-2 divide-y divide-white/5', !all && '[&>:not([data-row])]:hidden')}>
+    <section data-shown={query && all ? '' : undefined} className={cx('space-y-2', !all && '[&:not(:has([data-shown]))]:hidden')}>
+      <h2 className="px-1 text-[13px] font-semibold text-base-400">{title}</h2>
+      <div className={cx('divide-y divide-white/5 rounded-card bg-base-900 px-4', !all && '[&>:not([data-row])]:hidden')}>
         <SectionMatched.Provider value={all}>{children}</SectionMatched.Provider>
       </div>
+      {hint && <p className="px-1 text-[13px] leading-snug text-base-500 sm:text-xs sm:leading-relaxed">{hint}</p>}
     </section>
   )
 }
 
-// The row's label names its control for screen readers, as the controls show no text.
 const RowLabel = ControlLabel
+const ROW_CONTROLS = 'a, button, input, select, textarea, label, [role="switch"], [role="combobox"], [tabindex]'
 
 function Row({
   label,
   hint,
   keywords,
   stacked,
+  under,
+  below,
   children,
 }: {
   label: string
   hint?: string
-  /** Other words someone might search for it by. */
   keywords?: string
-  /** The control under the words, for one too wide to sit beside them. */
   stacked?: boolean
+  under?: boolean
+  below?: ReactNode
   children: ReactNode
 }) {
   const query = useContext(SearchQuery)
   const all = useContext(SectionMatched)
   const only = useContext(OnlyRows)
   const shown = only ? only.has(label) : !query || all || matches(query, label, hint, keywords)
+  const compact = !stacked && isValidElement(children) && (children.type === Switch || children.type === ValueMenu)
+  const tap = (e: React.MouseEvent<HTMLDivElement>) => {
+    const hit = (e.target as Element).closest(ROW_CONTROLS)
+    if ((hit && e.currentTarget.contains(hit)) || window.getSelection()?.toString()) return
+    e.currentTarget.querySelector<HTMLElement>('[data-control] [role="switch"], [data-control] [role="combobox"]')?.click()
+  }
   return (
-    // Wraps on a narrow screen rather than clipping buttons off the edge.
     <div
       data-row
       data-shown={(query || only) && shown ? '' : undefined}
       hidden={!shown}
-      className={cx('flex flex-wrap justify-between gap-x-5 gap-y-2 py-3', stacked ? 'flex-col' : 'items-center')}
+      onClick={compact ? tap : undefined}
+      className={cx(
+        'flex min-h-14 gap-x-4 gap-y-2 py-3',
+        stacked ? 'flex-col justify-center' : 'items-center justify-between',
+        !stacked && (!compact || !!below) && 'flex-wrap',
+        under && 'pl-5',
+        compact && 'cursor-pointer',
+      )}
     >
-      {/* basis-48 is a width beside the control; in a stacked (column) row it became a 12rem height. */}
-      <div className={cx('min-w-0', !stacked && 'flex-1 basis-48')}>
-        <p className="text-sm text-base-100">
+      <div className={cx('min-w-0', !stacked && 'flex-1', !stacked && !compact && 'basis-48')}>
+        <p className="text-[15px] font-medium text-base-100 sm:text-sm">
           {label}
-          {only && <span className="ml-2 rounded bg-accent-500/20 px-1.5 py-0.5 text-[11px] font-medium text-accent-200">New</span>}
+          {only && <span className="ml-2 rounded bg-accent-500/20 px-1.5 py-0.5 text-xs font-medium text-accent-200">New</span>}
         </p>
-        {hint && <p className="mt-0.5 text-xs leading-relaxed text-base-500">{hint}</p>}
+        {hint && <p className="mt-0.5 text-[13px] leading-snug text-base-400 sm:text-xs sm:leading-relaxed">{hint}</p>}
       </div>
-      {/* One track so the right edge doesn't zigzag (not on a phone, where it leaves the label). */}
-      <div className={cx('flex max-w-full', stacked ? '' : 'justify-end sm:min-w-36')}>
+      <div data-control className={cx('flex', compact ? 'max-w-[50%] shrink-0' : 'max-w-full', !stacked && 'justify-end')}>
         <RowLabel.Provider value={label}>{children}</RowLabel.Provider>
       </div>
+      {below && <div className="basis-full">{below}</div>}
     </div>
   )
 }
@@ -476,7 +573,6 @@ function useFlag() {
   const values = prefs.data?.effective ?? {}
   return {
     loading: prefs.isPending,
-    // Unloaded settings would show as all off, and a click would write over the real ones.
     failed: prefs.isError && !prefs.data ? <ErrorState error={prefs.error} retry={() => void prefs.refetch()} /> : null,
     get: (key: string) => values[key] === 'true',
     value: (key: string) => values[key] ?? '',
@@ -484,24 +580,27 @@ function useFlag() {
   }
 }
 
-// How Yoru runs on the machine it's installed on, so set there alone; another device is told where.
 function WindowSection({ f }: { f: ReturnType<typeof useFlag> }) {
   const access = useAccess()
   if (access.isPending) return null
   if (!access.data?.host) {
     return (
       <Section title="This computer" hint="How Yoru runs on the computer it's installed on." keywords="window startup awake">
-        <p className="py-2 text-sm text-base-400">These are set on the computer Yoru runs on, in its own window.</p>
+        <p className="py-3 text-sm text-base-400">These are set on the computer Yoru runs on, in its own window.</p>
       </Section>
     )
   }
   return (
     <Section title="This computer" hint="How Yoru runs on the computer it's installed on.">
       <Row label="Open Yoru" hint="From the next start. F11 switches either way." keywords="window fullscreen maximized">
-        <Select value={f.value('window.mode') || 'fullscreen'} onChange={(v) => f.set('window.mode', v)}>
-          <option value="fullscreen">Fullscreen</option>
-          <option value="maximized">Maximized</option>
-        </Select>
+        <ValueMenu
+          value={f.value('window.mode') || 'fullscreen'}
+          onChange={(v) => f.set('window.mode', v)}
+          options={[
+            { value: 'fullscreen', label: 'Fullscreen' },
+            { value: 'maximized', label: 'Maximized' },
+          ]}
+        />
       </Row>
       <CloseWindowRow f={f} />
       <SignInRow />
@@ -531,7 +630,6 @@ function WindowSection({ f }: { f: ReturnType<typeof useFlag> }) {
   )
 }
 
-// Started at sign-in, Yoru is there for alerts, downloads and other devices without being opened first.
 function SignInRow() {
   const qc = useQueryClient()
   const startup = useQuery({
@@ -559,7 +657,6 @@ function SignInRow() {
   )
 }
 
-// On Windows, where Yoru's tray icon is.
 function CloseWindowRow({ f }: { f: ReturnType<typeof useFlag> }) {
   if (!navigator.userAgent.includes('Windows')) return null
   const tray = f.value('window.on_close') === 'tray'
@@ -573,15 +670,18 @@ function CloseWindowRow({ f }: { f: ReturnType<typeof useFlag> }) {
       }
       keywords="close exit quit tray background minimize"
     >
-      <Select value={tray ? 'tray' : 'exit'} onChange={(v) => f.set('window.on_close', v)}>
-        <option value="exit">Exit Yoru</option>
-        <option value="tray">Keep running in the tray</option>
-      </Select>
+      <ValueMenu
+        value={tray ? 'tray' : 'exit'}
+        onChange={(v) => f.set('window.on_close', v)}
+        options={[
+          { value: 'exit', label: 'Exit Yoru' },
+          { value: 'tray', label: 'Keep running in the tray' },
+        ]}
+      />
     </Row>
   )
 }
 
-// Where casting starts is the player's button; here only how the TV shows subtitles. None on an iPhone.
 function CastingSection({ f }: { f: ReturnType<typeof useFlag> }) {
   if (castImpossible()) return null
   return (
@@ -605,13 +705,12 @@ function CastingSection({ f }: { f: ReturnType<typeof useFlag> }) {
   )
 }
 
-// Only when chosen and missing: Yoru does not install VLC.
 function VLCNote() {
   const f = useFlag()
   const setup = useSetup()
   if (f.value('playback.player') !== 'vlc' || !setup.data || setup.data.vlc) return null
   return (
-    <p className="text-xs text-recap">
+    <p className="py-3 text-xs text-recap">
       VLC was not found. Install it from videolan.org, or if it is installed somewhere unusual set{' '}
       <code>vlc_path</code> in {setup.data.configPath} to its folder, then restart Yoru.
     </p>
@@ -640,13 +739,18 @@ function PlaybackTab() {
               : 'Only with Auto next episode on.'
           }
           keywords="still watching asleep sleep binge pause"
+          under
         >
-          <Select value={f.value('playback.still_watching') || '3'} onChange={(v) => f.set('playback.still_watching', v)}>
-            <option value="0">Never</option>
-            <option value="2">After 2 episodes</option>
-            <option value="3">After 3 episodes</option>
-            <option value="5">After 5 episodes</option>
-          </Select>
+          <ValueMenu
+            value={f.value('playback.still_watching') || '3'}
+            onChange={(v) => f.set('playback.still_watching', v)}
+            options={[
+              { value: '0', label: 'Never' },
+              { value: '2', label: 'After 2 episodes' },
+              { value: '3', label: 'After 3 episodes' },
+              { value: '5', label: 'After 5 episodes' },
+            ]}
+          />
         </Row>
         <Row
           label="Skip filler and recap episodes"
@@ -663,13 +767,17 @@ function PlaybackTab() {
           }
           keywords="watched threshold progress percent credits ending"
         >
-          <Select value={f.value('sync.progress_at') || '0.9'} onChange={(v) => f.set('sync.progress_at', v)}>
-            <option value="0.8">80%</option>
-            <option value="0.85">85%</option>
-            <option value="0.9">90%</option>
-            <option value="0.95">95%</option>
-            <option value="ed">When the ending starts</option>
-          </Select>
+          <ValueMenu
+            value={f.value('sync.progress_at') || '0.9'}
+            onChange={(v) => f.set('sync.progress_at', v)}
+            options={[
+              { value: '0.8', label: '80%' },
+              { value: '0.85', label: '85%' },
+              { value: '0.9', label: '90%' },
+              { value: '0.95', label: '95%' },
+              { value: 'ed', label: 'When the ending starts' },
+            ]}
+          />
         </Row>
       </Section>
 
@@ -677,14 +785,15 @@ function PlaybackTab() {
 
       <Section title="Player">
         <Row label="Default player" hint="mpv and VLC play on this computer only; a phone or TV uses the browser." keywords="mpv vlc external">
-          <Select
+          <ValueMenu
             value={f.value('playback.player')}
             onChange={(v) => f.set('playback.player', v)}
-          >
-            <option value="browser">In browser</option>
-            <option value="mpv">mpv</option>
-            <option value="vlc">VLC</option>
-          </Select>
+            options={[
+              { value: 'browser', label: 'In browser' },
+              { value: 'mpv', label: 'mpv' },
+              { value: 'vlc', label: 'VLC' },
+            ]}
+          />
         </Row>
         <VLCNote />
         <Row
@@ -712,14 +821,15 @@ function LanguageTab() {
     <div className="space-y-4">
       <Section title="Language">
         <Row label="Audio preference" keywords="sub dub dubbed subbed">
-          <Select
+          <ValueMenu
             value={f.value('audio.prefer')}
             onChange={(v) => f.set('audio.prefer', v)}
-          >
-            <option value="sub">Subbed</option>
-            <option value="dub">Dubbed</option>
-            <option value="either">Either</option>
-          </Select>
+            options={[
+              { value: 'sub', label: 'Subbed' },
+              { value: 'dub', label: 'Dubbed' },
+              { value: 'either', label: 'Either' },
+            ]}
+          />
         </Row>
         <SubtitleLanguages f={f} />
         <SubtitlesWithDub f={f} />
@@ -727,22 +837,16 @@ function LanguageTab() {
           label="Subtitle look"
           hint="For dialogue; signs and songs stay as made. Also on a TV, and in mpv for plain-text subtitles."
           keywords="subs captions style colour color outline box yellow readable"
-        >
-          <div className="flex flex-wrap items-center justify-end gap-3">
+          below={
             <span
               aria-hidden
               className="grid h-9 w-36 place-items-center rounded bg-[linear-gradient(135deg,#384868,#6e5546)] text-xs font-semibold"
             >
               <span style={previewStyle(asSubLook(f.value('subtitle.look')))}>Where to next?</span>
             </span>
-            <Select value={f.value('subtitle.look')} onChange={(v) => f.set('subtitle.look', v)}>
-              {SUB_LOOKS.map((l) => (
-                <option key={l.value} value={l.value}>
-                  {l.label}
-                </option>
-              ))}
-            </Select>
-          </div>
+          }
+        >
+          <ValueMenu value={f.value('subtitle.look')} onChange={(v) => f.set('subtitle.look', v)} options={SUB_LOOKS} />
         </Row>
         <Row
           label="Raise subtitles"
@@ -753,13 +857,14 @@ function LanguageTab() {
         </Row>
         <JimakuKey />
         <Row label="Show titles as" keywords="english romaji names">
-          <Select
+          <ValueMenu
             value={f.value('display.titles')}
             onChange={(v) => f.set('display.titles', v)}
-          >
-            <option value="english">English</option>
-            <option value="romaji">Romaji</option>
-          </Select>
+            options={[
+              { value: 'english', label: 'English' },
+              { value: 'romaji', label: 'Romaji' },
+            ]}
+          />
         </Row>
       </Section>
 
@@ -769,11 +874,15 @@ function LanguageTab() {
           hint="Unwatched episodes show a blurred picture and no title or synopsis; tap the eye to see one. Shows you finished or are rewatching show everything. A show's episode list can show all of its titles."
           keywords="spoilers blur hide titles synopsis thumbnails"
         >
-          <Select value={f.value('display.spoilers') || 'after_next'} onChange={(v) => f.set('display.spoilers', v)}>
-            <option value="after_next">After the next episode</option>
-            <option value="unwatched">Every unwatched episode</option>
-            <option value="off">Off</option>
-          </Select>
+          <ValueMenu
+            value={f.value('display.spoilers') || 'after_next'}
+            onChange={(v) => f.set('display.spoilers', v)}
+            options={[
+              { value: 'after_next', label: 'After the next episode' },
+              { value: 'unwatched', label: 'Every unwatched episode' },
+              { value: 'off', label: 'Off' },
+            ]}
+          />
         </Row>
       </Section>
 
@@ -791,7 +900,6 @@ function LanguageTab() {
   )
 }
 
-// Off takes a row off Home on every device; folding one by its heading on Home is that device's alone.
 function HomeRowsRow({ f }: { f: ReturnType<typeof useFlag> }) {
   const hidden = hiddenRows(f.value('home.hidden'))
   const set = (id: string, on: boolean) => {
@@ -802,7 +910,7 @@ function HomeRowsRow({ f }: { f: ReturnType<typeof useFlag> }) {
   return (
     <Row
       label="Rows on Home"
-      hint="Off takes a row off Home. To fold one away for now, press its heading on Home."
+      hint="Off takes a row off Home on every device. To reorder or fold rows, use Edit Home at the end of Home."
       keywords="home rows rails hide collapse for you sequels trending season upcoming"
       stacked
     >
@@ -834,11 +942,15 @@ function SoundTab() {
     <div className="space-y-4">
       <Section title="Sound" hint="Browser player only; also in the player's sound menu.">
         <Row label="Voice boost" hint="Lifts dialogue over music and effects. Press V in the player." keywords="dialogue speech clear">
-          <Select value={f.value('playback.voice') || 'off'} onChange={(v) => f.set('playback.voice', v)}>
-            <option value="off">Off</option>
-            <option value="medium">Medium (+6 dB)</option>
-            <option value="high">High (+12 dB)</option>
-          </Select>
+          <ValueMenu
+            value={f.value('playback.voice') || 'off'}
+            onChange={(v) => f.set('playback.voice', v)}
+            options={[
+              { value: 'off', label: 'Off' },
+              { value: 'medium', label: 'Medium (+6 dB)' },
+              { value: 'high', label: 'High (+12 dB)' },
+            ]}
+          />
         </Row>
         <Row label="Night mode" hint="Evens out loud effects and quiet lines." keywords="compress dynamic range">
           <Switch on={f.get('playback.night')} onChange={(v) => f.set('playback.night', String(v))} />
@@ -850,11 +962,15 @@ function SoundTab() {
           <Switch on={f.get('playback.mono')} onChange={(v) => f.set('playback.mono', String(v))} />
         </Row>
         <Row label="Volume boost" hint="Raises a quiet release, limited so nothing clips." keywords="louder gain">
-          <Select value={f.value('playback.boost') || 'off'} onChange={(v) => f.set('playback.boost', v)}>
-            <option value="off">Off</option>
-            <option value="medium">Medium (twice as loud)</option>
-            <option value="high">High (four times)</option>
-          </Select>
+          <ValueMenu
+            value={f.value('playback.boost') || 'off'}
+            onChange={(v) => f.set('playback.boost', v)}
+            options={[
+              { value: 'off', label: 'Off' },
+              { value: 'medium', label: 'Medium (twice as loud)' },
+              { value: 'high', label: 'High (four times)' },
+            ]}
+          />
         </Row>
       </Section>
 
@@ -871,14 +987,11 @@ function SoundTab() {
           hint={ANIME4K_MODES.find((m) => m.id === f.value('playback.anime4k_mode'))?.hint}
           keywords="upscale"
         >
-          <Select
+          <ValueMenu
             value={f.value('playback.anime4k_mode')}
             onChange={(v) => f.set('playback.anime4k_mode', v)}
-          >
-            {ANIME4K_MODES.map((m) => (
-              <option key={m.id} value={m.id}>{m.title}</option>
-            ))}
-          </Select>
+            options={ANIME4K_MODES.map((m) => ({ value: m.id, label: m.title }))}
+          />
         </Row>
         <Row
           label="Anime4K size"
@@ -887,14 +1000,11 @@ function SoundTab() {
           }`}
           keywords="upscale gpu"
         >
-          <Select
+          <ValueMenu
             value={f.value('playback.anime4k_size')}
             onChange={(v) => f.set('playback.anime4k_size', v)}
-          >
-            {ANIME4K_SIZES.map((s) => (
-              <option key={s.id} value={s.id}>{s.id}</option>
-            ))}
-          </Select>
+            options={ANIME4K_SIZES.map((s) => ({ value: s.id, label: s.id }))}
+          />
         </Row>
         <Row
           label="Soften flashing"
@@ -918,7 +1028,6 @@ function SoundTab() {
   )
 }
 
-// The card is this computer's Discord account, so it is set here only.
 function DiscordSection({ f }: { f: ReturnType<typeof useFlag> }) {
   const access = useAccess()
   if (!access.data?.host) return null
@@ -933,10 +1042,7 @@ function DiscordSection({ f }: { f: ReturnType<typeof useFlag> }) {
         <Switch on={on} onChange={(v) => f.set('discord.enabled', String(v))} />
       </Row>
       {on && (
-        <Row
-          label="Include other devices"
-          hint="Also what plays on a phone or TV through this Yoru."
-        >
+        <Row label="Include other devices" hint="Also what plays on a phone or TV through this Yoru." under>
           <Switch on={f.get('discord.everywhere')} onChange={(v) => f.set('discord.everywhere', String(v))} />
         </Row>
       )}
@@ -960,7 +1066,6 @@ const LANGUAGES = [
   { code: 'th', name: 'Thai' },
 ]
 
-/** Subtitle languages in order, which picks both the release and the track inside it. */
 function SubtitleLanguages({ f }: { f: ReturnType<typeof useFlag> }) {
   const chosen: string[] = (() => {
     try {
@@ -1011,7 +1116,6 @@ function SubtitleLanguages({ f }: { f: ReturnType<typeof useFlag> }) {
   )
 }
 
-/** Japanese subtitles from jimaku.cc with the viewer's key, kept secret: only whether one is set shows. */
 function JimakuKey() {
   const qc = useQueryClient()
   const state = useQuery({ queryKey: ['jimaku'], queryFn: () => api.get<{ set: boolean }>('/api/jimaku') })
@@ -1062,7 +1166,6 @@ function JimakuKey() {
   )
 }
 
-/** With a dub the viewer understands, full subtitles repeat it; signs and songs still translate the screen. */
 function SubtitlesWithDub({ f }: { f: ReturnType<typeof useFlag> }) {
   return (
     <Row
@@ -1070,11 +1173,15 @@ function SubtitlesWithDub({ f }: { f: ReturnType<typeof useFlag> }) {
       hint="When the audio is in one of your subtitle languages. Any track can still be picked in the player."
       keywords="dub signs songs forced captions"
     >
-      <Select value={f.value('subtitle.with_dub') || 'signs'} onChange={(v) => f.set('subtitle.with_dub', v)}>
-        <option value="signs">Signs and songs only</option>
-        <option value="off">Off</option>
-        <option value="same">Same as with sub</option>
-      </Select>
+      <ValueMenu
+        value={f.value('subtitle.with_dub') || 'signs'}
+        onChange={(v) => f.set('subtitle.with_dub', v)}
+        options={[
+          { value: 'signs', label: 'Signs and songs only' },
+          { value: 'off', label: 'Off' },
+          { value: 'same', label: 'Same as with sub' },
+        ]}
+      />
     </Row>
   )
 }
@@ -1083,17 +1190,14 @@ interface OrphanResult {
   files: { name: string; bytes: number }[]
   removed: number
   freedBytes: number
-  /** Shown but kept: claimed by a download since the list was made. */
   kept?: string[]
 }
 
 function StorageTab() {
   const f = useFlag()
   const qc = useQueryClient()
-  // Turning on the deletion of kept downloads asks: those files go for good.
   const [confirmPurge, setConfirmPurge] = useState(false)
   const cache = useQuery({ queryKey: ['cache'], queryFn: () => api.get<Record<string, number>>('/api/cache') })
-  // The budget is kept every two minutes by itself; this frees the space now, as the Downloads page's Clear does.
   const [confirmClear, setConfirmClear] = useState(false)
   const clear = useMutation({
     meta: { inline: true },
@@ -1104,14 +1208,12 @@ function StorageTab() {
       refreshDownloads(qc)
     },
   })
-  // Looked at first, deleted only once the list has been seen.
   const preview = useMutation({
     meta: { inline: true },
     mutationFn: () => api.get<OrphanResult>('/api/cache/orphans'),
   })
   const orphans = useMutation({
     meta: { inline: true },
-    // Exactly the names shown: anything that turned up or got claimed since stays.
     mutationFn: (names: string[]) => api.post<OrphanResult>('/api/cache/orphans', { names }),
     onSuccess: () => {
       preview.reset()
@@ -1133,30 +1235,32 @@ function StorageTab() {
         keywords="cache disk"
       >
         <Row label="Budget" hint="How much watched episodes may take." keywords="size space gb cache">
-          <Select
+          <ValueMenu
             value={f.value('cache.budget_bytes')}
             onChange={(v) => f.set('cache.budget_bytes', v)}
-          >
-            {[5, 10, 20, 40, 80].map((gb) => (
-              <option key={gb} value={String(gb * 1024 ** 3)}>{gb} GB</option>
-            ))}
-          </Select>
+            options={[5, 10, 20, 40, 80].map((gb) => ({ value: String(gb * 1024 ** 3), label: `${gb} GB` }))}
+          />
         </Row>
         <Row
           label="Auto-delete watched"
           hint="Once two more are watched keeps the last one, so going back is still free."
           keywords="remove clean up"
         >
-          <Select value={f.value('cache.autodelete') || 'off'} onChange={(v) => f.set('cache.autodelete', v)}>
-            <option value="off">Off</option>
-            <option value="now">Right after watching</option>
-            <option value="keep2">Once two more are watched</option>
-          </Select>
+          <ValueMenu
+            value={f.value('cache.autodelete') || 'off'}
+            onChange={(v) => f.set('cache.autodelete', v)}
+            options={[
+              { value: 'off', label: 'Off' },
+              { value: 'now', label: 'Right after watching' },
+              { value: 'keep2', label: 'Once two more are watched' },
+            ]}
+          />
         </Row>
         {(f.value('cache.autodelete') || 'off') !== 'off' && (
           <Row
             label="Also delete downloaded episodes"
             hint="Episodes you chose to keep are deleted from disk too, once watched. Nothing else ever removes a download."
+            under
           >
             {confirmPurge ? (
               <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1244,7 +1348,7 @@ function StorageTab() {
           )}
         </Row>
         {found && found.removed > 0 && (
-          <ul className="max-h-40 overflow-y-auto rounded-md bg-base-950 px-3 py-2 font-mono text-[11px] text-base-400">
+          <ul className="my-3 max-h-40 overflow-y-auto rounded-md bg-base-950 px-3 py-2 font-mono text-xs text-base-400">
             {found.files.map((f) => (
               <li key={f.name} className="flex justify-between gap-4">
                 <span className="truncate">{f.name}</span>
@@ -1254,7 +1358,7 @@ function StorageTab() {
           </ul>
         )}
         {(preview.error ?? orphans.error) && (
-          <p className="text-xs text-recap">{((preview.error ?? orphans.error) as Error).message}</p>
+          <p className="py-3 text-xs text-recap">{((preview.error ?? orphans.error) as Error).message}</p>
         )}
       </Section>
 
@@ -1290,27 +1394,32 @@ function DownloadsTab() {
           hint="Downloads the next episodes while one plays, sharing your connection. Leave off on a slow line."
           keywords="prefetch preload next"
         >
-          <Select
+          <ValueMenu
             value={f.get('cache.prefetch_next') ? (f.value('cache.prefetch_count') === '2' ? '2' : '1') : '0'}
             onChange={(v) => {
               f.set('cache.prefetch_next', String(v !== '0'))
               if (v !== '0') f.set('cache.prefetch_count', v)
             }}
-          >
-            <option value="0">Off</option>
-            <option value="1">Next episode</option>
-            <option value="2">Next 2 episodes</option>
-          </Select>
+            options={[
+              { value: '0', label: 'Off' },
+              { value: '1', label: 'Next episode' },
+              { value: '2', label: 'Next 2 episodes' },
+            ]}
+          />
         </Row>
         <Row
           label="Download queue while watching"
           hint="Pausing gives the episode on screen the whole connection; one already on disk pauses nothing."
           keywords="pause queued wait"
         >
-          <Select value={f.value('downloads.while_watching') || 'pause'} onChange={(v) => f.set('downloads.while_watching', v)}>
-            <option value="pause">Pause while the episode is still arriving</option>
-            <option value="continue">Never pause</option>
-          </Select>
+          <ValueMenu
+            value={f.value('downloads.while_watching') || 'pause'}
+            onChange={(v) => f.set('downloads.while_watching', v)}
+            options={[
+              { value: 'pause', label: 'Pause while the episode is still arriving' },
+              { value: 'continue', label: 'Never pause' },
+            ]}
+          />
         </Row>
         <Row
           label="Keep whole episode"
@@ -1331,30 +1440,34 @@ function DownloadsTab() {
           }
           keywords="resolution 1080p 720p 480p quality data saver"
         >
-          <Select value={f.value('quality.prefer') || 'best'} onChange={(v) => f.set('quality.prefer', v)}>
-            <option value="best">Best available</option>
-            <option value="720p">Up to 720p</option>
-            <option value="480p">Up to 480p</option>
-          </Select>
+          <ValueMenu
+            value={f.value('quality.prefer') || 'best'}
+            onChange={(v) => f.set('quality.prefer', v)}
+            options={[
+              { value: 'best', label: 'Best available' },
+              { value: '720p', label: 'Up to 720p' },
+              { value: '480p', label: 'Up to 480p' },
+            ]}
+          />
         </Row>
         <PreferGroups f={f} />
         <AvoidRows f={f} />
-        {/* Was fixed at 3 GB, silently passing over remuxes on a line that could take them. */}
         <Row
           label="Largest automatic episode"
           hint="Bigger releases are left for you to choose by hand. Films scale by their runtime."
           keywords="size limit remux 4k gb"
         >
-          <Select
+          <ValueMenu
             value={f.value('quality.max_auto_bytes') || '3221225472'}
             onChange={(v) => f.set('quality.max_auto_bytes', v)}
-          >
-            <option value="2147483648">2 GB</option>
-            <option value="3221225472">3 GB</option>
-            <option value="5368709120">5 GB</option>
-            <option value="10737418240">10 GB</option>
-            <option value="0">No limit</option>
-          </Select>
+            options={[
+              { value: '2147483648', label: '2 GB' },
+              { value: '3221225472', label: '3 GB' },
+              { value: '5368709120', label: '5 GB' },
+              { value: '10737418240', label: '10 GB' },
+              { value: '0', label: 'No limit' },
+            ]}
+          />
         </Row>
         <Row label="Allow 10-bit H.264 (Hi10P)" hint="No hardware decodes it; expect high CPU." keywords="hi10p codec">
           <Switch on={f.get('quality.allow_hi10p')} onChange={(v) => f.set('quality.allow_hi10p', String(v))} />
@@ -1374,7 +1487,11 @@ function DownloadsTab() {
           }
           keywords="wait upgrade preferred group better release v2 repack"
         >
-          <WaitSelect value={f.value('autodownload.wait_hours') || '0'} onChange={(v) => f.set('autodownload.wait_hours', v)} />
+          <ValueMenu
+            value={f.value('autodownload.wait_hours') || '0'}
+            onChange={(v) => f.set('autodownload.wait_hours', v)}
+            options={WAITS}
+          />
         </Row>
         <AutoDownloadPreview />
       </Section>
@@ -1386,10 +1503,14 @@ function DownloadsTab() {
           hint="Speed tests count megabits, file sizes megabytes. 8 Mbps is about 1 MB/s."
           keywords="mbps mb/s units"
         >
-          <Select value={f.value('display.speed') || 'mbps'} onChange={(v) => f.set('display.speed', v)}>
-            <option value="mbps">Mbps</option>
-            <option value="mbs">MB/s</option>
-          </Select>
+          <ValueMenu
+            value={f.value('display.speed') || 'mbps'}
+            onChange={(v) => f.set('display.speed', v)}
+            options={[
+              { value: 'mbps', label: 'Mbps' },
+              { value: 'mbs', label: 'MB/s' },
+            ]}
+          />
         </Row>
         <TorrentNetworkRow f={f} />
         <Row
@@ -1401,10 +1522,14 @@ function DownloadsTab() {
           }
           keywords="upload seed seeding"
         >
-          <Select value={f.value('downloads.upload') || 'while_downloading'} onChange={(v) => f.set('downloads.upload', v)}>
-            <option value="while_downloading">While downloading</option>
-            <option value="never">Never</option>
-          </Select>
+          <ValueMenu
+            value={f.value('downloads.upload') || 'while_downloading'}
+            onChange={(v) => f.set('downloads.upload', v)}
+            options={[
+              { value: 'while_downloading', label: 'While downloading' },
+              { value: 'never', label: 'Never' },
+            ]}
+          />
         </Row>
         <PeersFirewallRow />
       </Section>
@@ -1419,8 +1544,6 @@ interface PeersFirewall {
   blocked: boolean
 }
 
-// Whether torrent peers can connect in. Downloads work without it, from fewer
-// peers. Host only: a paired device cannot change this machine's firewall.
 function PeersFirewallRow() {
   const qc = useQueryClient()
   const access = useAccess()
@@ -1438,7 +1561,6 @@ function PeersFirewallRow() {
   if (!host || !fw.data) return null
   const { status, port, allowed, blocked } = fw.data
 
-  // Linux and macOS: Yoru only says what it found.
   if (!status.supported) {
     if (!status.firewall) return null
     return (
@@ -1462,7 +1584,7 @@ function PeersFirewallRow() {
   return (
     <Row label="Incoming peers" hint={hint} keywords="firewall port">
       {allowed ? (
-        <span className="text-sm text-accent-400">✓ Allowed</span>
+        <span className="text-sm text-emerald-300">✓ Allowed</span>
       ) : (
         <button onClick={() => allow.mutate()} disabled={allow.isPending} className={buttonClass('secondary', 'sm')}>
           {allow.isPending ? 'Waiting for Windows…' : 'Allow'}
@@ -1472,18 +1594,15 @@ function PeersFirewallRow() {
   )
 }
 
-// Bytes a second, as stored: round numbers in the unit Settings shows speeds in.
 const SPEED_LIMITS: Record<SpeedUnit, number[]> = {
   mbps: [5, 10, 20, 40, 80].map((m) => (m * 1_000_000) / 8),
   mbs: [1, 2, 3, 5, 10].map((m) => m * 1024 ** 2),
 }
-// A 1080p episode is about 1.4 GB for 24 minutes: some 8 Mbps, 1 MB/s.
 const STREAM_BYTES = 1_000_000
 
 function SpeedLimitRow({ f }: { f: ReturnType<typeof useFlag> }) {
   const unit: SpeedUnit = f.value('display.speed') === 'mbs' ? 'mbs' : 'mbps'
   const limit = Number(f.value('downloads.limit_bytes')) || 0
-  // One picked in the other unit stays listed, or the choice would read as nothing.
   const choices = limit && !SPEED_LIMITS[unit].includes(limit) ? [...SPEED_LIMITS[unit], limit].sort((a, b) => a - b) : SPEED_LIMITS[unit]
   return (
     <Row
@@ -1495,14 +1614,11 @@ function SpeedLimitRow({ f }: { f: ReturnType<typeof useFlag> }) {
           : 'Leaves room on your connection for everything else. Streaming counts against it too.'
       }
     >
-      <Select value={String(limit)} onChange={(v) => f.set('downloads.limit_bytes', v)}>
-        <option value="0">No limit</option>
-        {choices.map((b) => (
-          <option key={b} value={String(b)}>
-            {speedLimit(b, unit)}
-          </option>
-        ))}
-      </Select>
+      <ValueMenu
+        value={String(limit)}
+        onChange={(v) => f.set('downloads.limit_bytes', v)}
+        options={[{ value: '0', label: 'No limit' }, ...choices.map((b) => ({ value: String(b), label: speedLimit(b, unit) }))]}
+      />
     </Row>
   )
 }
@@ -1512,11 +1628,9 @@ interface TorrentNetwork {
   network: { adapter: string; address?: string; waiting: boolean }
 }
 
-// Torrents kept to one adapter, a VPN's. Host only: it is this machine's network, as the firewall is.
 function TorrentNetworkRow({ f }: { f: ReturnType<typeof useFlag> }) {
   const access = useAccess()
   const host = !!access.data?.host
-  // Polled: a VPN connects and drops on its own.
   const net = useQuery({
     queryKey: ['network'],
     queryFn: () => api.get<TorrentNetwork>('/api/network'),
@@ -1526,7 +1640,6 @@ function TorrentNetworkRow({ f }: { f: ReturnType<typeof useFlag> }) {
   if (!host || !net.data) return null
   const chosen = f.value('downloads.adapter')
   const { adapters, network } = net.data
-  // A chosen adapter that's down isn't listed, but stays the choice.
   const missing = chosen && !adapters.some((a) => a.name === chosen)
 
   let hint =
@@ -1540,16 +1653,15 @@ function TorrentNetworkRow({ f }: { f: ReturnType<typeof useFlag> }) {
   }
   return (
     <Row label="Network for torrents" hint={hint} keywords="vpn adapter interface">
-      <Select value={chosen} onChange={(v) => f.set('downloads.adapter', v)}>
-        <option value="">Any network</option>
-        {missing && <option value={chosen}>{chosen} (not connected)</option>}
-        {adapters.map((a) => (
-          <option key={a.name} value={a.name}>
-            {a.name} · {a.addresses[0]}
-            {a.vpn ? ' · VPN' : ''}
-          </option>
-        ))}
-      </Select>
+      <ValueMenu
+        value={chosen}
+        onChange={(v) => f.set('downloads.adapter', v)}
+        options={[
+          { value: '', label: 'Any network' },
+          ...(missing ? [{ value: chosen, label: `${chosen} (not connected)` }] : []),
+          ...adapters.map((a) => ({ value: a.name, label: `${a.name} · ${a.addresses[0]}${a.vpn ? ' · VPN' : ''}` })),
+        ]}
+      />
     </Row>
   )
 }
@@ -1585,7 +1697,6 @@ function previewWords(row: PreviewRow): string {
   }
 }
 
-// What auto-download would take next, show by show, before it runs. Searching each show is all it does.
 function AutoDownloadPreview() {
   const qc = useQueryClient()
   const preview = useMutation({
@@ -1673,7 +1784,6 @@ function PreferGroups({ f }: { f: ReturnType<typeof useFlag> }) {
   )
 }
 
-// Never taken on their own; the picker still lists them, saying why, so one can be chosen by hand.
 function AvoidRows({ f }: { f: ReturnType<typeof useFlag> }) {
   return (
     <>
@@ -1716,16 +1826,37 @@ function SkippingSection({ f }: { f: ReturnType<typeof useFlag> }) {
   })
   return (
     <Section title="Skipping" hint="Opening and ending can be set per show on its watch page.">
-      <Row label="Skip opening" keywords="intro op">
-        <Switch on={f.get('playback.autoskip_op')} onChange={(v) => f.set('playback.autoskip_op', String(v))} />
+      <Row
+        label="Skip openings"
+        hint="Off: no Skip button. Button: Skip shows while it plays. Auto: skipped for you, with Undo."
+        keywords="intro op skip button auto"
+      >
+        <Segmented
+          size="sm"
+          label="Skip openings"
+          value={skipMode(f.value('playback.autoskip_op'))}
+          onChange={(v) => f.set('playback.autoskip_op', v)}
+          options={SKIP_MODES}
+        />
       </Row>
-      <Row label="Skip ending" keywords="outro ed credits">
-        <Switch on={f.get('playback.autoskip_ed')} onChange={(v) => f.set('playback.autoskip_ed', String(v))} />
+      <Row
+        label="Skip endings"
+        hint="Off: no Skip button. Button: Skip shows while it plays. Auto: skipped for you, with Undo."
+        keywords="outro ed credits skip button auto"
+      >
+        <Segmented
+          size="sm"
+          label="Skip endings"
+          value={skipMode(f.value('playback.autoskip_ed'))}
+          onChange={(v) => f.set('playback.autoskip_ed', v)}
+          options={SKIP_MODES}
+        />
       </Row>
       <Row
         label="Keep the songs on a first and last episode"
         hint="A first episode's opening plays even when skipping, and so does a finale's ending."
         keywords="first episode finale opening ending songs"
+        under
       >
         <Switch
           on={f.get('playback.skip_keep_bookends')}
@@ -1774,7 +1905,6 @@ function SkippingSection({ f }: { f: ReturnType<typeof useFlag> }) {
   )
 }
 
-// A comma-separated list setting, saved as a JSON array when the field is left.
 function ListPref({
   f,
   setting,
@@ -1798,7 +1928,6 @@ function ListPref({
       return []
     }
   })()
-  // The field follows the saved list when it changes, set during render rather than an effect after it.
   const saved = stored.join(', ')
   const [text, setText] = useState(saved)
   const [shown, setShown] = useState(saved)
@@ -1807,7 +1936,6 @@ function ListPref({
     setText(saved)
   }
 
-  // Its own mutation, so the Saved hint is this field's and not every switch's on the page.
   const setGroups = useSetPref()
   const save = () => {
     const items = text.split(',').map((g) => g.trim()).filter(Boolean)
@@ -1833,7 +1961,6 @@ function ListPref({
 function AccountsTab() {
   const f = useFlag()
   const trackers = useTrackers()
-  // Signing in or out and the keys are the host's; a paired device only reads the state.
   const access = useAccess()
   const host = access.data?.host !== false
 
@@ -1857,9 +1984,7 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
   const qc = useQueryClient()
   const [clientId, setClientId] = useState(tracker.clientId)
   const [secret, setSecret] = useState('')
-  // Keys are the host's to add: a paired device got the form open and a Save that always failed.
   const [editing, setEditing] = useState(!tracker.configured && host && !tracker.tokenUrl)
-  // Yoru's own AniList client: AniList shows a code to paste back, no keys of one's own. An own client leads.
   const quick = !tracker.configured && host ? tracker.tokenUrl : undefined
   const [pasting, setPasting] = useState(false)
   const [pasted, setPasted] = useState('')
@@ -1879,7 +2004,6 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
       api.post('/api/trackers', {
         provider: tracker.provider,
         clientId,
-        // An untouched field must not wipe the stored secret.
         clientSecret: secret === '' && tracker.hasSecret ? undefined : secret,
       }),
     onSuccess: () => {
@@ -1889,7 +2013,6 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
     },
   })
 
-  // MAL's API has no favourites; the public profile can be read once.
   const importFavs = useMutation({
     meta: { inline: true },
     mutationFn: () =>
@@ -1934,7 +2057,7 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
       keywords="tracker sync list account login mal"
     >
       <Row label={status}>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           {tracker.configured && host && (
             <a
               href={loginPath}
@@ -1997,18 +2120,17 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
       </Row>
 
       {favs && (
-        <p className="px-3 pb-2 text-xs text-base-400">
+        <p className="py-3 text-xs text-base-400">
           {favs.favourited} favourited of {favs.found} on MyAnimeList
           {favs.unmatched > 0 && `, ${favs.unmatched} not in the catalogue`}.
         </p>
       )}
       {importFavs.isError && (
-        <p className="px-3 pb-2 text-xs text-recap">{(importFavs.error as Error).message}</p>
+        <p className="py-3 text-xs text-recap">{(importFavs.error as Error).message}</p>
       )}
 
-      {/* Neither service revokes tokens, so this says plainly what disconnecting does. */}
       {confirmingOut && (
-        <p className="px-3 pb-2 text-xs text-base-500">
+        <p className="py-3 text-xs text-base-500">
           Forgets the account on this machine. Watch history stays. The
           authorisation remains on your {tracker.name} account until you remove
           it there.
@@ -2018,7 +2140,7 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
       {tracker.connected && tracker.provider === 'anilist' && <ImportRow />}
 
       {pasting && quick && (
-        <div className="space-y-3 rounded-lg border border-base-850 bg-base-950/40 p-3">
+        <div className="my-3 space-y-3 rounded-lg border border-base-850 bg-base-950/40 p-3">
           <p className="text-xs text-base-400">
             Approve Yoru on the AniList page that opened, then paste the code it shows here.
           </p>
@@ -2040,14 +2162,14 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
       )}
 
       {editing && (
-        <div className="space-y-3 rounded-lg border border-base-850 bg-base-950/40 p-3">
+        <div className="my-3 space-y-3 rounded-lg border border-base-850 bg-base-950/40 p-3">
           <p className="text-xs text-base-400">
             Create an API client at{' '}
             <a
               href={tracker.register}
               target="_blank"
               rel="noreferrer"
-              className="text-accent-400 hover:underline"
+              className="text-accent-300 hover:underline"
             >
               {tracker.register.replace('https://', '')}
             </a>
@@ -2109,7 +2231,6 @@ function Field({
   )
 }
 
-/** Copy, then what happened: plain-http LAN pages have no clipboard API, so copyText falls back or says no. */
 function useCopy() {
   const [result, setResult] = useState<'Copied' | "Couldn't copy" | null>(null)
   const copy = async (text: string) => {
@@ -2153,7 +2274,7 @@ function ImportRow() {
   const result = useHeldData(sync) as { entries?: number; removed?: number } | undefined
 
   return (
-    <div className="space-y-2 rounded-lg border border-base-850 bg-base-950/40 p-3">
+    <div className="my-3 space-y-2 rounded-lg border border-base-850 bg-base-950/40 p-3">
       <p className="text-xs text-base-400">Bring your AniList list into Yoru.</p>
 
       <div className="flex gap-1 rounded-md bg-base-900 p-1">
@@ -2227,7 +2348,6 @@ function LibraryTab() {
     mutationFn: () => api.post('/api/local/scan'),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['local'] }),
   })
-  // A finished scan changes which episodes show as on disk.
   const scanning = !!local.data?.scanning
   const wasScanning = useRef(scanning)
   useEffect(() => {
@@ -2238,7 +2358,6 @@ function LibraryTab() {
   }, [scanning, qc])
 
   const roots = local.data?.roots ?? []
-  // Which paths the server refused, and why, said beside the list instead of one vague line.
   const problems =
     save.error instanceof ApiError
       ? ((save.error.body as { paths?: Record<string, string> } | undefined)?.paths ?? {})
@@ -2247,54 +2366,56 @@ function LibraryTab() {
   return (
     <div className="space-y-4">
     <Section title="Local files" hint="Anime already on disk plays instantly, with no torrent involved." keywords="folders library scan disk">
-      <ul className="space-y-1">
-        {roots.map((root) => (
-          <li key={root} className="flex items-center justify-between gap-2 rounded-md bg-base-900 px-3 py-1.5">
-            <span className="truncate text-sm text-base-200">{root}</span>
-            <button
-              onClick={() => save.mutate(roots.filter((r) => r !== root))}
-              // One change at a time: a second click would start from the list before the first.
-              disabled={save.isPending}
-              className="tap relative text-xs text-base-500 hover:text-recap disabled:opacity-50"
-            >
-              Remove
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      <div className="flex gap-2">
-        <TextInput
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          placeholder="D:\Anime"
-          aria-label="Folder to add"
-          className="min-w-0 flex-1"
-        />
-        <button
-          onClick={() => {
-            // Cleared only once saved, so a refused path can be corrected.
-            if (path.trim()) save.mutate([...roots, path.trim()], { onSuccess: () => setPath('') })
-          }}
-          disabled={save.isPending}
-          className={buttonClass()}
-        >
-          Add
-        </button>
-      </div>
-
-      {save.isError &&
-        (Object.keys(problems).length > 0 ? (
-          <ul className="space-y-0.5 text-xs text-recap">
-            {Object.entries(problems).map(([p, why]) => (
-              <li key={p}>
-                {p}: {why}
+      <div className="space-y-2 py-3">
+        {roots.length > 0 && (
+          <ul className="space-y-1">
+            {roots.map((root) => (
+              <li key={root} className="flex items-center justify-between gap-2 rounded-md bg-base-800 px-3 py-1.5">
+                <span className="truncate text-sm text-base-200">{root}</span>
+                <button
+                  onClick={() => save.mutate(roots.filter((r) => r !== root))}
+                  disabled={save.isPending}
+                  className="tap relative text-xs text-base-400 hover:text-recap disabled:opacity-50"
+                >
+                  Remove
+                </button>
               </li>
             ))}
           </ul>
-        ) : (
-          <p className="text-xs text-recap">{(save.error as Error).message}</p>
-        ))}
+        )}
+
+        <div className="flex gap-2">
+          <TextInput
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            placeholder="D:\Anime"
+            aria-label="Folder to add"
+            className="min-w-0 flex-1"
+          />
+          <button
+            onClick={() => {
+              if (path.trim()) save.mutate([...roots, path.trim()], { onSuccess: () => setPath('') })
+            }}
+            disabled={save.isPending}
+            className={buttonClass()}
+          >
+            Add
+          </button>
+        </div>
+
+        {save.isError &&
+          (Object.keys(problems).length > 0 ? (
+            <ul className="space-y-0.5 text-xs text-recap">
+              {Object.entries(problems).map(([p, why]) => (
+                <li key={p}>
+                  {p}: {why}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-recap">{(save.error as Error).message}</p>
+          ))}
+      </div>
 
       <Row
         label={
@@ -2323,7 +2444,6 @@ function BackupSection() {
   const qc = useQueryClient()
   const [message, setMessage] = useState('')
 
-  // A plain link so the browser saves the file, the token in the URL as a link has no header.
   const exportURL = (format: string) => withToken(`/api/library/export?format=${format}`)
 
   const load = useMutation({
@@ -2392,13 +2512,12 @@ function BackupSection() {
       </Row>
 
       {message && (
-        <p className={cx('text-xs', load.isError ? 'text-recap' : 'text-base-400')}>{message}</p>
+        <p className={cx('py-3 text-xs', load.isError ? 'text-recap' : 'text-base-400')}>{message}</p>
       )}
     </Section>
   )
 }
 
-// Desktop alerts are a browser permission plus a switch, belonging to this browser.
 const ALERT_HINT: Record<PushState, string> = {
   on: 'A new episode shows on this device, even with Yoru closed.',
   off: 'A new episode shows on this device, even with Yoru closed.',
@@ -2409,7 +2528,6 @@ const ALERT_HINT: Record<PushState, string> = {
   unsupported: 'Shows while Yoru is open; this browser cannot get alerts with Yoru closed.',
 }
 
-// One switch for both: alerts while a Yoru tab is open, and, where the browser can, pushed with Yoru closed.
 function AlertsRow() {
   const [wanted, setWanted] = useState(desktopNotifyWanted())
   const state = useQuery({ queryKey: ['push-state'], queryFn: pushState, staleTime: Infinity })
@@ -2425,11 +2543,9 @@ function AlertsRow() {
       if (next && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
         if ((await Notification.requestPermission()) !== 'granted') return
       }
-      // Alerts in an open tab first: a push service that refuses must not take those away too.
       try {
         localStorage.setItem(DESKTOP_NOTIFY_KEY, next ? '1' : '0')
       } catch {
-        // Storage unavailable; the switch just will not stick.
       }
       setWanted(next)
       const can = state.data === 'on' || state.data === 'off'
@@ -2476,14 +2592,15 @@ function NotificationsTab() {
       </Row>
       <AlertsRow />
       <Row label="Notify for">
-        <Select
+        <ValueMenu
           value={f.value('notify.releases')}
           onChange={(v) => f.set('notify.releases', v)}
-        >
-          <option value="sub">Subbed</option>
-          <option value="dub">Dubbed</option>
-          <option value="both">Both</option>
-        </Select>
+          options={[
+            { value: 'sub', label: 'Subbed' },
+            { value: 'dub', label: 'Dubbed' },
+            { value: 'both', label: 'Both' },
+          ]}
+        />
       </Row>
     </Section>
   )
@@ -2503,7 +2620,6 @@ function DevicesAccess() {
   const access = useAccess()
   const proxy = access.data?.host ? access.data.proxy : undefined
 
-  // Moves the listener there and then, so the phone can be tried immediately.
   const setNetwork = useMutation({
     meta: { inline: true },
     mutationFn: (lan: boolean) => api.post('/api/access/network', { lan }),
@@ -2533,22 +2649,21 @@ function DevicesAccess() {
       )}
 
       {access.isPending ? (
-        <Skeleton className="h-40 w-full" />
+        <Skeleton className="my-3 h-40 w-full" />
       ) : access.isError ? (
-        <p className="text-sm text-recap">{(access.error as Error).message}</p>
+        <p className="py-3 text-sm text-recap">{(access.error as Error).message}</p>
       ) : !access.data?.reachable ? (
-        <p className="text-sm text-base-400">
+        <p className="py-3 text-sm text-base-400">
           {proxy ? 'Only this machine, and the proxy on it, can reach Yoru.' : 'Only this machine can reach Yoru right now.'}
         </p>
       ) : access.data.urls.length === 0 ? (
-        <p className="text-sm text-base-300">
+        <p className="py-3 text-sm text-base-300">
           This machine has no home-network address right now (not on Wi-Fi or Ethernet, or only on a
           VPN), so there is nothing a phone could open yet.
         </p>
       ) : (
-        <div className="flex flex-wrap items-center gap-5">
+        <div className="flex flex-wrap items-center gap-5 py-3">
           <img
-            // The link in the src: a new token or HTTPS coming up changes it, and the image with it.
             src={`/api/access/qr.svg?url=${encodeURIComponent(access.data.urls[0])}`}
             alt="Pairing QR code"
             className="size-40 rounded-lg bg-white p-2"
@@ -2557,7 +2672,7 @@ function DevicesAccess() {
             <p className="mb-1 text-xs text-base-500">Scan, or open this on the device:</p>
             {access.data.urls.map((url) => (
               <div key={url} className="flex items-center gap-2">
-                <code className="min-w-0 truncate text-xs text-accent-400">{url}</code>
+                <code className="min-w-0 truncate text-xs text-accent-300">{url}</code>
                 <CopyButton text={url} />
               </div>
             ))}
@@ -2565,7 +2680,6 @@ function DevicesAccess() {
         </div>
       )}
       {access.data?.reachable && access.data.urls.length > 0 && <PairDevice url={access.data.urls[0]} />}
-      {/* Whatever device this is: the phone that installs is rarely the computer Yoru runs on. */}
       <InstallHere />
       {proxy && <ProxyRow proxy={proxy} token={access.data?.token ?? ''} />}
       {access.data?.reachable && access.data.host && <FirewallPanel />}
@@ -2576,10 +2690,8 @@ function DevicesAccess() {
   )
 }
 
-// Kept on this device, as phones and laptops want different things away from home.
 function ThisDeviceStreaming() {
   const net = useNetwork()
-  // Only some browsers say they're on mobile data; elsewhere the rule follows being away from home.
   const knows = net.cellular !== null
   return (
     <Section title="This device" hint="Streaming here, away from the computer Yoru runs on." keywords="mobile data cellular quality wifi saver">
@@ -2589,27 +2701,18 @@ function ThisDeviceStreaming() {
           knows ? '' : "This device doesn't say when it's on mobile data, so this applies whenever it's away from home."
         }`}
       >
-        <Select value={net.onMobile} onChange={(v) => setOnMobile(v as OnMobile)}>
-          {ON_MOBILE.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </Select>
+        <ValueMenu value={net.onMobile} onChange={(v) => setOnMobile(v as OnMobile)} options={ON_MOBILE} />
       </Row>
       <Row
         label="Streaming quality"
         hint="Auto changes nothing at home; away, it lowers a connection that can't keep up. Downloads keep their quality."
       >
-        <Select value={net.quality} onChange={(v) => setDeviceQuality(v as Quality)}>
-          {QUALITIES.map((q) => (
-            <option key={q.value} value={q.value}>{q.label}</option>
-          ))}
-        </Select>
+        <ValueMenu value={net.quality} onChange={(v) => setDeviceQuality(v as Quality)} options={QUALITIES} />
       </Row>
     </Section>
   )
 }
 
-// Devices that come through a proxy on this machine pair with the link like any other.
 function ProxyRow({ proxy, token }: { proxy: NonNullable<AccessState['proxy']>; token: string }) {
   const link = `${proxy.site}/?token=${token}`
   return (
@@ -2620,7 +2723,7 @@ function ProxyRow({ proxy, token }: { proxy: NonNullable<AccessState['proxy']>; 
     >
       {proxy.site && (
         <div className="flex min-w-0 items-center gap-2">
-          <code className="min-w-0 truncate text-xs text-accent-400">{link}</code>
+          <code className="min-w-0 truncate text-xs text-accent-300">{link}</code>
           <CopyButton text={link} />
         </div>
       )}
@@ -2635,11 +2738,9 @@ interface HTTPSStatus {
   state: 'off' | 'working' | 'ready' | 'error'
   problem?: string
   expires?: number
-  /** This network's DNS answers the name with this PC's address; absent until asked. */
   atHome?: boolean
 }
 
-// The device this page is on: one tap where the browser offers it, else what to do there.
 function InstallHere() {
   const state = useInstall()
   const [said, setSaid] = useState('')
@@ -2654,14 +2755,12 @@ function InstallHere() {
   )
 }
 
-// A phone only installs Yoru as an app over HTTPS: a free DuckDNS name and a certificate Yoru fetches for it.
 function InstallAsApp() {
   const qc = useQueryClient()
   const https = useQuery({
     queryKey: ['access-https'],
     queryFn: () => api.get<HTTPSStatus>('/api/access/https'),
     staleTime: 0,
-    // An error is retried in the background, so it can still turn into ready.
     refetchInterval: (q) => (q.state.data?.state === 'working' ? 3000 : q.state.data?.state === 'error' ? 10_000 : false),
   })
   const [editing, setEditing] = useState(false)
@@ -2677,14 +2776,12 @@ function InstallAsApp() {
       setTurningOff(false)
       setToken('')
     },
-    // The pairing links switch to https once the certificate is in.
     onSettled: () => qc.invalidateQueries({ queryKey: ['access'] }),
   })
   const check = useMutation({
     meta: { inline: true },
     mutationFn: () => api.post<HTTPSStatus>('/api/access/https/check'),
     onSuccess: (status) => qc.setQueryData(['access-https'], status),
-    // The QR code goes back to the HTTPS link when the name answers.
     onSettled: () => qc.invalidateQueries({ queryKey: ['access'] }),
   })
   const state = https.data?.state ?? 'off'
@@ -2713,7 +2810,6 @@ function InstallAsApp() {
     <>
       <Row label="Install as an app on a phone" hint={hint}>
         {state === 'off' || editing ? null : turningOff ? (
-          // It forgets the name and token, and every phone that installed the app stops: asked first.
           <div className="flex flex-wrap items-center justify-end gap-2">
             <ConfirmInline
               label={save.isPending ? 'Turning off…' : 'Turn off HTTPS'}
@@ -2784,7 +2880,6 @@ function InstallAsApp() {
   )
 }
 
-// A TV or console opening Yoru's address without the link's token shows a code; typed here, it lets it in.
 function PairDevice({ url }: { url: string }) {
   const [code, setCode] = useState('')
   const pair = useMutation({
@@ -2792,7 +2887,6 @@ function PairDevice({ url }: { url: string }) {
     mutationFn: (typed: string) => api.post<{ paired: string }>('/api/pair', { code: typed }),
     onSuccess: () => setCode(''),
   })
-  // The address alone, which a remote can type: the token stays in the link.
   const address = new URL(url).origin
   const complete = code.replace(/[\s-]/g, '').length === 6
   return (
@@ -2839,7 +2933,6 @@ const APPROVAL_MODES: ReadonlyArray<{ value: ApprovalMode; label: string }> = [
   { value: 'always', label: 'Every time' },
 ]
 
-// The link alone, or the link plus the host's say per device.
 function DeviceApproval() {
   const qc = useQueryClient()
   const devices = useAccessDevices(true)
@@ -2867,7 +2960,6 @@ function DeviceApproval() {
           key={d.id}
           label={d.name}
           hint={
-            // The answer is inline-only, so a failed one says so on its own row.
             decide.isError && decide.variables?.id === d.id
               ? (decide.error as Error).message
               : `${d.addr || 'through a proxy'} · ${DEVICE_STATUS[d.status]} · asked ${relativeTime(d.requestedAt)}`
@@ -2918,14 +3010,13 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       onClick={() => void copy(text)}
-      className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-base-400 hover:bg-base-800 hover:text-white"
+      className="shrink-0 rounded px-1.5 py-0.5 text-xs text-base-400 hover:bg-base-800 hover:text-white"
     >
       {label}
     </button>
   )
 }
 
-// A new token signs every paired phone and TV out at once; they pair again with the new code.
 function RevokeDevices() {
   const qc = useQueryClient()
   const [confirming, setConfirming] = useState(false)
@@ -2982,7 +3073,6 @@ interface FirewallState {
   public: boolean
 }
 
-// Why a phone on the same Wi-Fi can or can't get in, and the fix (a Cancel or Public network blocks it).
 function FirewallPanel() {
   const qc = useQueryClient()
   const [alsoPublic, setAlsoPublic] = useState(false)
@@ -2998,16 +3088,15 @@ function FirewallPanel() {
   })
   const openSettings = useMutation({ mutationFn: () => api.post('/api/access/network-settings') })
 
-  if (fw.isPending) return <Skeleton className="mt-4 h-16 w-full" />
+  if (fw.isPending) return <Skeleton className="my-3 h-16 w-full" />
   if (fw.isError || !fw.data) return null
   const { status, reachable, blocked } = fw.data
   const publicNets = status.networks.filter((n) => n.category === 'Public')
 
-  // Linux and macOS: Yoru only says what it found.
   if (!status.supported) {
     if (!status.firewall) return null
     return (
-      <div className="mt-4 rounded-md border border-base-800 bg-base-950/60 p-3 text-sm">
+      <div className="my-3 rounded-md border border-base-800 bg-base-950/60 p-3 text-sm">
         <p className="text-base-200">{status.hint}</p>
         {status.command && (
           <code className="mt-2 block rounded bg-base-900 px-2 py-1.5 text-xs break-all text-accent-300 select-all">
@@ -3021,7 +3110,7 @@ function FirewallPanel() {
   return (
     <div
       className={cx(
-        'mt-4 space-y-2.5 rounded-md border p-3 text-sm',
+        'my-3 space-y-2.5 rounded-md border p-3 text-sm',
         reachable ? 'border-accent-500/30 bg-accent-500/5' : 'border-recap/40 bg-recap/10',
       )}
     >
@@ -3107,7 +3196,6 @@ function AboutTab() {
   const status = useQuery({
     queryKey: ['update'],
     queryFn: () => api.get<UpdateStatus>('/api/update'),
-    // A dev build has no updater; that is a plain answer, not an error to retry.
     retry: false,
     refetchInterval: (q) => {
       const stage = q.state.data?.stage
@@ -3127,21 +3215,17 @@ function AboutTab() {
   const s = status.data
   const from = s?.current
 
-  // Poll until a different version answers, then reload; a failed poll after verifying counts too.
   const handingOver =
     s?.stage === 'restarting' || (status.isError && (s?.stage === 'verifying' || s?.stage === 'downloading'))
-  // Keyed on handingOver alone: one failed poll mid-download must not leave the restart unwatched.
   useEffect(() => {
     if (!handingOver) return
     let ticks = 0
     const timer = window.setInterval(async () => {
-      // A new version that never comes up (or a rollback) must not leave the page spinning for good.
       if (++ticks === 90) setStuck(true)
       try {
         const health = await api.get<{ version?: string }>('/api/health')
         if (health.version && health.version !== from) window.location.reload()
       } catch {
-        // Between the old process leaving and the new one binding.
       }
     }, 1000)
     return () => window.clearInterval(timer)
@@ -3150,11 +3234,10 @@ function AboutTab() {
 
   if (status.isPending) return <Skeleton className="h-40 w-full" />
 
-  // Only a 503 "updater unavailable" means a development build; other failures say what they are.
   if (!s && !(status.error instanceof ApiError && status.error.status === 503)) {
     return (
       <Section title="Yoru">
-        <p className="text-sm text-recap">{(status.error as Error | null)?.message ?? 'Could not read the version.'}</p>
+        <p className="py-3 text-sm text-recap">{(status.error as Error | null)?.message ?? 'Could not read the version.'}</p>
       </Section>
     )
   }
@@ -3162,7 +3245,7 @@ function AboutTab() {
     return (
       <div className="space-y-4">
         <Section title="Yoru" hint="Development build: updates aren't checked.">
-          <p className="text-sm text-base-400">Built from source.</p>
+          <p className="py-3 text-sm text-base-400">Built from source.</p>
         </Section>
         <LogSection />
         <ComponentsSection />
@@ -3174,7 +3257,6 @@ function AboutTab() {
 
   const busy = s.stage === 'downloading' || s.stage === 'verifying' || s.stage === 'restarting'
   const percent = s.total > 0 ? Math.round((s.bytes / s.total) * 100) : 0
-  // Every release since this one, so a long jump reads all of it; the latest's own notes otherwise.
   const pendingNotes: Notes[] = s.pending?.length
     ? s.pending
     : s.latest?.notes
@@ -3205,7 +3287,7 @@ function AboutTab() {
     <div className="space-y-4">
       <Section title={`Yoru ${s.current}`} hint="Updates replace only yoru.exe. Downloads, settings and history stay.">
         <Row label={line} hint={s.checkedAt ? `Checked ${relativeTime(Date.parse(s.checkedAt) / 1000)}` : undefined}>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
             <button
               onClick={() => check.mutate()}
               disabled={busy || check.isPending}
@@ -3224,8 +3306,8 @@ function AboutTab() {
             )}
           </div>
         </Row>
-        {s.stage === 'downloading' && s.total > 0 && <ProgressBar value={percent} />}
-        {apply.isError && <p className="text-xs text-recap">{(apply.error as Error).message}</p>}
+        {s.stage === 'downloading' && s.total > 0 && <ProgressBar value={percent} className="my-3" />}
+        {apply.isError && <p className="py-3 text-xs text-recap">{(apply.error as Error).message}</p>}
         {s.available && pendingNotes.length > 0 && (
           <div className="space-y-2 py-3">
             <p className="text-xs text-base-400">
@@ -3252,8 +3334,6 @@ function AboutTab() {
   )
 }
 
-// Every source the app's information comes from, credited as manami's Open Database License asks; TheTVDB's
-// terms ask for a link to its site where its data shows.
 const SOURCES: ReadonlyArray<{ name: string; gives: string; site?: string }> = [
   { name: 'AniList', gives: 'Show details, lists and schedules' },
   { name: 'MyAnimeList, through Jikan and Tenrai', gives: 'Episode titles, filler and recap flags, cast and staff' },
@@ -3286,7 +3366,6 @@ function CreditsSection() {
   )
 }
 
-// Yoru's log, this run's and the last one's, to send when something goes wrong; no console shows it.
 function LogSection() {
   const access = useAccess()
   const [copied, setCopied] = useState<'' | 'copied' | 'failed'>('')
@@ -3322,13 +3401,12 @@ function LogSection() {
           </button>
         </div>
       </Row>
-      {copied === 'failed' && <p className="text-xs text-recap">Couldn't copy the log; Save log keeps it as a file.</p>}
-      {folder.isError && <p className="text-xs text-recap">{(folder.error as Error).message}</p>}
+      {copied === 'failed' && <p className="py-3 text-xs text-recap">Couldn't copy the log; Save log keeps it as a file.</p>}
+      {folder.isError && <p className="py-3 text-xs text-recap">{(folder.error as Error).message}</p>}
     </Section>
   )
 }
 
-// The folders Yoru uses and the movable one, here too as only the first run opens Setup.
 function WhereSection() {
   const setup = useSetup()
   if (!setup.data) return null
@@ -3339,7 +3417,6 @@ function WhereSection() {
   )
 }
 
-// Here too, or what the first run skipped is unreachable: only its nudge opens Setup.
 function ComponentsSection() {
   const qc = useQueryClient()
   const setup = useSetup({
@@ -3380,7 +3457,7 @@ function ComponentsSection() {
             }
           >
             {c.present && progress?.stage !== 'failed' && (!c.latest || c.latest === c.version) ? (
-              <span className="text-sm text-accent-400">✓</span>
+              <span className="text-sm text-emerald-300">✓</span>
             ) : (
               <ComponentState
                 progress={progress}
@@ -3400,13 +3477,12 @@ function ComponentsSection() {
       })}
       {setup.data.encoder && <ConvertingRow encoder={setup.data.encoder} toneMapper={setup.data.toneMapper ?? ''} />}
       {install.isError && (
-        <p className="px-3 pb-2 text-xs text-recap">{(install.error as Error).message}</p>
+        <p className="py-3 text-xs text-recap">{(install.error as Error).message}</p>
       )}
     </Section>
   )
 }
 
-// What converts the episodes a device can't play as they are, and what's missing when it's the processor alone.
 function ConvertingRow({ encoder, toneMapper }: { encoder: string; toneMapper: string }) {
   const software = encoder === 'libx264'
   const hdr = { libplacebo: 'on the graphics card', zscale: 'on the processor' }[toneMapper]
@@ -3433,21 +3509,18 @@ function JobsSection() {
     refetchInterval: 10_000,
   })
   const qc = useQueryClient()
-  // Started, not awaited: the list shows it running at once, and a job that
-  // was already running says so instead of looking like nothing happened.
   const run = useMutation({
     meta: { inline: true },
     mutationFn: (name: string) => api.post(`/api/jobs/${name}`),
     onSettled: () => qc.invalidateQueries({ queryKey: ['jobs'] }),
   })
   const busy = run.error instanceof ApiError && run.error.status === 409 ? run.variables : undefined
-  // Any other refusal is said under its row too: inline keeps it out of the toasts.
   const failed = run.isError && busy === undefined ? run.variables : undefined
 
   return (
     <Section title="Background jobs" hint="Syncing, release checks and data mirrors." keywords="tasks schedule sync">
       {jobs.isPending ? (
-        <Skeleton className="h-40 w-full" />
+        <Skeleton className="my-3 h-40 w-full" />
       ) : (
         jobs.data?.jobs?.map((job) => {
           const name = String(job.name)

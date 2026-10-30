@@ -282,9 +282,13 @@ try {
   // The bar's last button stays on screen beside Cast, with two audio tracks and subtitles in it too.
   for (const width of [390, 360]) {
     await page.setViewportSize({ width, height: 844 })
-    await sleep(200)
-    const fs = await page.getByRole('button', { name: 'Fullscreen' }).boundingBox()
-    check(!!fs && fs.x + fs.width <= width, `at ${width}px Fullscreen is still in the bar`, JSON.stringify(fs))
+    let fs = null
+    for (let i = 0; i < 15; i++) {
+      await sleep(200)
+      fs = await page.getByRole('region', { name: 'Video player' }).getByRole('button', { name: 'Full screen', exact: true }).boundingBox()
+      if (fs && fs.x + fs.width <= width) break
+    }
+    check(!!fs && fs.x + fs.width <= width, `at ${width}px Full screen is still in the bar`, JSON.stringify(fs))
   }
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.evaluate(() => window.__castFound())

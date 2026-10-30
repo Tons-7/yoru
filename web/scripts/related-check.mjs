@@ -49,7 +49,7 @@ check(
 const texts = await chips.allInnerTexts()
 const undated = texts.filter((t) => !/\b(19|20)\d{2}\b/.test(t))
 check(undated.length === 0, 'every entry shows its year', undated.slice(0, 3).map((t) => t.replace(/\s+/g, ' ')).join(' | '))
-const noEpisodes = texts.filter((t) => !/\d+ ep\b/.test(t))
+const noEpisodes = texts.filter((t) => !/\d+ eps?\b/.test(t))
 check(noEpisodes.length === 0, 'every entry shows its episode count', noEpisodes.slice(0, 3).map((t) => t.replace(/\s+/g, ' ')).join(' | '))
 
 // Arrows and the progress line belong to rails that actually overflow.
@@ -100,12 +100,9 @@ if (await until(() => cast.isVisible(), 25000)) {
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 
-const first = await rails.first().boundingBox()
-if (first) {
-  await page.screenshot({
-    path: `${SHOTS}/series-rails.png`,
-    clip: { x: 0, y: Math.max(0, first.y - 150), width: 1440, height: 800 },
-  })
+if ((await rails.count()) > 0) {
+  await rails.first().scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `${SHOTS}/series-rails.png` })
 }
 
 await browser.close()

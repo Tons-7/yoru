@@ -90,8 +90,11 @@ func (s *Server) cacheStatus(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "cache usage", err)
 		return
 	}
-	if free, drive, err := disk.Free(s.cfg.CacheDir); err == nil {
+	if free, total, drive, err := disk.Space(s.cfg.CacheDir); err == nil {
 		usage.FreeBytes, usage.Drive = &free, drive
+		if total > 0 {
+			usage.TotalBytes = &total
+		}
 	}
 	send(w, http.StatusOK, usage)
 }

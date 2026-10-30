@@ -38,12 +38,12 @@ check(await says.waitFor({ timeout: 5000 }).then(() => true, () => false), 'the 
 const before = asked
 await sleep(3000)
 check(asked === before, 'and stops asking for it', `${asked - before} more requests`)
-check((await page.getByRole('button', { name: 'Try again' }).count()) === 0, 'no Try again, which would fail the same way')
+check((await page.getByRole('button', { name: 'Retry', exact: true }).count()) === 0, 'no Retry, which would fail the same way')
 await page.screenshot({ path: `${SHOTS}/unconvertible.png` })
 
-await page.getByRole('button', { name: 'Choose another release' }).click()
+await page.getByRole('button', { name: 'Try another release' }).click()
 check(await page.getByRole('dialog', { name: 'Choose a release' }).waitFor({ timeout: 5000 }).then(() => true, () => false),
-  'Choose another release opens the release picker')
+  'Try another release opens the release picker')
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 await browser.close()

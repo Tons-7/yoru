@@ -84,7 +84,8 @@ export function useDismiss<T extends HTMLElement>(onClose: () => void, active = 
       const target = e.target as Node | null
       if (!ref.current || ref.current.contains(target)) return
       // A portal menu isn't inside the trigger, so without this a click on it reads as outside and closes it.
-      if (target instanceof Element && target.closest('[data-portal-menu]')) return
+      const portal = target instanceof Element ? target.closest('[data-portal-menu]') : null
+      if (portal && !portal.contains(ref.current)) return
       close()
     }
     function onKey(e: KeyboardEvent) {

@@ -1,4 +1,3 @@
-// The profile menu: who is signed in, the list's counts, its keyboard paths, and a phone's width.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -29,7 +28,6 @@ const counts = {
 
 const browser = await chromium.launch()
 const errors = []
-// The menu scales up as it opens; measured before that ends, every box is a pixel short.
 const settled = (menu) => menu.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
 
 async function open(viewport, trackers) {
@@ -117,35 +115,32 @@ async function open(viewport, trackers) {
   await page.close()
 }
 
-// A phone: on screen, and no shortcuts row with no keys to press.
 for (const width of [390, 360]) {
-  const { page, button, menu } = await open({ width, height: 844 }, [tracker('anilist', 'AniList', { user: 'Yuki' })])
-  await button.click()
-  await menu.waitFor()
-  await page.getByText('All 214').waitFor({ timeout: 5000 }).catch(() => {})
-  await settled(menu)
-  const box = await menu.boundingBox()
-  check(box.x >= 0 && box.x + box.width <= width, `at ${width}px the menu fits`, `${Math.round(box.x)}..${Math.round(box.x + box.width)}`)
-  check(!(await menu.getByRole('menuitem', { name: /Keyboard shortcuts/ }).isVisible()), `at ${width}px no keyboard shortcuts row`)
-  if (width === 390) await menu.screenshot({ path: `${SHOTS}/profile-menu-phone.png` })
+  const page = await browser.newPage({ viewport: { width, height: 844 } })
+  page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
+  await page.route('**/api/trackers', (r) => r.fulfill({ json: { trackers: [tracker('anilist', 'AniList', { user: 'Yuki' })] } }))
+  await page.goto(`${BASE}/you`, { waitUntil: 'domcontentloaded' })
+  const name = page.getByText('Yuki', { exact: true })
+  await name.waitFor({ timeout: 15_000 }).catch(() => {})
+  check(await name.isVisible(), `at ${width}px the You page names who is signed in`)
+  check(!(await page.getByRole('button', { name: 'Profile and settings' }).isVisible()), `at ${width}px it replaces the profile menu`)
+  const across = await page.evaluate(() => document.documentElement.scrollWidth)
+  check(across <= width, `at ${width}px it fits`, String(across))
+  check(!(await page.getByText(/Keyboard shortcuts/).isVisible()), `at ${width}px no keyboard shortcuts row`)
+  if (width === 390) await page.screenshot({ path: `${SHOTS}/you-phone.png` })
   await page.close()
 }
 
-// On touch the rows take their coarse-pointer sizes.
 {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
   const page = await context.newPage()
-  await page.route('**/api/library/counts', (r) => r.fulfill({ json: counts }))
-  await page.goto(`${BASE}/history`, { waitUntil: 'domcontentloaded' })
-  await page.getByRole('button', { name: 'Profile and settings' }).tap()
-  const menu = page.getByRole('menu', { name: 'Profile' })
-  await menu.waitFor()
-  await settled(menu)
-  const heights = await menu.getByRole('menuitem').evaluateAll((els) =>
-    els.filter((el) => el.offsetParent).map((el) => [el.textContent.trim(), Math.round(el.getBoundingClientRect().height)]))
-  // All is a text link; its 44px hit area is drawn around it, not in its box.
-  const short = heights.filter(([name, h]) => h < 44 && !name.startsWith('All'))
-  check(short.length === 0, 'on touch every row is tall enough to hit', short.map(([n, h]) => `${n} ${h}px`).join(', '))
+  await page.goto(`${BASE}/you`, { waitUntil: 'domcontentloaded' })
+  await page.getByRole('link', { name: /^Downloads/ }).first().waitFor({ timeout: 15_000 })
+  const heights = await page.locator('main li > a, main li > button, main h1 ~ a').evaluateAll((els) =>
+    els.filter((el) => el.offsetParent).map((el) => [el.textContent.trim().slice(0, 30), Math.round(el.getBoundingClientRect().height)]))
+  const short = heights.filter(([, h]) => h < 44)
+  check(heights.length >= 5 && short.length === 0, 'on touch every You row is tall enough to hit',
+    short.map(([n, h]) => `${n} ${h}px`).join(', ') || String(heights.length))
   await context.close()
 }
 

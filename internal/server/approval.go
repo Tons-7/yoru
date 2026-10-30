@@ -317,9 +317,9 @@ func waitingPage(status, name string) string {
 		title, detail = "Too many requests", "Too many devices are waiting. Ask the host to clear the list in Settings, then reload."
 	}
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b0d12">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b0c10">
 <title>Yoru</title><style>
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d12;color:#d6dbe6;font:16px/1.5 system-ui,sans-serif}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0c10;color:#d6dbe6;font:16px/1.5 system-ui,sans-serif}
 main{max-width:22rem;padding:2rem;text-align:center}h1{font-size:1.25rem;margin:0 0 .5rem}p{margin:0;color:#8b93a7}
 code{display:inline-block;margin-top:1rem;padding:.25rem .6rem;border-radius:.4rem;background:#151822;color:#d6dbe6}
 </style></head><body><main><h1>` + title + `</h1><p>` + detail + `</p><code>` + html.EscapeString(name) + `</code></main>

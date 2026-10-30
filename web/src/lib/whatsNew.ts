@@ -2,7 +2,6 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from './api'
 import { usePrefs } from './queries'
 
-// Settings rows by arrival date: versions are dates, so one newer than the version updated from is new.
 export interface NewSetting {
   label: string
   since: string
@@ -21,9 +20,10 @@ export const NEW_SETTINGS: NewSetting[] = [
   { label: 'Rows on Home', since: '2026.10.29' },
   { label: 'Adult titles', since: '2026.10.29' },
   { label: 'Raise subtitles', since: '2026.10.30.1' },
+  { label: 'Skip openings', since: '2026.10.30.2' },
+  { label: 'Skip endings', since: '2026.10.30.2' },
 ]
 
-// What works differently, with no setting of its own to show.
 export interface Change {
   what: string
   before: string
@@ -42,7 +42,6 @@ export const CHANGES: Change[] = [
   { what: 'Adult titles', before: 'left out of For you only', now: 'left out of For you, Schedule and Recent', since: '2026.10.30.1' },
 ]
 
-/** a is a later version than b: 2026.10.24.1 after 2026.10.24, numbers compared, not text. */
 export function newer(a: string, b: string): boolean {
   const x = a.split('.').map(Number)
   const y = b.split('.').map(Number)
@@ -54,7 +53,6 @@ export function newer(a: string, b: string): boolean {
 
 export const SEEN_KEY = 'settings.new_seen'
 
-/** What updates added to Settings since the version replaced; unseen until "Seen them" for this one. */
 export function useNewSettings() {
   const update = useQuery({
     queryKey: ['update-since'],

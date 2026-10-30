@@ -166,7 +166,7 @@ check(
   'the player element survived the failure',
 )
 check(
-  await page.getByRole('button', { name: 'Choose a release' }).isVisible(),
+  await page.getByRole('button', { name: 'Try another release' }).isVisible(),
   'the ways out are reachable from inside the player',
 )
 await page.screenshot({ path: `${SHOTS}/fs-no-release.png` })

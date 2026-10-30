@@ -207,6 +207,16 @@ func (s *Server) decorate(r *http.Request, media []anilist.Media) []discoverItem
 		s.log.Warn("list entries", "err", err)
 	}
 	titles := s.store.TitleMode(r.Context(), 0)
+	var soon []int
+	for _, m := range media {
+		if m.Status != nil && *m.Status == "NOT_YET_RELEASED" {
+			soon = append(soon, m.ID)
+		}
+	}
+	alerts, err := s.store.FollowsOf(r.Context(), soon)
+	if err != nil {
+		s.log.Warn("follows", "err", err)
+	}
 
 	items := make([]discoverItem, 0, len(media))
 	for _, m := range media {
@@ -242,6 +252,10 @@ func (s *Server) decorate(r *http.Request, media []anilist.Media) []discoverItem
 		}
 		if m.Title.Romaji != nil {
 			it.Romaji = *m.Title.Romaji
+		}
+		if m.Status != nil && *m.Status == "NOT_YET_RELEASED" && alerts != nil {
+			on := alerts[m.ID]
+			it.AlertOn = &on
 		}
 		if m.NextAiring != nil {
 			it.NextEpisode, it.NextAiringAt = m.NextAiring.Episode, int64(m.NextAiring.AiringAt)

@@ -111,8 +111,8 @@ check(await until(() => upNext.getByText('The sleep timer stopped auto next.').i
 await sleep(7000)
 check(page.url().endsWith(`/watch/${ANIME}/4`), 'and stays on the episode')
 await page.screenshot({ path: `${SHOTS}/watching-sleep.png` })
-await upNext.getByRole('button', { name: 'Play next' }).click()
-check(await at(5), 'Play next goes on by hand')
+await upNext.getByRole('button', { name: 'Play now' }).click()
+check(await at(5), 'Play now goes on by hand')
 
 // Spoilers on the show page: past the next episode, no title, synopsis or clear still until the eye is pressed.
 const ep = (n, more = {}) => ({
@@ -171,7 +171,7 @@ franchise = [franchise[0], season('RELEASING')]
 await page.goto(`${BASE}/watch/${ANIME}/5`, { waitUntil: 'domcontentloaded' })
 await playing()
 await runOut()
-check(await until(() => page.getByText('Season finale · next season').isVisible(), 20_000), 'a season out already is up next')
+check(await until(() => upNext.getByText('Next season', { exact: true }).isVisible(), 20_000), 'a season out already is up next')
 check(await page.getByText('Show Season 2 · Episode 1').isVisible(), 'its first episode')
 await page.screenshot({ path: `${SHOTS}/watching-next-season.png` })
 check(await at(1, 990001), 'counting down into it')
@@ -195,6 +195,17 @@ await playing()
 await runOut()
 const later = page.getByRole('dialog', { name: 'Next episode' })
 check(await until(() => later.getByText(/Episode 6 airs in/).isVisible(), 20_000), 'still airing, it says when the next one airs', await later.innerText().catch(() => ''))
+const outButton = page.getByRole('button', { name: /^Episode 6 · out / })
+check(await outButton.isVisible(), 'the page names the day episode 6 is out', await outButton.innerText().catch(() => ''))
+await outButton.click({ timeout: 5000 }).catch(() => {})
+const notOut = page.getByRole('dialog', { name: 'Not out yet' })
+check(
+  (await until(() => notOut.getByRole('button', { name: "Download it when it's out" }).isVisible())) &&
+    ((await notOut.getByRole('button', { name: "Tell me when it's out" }).isVisible()) ||
+      (await notOut.getByText('Alerts are on for this show.').isVisible())),
+  'and its popover offers an alert and a download for when it is out',
+  await notOut.innerText().catch(() => ''),
+)
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 await browser.close()

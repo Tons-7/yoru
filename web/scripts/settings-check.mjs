@@ -34,7 +34,7 @@ const tabs = page.getByRole('tab')
 await tabs.first().waitFor({ timeout: 15_000 })
 const names = await tabs.allInnerTexts()
 check(names.join('|') ===
-  'Playback|Language & display|Sound & picture|Downloads|Storage|Accounts|Library|Notifications|Devices|This computer|About',
+  'Playback|Language and display|Sound and picture|Accounts|Library|Notifications|Downloads|Storage|Devices|This computer|About',
   'eleven tabs, in order', names.join(' | '))
 check(await until(() => visible('Auto next episode')), 'Playback opens first, with the automatic options')
 check(!(await visible('Download ahead while watching')), 'download ahead is not under Playback')
@@ -53,8 +53,8 @@ if (process.platform === 'win32') {
   check(await section('This computer').getByText('When the window closes', { exact: true }).isVisible(), 'and what closing it does')
 }
 check(await section('This computer').getByText('Stay awake while downloading', { exact: true }).isVisible(), 'and staying awake')
-await page.getByRole('tab', { name: 'Language & display' }).click()
-check(await until(() => visible('Show titles as')) && (await visible('Hide spoilers')), 'Language & display holds titles and spoilers')
+await page.getByRole('tab', { name: 'Language and display' }).click()
+check(await until(() => visible('Show titles as')) && (await visible('Hide spoilers')), 'Language and display holds titles and spoilers')
 
 // A stacked row (the control under its words) keeps the control right under them.
 const stacked = page.locator('[data-row]', { has: page.getByText('Subtitle languages', { exact: true }) })
@@ -70,12 +70,14 @@ check(await until(() => visible('Download ahead while watching')) && (await visi
   'both download-while-watching choices sit together there')
 
 // The quality ladder at last has a control: up to 720p is saved as such, and back to the best.
-const quality = page.getByLabel('Preferred quality')
+const quality = page.getByRole('combobox', { name: 'Preferred quality' })
 check(await until(() => quality.isVisible()), 'Downloads offers a preferred quality')
-await quality.selectOption('720p')
+await quality.click()
+await page.getByRole('option', { name: 'Up to 720p', exact: true }).click()
 check(await until(async () => (await prefs())['quality.prefer'] === '720p'), 'up to 720p is saved')
 check(await until(() => page.getByText(/a bigger one only when nothing smaller exists/).isVisible()), 'and says what it means')
-await quality.selectOption('best')
+await quality.click()
+await page.getByRole('option', { name: 'Best available', exact: true }).click()
 check(await until(async () => (await prefs())['quality.prefer'] === 'best'), 'best available is saved back')
 await page.screenshot({ path: `${SHOTS}/settings-downloads.png` })
 
@@ -119,12 +121,15 @@ check(await until(async () => !new URL(page.url()).searchParams.get('q')), 'Esca
 
 // A phone: the tabs are a menu, searching still works, and nothing pushes the page sideways.
 await page.setViewportSize({ width: 390, height: 844 })
+await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
+const sections = page.getByRole('navigation', { name: 'Settings sections' })
+check(await until(() => sections.getByRole('link', { name: /^Downloads/ }).isVisible()), 'a phone gets the tabs as a menu')
 await page.goto(`${BASE}/settings?tab=Downloads`, { waitUntil: 'domcontentloaded' })
-check(await until(() => page.getByLabel('Settings section').isVisible()), 'a phone gets the tabs as a menu')
 check(await until(() => visible('Preferred quality')), 'open on the tab the link names')
 const over = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
 check((await over()) <= 0, 'no sideways scroll on a phone', `${await over()}px over`)
 await page.screenshot({ path: `${SHOTS}/settings-phone.png`, fullPage: true })
+await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
 await search.fill('budget')
 check(await until(() => visible('Budget')), 'searching works on a phone too')
 check((await over()) <= 0, 'and its results fit the width', `${await over()}px over`)

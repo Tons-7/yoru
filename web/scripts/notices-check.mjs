@@ -91,6 +91,7 @@ const item = (animeId, title, episode, airingAt, more) => ({
 })
 const items = [
   item(1, 'Out Show', 5, now - 3600, { out: true }),
+  item(3, 'Early Show', 2, now + 1800, { out: true }),
   item(2, 'Late Show', 8, now + 3 * 86400, { delayedFrom: now - 4 * 86400 }),
 ]
 await page.route('**/api/schedule*', (route) => route.fulfill({ json: {
@@ -99,10 +100,9 @@ await page.route('**/api/schedule*', (route) => route.fulfill({ json: {
 } }))
 await page.goto(`${BASE}/schedule`, { waitUntil: 'domcontentloaded' })
 const rowOf = (title) => page.locator('li', { hasText: title })
-// A row draws its badges twice, one copy for phones: the visible one counts.
-const badge = (title, text) => rowOf(title).getByText(text, { exact: true }).filter({ visible: true })
-check(await until(() => badge('Out Show', 'Out').first().isVisible()), 'the schedule marks an episode already out')
-check(await badge('Late Show', 'Delayed').first().isVisible(), 'and one AniList moved later')
+check(await until(() => page.getByRole('button', { name: /^Earlier today · 1 out/ }).isVisible()), 'what aired earlier today folds into one row')
+check(await rowOf('Early Show').getByText('Ready to play', { exact: true }).first().isVisible(), 'the schedule marks an episode already out before its time')
+check(await rowOf('Late Show').getByText(/^Delayed, was due/).first().isVisible(), 'and one AniList moved later')
 check(await rowOf('Late Show').getByText(/was due/).isVisible(), 'saying when it was due')
 await page.screenshot({ path: `${SHOTS}/notices-schedule.png` })
 

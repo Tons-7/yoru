@@ -1,319 +1,294 @@
-import { useState } from 'react'
+import { Fragment, useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
-import { api, type DiscoverItem, type LibraryItem } from '../lib/api'
-import { clockTime } from '../lib/format'
-import { browseSeason, currentSeason, nextSeason } from '../lib/season'
-import { useAired, useDiscover, useHome, useHomePicks, useNow, useUpNext } from '../lib/queries'
-import { useHomeRows, type HomeRow } from '../lib/homeRows'
-import { Hero } from '../components/Hero'
-import { HoverInfo } from '../components/HoverInfo'
-import { PlayIcon, PosterCard } from '../components/PosterCard'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { api, type DiscoverItem, type LibraryItem, type ScheduleItem } from '../lib/api'
 import { toCard } from '../lib/cards'
-import { Rail, RailItem } from '../components/Rail'
+import { browseSeason, currentSeason, nextSeason } from '../lib/season'
+import {
+  refreshListState,
+  useAired,
+  useAlertsOff,
+  useDiscover,
+  useHome,
+  useHomePicks,
+  useNow,
+  useUpNext,
+  useUpNextEdit,
+} from '../lib/queries'
+import { toast } from '../lib/toast'
+import { AiringToday } from '../components/AiringToday'
+import { EditHomeSheet } from '../components/EditHome'
+import { Hero } from '../components/Hero'
+import { useHomeLayout, type HomeRowId } from '../components/homeLayout'
+import { MoreMenu } from '../components/MoreMenu'
+import { PosterCard } from '../components/PosterCard'
+import { Rail, RailFailed, RailItem, RailSkeleton } from '../components/Rail'
 import { ReleasedCard } from '../components/ReleasedCard'
-import { Popularity, ScheduleWidget } from '../components/Sidebar'
-import { ConfirmInline, ProgressBar, Skeleton } from '../components/ui'
-import { ListPlusGlyph, UpNextRail, UpNextSheet } from '../components/UpNext'
+import { ResumeCard } from '../components/ResumeCard'
+import { TopTen } from '../components/TopTen'
+import { soonestFirst } from '../components/upcoming'
+import { Button, ConfirmInline, LinkButton } from '../components/ui'
+import { UpNextRail, UpNextSheet } from '../components/UpNext'
 
 export function Home() {
-  const rows = useHomeRows()
+  const layout = useHomeLayout()
+  const [params, setParams] = useSearchParams()
+  const editingHome = params.get('edit') === 'home'
+  const setEditingHome = (open: boolean) => {
+    const next = new URLSearchParams(params)
+    if (open) next.set('edit', 'home')
+    else next.delete('edit')
+    setParams(next, { replace: true })
+  }
+
   const trending = useDiscover('trending', 20)
   const seasonal = useDiscover('season', 20)
   const upcoming = useDiscover('upcoming', 20)
   const continuing = useHome()
-  const sequels = useHomePicks('sequels', rows.wanted('sequels'))
-  const forYou = useHomePicks('for-you', rows.wanted('foryou'))
-  const schedule = useAired(48)
+  const sequels = useHomePicks('sequels', layout.wanted('sequels'))
+  const forYou = useHomePicks('for-you', layout.wanted('foryou'))
+  const aired = useAired(48)
   const upNext = useUpNext()
+  const alertsOff = useAlertsOff()
   const upNextEmpty = upNext.isSuccess && upNext.data.items.length === 0
-  const [editing, setEditing] = useState(false)
+  const [editingList, setEditingList] = useState(false)
 
-  // Everything already aired, newest first: the "recently released" strip. Shows on the list lead, or a busy
-  // season pushed them past the cut.
   const now = useNow() / 1000
-  const released = (schedule.data?.items ?? [])
+  const released = (aired.data?.items ?? [])
     .filter((item) => item.airingAt <= now)
-    .sort((a, b) => Number(b.onList) - Number(a.onList) || b.airingAt - a.airingAt)
+    .sort((a, b) => b.airingAt - a.airingAt)
     .slice(0, 20)
 
-  // Folded, a row still loading shows its heading alone, not a strip of placeholders.
-  const loading = (id: HomeRow, title: string) =>
-    rows.fold(id).folded ? <Rail title={title} fold={rows.fold(id)}>{null}</Rail> : <RailSkeleton title={title} />
+  const queued = new Set((upNext.data?.items ?? []).map((it) => it.animeId))
+  const resuming = (continuing.data?.items ?? []).filter((item) => !queued.has(item.id))
+
+  const seen = new Map<number, number>()
+  const mark = (id: number) => seen.set(id, (seen.get(id) ?? 0) + 1)
+  for (const show of (trending.data?.items ?? []).filter((a) => a.cover).slice(0, 10)) mark(show.id)
+  if (layout.shown('upnext')) {
+    for (const id of queued) mark(id)
+    for (const item of resuming) mark(item.id)
+  }
+  const fresh = (items: DiscoverItem[], most: number) => {
+    const out = items.filter((a) => (seen.get(a.id) ?? 0) < most)
+    for (const a of out) mark(a.id)
+    return out
+  }
+  const picked: Partial<Record<HomeRowId, DiscoverItem[]>> = {}
+  for (const id of layout.order) {
+    if (!layout.shown(id)) continue
+    if (id === 'foryou') picked.foryou = fresh(forYou.data?.items ?? [], 1)
+    else if (id === 'sequels') picked.sequels = fresh(sequels.data?.items ?? [], 2)
+    else if (id === 'season') picked.season = fresh(seasonal.data?.items ?? [], 2)
+    else if (id === 'upcoming') picked.upcoming = fresh(soonestFirst(upcoming.data?.items ?? []), 2)
+  }
+
+  const row = (id: HomeRowId): ReactNode => {
+    const fold = { folded: layout.folded(id), onUnfold: layout.unfold(id) }
+    switch (id) {
+      case 'upnext':
+        if (continuing.isError && !continuing.data && upNextEmpty)
+          return <RailFailed title="Up next" retry={() => void continuing.refetch()} />
+        return (
+          <UpNextRail
+            onEdit={() => setEditingList(true)}
+            after={resuming.map((item) => ({ key: `resume-${item.id}`, node: <ContinueCard item={item} /> }))}
+            {...fold}
+          />
+        )
+      case 'airing':
+        return <AiringToday {...fold} />
+      case 'trending':
+        return <TopTen {...fold} />
+      case 'foryou':
+        return <ShowsRail title="For you" result={forYou} items={picked.foryou ?? []} quiet {...fold} />
+      case 'sequels':
+        return <ShowsRail title="Sequels you missed" result={sequels} items={picked.sequels ?? []} quiet {...fold} />
+      case 'season':
+        return (
+          <ShowsRail
+            title="This season"
+            to={browseSeason(currentSeason())}
+            result={seasonal}
+            items={picked.season ?? []}
+            {...fold}
+          />
+        )
+      case 'released':
+        return <ReleasedRail result={aired} items={released} {...fold} />
+      case 'upcoming':
+        return (
+          <ShowsRail
+            title="Upcoming"
+            to={browseSeason(nextSeason())}
+            result={upcoming}
+            items={picked.upcoming ?? []}
+            alert={!alertsOff}
+            meta={alertsOff ? 'Alerts are off for every show' : undefined}
+            action={
+              alertsOff && (
+                <LinkButton to="/settings?tab=Notifications" size="sm">
+                  Turn alerts on
+                </LinkButton>
+              )
+            }
+            {...fold}
+          />
+        )
+    }
+  }
 
   return (
     <div className="space-y-8">
       <Hero items={trending.data?.items} loading={trending.isPending} />
-
-      <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_22rem] xl:gap-10 2xl:grid-cols-[minmax(0,1fr)_24rem]">
-        <div className="min-w-0 space-y-8">
-          {rows.shown('upnext') && <UpNextRail onEdit={() => setEditing(true)} fold={rows.fold('upnext')} />}
-
-          {!rows.shown('continue') ? null : continuing.isPending ? (
-            loading('continue', 'Continue watching')
-          ) : continuing.isError && !continuing.data ? (
-            <RailFailed title="Continue watching" retry={() => void continuing.refetch()} />
-          ) : (
-            continuing.data && continuing.data.items.length > 0 && (
-              <Rail
-                title="Continue watching"
-                fold={rows.fold('continue')}
-                more={{ to: '/library' }}
-                // The way into an empty Up next list, whose own row stays hidden until it has something.
-                action={
-                  upNextEmpty && (
-                    <button
-                      onClick={() => setEditing(true)}
-                      title="Line up episodes to play one after another"
-                      className="flex items-center gap-1.5 rounded-full bg-base-900 px-3 py-1 text-xs font-semibold text-base-300 ring-1 ring-white/[0.07] transition-colors hover:bg-base-800 hover:text-white"
-                    >
-                      <ListPlusGlyph className="size-3.5" />
-                      Up next
-                    </button>
-                  )
-                }
-              >
-                {continuing.data.items.map((item) => (
-                  <RailItem key={item.id}>
-                    <ContinueCard item={item} />
-                  </RailItem>
-                ))}
-              </Rail>
-            )
-          )}
-
-          {rows.shown('sequels') && <PicksRail title="Sequels you missed" picks={sequels} fold={rows.fold('sequels')} />}
-          {rows.shown('foryou') && <PicksRail title="For you" picks={forYou} fold={rows.fold('foryou')} />}
-
-          {!rows.shown('released') ? null : schedule.isPending ? (
-            loading('released', 'Recently released')
-          ) : schedule.isError && !schedule.data ? (
-            <RailFailed title="Recently released" retry={() => void schedule.refetch()} />
-          ) : (
-            released.length > 0 && (
-              <Rail title="Recently released" more={{ to: '/recent' }} fold={rows.fold('released')}>
-                {released.map((item) => (
-                  <RailItem key={`${item.animeId}-${item.episode}`}>
-                    <ReleasedCard item={item} />
-                  </RailItem>
-                ))}
-              </Rail>
-            )
-          )}
-
-          {!rows.shown('season') ? null : seasonal.isPending ? (
-            loading('season', 'This season')
-          ) : seasonal.isError && !seasonal.data ? (
-            <RailFailed title="This season" retry={() => void seasonal.refetch()} />
-          ) : (
-            <Rail title="This season" more={{ to: browseSeason(currentSeason()) }} fold={rows.fold('season')}>
-              {(seasonal.data?.items ?? []).map((anime) => (
-                <RailItem key={anime.id}>
-                  <PosterCard anime={toCard(anime)} />
-                </RailItem>
-              ))}
-            </Rail>
-          )}
-
-          {!rows.shown('trending') ? null : trending.isPending ? (
-            loading('trending', 'Trending now')
-          ) : trending.isError && !trending.data ? (
-            <RailFailed title="Trending now" retry={() => void trending.refetch()} />
-          ) : (
-            <Rail title="Trending now" more={{ to: '/browse?sort=trending' }} fold={rows.fold('trending')}>
-              {(trending.data?.items ?? []).map((anime) => (
-                <RailItem key={anime.id}>
-                  <PosterCard anime={toCard(anime)} />
-                </RailItem>
-              ))}
-            </Rail>
-          )}
-
-          {!rows.shown('upcoming') ? null : upcoming.isPending ? (
-            loading('upcoming', 'Upcoming')
-          ) : upcoming.isError && !upcoming.data ? (
-            <RailFailed title="Upcoming" retry={() => void upcoming.refetch()} />
-          ) : (
-            (upcoming.data?.items ?? []).length > 0 && (
-              <Rail title="Upcoming" more={{ to: browseSeason(nextSeason()) }} fold={rows.fold('upcoming')}>
-                {(upcoming.data?.items ?? []).map((anime) => (
-                  <RailItem key={anime.id}>
-                    <PosterCard anime={toCard(anime)} />
-                  </RailItem>
-                ))}
-              </Rail>
-            )
-          )}
-        </div>
-
-        <aside className="space-y-4">
-          <Popularity />
-          <ScheduleWidget />
-        </aside>
+      {layout.order.map((id) => layout.shown(id) && <Fragment key={id}>{row(id)}</Fragment>)}
+      <div className="flex justify-center pt-2">
+        <Button size="lg" className="w-full sm:w-auto" onClick={() => setEditingHome(true)}>
+          <SlidersGlyph />
+          Edit Home
+        </Button>
       </div>
-      <UpNextSheet open={editing} onClose={() => setEditing(false)} />
+      <UpNextSheet open={editingList} onClose={() => setEditingList(false)} />
+      <EditHomeSheet open={editingHome} onClose={() => setEditingHome(false)} layout={layout} />
     </div>
   )
 }
 
-function ContinueCard({ item }: { item: LibraryItem }) {
-  const resume = item.resume
-  const episode = resume?.episode ?? item.progress + 1
-  const percent =
-    resume && resume.duration ? Math.min(100, (resume.position / resume.duration) * 100) : 0
-
-  const qc = useQueryClient()
-  const [confirming, setConfirming] = useState(false)
-  const dismiss = useMutation({
-    mutationFn: () => api.post('/api/continue/dismiss', { animeId: item.id, episode }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['continue'] }),
-  })
-
-  return (
-    <div className="group/continue relative">
-      {/* Removing only takes it off this row; progress and the list tag stay. */}
-      <div className="absolute top-1.5 right-1.5 z-10">
-        {confirming ? (
-          <div className="flex items-center gap-1 rounded-lg bg-base-950/90 p-1 ring-1 ring-base-700 backdrop-blur-sm">
-            <ConfirmInline
-              label="Remove"
-              onConfirm={() => dismiss.mutate()}
-              onCancel={() => setConfirming(false)}
-              pending={dismiss.isPending}
-              size="sm"
-            />
-          </div>
-        ) : (
-          <button
-            onClick={() => setConfirming(true)}
-            aria-label="Remove from continue watching"
-            title="Remove from continue watching"
-            className="tap relative grid size-7 place-items-center rounded-md bg-base-950/80 text-base-300 ring-1 ring-white/10 backdrop-blur-sm transition-colors hover:bg-base-800 hover:text-white"
-          >
-            <svg viewBox="0 0 24 24" className="size-3.5" aria-hidden>
-              <path
-                d="m6 6 12 12M18 6 6 18"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-              />
-            </svg>
-          </button>
-        )}
-      </div>
-
-      <HoverInfo
-        anime={{
-          id: item.id,
-          title: item.title,
-          episodes: item.episodes,
-          aired: item.nextEpisode ? item.nextEpisode - 1 : null,
-          status: item.nextEpisode ? 'RELEASING' : null,
-          nextEpisode: item.nextEpisode,
-          nextAiringAt: item.nextAiringAt,
-          cover: item.cover,
-          color: item.color,
-          progress: item.progress,
-          play: { to: `/watch/${item.id}/${episode}`, label: `Resume ep ${episode}` },
-        }}
-      >
-        <Link to={`/watch/${item.id}/${episode}`} className="block">
-          <div className="relative aspect-video overflow-hidden rounded-card bg-base-850 ring-1 ring-base-800">
-            {item.cover && (
-              <img
-                src={item.cover}
-                alt=""
-                loading="lazy"
-                className="size-full object-cover object-center transition-transform duration-300 group-hover/continue:scale-105"
-              />
-            )}
-            <div className="absolute inset-0 bg-gradient-to-t from-base-950 via-base-950/30 to-transparent" />
-
-            <span className="absolute top-2 left-2 rounded-md bg-base-950/80 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white backdrop-blur-sm">
-              EP {episode}
-            </span>
-            <span className="absolute inset-0 grid place-items-center opacity-0 transition-opacity duration-200 group-hover/continue:opacity-100 [@media(hover:none)]:opacity-100">
-              <span className="grid size-11 place-items-center rounded-full bg-white/95 text-base-950 shadow-lg">
-                <PlayIcon />
-              </span>
-            </span>
-
-            <div className="absolute inset-x-0 bottom-0 p-2.5">
-              <p className="mb-1.5 text-[11px] font-medium text-base-200">
-                {resume && resume.position > 0 && resume.duration
-                  ? `${clockTime(Math.max(0, resume.duration - resume.position))} left`
-                  : resume && resume.position > 0
-                    ? `Paused at ${clockTime(resume.position)}`
-                    : 'Next episode'}
-              </p>
-              {percent > 0 && <ProgressBar value={percent} className="h-1.5 bg-white/15" />}
-            </div>
-          </div>
-        </Link>
-      </HoverInfo>
-
-      {/* The art plays the episode; the title opens the show. */}
-      <Link to={`/anime/${item.id}`} className="mt-2 block">
-        <p className="line-clamp-2 text-sm leading-snug text-base-200 transition-colors hover:text-white">
-          {item.title}
-        </p>
-      </Link>
-    </div>
-  )
+interface Fold {
+  folded: boolean
+  onUnfold: () => void
 }
 
-// Home's own picks, shown once they hold something: many lists have few sequels missed, or none.
-function PicksRail({
+function ShowsRail({
   title,
-  picks,
-  fold,
-}: {
+  to,
+  result,
+  items,
+  quiet = false,
+  alert,
+  meta,
+  action,
+  folded,
+  onUnfold,
+}: Fold & {
   title: string
-  picks: UseQueryResult<{ items: DiscoverItem[] }>
-  fold: { folded: boolean; onToggle: () => void }
+  to?: string
+  result: UseQueryResult<unknown>
+  items: DiscoverItem[]
+  quiet?: boolean
+  alert?: boolean
+  meta?: ReactNode
+  action?: ReactNode
 }) {
-  if (picks.isError && !picks.data) return <RailFailed title={title} retry={() => void picks.refetch()} />
-  const items = picks.data?.items ?? []
-  if (items.length === 0) return null
+  if (result.isError && !result.data) return <RailFailed title={title} to={to} retry={() => void result.refetch()} />
+  if (result.isPending) {
+    if (quiet) return null
+    if (!folded) return <RailSkeleton title={title} to={to} />
+  } else if (items.length === 0) return null
+  if (folded) return <Rail title={title} to={to} folded onUnfold={onUnfold}>{null}</Rail>
   return (
-    <Rail title={title} fold={fold}>
+    <Rail title={title} to={to} meta={meta} action={action}>
       {items.map((anime) => (
         <RailItem key={anime.id}>
-          <PosterCard anime={toCard(anime)} />
+          <PosterCard anime={toCard(anime)} alert={alert} />
         </RailItem>
       ))}
     </Rail>
   )
 }
 
-// A rail whose request failed keeps its heading, with one line and a retry instead of an empty row.
-function RailFailed({ title, retry }: { title: string; retry: () => void }) {
+function ReleasedRail({
+  result,
+  items,
+  folded,
+  onUnfold,
+}: Fold & { result: UseQueryResult<unknown>; items: ScheduleItem[] }) {
+  const title = 'Recently released'
+  const to = '/schedule?view=out'
+  if (result.isError && !result.data) return <RailFailed title={title} to={to} retry={() => void result.refetch()} />
+  if (result.isPending) return folded ? null : <RailSkeleton title={title} to={to} size="still" />
+  if (items.length === 0) return null
+  if (folded) return <Rail title={title} to={to} folded onUnfold={onUnfold}>{null}</Rail>
   return (
-    <section>
-      <h2 className="mb-3 section-title">{title}</h2>
-      <p className="flex flex-wrap items-center gap-2 text-sm text-base-400">
-        <span>Couldn't load this.</span>
-        <button onClick={retry} className="text-accent-300 underline-offset-2 hover:underline">
-          Try again
-        </button>
-      </p>
-    </section>
+    <Rail title={title} to={to}>
+      {items.map((item) => (
+        <RailItem key={`${item.animeId}-${item.episode}`} size="still">
+          <ReleasedCard item={item} />
+        </RailItem>
+      ))}
+    </Rail>
   )
 }
 
-function RailSkeleton({ title }: { title: string }) {
+function ContinueCard({ item }: { item: LibraryItem }) {
+  const resume = item.resume
+  const episode = resume?.episode ?? item.progress + 1
+  const qc = useQueryClient()
+  const navigate = useNavigate()
+  const { add } = useUpNextEdit()
+  const [confirming, setConfirming] = useState(false)
+  const dismiss = useMutation({
+    mutationFn: () => api.post('/api/continue/dismiss', { animeId: item.id, episode }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['continue'] }),
+  })
+  const watched = useMutation({
+    mutationFn: () => api.post('/api/watched', { animeId: item.id, episode, watched: true }),
+    onSuccess: () => {
+      refreshListState(qc)
+      toast(`Marked episode ${episode} of ${item.title} watched`, 'info')
+    },
+  })
+
   return (
-    <section>
-      <h2 className="mb-3 section-title">{title}</h2>
-      <div className="flex gap-3 overflow-hidden">
-        {Array.from({ length: 6 }, (_, i) => (
-          <div key={i} className="w-[38vw] shrink-0 sm:w-40 md:w-44 lg:w-[11.5rem]">
-            <Skeleton className="aspect-[2/3] w-full" />
-            <Skeleton className="mt-2 h-4 w-3/4" />
+    <ResumeCard
+      animeId={item.id}
+      title={item.title}
+      cover={item.cover}
+      episode={episode}
+      position={resume?.position}
+      duration={resume?.duration}
+      fallback="Next episode"
+      menu={
+        <MoreMenu
+          label={`More for ${item.title}`}
+          menuLabel={`${item.title} in Up next`}
+          className="size-11 rounded-full"
+          items={[
+            { label: 'Go to show', run: () => navigate(`/anime/${item.id}`) },
+            { label: 'Add to Up next', run: () => add.mutate({ animeId: item.id, episode }), disabled: add.isPending },
+            { label: 'Mark as watched', run: () => watched.mutate(), disabled: watched.isPending },
+            { label: 'Remove from Up next', run: () => setConfirming(true), danger: true },
+          ]}
+        />
+      }
+      footer={
+        confirming && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <ConfirmInline
+              label="Remove"
+              note="Progress stays."
+              onConfirm={() => dismiss.mutate()}
+              onCancel={() => setConfirming(false)}
+              pending={dismiss.isPending}
+              size="sm"
+            />
           </div>
-        ))}
-      </div>
-    </section>
+        )
+      }
+    />
+  )
+}
+
+function SlidersGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+      <path
+        d="M4 7h9m4 0h3M4 17h3m4 0h9M15 5v4M9 15v4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
   )
 }

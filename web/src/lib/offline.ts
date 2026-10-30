@@ -1,9 +1,12 @@
 import { useSyncExternalStore } from 'react'
 import { deviceCaps } from '../player/decode'
+import { cellular } from '../player/network'
 import { api, ApiError, fetchAuthed, query, type Episode, type PlaySession, type SkipRange, type StreamInfo, type SubtitleTrack } from './api'
+import { isUnaired } from './episodes'
 import { bytes } from './format'
 import { registerWorker } from './push'
 import type { Download, Queued } from './queries'
+import { aboutLeft, ordinal } from './shelf'
 
 // Saved episodes: the stream the PC would send this device, kept piece by piece; public/sw.js serves them.
 
@@ -12,8 +15,16 @@ const SHELL_PREFIX = 'yoru-shell-'
 const JOBS_KEY = 'yoru.saving'
 const WATCH_KEY = 'yoru.saved.watch'
 const QUALITY_KEY = 'yoru.saved.quality'
+const RULE_KEYS = { next: 'yoru.saved.next', tidy: 'yoru.saved.tidy', wifi: 'yoru.saved.wifi' } as const
+const DAY = 86_400_000
 
 export type SaveQuality = 'original' | '720'
+
+export interface SaveRules {
+  next: boolean
+  tidy: boolean
+  wifi: boolean
+}
 
 export interface SavedEpisode {
   key: string
@@ -37,16 +48,18 @@ export interface Job {
   animeId: number
   episode: number
   quality: SaveQuality
+  paused?: boolean
+  auto?: boolean
 }
 
 export interface SaveStatus {
-  phase: 'queued' | 'waiting' | 'preparing' | 'saving' | 'stopped' | 'failed'
+  phase: 'queued' | 'waiting' | 'preparing' | 'saving' | 'stopped' | 'failed' | 'paused'
   done: number
   total: number
   bytes: number
-  /** The PC's download, while waiting for it. */
   percent?: number
   message?: string
+  rate?: number
 }
 
 export const savedKey = (animeId: number, episode: number) => `${animeId}-${episode}`
@@ -84,6 +97,32 @@ export function setSaveQuality(q: SaveQuality) {
   emit()
 }
 
+export function saveRules(): SaveRules {
+  return {
+    next: read<boolean>(RULE_KEYS.next, false) === true,
+    tidy: read<boolean>(RULE_KEYS.tidy, false) === true,
+    wifi: read<boolean>(RULE_KEYS.wifi, false) === true,
+  }
+}
+
+export function setSaveRule(rule: keyof SaveRules, on: boolean) {
+  write(RULE_KEYS[rule], on)
+  emit()
+  if (rule === 'tidy' && on) void tidySaved()
+  if (rule === 'wifi') wakeForWifi()
+}
+
+function wakeForWifi() {
+  for (const [key, s] of status) if (s.phase === 'stopped' && s.message === WIFI_WAIT) retryAt.delete(key)
+  void pump()
+}
+
+const WIFI_WAIT = 'Waits for Wi-Fi'
+
+export const knowsNetwork = () => cellular() !== null
+
+const onMobileData = () => saveRules().wifi && cellular() === true
+
 let saved: SavedEpisode[] | null = null
 const status = new Map<string, SaveStatus>()
 const listeners = new Set<() => void>()
@@ -93,6 +132,7 @@ const current = () => ({
   status: new Map(status),
   loaded: saved !== null,
   quality: saveQuality(),
+  rules: saveRules(),
 })
 let snapshot = current()
 
@@ -134,25 +174,27 @@ const retryAt = new Map<string, number>()
 const restarts = new Map<string, number>()
 const reask = new Set<string>()
 const cancelled = new Set<string>()
+const halted = new Set<string>()
 let pumping = false
 let timer = 0
 
 class SaveFailed extends Error {}
 class Cancelled extends Error {}
+class Held extends Error {}
+class Paused extends Error {}
 
-export function saveEpisodes(episodes: Array<{ animeId: number; episode: number }>, quality = saveQuality()) {
+export function saveEpisodes(episodes: Array<{ animeId: number; episode: number }>, quality = saveQuality(), auto = false) {
   const jobs = read<Job[]>(JOBS_KEY, [])
   const have = new Set([...jobs.map(keyOf), ...(saved ?? []).map((e) => e.key)])
   for (const e of episodes) {
     const key = keyOf(e)
     if (have.has(key)) continue
     have.add(key)
-    jobs.push({ animeId: e.animeId, episode: e.episode, quality })
+    jobs.push({ animeId: e.animeId, episode: e.episode, quality, ...(auto && { auto }) })
     cancelled.delete(key)
     setStatus(key, { phase: 'queued', done: 0, total: 0, bytes: 0 })
   }
   write(JOBS_KEY, jobs)
-  // Otherwise the browser may clear it when it wants room.
   void navigator.storage?.persist?.().catch(() => false)
   void registerWorker()?.catch(() => {})
   void pump()
@@ -165,9 +207,47 @@ export function retrySave(key: string) {
   void pump()
 }
 
+function markJob(key: string, paused: boolean) {
+  write(JOBS_KEY, read<Job[]>(JOBS_KEY, []).map((j) => (keyOf(j) === key ? { ...j, paused } : j)))
+}
+
+export function pauseSave(key: string) {
+  markJob(key, true)
+  halted.add(key)
+  retryAt.delete(key)
+  setStatus(key, { ...(status.get(key) ?? { done: 0, total: 0, bytes: 0 }), phase: 'paused', message: undefined })
+}
+
+export function resumeSave(key: string) {
+  markJob(key, false)
+  halted.delete(key)
+  retryAt.delete(key)
+  setStatus(key, { ...(status.get(key) ?? { done: 0, total: 0, bytes: 0 }), phase: 'queued', message: undefined })
+  void pump()
+}
+
+export function saveNextAfter(animeId: number, episode: number) {
+  if (!saveRules().next || cannotSave()) return
+  const finished = (saved ?? []).find((e) => e.animeId === animeId && e.episode === episode)
+  if (!finished) return
+  saveEpisodes([{ animeId, episode: episode + 1 }], finished.quality, true)
+}
+
+export async function tidySaved() {
+  if (!saveRules().tidy || cannotSave()) return
+  const watched = read<Record<string, Watched>>(WATCH_KEY, {})
+  const now = Date.now()
+  const old = (saved ?? []).filter((e) => {
+    const w = watched[e.key]
+    return !!w && w.duration > 0 && w.position / w.duration >= 0.9 && now - w.at >= DAY
+  })
+  for (const e of old) await removeSaved(e.key)
+}
+
 function dropJob(key: string) {
   write(JOBS_KEY, read<Job[]>(JOBS_KEY, []).filter((j) => keyOf(j) !== key))
   retryAt.delete(key)
+  halted.delete(key)
 }
 
 /** Deletes a saved episode or stops its save; what was watched still goes to Yoru. */
@@ -197,14 +277,21 @@ export function resumeSaving() {
   started = true
   window.addEventListener('online', () => void sendWatched())
   window.setInterval(() => void sendWatched(), 30_000)
+  window.setInterval(() => void tidySaved(), 60 * 60_000)
+  ;(navigator as Navigator & { connection?: EventTarget }).connection?.addEventListener('change', wakeForWifi)
+  for (const job of read<Job[]>(JOBS_KEY, [])) {
+    if (!job.paused) continue
+    halted.add(keyOf(job))
+    setStatus(keyOf(job), { phase: 'paused', done: 0, total: 0, bytes: 0 })
+  }
   const begin = () =>
     api.get('/api/access').then(
       () => {
         void refreshSaved().then(() => {
           if ((saved ?? []).length === 0) return
-          // Registered again so an updated worker takes over.
           void registerWorker()?.catch(() => {})
           void keepApp()
+          void tidySaved()
         })
         for (const job of read<Job[]>(JOBS_KEY, [])) {
           if (!status.has(keyOf(job))) setStatus(keyOf(job), { phase: 'queued', done: 0, total: 0, bytes: 0 })
@@ -224,16 +311,26 @@ async function pump() {
   try {
     for (;;) {
       const now = Date.now()
-      const job = read<Job[]>(JOBS_KEY, []).find((j) => (retryAt.get(keyOf(j)) ?? 0) <= now)
-      if (!job) break
-      // A phone asleep stops the page.
+      const ready = read<Job[]>(JOBS_KEY, []).filter((j) => !j.paused && (retryAt.get(keyOf(j)) ?? 0) <= now)
+      if (ready.length === 0) break
+      if (onMobileData()) {
+        for (const j of ready) {
+          retryAt.set(keyOf(j), now + 60_000)
+          setStatus(keyOf(j), { ...(status.get(keyOf(j)) ?? { done: 0, total: 0, bytes: 0 }), phase: 'stopped', message: WIFI_WAIT })
+        }
+        break
+      }
       awake ??= await navigator.wakeLock?.request('screen').catch(() => null)
-      await run(job)
+      await run(ready[0])
     }
   } finally {
     pumping = false
     void awake?.release().catch(() => {})
-    const next = Math.min(...retryAt.values())
+    const next = Math.min(
+      ...read<Job[]>(JOBS_KEY, [])
+        .filter((j) => !j.paused)
+        .map((j) => retryAt.get(keyOf(j)) ?? Infinity),
+    )
     window.clearTimeout(timer)
     if (Number.isFinite(next)) timer = window.setTimeout(() => void pump(), Math.max(1000, next - Date.now()))
   }
@@ -260,6 +357,12 @@ async function run(job: Job) {
       api.get<{ ready: boolean; downloading?: boolean }>(`/api/saved/ready${query({ anime: job.animeId, episode: job.episode })}`),
     ])
     const ep = episodes.items.find((e) => e.number === job.episode)
+    if (job.auto && (!ep || ep.planned || isUnaired(ep, Date.now()))) {
+      dropJob(key)
+      setStatus(key, null)
+      return
+    }
+    if (halted.has(key)) throw new Paused()
     if (!ep || !ready.ready) return await waitForPC(job, !!ready.downloading)
 
     const effective = prefs.effective
@@ -277,7 +380,6 @@ async function run(job: Job) {
     if (!stream.complete) return await waitForPC(job, true)
 
     const cache = await caches.open(SAVED_CACHE)
-    // Pieces from an earlier try fit only if the PC makes the copy the same way again.
     const shape = JSON.stringify([stream.plan, stream.duration, stream.audioTrack, job.quality])
     const begun = await cache.match(`${at}/shape`)
     if (begun && (await begun.text()) !== shape) await removeFiles(key)
@@ -296,10 +398,14 @@ async function run(job: Job) {
     let fresh = 0
     let freshBytes = 0
     let failed: unknown = null
+    const began = Date.now()
+    const rate = () => (fresh >= 3 && Date.now() > began ? freshBytes / ((Date.now() - began) / 1000) : undefined)
     const worker = async () => {
       try {
         while (next < pieces.length && !failed) {
           if (cancelled.has(key)) throw new Cancelled()
+          if (halted.has(key)) throw new Paused()
+          if (onMobileData()) throw new Held()
           const piece = pieces[next++]
           const url = `${at}/${piece}`
           const have = await cache.match(url)
@@ -314,7 +420,7 @@ async function run(job: Job) {
             if (fresh === 4) await checkRoom((freshBytes / fresh) * (pieces.length - done - 1))
           }
           done++
-          if (!failed) setStatus(key, { phase: 'saving', done, total: pieces.length, bytes: size })
+          if (!failed && !halted.has(key)) setStatus(key, { phase: 'saving', done, total: pieces.length, bytes: size, rate: rate() })
         }
       } catch (e) {
         failed ??= e
@@ -350,7 +456,7 @@ async function run(job: Job) {
           cover = `${at}/cover`
         }
       } catch {
-        // Listed without its picture.
+        cover = undefined
       }
     }
 
@@ -365,7 +471,6 @@ async function run(job: Job) {
       },
     }
     if (cancelled.has(key)) throw new Cancelled()
-    // Last, so only a whole episode is listed.
     await keepJSON(cache, `${at}/info.json`, info)
     dropJob(key)
     restarts.delete(key)
@@ -373,8 +478,14 @@ async function run(job: Job) {
     await refreshSaved()
     void keepApp()
   } catch (e) {
-    if (e instanceof Cancelled) return await removeFiles(key)
+    if (e instanceof Cancelled || cancelled.has(key)) return await removeFiles(key)
     const was = status.get(key) ?? { done: 0, total: 0, bytes: 0 }
+    if (e instanceof Paused || e instanceof Held) {
+      if (halted.has(key)) return setStatus(key, { ...was, phase: 'paused', message: undefined })
+      if (e instanceof Paused) return setStatus(key, { ...was, phase: 'queued', message: undefined })
+      retryAt.set(key, Date.now() + 60_000)
+      return setStatus(key, { ...was, phase: 'stopped', message: WIFI_WAIT })
+    }
     if (e instanceof ApiError && e.status === 404 && (restarts.get(key) ?? 0) < 3) {
       restarts.set(key, (restarts.get(key) ?? 0) + 1)
       retryAt.set(key, Date.now() + 5000)
@@ -401,6 +512,7 @@ async function waitForPC(job: Job, downloading: boolean) {
   ])
   const item = downloads.items.find((d) => d.animeId === job.animeId && d.episodes.includes(String(job.episode)))
   const queued = queue.items.find((q) => q.animeId === job.animeId && q.episode === job.episode)
+  if (halted.has(key)) throw new Paused()
   const retry = reask.delete(key)
   if (queued?.state === 'failed' && !retry) {
     throw new SaveFailed(`The PC couldn't download it: ${queued.error ?? 'no release found'}`)
@@ -409,7 +521,7 @@ async function waitForPC(job: Job, downloading: boolean) {
     await api.post('/api/download', { animeId: job.animeId, episode: job.episode })
   }
   retryAt.set(key, Date.now() + 20_000)
-  setStatus(key, { phase: 'waiting', done: 0, total: 0, bytes: 0, percent: item?.percent })
+  setStatus(key, { phase: halted.has(key) ? 'paused' : 'waiting', done: 0, total: 0, bytes: 0, percent: item?.percent })
 }
 
 async function keepExtras(cache: Cache, key: string, stream: StreamInfo) {
@@ -566,4 +678,32 @@ export function resumeAt(e: SavedEpisode, watched: Record<string, Watched>): num
 export function watchedThrough(e: SavedEpisode, watched: Record<string, Watched>): number {
   const w = watched[e.key]
   return w && w.duration > 0 ? Math.min(1, w.position / w.duration) : 0
+}
+
+export const savedShare = (s?: SaveStatus) => (s?.phase === 'saving' && s.total ? s.done / s.total : 0)
+
+export function saveEta(s?: SaveStatus): string {
+  if (s?.phase !== 'saving' || !s.rate || !s.done || !s.total) return ''
+  return aboutLeft(((s.bytes / s.done) * (s.total - s.done)) / s.rate)
+}
+
+export function saveWords(s: SaveStatus | undefined, place: number): string {
+  switch (s?.phase) {
+    case 'saving':
+      return `Saving · ${Math.floor(savedShare(s) * 100)}%`
+    case 'preparing':
+      return 'Getting it ready on the PC'
+    case 'waiting':
+      return `Waiting for the PC to download it${s.percent != null ? ` · ${Math.floor(s.percent)}%` : ''}`
+    case 'paused':
+      return 'Paused'
+    case 'stopped':
+      if (s.message === WIFI_WAIT) return 'Waiting for Wi-Fi'
+      if (s.message === "Can't reach Yoru") return "Can't reach the PC · carries on when it answers"
+      return s.message ?? 'Stopped for now'
+    case 'failed':
+      return `Couldn't save: ${s.message ?? 'something went wrong'}`
+    default:
+      return place > 1 ? `Waiting · ${ordinal(place)} in line` : 'Next in line'
+  }
 }

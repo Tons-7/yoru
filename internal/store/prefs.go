@@ -9,121 +9,114 @@ import (
 	"time"
 )
 
-// Defaults are the source of truth for what a setting means. The database only
-// stores what differs, so a key added in a later version still has a value.
 var Defaults = map[string]string{
-	// The browser player works everywhere; everything automatic is off, as an unwanted skip annoys more.
 	"playback.player":      "browser",
 	"playback.autoplay":    "false",
-	"playback.autoskip_op": "false",
-	"playback.autoskip_ed": "false",
-	// Recaps of the last episode, and the next one's preview with the eyecatch bumpers.
+	"playback.autoskip_op": SkipButton,
+	"playback.autoskip_ed": SkipButton,
+
 	"playback.autoskip_recap":   "false",
 	"playback.autoskip_preview": "false",
-	// A first opening and a finale's ending play even when skipping: one is new, the other often its own.
+
 	"playback.skip_keep_bookends": "true",
-	// More chapter names to always skip, a JSON list, matched anywhere in a chapter's title.
+
 	"playback.skip_chapters": `[]`,
-	// Give AniSkip the times it lacks and vote on its own; off until asked, as it sends to a third party.
+
 	"skips.share":       "false",
 	"playback.autonext": "false",
-	// Auto next asks "Still watching?" after this many episodes it started untouched; 0 never asks.
+
 	"playback.still_watching": "3",
-	// Unwatched episodes past the next keep their titles, synopses and stills hidden (see spoilers.go).
+
 	"display.spoilers": SpoilersAfterNext,
-	// Auto-next and prefetch step over filler and recap episodes.
+
 	"playback.skip_filler": "false",
-	// Dialogue lifted over music and effects (off, medium, high); loud and quiet evened out; a little of
-	// each channel in the other ear for headphones; both channels in both ears.
+
 	"playback.voice":      "off",
 	"playback.night":      "false",
 	"playback.headphones": "false",
 	"playback.mono":       "false",
-	// The whole mix raised for a quiet release: off, medium or high.
+
 	"playback.boost":        "off",
 	"playback.anime4k":      "false",
 	"playback.anime4k_mode": "A",
 	"playback.anime4k_size": "M",
-	// mpv: decoding on the GPU where mpv knows it safe; banding smoothed off, as it softens fine detail too.
+
 	"playback.mpv_hwdec":  "true",
 	"playback.mpv_deband": "false",
-	// Bright flashes dimmed while converting (ffmpeg's photosensitivity); no guarantee, so off until asked.
+
 	"playback.soften_flashing": "false",
-	// Search for the next episode's release while this one plays, so Next doesn't wait.
+
 	"playback.prepare_next": "true",
 
 	"audio.prefer": "sub",
 
-	// Subtitle languages, best first. A release in none is ranked down, not
-	// refused (sometimes it's the only one). Same order decides which track plays.
 	"subtitle.languages": `["en"]`,
-	// With a dub in a language read above: signs and songs only ("signs"), none ("off"), or as sub ("same").
+
 	"subtitle.with_dub": "signs",
-	// Per show only: {"group","delay"}, a subtitle delay kept for that show's releases from one group.
+
 	"subtitle.delay": "",
-	// How dialogue looks: "" as the file made it, "outline", "yellow", "box" or "yellow-box" (signs keep theirs).
+
 	"subtitle.look":  "",
 	"subtitle.raise": "false",
 	"schedule.mine":  "false",
 	"recent.mine":    "false",
-	// Casting: subtitles drawn into the picture (look and signs kept, video re-encoded) over plain text.
+
 	"cast.burn_subtitles": "false",
 
 	"display.titles": TitleEnglish,
-	// Home's rows taken off, a JSON list of their ids (web/src/lib/homeRows.ts); folding one is per device.
+
 	"home.hidden": `[]`,
-	// For you leaves adult titles out until asked.
+
 	"home.adult_picks": "false",
-	// The version whose new settings were seen in Settings' New tab, which marks Settings until then.
+
 	"settings.new_seen": "",
-	// How the app window opens: fullscreen or maximized. Takes effect next launch.
+
 	"window.mode": "fullscreen",
-	// Closing the window: Yoru exits ("exit"), or keeps running in the tray ("tray").
+
 	"window.on_close": "exit",
-	// The computer stays awake while another device plays, and while downloads move; the lid still sleeps it.
+
 	"power.awake_watching":    "true",
 	"power.awake_downloading": "true",
 
 	"quality.ladder": `["1080p:BD:HEVC:10","1080p:BD","1080p:WEB","720p"]`,
-	// "best", or "720p"/"480p": the best release up to that, a bigger one only when nothing fits.
+
 	"quality.prefer":         "best",
 	"quality.max_auto_bytes": "3221225472",
 	"quality.allow_hi10p":    "false",
-	// Release groups to favour, as a JSON array; a match earns a scoring bonus.
+
 	"release.prefer_groups": `[]`,
-	// Groups and title words never picked on their own (JSON arrays); they stay in the picker, with the reason.
+
 	"release.avoid_groups":  `[]`,
 	"release.exclude_terms": `[]`,
-	// TRaSH Guides' low-quality groups rank last within a resolution; with this on, they're never picked alone.
+
 	"release.avoid_lq": "false",
-	// Per show only: an episode to download when the release watch finds it, without auto-downloading the rest.
+
 	"autodownload.want": "",
-	// Per show only: the SeaDex release offered over the kept copy that the user turned down.
+
 	"seadex.dismissed": "",
 
 	"cache.budget_bytes":  "5368709120",
 	"cache.prefetch_next": "false",
-	// How many episodes ahead prefetch downloads while it is on: 1 or 2.
+
 	"cache.prefetch_count": "1",
-	// On: an episode keeps downloading after the player closes, so going back needs no swarm.
+
 	"cache.prefetch_full": "true",
-	// "pause": downloads stand down while the episode on screen is still arriving; "continue": never.
+
 	"downloads.while_watching": "pause",
-	// Download cap in bytes a second, 0 for none; streams count against it too.
+
 	"downloads.limit_bytes": "0",
-	// Speeds shown in "mbps" (megabits, as speed tests give them) or "mbs" (megabytes, as file sizes are).
+
 	"display.speed": "mbps",
-	// "while_downloading": share pieces of what downloads, never once it's done; "never": share nothing.
+
 	"downloads.upload": "while_downloading",
-	// The network adapter torrents keep to, a VPN's; empty is any. They wait while it's down.
+
 	"downloads.adapter": "",
 
-	// Discord shows what plays (needs the Discord desktop app here); everywhere adds other devices' playback.
 	"discord.enabled":    "false",
 	"discord.everywhere": "false",
-	// off | now (gone once watched) | keep2 (gone once the two after it are watched).
+
 	"cache.autodelete": "off",
-	// Kept downloads are never evicted, so this is their only automatic cleanup.
+
 	"cache.autodelete_downloads": "false",
 
 	"sync.progress_at":  "0.9",
@@ -134,12 +127,10 @@ var Defaults = map[string]string{
 	"notify.poll_seconds": "1800",
 
 	"autodownload.enabled": "false",
-	// Hours a new episode is held for a preferred group or a higher resolution; a better one within a day
-	// then replaces it while unwatched. 0 takes the first acceptable release.
+
 	"autodownload.wait_hours": "0",
 }
 
-// Anime4K's six chains by source quality, and five CNN sizes, each doubling GPU cost.
 var (
 	Anime4KModes = []string{"A", "B", "C", "A+A", "B+B", "C+A"}
 	Anime4KSizes = []string{"S", "M", "L", "VL", "UL"}
@@ -149,8 +140,6 @@ var (
 	TitleModes   = []string{TitleRomaji, TitleEnglish}
 )
 
-// Prefs resolves a setting for one anime: a per-show override if there is one,
-// otherwise the global value, otherwise the compiled-in default.
 type Prefs struct {
 	values map[string]string
 }
@@ -163,6 +152,25 @@ func (p Prefs) String(key string) string {
 }
 
 func (p Prefs) Bool(key string) bool { return p.String(key) == "true" }
+
+const (
+	SkipOff    = "off"
+	SkipButton = "button"
+	SkipAuto   = "auto"
+)
+
+var SkipValues = []string{SkipOff, SkipButton, SkipAuto, "true", "false"}
+
+func (p Prefs) SkipMode(key string) string {
+	switch v := p.String(key); v {
+	case SkipAuto, "true":
+		return SkipAuto
+	case SkipOff:
+		return SkipOff
+	default:
+		return SkipButton
+	}
+}
 
 func (p Prefs) Int(key string) int {
 	n, _ := strconv.Atoi(p.String(key))
@@ -218,7 +226,6 @@ func (s *Store) Prefs(ctx context.Context, animeID int) (Prefs, error) {
 	return Prefs{values: values}, nil
 }
 
-// EnsureAnime creates the anime row other tables' foreign keys need, from the corpus where known.
 func (s *Store) EnsureAnime(ctx context.Context, animeID int) error {
 	return ensureAnime(ctx, s.w, animeID)
 }
@@ -245,15 +252,12 @@ func ensureAnime(ctx context.Context, db execer, animeID int) error {
 		return err
 	}
 
-	// A placeholder for anything the corpus has never seen, so the foreign key
-	// holds. The real title arrives whenever the anime is next hydrated.
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO anime (id, title_romaji, synced_at) VALUES (?, 'Unknown', 0)
 		ON CONFLICT(id) DO NOTHING`, animeID)
 	return err
 }
 
-// Unhydrated reports which ids are placeholders or missing, for a metadata source to fill.
 func (s *Store) Unhydrated(ctx context.Context, ids []int) ([]int, error) {
 	var out []int
 	for _, id := range ids {
@@ -331,8 +335,6 @@ func (s *Store) SetBookmark(ctx context.Context, animeID int, b Bookmark) error 
 	return err
 }
 
-// BookmarkPatch changes only the fields set. Two controls saving at once
-// (a note on blur, then Favourite) each sent the whole row and undid the other.
 type BookmarkPatch struct {
 	Favourite *bool   `json:"favourite"`
 	Pinned    *bool   `json:"pinned"`
@@ -370,7 +372,6 @@ func (s *Store) PatchBookmark(ctx context.Context, animeID int, p BookmarkPatch)
 	return err
 }
 
-// FavouriteChange is a favourite the tracker has not been told about.
 type FavouriteChange struct {
 	AnimeID   int
 	Favourite bool
@@ -397,8 +398,6 @@ func (s *Store) DirtyFavourites(ctx context.Context) ([]FavouriteChange, error) 
 	return out, rows.Err()
 }
 
-// MarkFavouriteSynced records what the tracker now holds. A row changed again
-// while the push was in flight stays dirty, so that edit goes up next time.
 func (s *Store) MarkFavouriteSynced(ctx context.Context, animeID int, favourite bool) error {
 	_, err := s.w.ExecContext(ctx, `
 		UPDATE user_anime
@@ -409,14 +408,12 @@ func (s *Store) MarkFavouriteSynced(ctx context.Context, animeID int, favourite 
 	return err
 }
 
-// ApplyRemoteFavourites merges the tracker's list, skipping unpushed and unchanged rows so nothing reorders.
 func (s *Store) ApplyRemoteFavourites(ctx context.Context, ids []int) (int, error) {
 	remote := make(map[int]bool, len(ids))
 	for _, id := range ids {
 		remote[id] = true
 	}
 
-	// MAL-only titles (negative ids) are never on AniList's list, so its list says nothing about them.
 	rows, err := s.r.QueryContext(ctx,
 		`SELECT anime_id, favourite FROM user_anime WHERE favourite_dirty = 0 AND anime_id > 0`)
 	if err != nil {
@@ -499,12 +496,8 @@ func (s *Store) Bookmark(ctx context.Context, animeID int) (Bookmark, error) {
 }
 
 const bookmarkQuery = `
-SELECT ` + libraryColumns + `
-FROM user_anime u
-JOIN anime a ON a.id = u.anime_id
-LEFT JOIN list_entry e ON e.anime_id = a.id
-` + latestPlayback + `
-WHERE u.favourite = 1 AND u.hidden = 0
+SELECT ` + libraryColumns + favouritesFrom + latestPlayback + `
+WHERE ` + favouritesWhere + `
 ORDER BY u.pinned DESC, u.updated_at DESC
 LIMIT ? OFFSET ?`
 
@@ -513,15 +506,13 @@ func (s *Store) Bookmarks(ctx context.Context, p Paging) (Page[LibraryItem], err
 	if err != nil {
 		return Page[LibraryItem]{}, err
 	}
-	total, err := s.countRows(ctx,
-		`SELECT count(*) FROM user_anime WHERE favourite = 1 AND hidden = 0`)
+	total, err := s.countRows(ctx, `SELECT count(*)`+favouritesFrom+`WHERE `+favouritesWhere)
 	if err != nil {
 		return Page[LibraryItem]{}, err
 	}
 	return NewPage(items, p, total), nil
 }
 
-// RecentlyWatched is ordered by when playback last happened, regardless of whether the episode was finished.
 const recentQuery = `
 SELECT ` + libraryColumns + `
 FROM anime a

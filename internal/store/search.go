@@ -7,7 +7,8 @@ import (
 )
 
 const searchColumns = `a.id, a.title_romaji, a.title_english, a.cover_url, a.episode_count,
-       e.status, COALESCE(e.progress, 0), COALESCE(e.score, 0), a.next_episode, a.next_airing_at`
+       e.status, COALESCE(e.progress, 0), COALESCE(e.score, 0), a.next_episode, a.next_airing_at,
+       a.format, COALESCE(a.season_year, CAST(NULLIF(substr(a.start_date, 1, 4), '') AS INTEGER))`
 
 const searchFTS = `
 SELECT ` + searchColumns + `
@@ -88,7 +89,7 @@ func (s *Store) query(ctx context.Context, sql string, args ...any) ([]LibraryIt
 	for rows.Next() {
 		var it LibraryItem
 		if err := rows.Scan(&it.ID, &it.Romaji, &it.English, &it.Cover, &it.Episodes,
-			&it.Status, &it.Progress, &it.Score, &it.NextEpisode, &it.NextAiringAt); err != nil {
+			&it.Status, &it.Progress, &it.Score, &it.NextEpisode, &it.NextAiringAt, &it.Format, &it.SeasonYear); err != nil {
 			return nil, err
 		}
 		out = append(out, it)

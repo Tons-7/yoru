@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { cx } from '../lib/format'
+import { buttonClass } from '../lib/ui'
+import { Skeleton } from './ui'
 
-/** How far the track can scroll, and where it currently sits. */
 function useScrollState(track: React.RefObject<HTMLDivElement | null>) {
   const [state, setState] = useState({
     scrollable: false,
@@ -18,24 +19,20 @@ function useScrollState(track: React.RefObject<HTMLDivElement | null>) {
     const measure = () => {
       const max = el.scrollWidth - el.clientWidth
       const next = {
-        // A pixel of slack, or sub-pixel widths give short rows arrows.
         scrollable: max > 1,
         atStart: el.scrollLeft <= 1,
         atEnd: el.scrollLeft >= max - 1,
         progress: max > 1 ? el.scrollLeft / max : 0,
         visible: el.scrollWidth > 0 ? el.clientWidth / el.scrollWidth : 1,
       }
-      // The observers fire on every image that loads; most say nothing new.
       setState((prev) =>
         (Object.keys(next) as (keyof typeof next)[]).every((k) => prev[k] === next[k]) ? prev : next,
       )
     }
     el.addEventListener('scroll', measure, { passive: true })
 
-    // A ResizeObserver reports once as it starts, so this also takes the first measure.
     const resize = new ResizeObserver(measure)
     resize.observe(el)
-    // Cards replacing skeletons change scrollWidth but not the track's box, so this watches both.
     const swap = new MutationObserver(measure)
     swap.observe(el, { childList: true, subtree: true })
 
@@ -49,26 +46,41 @@ function useScrollState(track: React.RefObject<HTMLDivElement | null>) {
   return state
 }
 
-/** A horizontal strip of cards; arrows on pointer devices only, as touch swipes. */
+export function RailHeading({ title, to }: { title: string; to?: string }) {
+  return (
+    <h2 className="section-title min-w-0">
+      {to ? (
+        <Link
+          to={to}
+          className="group/heading tap relative -my-2 flex min-h-11 items-center gap-1 transition-colors hover:text-base-200"
+        >
+          {title}
+          <ChevronGlyph className="size-4 shrink-0 text-base-500 transition-colors group-hover/heading:text-base-300" />
+        </Link>
+      ) : (
+        title
+      )}
+    </h2>
+  )
+}
+
 export function Rail({
   title,
+  to,
   meta,
-  more,
   action,
-  fold,
+  folded = false,
+  onUnfold,
   children,
 }: {
   title: string
-  /** A quiet line beside the title, such as how long the row runs. */
+  to?: string
   meta?: ReactNode
-  more?: { to: string; label?: string }
-  /** A control beside the arrows, where "more" would be a link to a page. */
   action?: ReactNode
-  /** Home's rows fold to their heading, which opens them again. */
-  fold?: { folded: boolean; onToggle: () => void }
+  folded?: boolean
+  onUnfold?: () => void
   children: ReactNode
 }) {
-  const folded = !!fold?.folded
   const track = useRef<HTMLDivElement>(null)
   const { scrollable, atStart, atEnd, progress, visible } = useScrollState(track)
 
@@ -80,69 +92,46 @@ export function Rail({
 
   return (
     <section className="group/rail">
-      <div className="mb-3 flex items-center justify-between gap-4">
-        {/* Big enough to read across the row it labels. */}
+      <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
-          {fold ? (
-            <h2 className="section-title">
-              <button
-                type="button"
-                onClick={fold.onToggle}
-                aria-expanded={!folded}
-                className="tap relative flex items-center gap-1.5 text-left transition-colors hover:text-base-200"
-              >
-                {title}
-                <svg viewBox="0 0 24 24" className={cx('size-4 text-base-500 transition-transform', folded && '-rotate-90')} aria-hidden>
-                  <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-            </h2>
-          ) : (
-            <h2 className="section-title">{title}</h2>
-          )}
-          {meta && !folded && <span className="text-sm text-base-500">{meta}</span>}
+          <RailHeading title={title} to={to} />
+          {meta && !folded && <span className="text-sm text-base-500 tabular-nums">{meta}</span>}
         </div>
-        <div className={cx('flex shrink-0 items-center gap-2', folded && 'hidden')}>
-          {more && (
-            <Link
-              to={more.to}
-              className="tap relative flex items-center gap-1 px-1 py-1 text-sm font-medium text-base-400 transition-colors hover:text-white"
+        {folded ? (
+          onUnfold && (
+            <button
+              type="button"
+              onClick={onUnfold}
+              aria-expanded={false}
+              aria-label={`Show ${title}`}
+              className={buttonClass('ghost', 'sm')}
             >
-              {more.label ?? 'See all'}
-              <svg viewBox="0 0 24 24" className="size-3.5" aria-hidden>
-                <path
-                  d="m9 5 7 7-7 7"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </Link>
-          )}
-          {action}
-          {/* Only where there's something to scroll to. */}
-          {scrollable && (
-            <div className="hidden gap-1 md:flex">
-              <ArrowButton direction={-1} disabled={atStart} onClick={() => scrollBy(-1)} />
-              <ArrowButton direction={1} disabled={atEnd} onClick={() => scrollBy(1)} />
-            </div>
-          )}
-        </div>
+              Show
+            </button>
+          )
+        ) : (
+          <div className="flex shrink-0 items-center gap-2">
+            {action}
+            {scrollable && (
+              <div className="hidden gap-1.5 md:flex">
+                <ArrowButton direction={-1} disabled={atStart} onClick={() => scrollBy(-1)} />
+                <ArrowButton direction={1} disabled={atEnd} onClick={() => scrollBy(1)} />
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Kept mounted when folded, so its measures pick up again on opening. */}
       <div
         ref={track}
+        data-rail-track
         className={cx('no-scrollbar -mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth px-1 pb-1', folded && 'hidden')}
       >
         {children}
       </div>
 
-      {/* Where you are in the row; the thumb is the share on screen. */}
       {scrollable && !folded && (
-        <div className="mt-1.5 h-0.5 overflow-hidden rounded-full bg-base-850" aria-hidden>
+        <div className="mt-1.5 h-0.5 overflow-hidden rounded-full bg-base-850 pointer-coarse:hidden" aria-hidden>
           <div
             className="h-full rounded-full bg-base-700"
             style={{
@@ -156,9 +145,49 @@ export function Rail({
   )
 }
 
-export function RailItem({ children }: { children: ReactNode }) {
+export type RailSize = 'poster' | 'wide' | 'still'
+
+const WIDTHS: Record<RailSize, string> = {
+  poster: 'w-[38vw] sm:w-40 md:w-44 lg:w-[11.5rem]',
+  wide: 'w-[16.25rem] lg:w-[18.75rem]',
+  still: 'w-[12.5rem] lg:w-[15rem]',
+}
+
+export function RailItem({ children, size = 'poster' }: { children: ReactNode; size?: RailSize }) {
+  return <div className={cx('shrink-0 snap-start', WIDTHS[size])}>{children}</div>
+}
+
+export function RailFailed({ title, to, retry }: { title: string; to?: string; retry: () => void }) {
   return (
-    <div className="w-[38vw] shrink-0 snap-start sm:w-40 md:w-44 lg:w-[11.5rem]">{children}</div>
+    <section>
+      <div className="mb-3">
+        <RailHeading title={title} to={to} />
+      </div>
+      <p className="flex flex-wrap items-center gap-3 text-sm text-base-400">
+        <span>Couldn't load this.</span>
+        <button type="button" onClick={retry} className={buttonClass('secondary', 'sm')}>
+          Try again
+        </button>
+      </p>
+    </section>
+  )
+}
+
+export function RailSkeleton({ title, to, size = 'poster' }: { title: string; to?: string; size?: RailSize }) {
+  return (
+    <section>
+      <div className="mb-3">
+        <RailHeading title={title} to={to} />
+      </div>
+      <div className="flex gap-3 overflow-hidden">
+        {Array.from({ length: size === 'poster' ? 16 : 10 }, (_, i) => (
+          <div key={i} className={cx('shrink-0', WIDTHS[size])}>
+            <Skeleton className={cx('w-full', size === 'poster' ? 'aspect-[2/3]' : 'aspect-video rounded-card')} />
+            <Skeleton className="mt-2 h-4 w-3/4" />
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 
@@ -177,20 +206,17 @@ function ArrowButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={direction === 1 ? 'Scroll right' : 'Scroll left'}
-      // Always there once a rail can scroll: appearing on hover left a hole
-      // beside "See all" and made the row look broken until you moved onto it.
-      className="grid size-8 place-items-center rounded-md text-base-400 ring-1 ring-white/[0.08] transition-colors hover:bg-base-850 hover:text-white disabled:pointer-events-none disabled:opacity-30"
+      className="grid size-11 place-items-center rounded-full bg-base-800 text-base-200 transition-colors hover:bg-base-750 hover:text-white disabled:pointer-events-none disabled:bg-base-900 disabled:text-base-600"
     >
-      <svg viewBox="0 0 24 24" className={cx('size-4', direction === -1 && 'rotate-180')} aria-hidden>
-        <path
-          d="m9 5 7 7-7 7"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
+      <ChevronGlyph className={cx('size-5', direction === -1 && 'rotate-180')} />
     </button>
+  )
+}
+
+function ChevronGlyph({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden>
+      <path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   )
 }

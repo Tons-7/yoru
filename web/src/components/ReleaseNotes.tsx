@@ -13,7 +13,7 @@ export function ReleaseNotesList({ notes }: { notes: Notes[] }) {
   return (
     <div className="space-y-2">
       {shown.map((n, i) => (
-        <details key={n.version} open={i === 0} className="group rounded-lg bg-base-950/60 ring-1 ring-white/[0.05]">
+        <details key={n.version} open={i === 0} className="group rounded-lg bg-base-800">
           <summary className="flex cursor-pointer list-none items-baseline gap-2 px-3 py-2 text-sm font-medium text-base-100 [&::-webkit-details-marker]:hidden">
             <span aria-hidden className="text-base-500 transition-transform group-open:rotate-90">
               ›

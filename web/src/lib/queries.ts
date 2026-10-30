@@ -47,13 +47,14 @@ export function useHomePicks(kind: 'sequels' | 'for-you', enabled = true) {
   })
 }
 
-export function useDiscover(sort: string, perPage = 24) {
-  return useQuery({
-    queryKey: ['discover', sort, perPage],
-    queryFn: () => api.get<{ items: DiscoverItem[] }>(`/api/discover${query({ sort, perPage })}`),
-    // Trending moves slowly, and a refetch per tab focus wastes AniList's 30 a minute.
-    staleTime: 10 * 60_000,
-  })
+export const discoverQuery = (sort: string, perPage = 24) => ({
+  queryKey: ['discover', sort, perPage],
+  queryFn: () => api.get<{ items: DiscoverItem[] }>(`/api/discover${query({ sort, perPage })}`),
+  staleTime: 10 * 60_000,
+})
+
+export function useDiscover(sort: string, perPage = 24, keep = false) {
+  return useQuery({ ...discoverQuery(sort, perPage), placeholderData: keep ? keepPreviousData : undefined })
 }
 
 export function useSetNotify(animeId: number) {
@@ -229,6 +230,9 @@ export interface Download {
   warning?: string
   freeBytes?: number
   drive?: string
+  group?: string
+  resolution?: string
+  codec?: string
   /** The queue entry this torrent is the download of, paired client-side. */
   queued?: Queued
 }

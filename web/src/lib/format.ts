@@ -20,6 +20,14 @@ export function waitLabel(hours: string): string {
   return hours === '1' ? '1 hour' : `${hours || '0'} hours`
 }
 
+export const WAITS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: '0', label: "Don't wait" },
+  { value: '1', label: 'Up to 1 hour' },
+  { value: '3', label: 'Up to 3 hours' },
+  { value: '6', label: 'Up to 6 hours' },
+  { value: '12', label: 'Up to 12 hours' },
+]
+
 /** Settings' unit for speeds: megabits as speed tests give them, or megabytes as file sizes are. */
 export type SpeedUnit = 'mbps' | 'mbs'
 
@@ -38,25 +46,39 @@ export function speedLimit(bytesPerSecond: number, unit: SpeedUnit = 'mbps'): st
     : `${+((bytesPerSecond * 8) / 1_000_000).toFixed(1)} Mbps`
 }
 
-/** "in 2h 14m" / "3d ago" — the schedule and episode lists both want this. */
-export function relativeTime(unix: number): string {
-  const delta = unix * 1000 - Date.now()
-  const abs = Math.abs(delta)
-  const minute = 60_000
-  const hour = 60 * minute
-  const day = 24 * hour
+const DAY_MS = 86_400_000
 
-  // Rounded to whole minutes once, so 59.6 minutes reads "1h", not "60m", and never "2h 60m".
-  const mins = Math.max(1, Math.round(abs / minute))
-  let text: string
-  if (mins < 60) text = `${mins}m`
-  else if (abs < day) {
-    const h = Math.floor(mins / 60)
-    const m = mins % 60
-    text = m > 0 ? `${h}h ${m}m` : `${h}h`
-  } else text = `${Math.round(abs / day)}d`
-
+export function relativeTime(unix: number, now = Date.now()): string {
+  const delta = unix * 1000 - now
+  const mins = Math.max(1, Math.round(Math.abs(delta) / 60_000))
+  const text =
+    mins < 60
+      ? `${mins}m`
+      : Math.abs(delta) < DAY_MS
+        ? `${Math.min(23, Math.round(mins / 60))}h`
+        : `${Math.max(1, Math.round(mins / 1440))}d`
   return delta >= 0 ? `in ${text}` : `${text} ago`
+}
+
+const startOfDay = (ms: number) => new Date(ms).setHours(0, 0, 0, 0)
+
+export function airDay(unix: number, now = Date.now()): string {
+  const days = Math.round((startOfDay(unix * 1000) - startOfDay(now)) / DAY_MS)
+  if (days === 0) return 'Today'
+  if (days === 1) return 'Tomorrow'
+  if (days === -1) return 'Yesterday'
+  const date = new Date(unix * 1000)
+  return Math.abs(days) < 7
+    ? date.toLocaleDateString(undefined, { weekday: 'short' })
+    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+export function whenLabel(unix: number, now = Date.now()): string {
+  return Math.abs(unix * 1000 - now) < DAY_MS ? relativeTime(unix, now) : airDay(unix, now)
+}
+
+export function dayAndTime(unix: number, now = Date.now()): string {
+  return `${airDay(unix, now)} ${airTime(unix)}`
 }
 
 /** "10/13 eps" while airing, "13 eps" once it has finished, "10 eps" with no total. */
@@ -73,10 +95,7 @@ export function episodeCount(anime: {
 }
 
 export function airTime(unix: number): string {
-  return new Date(unix * 1000).toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return new Date(unix * 1000).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
 
 // A schedule day as TV guides name it: Yesterday, Today, Tomorrow, then its weekday; short, for a narrow

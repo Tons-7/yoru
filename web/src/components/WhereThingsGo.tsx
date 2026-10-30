@@ -21,7 +21,7 @@ export function WhereThingsGo({ setup }: { setup: SetupState }) {
           aside={
             <button
               onClick={() => setPicking((v) => !v)}
-              className="text-accent-400 transition-colors hover:text-accent-300"
+              className="text-accent-300 transition-colors hover:text-accent-300"
             >
               Change…
             </button>
@@ -72,7 +72,7 @@ function Folder({
     <div className="py-2.5">
       <dt className="flex items-baseline justify-between gap-4 text-sm text-base-200">
         <span>
-          {label} <code className="text-[11px] text-base-500">{setting}</code>
+          {label} <code className="text-xs text-base-500">{setting}</code>
         </span>
         <span className="shrink-0 text-xs text-base-500">{aside}</span>
       </dt>
@@ -101,7 +101,7 @@ function DataDirPicker({ fallback }: { fallback: string }) {
 
   if (move.isSuccess) {
     return (
-      <p className="mt-2 text-xs text-accent-400">
+      <p className="mt-2 text-xs text-accent-300">
         {move.data.restart === false
           ? 'Already using that folder.'
           : `Saved: ${move.data.dataDir}. Restart Yoru to use it${
@@ -114,7 +114,7 @@ function DataDirPicker({ fallback }: { fallback: string }) {
     <div className="mt-2 space-y-2 text-xs">
       <p className="text-base-400">
         Empty means the default ({fallback}). A relative path is beside yoru.exe:{' '}
-        <button onClick={() => setPath('data')} className="text-accent-400 hover:underline">
+        <button onClick={() => setPath('data')} className="text-accent-300 hover:underline">
           data
         </button>{' '}
         keeps everything in Yoru's own folder.

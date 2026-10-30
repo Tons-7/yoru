@@ -54,15 +54,20 @@ try {
   check(pieces.segments >= 30 && pieces.subtitles >= 1 && pieces.info === 1, 'every piece kept, subtitles too', JSON.stringify(pieces))
 
   await page.goto(`${BASE}/saved`, { waitUntil: 'domcontentloaded' })
-  check(await until(() => page.getByRole('link', { name: 'Play' }).isVisible()), 'it lists under On this device')
+  check(await until(() => page.getByRole('link', { name: 'Play' }).isVisible()), 'it lists in Downloads, on the This device side')
+  check(await page.getByRole('tab', { name: /^This (device|phone)/, selected: true }).isVisible(), 'with This device chosen')
   const before = await position()
 
   const cut = (route) => route.abort('internetdisconnected')
   await context.route('**/*', cut)
   await context.setOffline(true)
   await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' }).catch(() => {})
-  check(await until(() => page.getByText("Can't reach Yoru on your PC").isVisible(), 20_000),
+  check(await until(() => page.getByText("Can't reach the PC. Saved episodes still play.").isVisible(), 20_000),
     'with the PC out of reach, Yoru opens on what is saved', page.url())
+  await page.getByRole('tab', { name: 'On the PC' }).click()
+  check(await until(() => page.getByText("The PC is off or out of reach. Its list comes back when it's on.").isVisible()),
+    'the PC side says why its list is missing')
+  await page.getByRole('tab', { name: /^This (device|phone)/ }).click()
   await page.getByRole('link', { name: 'Play' }).click()
   await page.locator('video').first().waitFor({ timeout: 20_000 })
   await page.evaluate(() => {
@@ -74,7 +79,7 @@ try {
   check(await until(async () => (await at()) > 104, 20_000), 'the saved copy plays offline', String(await at()))
   check(await page.evaluate(() => performance.getEntriesByType('resource').some((e) => e.name.includes('/subtitle/'))),
     'with its subtitles')
-  await page.getByRole('link', { name: '‹ On this device' }).click()
+  await page.getByRole('link', { name: '‹ Downloads' }).click()
   check(await until(() => page.evaluate(() =>
     Object.values(JSON.parse(localStorage.getItem('yoru.saved.watch') || '{}')).some((w) => w.dirty && w.position > 100)),
   ), 'what was watched is kept on the device')
@@ -88,9 +93,10 @@ try {
     `${before} → ${await position()}`)
 
   await page.goto(`${BASE}/saved`, { waitUntil: 'domcontentloaded' })
-  await page.getByRole('button', { name: /^Delete .* from this device$/ }).click()
-  await page.getByRole('button', { name: 'Delete', exact: true }).click()
-  check(await until(() => page.getByText('Nothing saved on this device').isVisible()), 'Delete removes it')
+  await page.getByRole('button', { name: /^More for .* episode 1$/ }).click()
+  await page.getByRole('menuitem', { name: /^Remove from this (device|phone)$/ }).click()
+  check(await until(() => page.getByRole('button', { name: 'Undo' }).isVisible()), 'Remove offers Undo')
+  check(await until(() => page.getByText('Nothing saved yet').isVisible()), 'and removes it once Undo has passed')
   check(await until(async () => { const k = await kept(); return k.segments === 0 && k.apps === 0 }), 'and every piece, the app copy too')
 
   const silent = () => {}
@@ -100,24 +106,33 @@ try {
   check(await until(() => page.getByRole('heading', { name: "Can't reach Yoru" }).isVisible(), 10_000),
     'with nothing saved and the PC silent, it says so in seconds', `${((Date.now() - asked) / 1000).toFixed(1)} s`)
   await context.unroute('**/*', silent)
-
-  // A finished download saves from its row in Downloads; the PC's own page has no such button.
   const finished = {
     infoHash: 'cd'.repeat(20), animeId: ANIME, title: 'Yoru Test Show', name: 'Yoru Test Show - 01.mkv', episode: '1',
     episodes: ['1'], totalBytes: 1 << 27, bytesOnDisk: 1 << 27, percent: 100, pinned: false, kept: true, state: 'paused',
   }
   const listed = (route) => route.fulfill({ json: { items: [finished], count: 1 } })
   await context.route('**/api/downloads', listed)
-  await page.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
-  const row = page.getByRole('button', { name: 'Save to this device' })
-  check(await until(() => row.isVisible()), 'a finished download offers to save it here')
-  await row.click()
-  check(await until(() => page.getByRole('button', { name: /^(Saving to|On) this device$/ }).isVisible()), 'and starts saving it')
+  await page.goto(`${BASE}/downloads?on=pc`, { waitUntil: 'domcontentloaded' })
+  const more = page.getByRole('button', { name: 'More for Yoru Test Show episode 1' })
+  check(await until(() => more.isVisible()), 'a finished download is listed on the PC side')
+  await more.click()
+  const save = page.getByRole('menuitem', { name: 'Save to this device' })
+  check(await until(() => save.isVisible()), 'and offers to save it here')
+  await save.click()
+  check(await until(async () => {
+    await more.click()
+    const shown = await page.getByRole('menuitem', { name: /^(Saving to|On) this device$/ }).isVisible()
+    await page.keyboard.press('Escape')
+    return shown
+  }), 'and starts saving it')
   const pc = await browser.newPage()
   await pc.route('**/api/downloads', listed)
   await pc.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
-  await pc.getByRole('button', { name: 'Delete Yoru Test Show' }).waitFor({ timeout: 15_000 })
-  check((await pc.getByRole('button', { name: /this device/ }).count()) === 0, 'the PC running Yoru shows no Save button')
+  const pcMore = pc.getByRole('button', { name: 'More for Yoru Test Show episode 1' })
+  await pcMore.waitFor({ timeout: 15_000 })
+  check((await pc.getByRole('tab', { name: /This (device|phone)/ }).count()) === 0, 'the PC running Yoru has no This device side')
+  await pcMore.click()
+  check((await pc.getByRole('menuitem', { name: /this device/ }).count()) === 0, 'and no Save to this device')
   check(errors.length === 0, 'no page errors', errors.join(' | '))
 } finally {
   await browser.close()

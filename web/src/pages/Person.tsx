@@ -32,7 +32,21 @@ interface PersonData {
   work: Array<{ show: PeopleShow; positions: string[] }>
 }
 
-/** A voice actor or staff member: who they played, your shows first, and what else they worked on. */
+const ROLE_WORDS: Array<[RegExp, string]> = [
+  [/song performance.*\(op\)/i, 'Opening song'],
+  [/song performance.*\(ed\)/i, 'Ending song'],
+  [/insert(ed)? song performance/i, 'Insert song'],
+  [/theme song performance/i, 'Theme song'],
+  [/song lyrics/i, 'Song lyrics'],
+  [/song composition/i, 'Song composition'],
+  [/song arrangement/i, 'Song arrangement'],
+]
+
+function roleWords(positions: string[]): string {
+  const words = positions.map((p) => ROLE_WORDS.find(([re]) => re.test(p))?.[1] ?? p.trim())
+  return [...new Set(words)].join(', ')
+}
+
 export function Person() {
   const id = Number(useParams().personId)
   const person = useQuery({
@@ -47,10 +61,8 @@ export function Person() {
   if (person.isPending) return <PeopleSkeleton />
   if (!p) return <ErrorState error={person.error} retry={() => void person.refetch()} />
 
-  // The server puts parts in the viewer's own shows first: those are the ones to recognise a voice by.
   const mine = p.characters.filter((c) => c.shows.some((s) => s.status))
   const others = p.characters.filter((c) => !c.shows.some((s) => s.status))
-  // Headings rather than a badge on every card: main parts are most of what comes first.
   const leads = others.filter((c) => c.role === 'Main')
   const supporting = others.filter((c) => c.role !== 'Main')
   const born = p.birthday && new Date(`${p.birthday}T00:00`).toLocaleDateString(undefined, { dateStyle: 'medium' })
@@ -99,26 +111,22 @@ export function Person() {
       </PeopleSection>
       <PeopleSection title="Staff work" items={p.work} cap={12}>
         {(work) => (
-          <ul className="surface divide-y divide-white/[0.05] overflow-hidden">
+          <PortraitGrid>
             {work.map((w) => (
-              <li key={w.show.malId}>
-                <Link to={showPath(w.show)} className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-base-850/70">
-                  {w.show.image ? (
-                    <img src={w.show.image} alt="" loading="lazy" className="h-14 w-10 shrink-0 rounded object-cover" />
-                  ) : (
-                    <div className="h-14 w-10 shrink-0 rounded bg-base-850" />
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="line-clamp-1 text-sm font-medium text-base-100">{w.show.title}</p>
-                    <p className="mt-0.5 line-clamp-1 text-xs text-base-500">
-                      {[w.positions.join(', '), w.show.year].filter(Boolean).join(' · ')}
-                    </p>
-                  </div>
-                  <ListBadge status={w.show.status} />
-                </Link>
-              </li>
+              <PortraitCard
+                key={w.show.malId}
+                to={showPath(w.show)}
+                image={w.show.image}
+                name={w.show.title}
+                badge={<ListBadge status={w.show.status} />}
+                under={
+                  <p className="mt-0.5 line-clamp-2 text-xs leading-snug text-base-400">
+                    {[roleWords(w.positions), w.show.year].filter(Boolean).join(' · ')}
+                  </p>
+                }
+              />
             ))}
-          </ul>
+          </PortraitGrid>
         )}
       </PeopleSection>
     </div>

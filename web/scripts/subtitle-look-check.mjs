@@ -81,9 +81,14 @@ function changed(a, b) {
   )
 }
 
+const menu = page.getByRole('dialog', { name: 'Audio & subtitles' })
+const sizes = menu.getByRole('radiogroup', { name: 'Size' })
+const size = (name) => sizes.getByRole('radio', { name, exact: true })
+const sizeIs = (name) =>
+  sizes.getByRole('radio', { name, exact: true, checked: true }).waitFor({ timeout: 3000 }).then(() => true, () => false)
 const openMenu = async () => {
-  await page.getByTitle('Subtitles').click()
-  await page.getByRole('menu').waitFor({ timeout: 5000 })
+  await page.getByRole('region', { name: 'Video player' }).getByRole('button', { name: 'Audio & subtitles' }).click()
+  await menu.waitFor({ timeout: 5000 })
 }
 
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
@@ -95,9 +100,8 @@ await sleep(3000)
 await holdAt(8.5)
 const normal = await shot('look-size-100')
 await openMenu()
-await page.getByRole('menuitem', { name: 'Size up' }).click()
-await page.getByRole('menuitem', { name: 'Size up' }).click()
-check(await page.getByRole('menu').getByText('130%').isVisible(), 'size reads 130%')
+await size('Extra large').click()
+check(await sizeIs('Extra large'), 'size reads Extra large')
 await page.keyboard.press('Escape')
 await sleep(1500)
 const bigger = await shot('look-size-130')
@@ -107,9 +111,9 @@ check(grown > 1000, 'larger size redraws the dialogue', `${grown} px changed`)
 await page.reload({ waitUntil: 'domcontentloaded' })
 check(await waitPlaying(), 'playback restarted after reload')
 await openMenu()
-check(await page.getByRole('menu').getByText('130%').isVisible(), 'size is remembered across loads')
-await page.getByRole('menuitem', { name: 'Reset size' }).click()
-check(await page.getByRole('menu').getByText('100%').isVisible(), 'reset returns to 100%')
+check(await sizeIs('Extra large'), 'size is remembered across loads')
+await size('Medium').click()
+check(await sizeIs('Medium'), 'Medium returns it to 100%')
 await page.keyboard.press('Escape')
 await sleep(1000)
 

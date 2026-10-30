@@ -17,7 +17,7 @@ import {
   type UpNextItem,
   type VoiceLevel,
 } from '../lib/api'
-import { airTime, bytes, cx, relativeTime } from '../lib/format'
+import { airTime, bytes, cx, languageName, relativeTime } from '../lib/format'
 import { setFocus } from '../lib/focus'
 import {
   refreshDownloads,
@@ -37,25 +37,44 @@ import {
 import { joinRoom, overlayOn, parseTogether, saveSeat, savedSeat, useRoom, useTogetherSync } from '../lib/together'
 import { JoinCard, TogetherPanel, TogetherToasts } from '../components/Together'
 import { SaveToDevice } from '../components/SaveToDevice'
+import { toast } from '../lib/toast'
+import { saveNextAfter } from '../lib/offline'
 import { Anime4KDialog } from '../components/Anime4KDialog'
 import { CharacterRail } from '../components/CharacterRail'
 import { EpisodeList } from '../components/EpisodeList'
 import { isUnaired } from '../lib/episodes'
 import { ReleasePicker } from '../components/ReleasePicker'
 import { OpenInApp } from '../components/OpenInApp'
+import { historyIndex } from '../components/places'
 import { StatusMenu } from '../components/StatusMenu'
-import { Badge, Button, ErrorState, LinkButton, Segmented, Skeleton, Spinner } from '../components/ui'
-import { useDocumentTitle } from '../lib/hooks'
+import { Button, ErrorState, LinkButton } from '../components/ui'
+import { PopSheet } from '../components/PopSheet'
+import { Sheet } from '../components/Sheet'
+import { useDocumentTitle, useMediaQuery } from '../lib/hooks'
 import { buttonClass } from '../lib/ui'
 import { getSleep, noteAutoStart, noteInput, setSleep, unattendedRun, useSleep, type Unattended } from '../lib/watching'
 
 type AudioChoice = 'sub' | 'dub' | 'either'
-import { Player } from '../player/Player'
+import { Player, type PlayerControls, type PlayerFacts } from '../player/Player'
+import { StartingSteps, type Starting } from '../player/Starting'
+import { ActionRow, ChoiceRow, Choices, PanelGroup, SegmentRow, SwitchRow } from '../player/panel'
+import { SKIP_MODES, skipMode } from '../player/skipMode'
+import { skipKind } from '../player/hooks'
+import { keyHint } from '../lib/keymap'
 import { deviceCaps } from '../player/decode'
 import { cellular, LOWER, SAVER, setOnMobile, setSitting, stepBytes, streamChoice, useNetwork } from '../player/network'
 import { MobileDataCard, NetworkNote } from '../components/MobileData'
 import { asSubLook, type SubLook } from '../player/subLook'
-import { currentVideo, togglePlay, useCurrentVideo, useDockDrag, usePlayingNow, type Corner } from '../lib/miniplayer'
+import {
+  currentVideo,
+  minimize,
+  togglePlay,
+  unminimize,
+  useCurrentVideo,
+  useDockDrag,
+  usePlayingNow,
+  type Corner,
+} from '../lib/miniplayer'
 import {
   autoTier,
   deviceUpscale,
@@ -66,7 +85,6 @@ import {
   type AutoTier,
 } from '../player/anime4k'
 
-/** Mounted once by the layout: the watch page, or docked in a corner (mini) once left while playing. */
 export function Watch({
   animeId,
   episode,
@@ -83,15 +101,35 @@ export function Watch({
   const id = Number(animeId)
   const ep = Number(episode)
   const routerNavigate = useNavigate()
-  // Docked, auto next stays docked.
   const navigate = useCallback(
     (path: string) => (mini && onGo && path.startsWith('/watch/') ? onGo(path) : routerNavigate(path)),
     [mini, onGo, routerNavigate],
   )
   const dock = useDockDrag(mini)
+  const wide = useMediaQuery('(min-width: 40rem)')
+  const side = useMediaQuery('(min-width: 80rem)')
+  const playerControls = useRef<PlayerControls>(null)
+  const [facts, setFacts] = useState<PlayerFacts>({})
+  const [avSheet, setAvSheet] = useState(false)
+  const enteredAt = useRef<number | null>(null)
+  useEffect(() => {
+    if (mini) {
+      enteredAt.current = null
+      return
+    }
+    unminimize()
+    enteredAt.current ??= historyIndex()
+  }, [mini])
+  const onMinimize = useCallback(() => {
+    minimize()
+    const at = enteredAt.current ?? historyIndex()
+    if (at > 0) routerNavigate(at - historyIndex() - 1)
+    else routerNavigate(`/anime/${id}`)
+  }, [routerNavigate, id])
   const [focused, setFocused] = useState(false)
   if (mini && focused) setFocused(false)
   const focus = focused && !mini
+  const toggleFocus = useCallback(() => setFocused((v) => !v), [])
   useEffect(() => {
     setFocus(focus)
     return () => setFocus(false)
@@ -125,7 +163,6 @@ export function Watch({
   }, [subLanguagesRaw])
   const external = effective['playback.player'] !== 'browser' && !!effective['playback.player']
 
-  // Write where the shown value came from, or a per-show override keeps winning and the switch looks stuck.
   const overrides = prefs.data?.overrides ?? {}
   const setFlag = (key: string) => (v: boolean) =>
     setPref.mutate({
@@ -134,16 +171,12 @@ export function Watch({
       animeId: key in overrides ? id : undefined,
     })
 
-  // Per-episode choices carry their episode: reset in an effect, they reached
-  // the next episode's play a render late, hand-picked release and all.
   const epKey = `${id}-${ep}`
 
-  // Prefs first, or the browser starts a stream mpv takes over; a raw is opted into per attempt only.
   const [rawFor, setRawFor] = useState('')
   const allowRaw = rawFor === epKey
   const setAllowRaw = (on: boolean) => setRawFor(on ? epKey : '')
 
-  // Sub or dub is saved per show, and held here too so the switch doesn't wait on the save.
   const [audioPick, setAudioPick] = useState<{ key: number; audio: AudioChoice } | null>(null)
   const audio = audioPick?.key === id ? audioPick.audio : null
   const setAudio = (a: AudioChoice | null) => {
@@ -153,7 +186,6 @@ export function Watch({
   const wantAudio: AudioChoice =
     audio ?? ((effective['audio.prefer'] as AudioChoice | undefined) ?? 'sub')
 
-  // A release chosen by hand, for this episode only; a room's comes in the link.
   const [params] = useSearchParams()
   const [hashPick, setHashPick] = useState<{ key: string; hash: string } | null>(() => {
     const hash = params.get('hash')
@@ -167,7 +199,6 @@ export function Watch({
   const [together, setTogether] = useState(() => parseTogether(params.get('together') ?? ''))
   const [seat, setSeat] = useState(() => (together ? savedSeat(together) : null))
   const [invite, setInvite] = useState(() => seat?.invite)
-  // A room link opened while this view stays mounted (docked, or another room).
   const linkParam = params.get('together') ?? ''
   const hashParam = params.get('hash')
   useEffect(() => {
@@ -192,20 +223,17 @@ export function Watch({
   const play = useQuery({
     enabled: id !== 0 && ep > 0 && prefs.isSuccess,
     queryKey: ['play', id, ep, external, allowRaw, wantAudio, infoHash],
-    // Audio only when chosen here, so a held release in the other one is replaced.
     queryFn: ({ signal }) =>
       api.post<PlaySession>('/api/play', {
         animeId: id, episode: ep, external, allowRaw, audio: audio ?? undefined, infoHash,
       }, signal),
     retry: false,
-    // 'static', not Infinity: a refetch of everything (title language, Try now) must not start playback again.
     staleTime: 'static',
     gcTime: 0,
   })
 
   const playingInMpv = !!play.data && play.data.player !== 'browser'
 
-  // Follow the room's episode and release; moved on here, tell the room.
   const showTitleRef = useRef('')
   const roomState = room.view?.state
   const following = useRef(false)
@@ -237,7 +265,6 @@ export function Watch({
     onSuccess: (r) => {
       const shared = parseTogether(r.link)
       if (!shared) return
-      // Our own address here, the public one only for the invite; in the URL so a reload keeps the room.
       const href = `${window.location.origin}/together/${shared.code}?k=${shared.key}`
       const here = { ...shared, base: window.location.origin, href }
       const s = { member: r.member, token: r.token, invite: r.link }
@@ -248,7 +275,6 @@ export function Watch({
       routerNavigate(`/watch/${id}/${ep}?together=${encodeURIComponent(href)}`, { replace: true })
     },
   })
-  // Back to full size, still in the room.
   const watchHere = `/watch/${id}/${ep}${together ? `?together=${encodeURIComponent(together.href)}` : ''}`
   const leaveTogether = () => {
     void room.act('leave').catch(() => {})
@@ -258,9 +284,7 @@ export function Watch({
     setInvite(undefined)
   }
 
-  // mpv opens the file itself and reports over its own IPC socket, so there is nothing here to transcode for.
   const source = playingInMpv ? undefined : play.data?.streamUrl
-  // Read at open time, not part of the key: changing it mid-episode restarts the pass in place.
   const soundOptions = useMemo<SoundOptions>(
     () => ({
       voice: (effective['playback.voice'] || 'off') as VoiceLevel,
@@ -274,7 +298,6 @@ export function Watch({
   )
   const soundAtOpen = useRef(soundOptions)
   soundAtOpen.current = soundOptions
-  // Stable, or the player's key handler is torn down and re-added on every progress tick.
   const setSoundMutate = setPref.mutate
   const soundProp = useMemo(
     () => ({
@@ -287,23 +310,18 @@ export function Watch({
     }),
     [soundOptions, setSoundMutate],
   )
-  // A copy this device said it plays but couldn't: that source opens converted from then on.
   const [convertAll, setConvertAll] = useState<string | null>(null)
   const strict = !!source && convertAll === source
-  // This device's quality: its step, the mobile-data rule (or its card), or Auto's step down for a slow link.
   const net = useNetwork()
-  // Nothing opens until the server says where this device is; unanswered counts as away, safer for data.
   const access = useAccess()
   const away = access.data ? !!access.data.away : access.isError
   const [stepped, setStepped] = useState<{ source: string; step: string } | null>(null)
   const choice = streamChoice(net, away, stepped && stepped.source === source ? stepped.step : undefined)
-  // A reopen mid-episode (quality, converting) picks up where the picture was, this source's place only.
   const lastPosition = useRef<{ source?: string; at: number }>({ at: 0 })
   const [resumeAt, setResumeAt] = useState<{ source?: string; at: number } | null>(null)
   const reopenHere = () => {
     if (lastPosition.current.source === source) setResumeAt({ source, at: lastPosition.current.at })
   }
-  // A note answered or closed stays away for its source.
   const [noteClosed, setNoteClosed] = useState<string | null>(null)
   const lastStep = useRef(choice.step)
   useEffect(() => {
@@ -314,7 +332,6 @@ export function Watch({
   const stream = useQuery({
     enabled: !!source && !choice.card && !access.isPending,
     queryKey: ['stream', id, ep, source, wantAudio, strict, choice.step],
-    // Aborted when superseded: an abandoned open would otherwise pin and hold its episode when it lands.
     queryFn: async ({ signal }) =>
       api.post<StreamInfo>(
         `/api/stream/open${query({
@@ -325,15 +342,17 @@ export function Watch({
       ),
     retry: 1,
     staleTime: 'static',
-    // Never carried across a mount: leaving the page closes the session, so a
-    // cached answer would describe a playlist that is no longer there.
     gcTime: 0,
   })
 
-  // From pressing play to the stream opening: the search, then the release's first data, then its start.
-  const startingNote = useStartingNote(id, ep, play.isPending || (!!source && stream.isPending))
+  const startingNote = useStartingNote(
+    id,
+    ep,
+    episodes.data?.items.find((e) => e.number === ep)?.display ?? ep,
+    play.isPending || (!!source && stream.isPending),
+    !!play.data,
+  )
 
-  // AniSkip needs the stream's real length, remembered since an audio switch briefly clears it.
   const [lengthFor, setLengthFor] = useState<{ key: string; seconds: number } | null>(null)
   const episodeLength = lengthFor?.key === epKey ? lengthFor.seconds : 0
   useEffect(() => {
@@ -349,7 +368,6 @@ export function Watch({
         `/api/episode/skips${query({ anime: id, episode: ep, duration: episodeLength })}`,
       ),
     staleTime: 60 * 60_000,
-    // Yoru is finding the opening or ending in the sound: it lands in seconds.
     refetchInterval: (q) => (q.state.data?.finding ? 5000 : false),
   })
   const refetchSkips = skips.refetch
@@ -376,13 +394,10 @@ export function Watch({
     mutationFn: () => api.post('/api/download', { animeId: id, episode: ep }),
     onSuccess: () => refreshDownloads(qc),
   })
-  // The page no longer remounts, so "Queued" would follow you to the next one.
   const resetDownload = download.reset
   useEffect(() => resetDownload(), [id, ep, resetDownload])
 
-  // An episode already on disk isn't offered for download.
   const downloads = useDownloads()
-  // A release bigger than the cache budget is removed once nothing plays it; said now, with the way out.
   const cache = useQuery({
     enabled: play.data?.source === 'torrent',
     queryKey: ['cache'],
@@ -396,7 +411,6 @@ export function Watch({
     mutationFn: () => api.post(`/api/downloads/${playing!.infoHash}/keep`),
     onSuccess: () => refreshDownloads(qc),
   })
-  // A season pack lists every episode it serves.
   const held = (downloads.data?.items ?? []).some(
     (d) => d.animeId === id && d.episodes.includes(String(ep)) && d.percent >= 100,
   )
@@ -420,7 +434,6 @@ export function Watch({
 
   const list = episodes.data?.items ?? []
   const current = list.find((e) => e.number === ep)
-  // The next episode worth playing, as store.NextEpisode picks it (filler rule, nothing unaired).
   const skipFiller = flag('playback.skip_filler')
   const now = useNow()
   const next = list.find(
@@ -429,7 +442,6 @@ export function Watch({
       !isUnaired(e, now) &&
       !(skipFiller && (e.filler === 'filler' || e.recap)),
   )
-  // With an Up next list, the list plays next; the show's own next is for when it has nothing else.
   const after = useQuery({
     enabled: id !== 0 && ep > 0,
     queryKey: ['upnext-after', id, ep],
@@ -438,23 +450,18 @@ export function Watch({
     refetchInterval: 2 * 60_000,
   })
   const fromList = after.data?.fromList ? after.data.next : undefined
-  // Past this entry's last aired episode: still airing (one is due), or a finale leading to the next season.
   const franchise = useFranchise(id)
   const upcoming = next ? undefined : list.find((e) => e.number > ep && isUnaired(e, now))
-  // The entry's last episode by its count, as the server's play order has it: not filler skipped to the end.
   const total = detail.data?.episodes ?? 0
   const finale = !fromList && !next && !upcoming && total > 0 && ep >= total
   const seasons = franchise.data?.seasons ?? []
   const thisSeason = seasons.find((s) => s.id === id)
   const sequel =
     thisSeason && seasons.filter((s) => s.ordinal > thisSeason.ordinal).sort((a, b) => a.ordinal - b.ordinal)[0]
-  // Played on into only once it has aired, as the server's play order does.
   const sequelOut = !!sequel && (sequel.status === 'RELEASING' || sequel.status === 'FINISHED')
   const sequelPath = finale && sequelOut ? `/watch/${sequel.id}/1` : undefined
   const hasNext = !!fromList || !!next || !!sequelPath
 
-  // The release filename is what the server resolved; it is not what anyone
-  // calls the episode. Fall back to it only when nothing better is known.
   const showTitle = detail.data?.title ?? play.data?.title ?? ''
   showTitleRef.current = showTitle
   const episodeLabel = [`Episode ${current?.display ?? ep}`, current?.titleEn]
@@ -466,16 +473,13 @@ export function Watch({
     (position: number, duration: number, played: number, final: boolean, paused: boolean) => {
       lastPosition.current = { source, at: position }
       const body = { animeId: id, episode: ep, position, duration, played, paused, final }
-      // sendBeacon survives the tab closing, which a fetch does not.
       if (!final) return beacon('/api/progress', body)
-      // The last report of an episode (its end, Next, leaving) refreshes the ticks once the server has it.
       void api
         .post<{ watched: boolean }>('/api/progress', body)
         .then((r) => {
           if (!r.watched) return
           void qc.invalidateQueries({ queryKey: ['episodes', id] })
           void qc.invalidateQueries({ queryKey: ['anime', id] })
-          // A watched episode left the list.
           void qc.invalidateQueries({ queryKey: ['upnext'] })
         })
         .catch(() => {})
@@ -488,13 +492,11 @@ export function Watch({
     : next
       ? `/watch/${id}/${next.number}`
       : sequelPath
-  // The end of an episode is decided here, so what this page saw then goes to the server's log.
   const note = useCallback(
     (event: string, detail: Record<string, unknown>) =>
       beacon('/api/playback/note', { animeId: id, episode: ep, event, detail }),
     [id, ep],
   )
-  // At the end the episode after this one is the next to watch, so under the default rule its title shows.
   const endHides = (animeId: number, number: number, spoiler?: boolean) =>
     !!spoiler && !(effective['display.spoilers'] !== 'unwatched' && animeId === id && number === next?.number)
   const nextAnime = fromList ? fromList.animeId : !next && sequelPath ? sequel!.id : id
@@ -502,10 +504,8 @@ export function Watch({
   const advance = useCallback(
     (by: string) => {
       if (!nextPath) return
-      // Started by the countdown alone, it adds to the run that "Still watching?" counts.
       if (by === 'countdown' && nextEpisode) noteAutoStart({ animeId: nextAnime, episode: nextEpisode })
       else noteInput()
-      // Played on by hand after the sleep timer stopped things: someone's awake.
       if (by !== 'countdown' && getSleep().kind === 'fired') setSleep({ kind: 'off' })
       note('next', { by, to: nextPath })
       navigate(nextPath)
@@ -513,7 +513,6 @@ export function Watch({
     [nextPath, navigate, note, nextAnime, nextEpisode],
   )
   const goNext = useCallback((by: 'button' | 'key' | 'media' = 'button') => advance(by), [advance])
-  // A subtitle delay kept for the show belongs to one group's timing; another group's release starts at zero.
   const group = /^\[([^\]]+)\]/.exec(play.data?.title ?? '')?.[1]
   const keptRaw = effective['subtitle.delay']
   const keptDelay = useMemo(() => {
@@ -530,13 +529,11 @@ export function Watch({
       setPrefMutate({ animeId: id, key: 'subtitle.delay', value: delay === 0 ? '' : JSON.stringify({ group, delay }) }),
     [id, group, setPrefMutate],
   )
-  // Everywhere, not per show: a look is the viewer's eyes, not the release's.
   const setSubLook = useCallback((look: SubLook) => setPrefMutate({ key: 'subtitle.look', value: look }), [setPrefMutate])
   const setSubRaised = useCallback(
     (raised: boolean) => setPrefMutate({ key: 'subtitle.raise', value: String(raised) }),
     [setPrefMutate],
   )
-  // The aired episode before this one, filler or not: going back is to rewatch, not to follow the list.
   const previous = [...list].reverse().find((e) => e.number < ep && !isUnaired(e, now))
   const previousPath = previous ? `/watch/${id}/${previous.number}` : undefined
   const goPrevious = useCallback(() => {
@@ -545,20 +542,16 @@ export function Watch({
     navigate(previousPath)
   }, [previousPath, navigate, note])
 
-  // Swapping in the searching panel would destroy the element holding
-  // fullscreen, so after the first episode the player waits with its own spinner.
   const [streamed, setStreamed] = useState(false)
   useEffect(() => {
     if (stream.data) setStreamed(true)
   }, [stream.data])
 
-  // Which episode ended, not just that one did: a plain flag survives navigation and skips an episode.
   const [endedKey, setEndedKey] = useState<string | null>(null)
   const ended = endedKey === `${id}-${ep}`
   const endedAt = useRef(0)
   const endedNow = useRef(ended)
   endedNow.current = ended
-  // The card the overlay below would show at the end, as the log has it.
   const card =
     play.isError && !stream.data
       ? 'release error'
@@ -575,10 +568,8 @@ export function Watch({
                   ? 'next season'
                   : 'finale'
                 : 'none'
-  // In a room only the host's countdown runs; the rest follow.
   const autoNext = flag('playback.autonext') && (!inRoom || isHost)
   const sleep = useSleep()
-  // Past the limit of untouched episodes the card asks instead of counting down; so does a timer gone off.
   const stillLimit = Number(effective['playback.still_watching'] ?? '3')
   const [asked, setAsked] = useState<{ key: string; run: Unattended[] } | null>(null)
   const askedRun = asked?.key === `${id}-${ep}` ? asked.run : null
@@ -586,6 +577,7 @@ export function Watch({
   const onEnded = useCallback(() => {
     endedAt.current = Date.now()
     setEndedKey(`${id}-${ep}`)
+    saveNextAfter(id, ep)
     if (getSleep().kind === 'episode') setSleep({ kind: 'fired' })
     const run = unattendedRun()
     if (autoNext && stillLimit > 0 && run.length >= stillLimit) setAsked({ key: `${id}-${ep}`, run })
@@ -599,7 +591,6 @@ export function Watch({
     })
   }, [id, ep, card, next, fromList, autoNext, stillLimit, list.length, note])
 
-  // Any key, tap, wheel or mouse movement on the page counts as someone watching.
   useEffect(() => {
     const seen = (e: Event) => {
       if (e instanceof PointerEvent && e.type === 'pointermove' && e.pointerType !== 'mouse') return
@@ -619,18 +610,14 @@ export function Watch({
     [note],
   )
 
-  // A reaped session: /api/play revives the torrent and the reopen rebuilds it; throws so the player shows it.
-  // Refetched outright: invalidating leaves a 'static' query alone.
   const refetchPlay = play.refetch
   const refetchStream = stream.refetch
   const recoverSession = useCallback(async () => {
     const revived = await refetchPlay({ throwOnError: true })
-    // Another address for the file is a new stream query, which opens on its own.
     if (revived.data?.streamUrl !== source) return
     await refetchStream({ throwOnError: true })
   }, [refetchPlay, refetchStream, source])
 
-  // Copying more than H.264 and AAC or MP3, a stream may hold what this device claimed but can't decode.
   const opened = stream.data
   const sent = opened?.audio?.[opened.audioTrack ?? 0]
   const copiesMore =
@@ -643,7 +630,6 @@ export function Watch({
     return true
   }, [copiesMore, strict, source])
 
-  // Auto, away from home: a link that keeps stalling steps down a quality; "Back to original" keeps it there.
   const [keepOriginal, setKeepOriginal] = useState<string | null>(null)
   const slowLink =
     net.quality === 'auto' && away && !choice.card && keepOriginal !== source && LOWER[choice.step ?? 'original']
@@ -655,7 +641,6 @@ export function Watch({
       : undefined
   const networkNote =
     choice.card && stream.data && noteClosed !== source ? (
-      // Onto mobile data mid-episode: it keeps playing, data saver a tap away.
       <NetworkNote
         text={cellular() ? 'Now on mobile data' : 'Now away from home'}
         action="Data saver"
@@ -681,8 +666,6 @@ export function Watch({
       />
     ) : null
 
-  // Releasing the transcode session frees an ffmpeg process; leaving it to the
-  // idle reaper keeps a CPU busy for a minute after leaving the page.
   useEffect(() => {
     const streamId = stream.data?.id
     return () => {
@@ -690,33 +673,30 @@ export function Watch({
     }
   }, [stream.data?.id])
 
-  // A first episode's opening is new and a finale's ending is often its own: heard, unless asked otherwise.
   const bookend =
     effective['playback.skip_keep_bookends'] !== 'false' &&
     (ep === 1 || (detail.data?.status === 'FINISHED' && !!detail.data.episodes && ep === detail.data.episodes))
-  const skipOp = flag('playback.autoskip_op') && !bookend
-  const skipEd = flag('playback.autoskip_ed') && !bookend
+  const opMode = skipMode(effective['playback.autoskip_op'])
+  const edMode = skipMode(effective['playback.autoskip_ed'])
+  const skipOp = opMode === 'auto' && !bookend
+  const skipEd = edMode === 'auto' && !bookend
+  const skipOff = useMemo(() => ({ op: opMode === 'off', ed: edMode === 'off' }), [opMode, edMode])
   const skipRecap = flag('playback.autoskip_recap')
   const skipPreview = flag('playback.autoskip_preview')
-  // In a room only the host's auto-skips act, or each guest's settings would move everyone.
   const guest = inRoom && !isHost
   const autoSkip = useMemo(
     () => ({ op: skipOp && !guest, ed: skipEd && !guest, recap: skipRecap && !guest, preview: skipPreview && !guest }),
     [skipOp, skipEd, skipRecap, skipPreview, guest],
   )
 
-  // Per episode, unlike the toggles beside it: the saved default is untouched.
   const [upscale, setUpscale] = useState<{ enabled: boolean; mode: string } | null>(null)
   const [tuning, setTuning] = useState(false)
-  const [optionsOpen, setOptionsOpen] = useState(false)
   useEffect(() => setUpscale(null), [id, ep])
 
-  // The saved default is shared with mpv on the host; each browser decides whether it applies here.
   const [deviceChoice, setDeviceChoice] = useState(deviceUpscale)
   const [settled, setSettled] = useState(autoTier)
   const [steppedTo, setSteppedTo] = useState<AutoTier | null>(null)
   const here = upscaleHere(deviceChoice, flag('playback.anime4k'), settled)
-  // Under Auto a GPU that falls behind drops a tier, and the device remembers where it settled.
   const stepDown = () => {
     const next = lowerTier(here.tier)
     setAutoTier(next)
@@ -727,7 +707,6 @@ export function Watch({
     enabled: upscale?.enabled ?? here.enabled,
     mode: upscale?.mode ?? effective['playback.anime4k_mode'] ?? 'A',
     tier: here.tier,
-    // Not for a tier picked by hand, nor an episode switched on by hand.
     onSlow: here.auto && !upscale ? stepDown : undefined,
   }
 
@@ -738,28 +717,209 @@ export function Watch({
       ? (play.error.body as { rawAvailable?: boolean; rawTitle?: string; notOut?: boolean } | undefined)
       : undefined
 
-  // Docked, only classes change, never the tree, so the player isn't rebuilt.
+  const playerShown = !(play.isError && !streamed) && !(play.isPending && !streamed) && !playingInMpv
+  const cover = detail.data?.coverImage?.extraLarge ?? detail.data?.coverImage?.large ?? detail.data?.cover
+  const cancelStart = () => routerNavigate(`/anime/${id}`)
+  const minutes = episodeLength ? Math.round(episodeLength / 60) : current?.runtime
+  const height = opened?.plan?.maxRate ? opened.plan.height : opened?.video?.height
+  const factLine = [
+    minutes ? `${minutes} min` : '',
+    facts.audio ? `${facts.audio} audio` : '',
+    facts.subtitles === 'off'
+      ? 'Subtitles off'
+      : facts.subtitles === 'none'
+        ? 'No subtitles'
+        : facts.subtitles
+          ? `${facts.subtitles} subtitles`
+          : '',
+    height ? `${height}p` : '',
+    play.data?.source === 'local' ? 'Local file' : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  const sequelTitle = sequel ? sequel.english || sequel.romaji : ''
+  const listed = fromList?.animeId === id ? list.find((e) => e.number === fromList.episode) : undefined
+  const nextText = fromList
+    ? fromList.animeId === id
+      ? `Next: Episode ${listed?.display || fromList.episode}`
+      : `Up next: ${fromList.title} · Ep ${fromList.episode}`
+    : next
+      ? `Next: Episode ${next.display || next.number}`
+      : sequelPath
+        ? `Next: ${sequelTitle} · Ep 1`
+        : undefined
+  const previousName = previous ? previous.display || previous.number : 0
+  const nextButton = nextText ? (
+    <button
+      type="button"
+      onClick={() => goNext('button')}
+      title={`${nextText} (${keyHint('next')})`}
+      className={cx(buttonClass('primary'), 'min-w-0 max-sm:min-h-12')}
+    >
+      {fromList && fromList.animeId !== id && fromList.cover && (
+        <img src={fromList.cover} alt="" className="size-6 shrink-0 rounded object-cover" />
+      )}
+      <span className="truncate">{nextText}</span>
+      <span aria-hidden>›</span>
+    </button>
+  ) : upcoming ? (
+    <NotOut label={`Episode ${upcoming.display || upcoming.number} · ${outDay(upcoming.airDate, now)}`}>
+      <p className="text-sm text-base-100">
+        Episode {upcoming.display || upcoming.number}{' '}
+        {upcoming.airDate ? `comes out ${outFull(upcoming.airDate)}, ${relativeTime(upcoming.airDate)}.` : "isn't out yet."}
+      </p>
+      <p className="mt-1 text-sm text-base-400">Yoru can tell you when it's out, or download it then.</p>
+      <WhenOut animeId={id} episode={upcoming.number} alerting={!!detail.data?.notify?.on} start />
+    </NotOut>
+  ) : finale && sequel ? (
+    <NotOut label={`Next season · ${sequel.year ? `coming ${sequel.year}` : 'announced'}`}>
+      <SequelLater sequel={sequel} />
+    </NotOut>
+  ) : null
+
+  const scope = (key: string) => (key in overrides ? 'This show' : 'All devices')
+  const partMissing = (kind: 'op' | 'ed') =>
+    !!skips.data && !skips.data.finding && !skips.data.ranges.some((r) => skipKind(r.kind) === (kind === 'op' ? 'opening' : 'ending'))
+  const skipCaption = (kind: 'op' | 'ed') => {
+    const mode = kind === 'op' ? opMode : edMode
+    if (mode === 'auto' && bookend) return kind === 'op' ? 'This show · this episode keeps its opening' : 'This show · this episode keeps its ending'
+    if (partMissing(kind)) return `This show · no ${kind === 'op' ? 'opening' : 'ending'} times for this episode yet`
+    return 'This show'
+  }
+  const subtitleLanguage = languageName(subLanguages[0]) ?? 'English'
+  const audioChoice = (
+    <Choices label="Audio">
+      {(
+        [
+          { value: 'sub', label: `Japanese audio, ${subtitleLanguage} subtitles` },
+          { value: 'dub', label: 'English dub' },
+          { value: 'either', label: 'Whichever is ready first' },
+        ] as const
+      ).map((c) => (
+        <ChoiceRow
+          key={c.value}
+          label={c.label}
+          caption={c.value === wantAudio ? 'This show' : undefined}
+          selected={c.value === wantAudio}
+          onClick={() => setAudio(c.value)}
+        />
+      ))}
+    </Choices>
+  )
+  const playbackRows = (
+    <>
+      <SegmentRow
+        label="Skip openings"
+        caption={skipCaption('op')}
+        value={opMode}
+        options={SKIP_MODES}
+        onChange={(v) => setPref.mutate({ key: 'playback.autoskip_op', value: v, animeId: id })}
+      />
+      <SegmentRow
+        label="Skip endings"
+        caption={skipCaption('ed')}
+        value={edMode}
+        options={SKIP_MODES}
+        onChange={(v) => setPref.mutate({ key: 'playback.autoskip_ed', value: v, animeId: id })}
+      />
+      <SwitchRow
+        label="Skip filler episodes"
+        caption="This show"
+        on={skipFiller}
+        onChange={(v) => setPref.mutate({ key: 'playback.skip_filler', value: String(v), animeId: id })}
+      />
+      <SwitchRow
+        label="Play the next episode by itself"
+        caption={scope('playback.autonext')}
+        on={flag('playback.autonext')}
+        onChange={setFlag('playback.autonext')}
+      />
+      <SwitchRow
+        label="Start playing when opened"
+        caption={scope('playback.autoplay')}
+        on={flag('playback.autoplay')}
+        onChange={setFlag('playback.autoplay')}
+      />
+      {!playingInMpv && (
+        <ActionRow
+          label="Sharper picture (Anime4K)"
+          caption={wide ? 'This device' : 'This phone'}
+          value={upscaling.enabled ? `On · ${upscaling.mode}` : 'Off'}
+          onClick={() => {
+            playerControls.current?.settings(false)
+            setAvSheet(false)
+            setTuning(true)
+          }}
+        />
+      )}
+    </>
+  )
+  const openAudioSubtitles = () => {
+    if (playerShown && playerControls.current) playerControls.current.settings(true)
+    else setAvSheet(true)
+  }
+  const anime4kDialog = (
+    <Anime4KDialog
+      open={tuning}
+      enabled={upscaling.enabled}
+      mode={upscaling.mode}
+      onClose={() => setTuning(false)}
+      onChange={setUpscale}
+      device={deviceChoice}
+      onDevice={(choice) => {
+        setDeviceUpscale(choice)
+        setDeviceChoice(choice)
+        if (choice === 'auto') {
+          setAutoTier(null)
+          setSettled(null)
+        }
+        setSteppedTo(null)
+        setUpscale(null)
+      }}
+    />
+  )
+  const episodesSection = (
+    <section aria-labelledby="watch-episodes">
+      <h2 id="watch-episodes" className="mb-2 section-title">
+        Episodes
+      </h2>
+      {list.length > 0 ? (
+        <EpisodeList animeId={id} episodes={list} current={ep} compact />
+      ) : (
+        <p className="rounded-lg border border-base-850 p-4 text-sm text-base-500">No episode list available.</p>
+      )}
+    </section>
+  )
+
   return (
     <div
       ref={dock.ref}
       onPointerDownCapture={dock.onPointerDownCapture}
       onClickCapture={dock.onClickCapture}
       className={cx(
-        'bg-base-950',
+        focus ? 'fixed inset-0 z-40 overflow-y-auto bg-black' : 'bg-base-950',
         mini &&
           'fixed z-40 w-[22rem] cursor-grab touch-none rounded-xl shadow-2xl ring-1 shadow-black/60 ring-white/10 select-none active:cursor-grabbing max-sm:inset-x-2 max-sm:w-auto',
         mini && DOCK[dock.corner],
       )}
     >
-      <div className={cx(!mini && 'mx-auto w-full px-0 sm:px-6 sm:py-4', !mini && !focus && 'max-w-[1600px]')}>
-        <div className={cx(!mini && !focus && 'grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]')}>
+      <div
+        className={cx(
+          !mini && !focus && 'mx-auto w-full max-w-[1600px] px-0 sm:px-6 sm:py-4 min-[1800px]:max-w-[2200px]',
+          focus && 'flex min-h-full flex-col justify-center',
+        )}
+      >
+        <div className={cx(!mini && !focus && 'grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]')}>
           <div className={cx('min-w-0', mini && 'max-sm:flex max-sm:items-center')}>
-            {/* No overflow-hidden: clipping a composited video blacks it out. */}
             <div
               className={cx(
                 'relative bg-black',
-                mini ? 'rounded-t-xl max-sm:w-36 max-sm:shrink-0 max-sm:rounded-l-xl max-sm:rounded-tr-none' : 'sm:rounded-xl',
-                focus && 'mx-auto w-full max-w-[calc((100dvh-8rem)*16/9)]',
+                mini
+                  ? 'rounded-t-xl max-sm:w-36 max-sm:shrink-0 max-sm:rounded-l-xl max-sm:rounded-tr-none'
+                  : focus
+                    ? 'mx-auto w-full max-w-[calc((100dvh-3.5rem)*16/9)]'
+                    : 'sm:rounded-xl max-sm:sticky max-sm:top-0 max-sm:z-30 max-sm:pt-[env(safe-area-inset-top)]',
               )}
             >
               {play.isError && !streamed ? (
@@ -775,16 +935,34 @@ export function Watch({
                   onPick={() => setPicking(true)}
                 />
               ) : play.isPending && !streamed ? (
-                <Searching note={startingNote} />
+                <div className="relative aspect-video overflow-hidden sm:rounded-xl">
+                  <StartingSteps
+                    starting={startingNote}
+                    backdrop={cover}
+                    onPick={() => setPicking(true)}
+                    onCancel={cancelStart}
+                    onRetry={() => void play.refetch()}
+                  />
+                </div>
               ) : playingInMpv ? (
                 <MpvPanel title={play.data?.title ?? showTitle} animeId={id} episode={ep} player={play.data?.player ?? 'mpv'} />
               ) : (
                 <Player
                   stream={stream.data}
                   starting={startingNote}
+                  onStartCancel={cancelStart}
+                  onStartRetry={() => void play.refetch()}
                   startAt={resumeAt && resumeAt.source === source ? resumeAt.at : (play.data?.startAt ?? 0)}
                   skips={skips.data?.ranges ?? []}
                   autoSkip={autoSkip}
+                  skipOff={skipOff}
+                  onMinimize={!mini && !focus ? onMinimize : undefined}
+                  settings={{ audio: audioChoice, playback: playbackRows }}
+                  controls={playerControls}
+                  theatre={focus}
+                  onTheatre={wide ? toggleFocus : undefined}
+                  onFacts={setFacts}
+                  nextLabel={nextText}
                   onSkipVote={skips.data?.share ? voteSkip : undefined}
                   skipMarks={skipMarks}
                   autoPlay={flag('playback.autoplay')}
@@ -806,7 +984,6 @@ export function Watch({
                   onNext={hasNext ? goNext : undefined}
                   onPrevious={previousPath ? goPrevious : undefined}
                   onTVMovedOn={(anime, episode) => navigate(`/watch/${anime}/${episode}`)}
-                  // Back into the finished episode: the countdown must not take the viewer away mid-rewatch.
                   onResume={clearEnded}
                   onEndStuck={(detail) => note('end-stuck', detail)}
                   onSessionLost={recoverSession}
@@ -815,7 +992,6 @@ export function Watch({
                   onPickRelease={() => setPicking(true)}
                   castBurn={flag('cast.burn_subtitles')}
                   mini={mini ? { onExpand: () => routerNavigate(watchHere) } : undefined}
-                  // Inside the player, or fullscreen hides it; failures too, unless the player can recover.
                   overlay={<>
                     {networkNote}
                     {inRoom && <TogetherToasts room={room} on={toasts} />}
@@ -844,7 +1020,6 @@ export function Watch({
                         onPick={() => setPicking(true)}
                       />
                     ) : stream.isError && !stream.data ? (
-                      // The release was found; opening it is what failed.
                       <NoRelease
                         inPlayer
                         message={(stream.error as Error).message}
@@ -870,12 +1045,19 @@ export function Watch({
                       />
                     ) : ended && fromList ? (
                       <UpNext
-                        label="Up next · from your list"
-                        line={`${fromList.animeId === id ? '' : `${fromList.title} · `}Episode ${fromList.episode}${
-                          fromList.animeId === id && fromList.episodeTitle && !endHides(fromList.animeId, fromList.episode, fromList.spoiler)
-                            ? ` · ${fromList.episodeTitle}`
-                            : ''
-                        }`}
+                        label={nextText ?? `Up next: ${fromList.title}`}
+                        line={
+                          fromList.episodeTitle && !endHides(fromList.animeId, fromList.episode, fromList.spoiler)
+                            ? fromList.episodeTitle
+                            : 'From your Up next list'
+                        }
+                        thumb={
+                          fromList.animeId !== id
+                            ? fromList.cover
+                            : listed?.still && !endHides(id, listed.number, listed.spoiler)
+                              ? listed.still
+                              : undefined
+                        }
                         then={after.data?.then && `Then ${after.data.then.title} · Ep ${after.data.then.episode}`}
                         auto={counting}
                         stopped={sleep.kind === 'fired' && autoNext}
@@ -884,10 +1066,9 @@ export function Watch({
                       />
                     ) : ended && next ? (
                       <UpNext
-                        label="Up next"
-                        line={`Episode ${next.display || next.number}${
-                          next.titleEn && !endHides(id, next.number, next.spoiler) ? ` · ${next.titleEn}` : ''
-                        }`}
+                        label={`Next: Episode ${next.display || next.number}`}
+                        line={next.titleEn && !endHides(id, next.number, next.spoiler) ? next.titleEn : undefined}
+                        thumb={next.still && !endHides(id, next.number, next.spoiler) ? next.still : undefined}
                         auto={counting}
                         stopped={sleep.kind === 'fired' && autoNext}
                         onPlay={advance}
@@ -895,8 +1076,9 @@ export function Watch({
                       />
                     ) : ended && sequelPath && sequel ? (
                       <UpNext
-                        label="Season finale · next season"
-                        line={`${sequel.english || sequel.romaji} · Episode 1`}
+                        label="Next season"
+                        line={`${sequelTitle} · Episode 1`}
+                        thumb={sequel.cover ?? undefined}
                         auto={counting}
                         stopped={sleep.kind === 'fired' && autoNext}
                         onPlay={advance}
@@ -912,94 +1094,153 @@ export function Watch({
                         onClose={() => clearEnded('cancel')}
                       />
                     ) : null}
+                    {anime4kDialog}
                   </>}
                 />
               )}
             </div>
 
-            {/* Not drawn while docked: its lists and rails would keep fetching for nobody. */}
             {!mini && (
-            <div className={cx('space-y-3 p-3 sm:px-0 sm:pt-4', focus && 'mx-auto max-w-[calc((100dvh-8rem)*16/9)]')}>
-              <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
-                <div className="mr-auto min-w-0">
-                  <Link
-                    to={`/anime/${id}`}
-                    className="group inline-flex items-center gap-1.5 font-display text-xl font-bold tracking-tight text-white transition-colors hover:text-accent-200 sm:text-2xl"
-                  >
-                    <span className="line-clamp-1">{showTitle || 'Series'}</span>
-                    <span className="text-base-500 transition-transform group-hover:translate-x-0.5">›</span>
-                  </Link>
-                  <p className="mt-0.5 flex min-w-0 items-center gap-2 text-sm text-base-400">
-                    <span className="line-clamp-1">{episodeLabel}</span>
-                    {play.data?.source && (
-                      <Badge tone={play.data.source === 'local' ? 'accent' : 'neutral'}>
-                        {play.data.source === 'local' ? 'Local file' : 'Torrent'}
-                      </Badge>
-                    )}
+            <div
+              className={cx(
+                focus ? 'mx-auto w-full max-w-[calc((100dvh-3.5rem)*16/9)]' : 'space-y-4 p-3 sm:px-0 sm:pt-4',
+              )}
+            >
+              {focus ? (
+                <div className="flex h-14 items-center gap-2 px-4">
+                  <p className="min-w-0 flex-1 truncate text-sm font-semibold text-white">
+                    {showTitle} · Episode {current?.display ?? ep}
                   </p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  {focus && (
-                    <Button variant="ghost" onClick={() => setFocused(false)} aria-pressed title="Back to the whole page (Esc)">
-                      Exit focus
-                    </Button>
-                  )}
                   {previous && (
                     <Button onClick={goPrevious} title="The episode before">
-                      ‹ Episode {previous.display || previous.number}
+                      ‹ Episode {previousName}
                     </Button>
                   )}
-                  {hasNext && (
-                    <Button
-                      variant="primary"
-                      onClick={() => goNext('button')}
-                      title={fromList ? `${fromList.title} · Episode ${fromList.episode}` : undefined}
-                    >
-                      {fromList ? 'Up next ›' : 'Next episode ›'}
-                    </Button>
-                  )}
+                  {nextButton}
+                  <Button variant="ghost" onClick={() => setFocused(false)} aria-pressed title="Back to the whole page (Esc)">
+                    Exit focus
+                    <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-sans text-xs text-base-300">Esc</kbd>
+                  </Button>
                 </div>
-              </div>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-start gap-x-6 gap-y-3">
+                    <div className="mr-auto grid min-w-0 gap-0.5">
+                      <Link
+                        to={`/anime/${id}`}
+                        className="group -my-2 flex min-h-11 w-fit max-w-full items-center gap-1 text-sm font-semibold text-accent-300 transition-colors hover:text-accent-200"
+                      >
+                        <span className="line-clamp-2">{showTitle || 'Series'}</span>
+                        <span aria-hidden className="transition-transform group-hover:translate-x-0.5">
+                          ›
+                        </span>
+                      </Link>
+                      <h1 className="line-clamp-2 font-display text-xl font-bold tracking-tight text-white sm:text-2xl">
+                        {episodeLabel}
+                      </h1>
+                      {factLine && <p className="text-[13px] text-base-400">{factLine}</p>}
+                    </div>
+                    {wide && (previous || nextButton) && (
+                      <div className="flex max-w-full flex-wrap items-center gap-2">
+                        {previous && (
+                          <Button onClick={goPrevious} title={`The episode before (${keyHint('previous')})`}>
+                            ‹ Episode {previousName}
+                          </Button>
+                        )}
+                        {nextButton}
+                      </div>
+                    )}
+                  </div>
+                  <Synopsis key={epKey} text={current?.overview} file={play.data?.title} />
+                  {!wide && (previous || nextButton) && (
+                    <div className="grid grid-cols-3 gap-2">
+                      {previous && (
+                        <button type="button" onClick={goPrevious} className={cx(buttonClass('secondary'), 'min-h-12')}>
+                          ‹ Ep {previousName}
+                        </button>
+                      )}
+                      {nextButton && <div className={cx('grid', previous ? 'col-span-2' : 'col-span-3')}>{nextButton}</div>}
+                    </div>
+                  )}
+                </>
+              )}
 
               {!focus && (
-                <div className="flex flex-wrap items-center gap-1">
-                  <StatusMenu animeId={id} current={detail.data?.listStatus} />
-                  <Button variant="ghost" onClick={() => setPicking(true)}>
-                    {infoHash ? 'Release chosen' : 'Choose release'}
-                  </Button>
-                  <Button variant="ghost" onClick={() => download.mutate()} disabled={held || download.isPending || download.isSuccess}>
-                    {held ? 'Downloaded' : download.isSuccess ? 'Queued' : 'Download'}
-                  </Button>
-                  {source && (
-                    <Button variant="ghost" onClick={() => setInApp(true)}>
-                      Open or save
-                    </Button>
+                <div className="flex flex-wrap items-center gap-2 max-sm:grid max-sm:grid-cols-4">
+                  <StatusMenu animeId={id} current={detail.data?.listStatus} tile />
+                  <button type="button" className={ACTION} onClick={() => setPicking(true)}>
+                    <ActionLabel icon={<ReleaseGlyph />} long={infoHash ? 'Release chosen' : 'Choose release'} short="Release" />
+                  </button>
+                  {held ? (
+                    <span className={cx(ACTION, 'pointer-events-none text-emerald-300')}>
+                      <ActionLabel icon={<DoneGlyph />} long="Downloaded" />
+                    </span>
+                  ) : download.isSuccess ? (
+                    <span className={cx(ACTION, 'pointer-events-none text-amber-300')}>
+                      <ActionLabel icon={<DownloadGlyph />} long="Queued" />
+                    </span>
+                  ) : (
+                    <button type="button" className={ACTION} onClick={() => download.mutate()} disabled={download.isPending}>
+                      <ActionLabel icon={<DownloadGlyph />} long="Download" />
+                    </button>
                   )}
-                  {!playingInMpv && <SaveToDevice animeId={id} episode={ep} variant="ghost" />}
+                  {source && (
+                    <button type="button" className={ACTION} onClick={() => setInApp(true)}>
+                      <ActionLabel icon={<OpenGlyph />} long="Open or save" short="Open" />
+                    </button>
+                  )}
+                  {!playingInMpv && <SaveToDevice animeId={id} episode={ep} className={ACTION} icon={<PhoneGlyph />} />}
                   {!together && !naming && !playingInMpv && (
-                    <Button
-                      variant="ghost"
+                    <button
+                      type="button"
+                      className={ACTION}
                       onClick={() => {
+                        if (!play.data) {
+                          toast('Watch together starts once the episode is playing.', 'info')
+                          return
+                        }
                         startTogether.reset()
                         setNaming(true)
                       }}
-                      disabled={!play.data}
                       title="Watch in step with friends who have their own Yoru"
                     >
-                      Watch together
-                    </Button>
+                      <ActionLabel
+                        icon={<TogetherGlyph />}
+                        long="Watch together"
+                        short="Together"
+                        note={play.data ? undefined : 'once playing'}
+                      />
+                    </button>
                   )}
-                  {!playingInMpv && (
-                    <Button variant="ghost" onClick={() => setFocused(true)} aria-pressed={false} title="Just the player; Esc leaves">
-                      Focus
-                    </Button>
-                  )}
+                  <button type="button" className={ACTION} onClick={openAudioSubtitles} aria-haspopup="dialog">
+                    <ActionLabel icon={<SubtitlesGlyph />} long="Audio & subtitles" short="Audio & subs" />
+                  </button>
+                  {!playingInMpv &&
+                    (wide ? (
+                      <button
+                        type="button"
+                        className={ACTION}
+                        onClick={() => setFocused(true)}
+                        aria-pressed={false}
+                        title="Just the player on black; Esc leaves"
+                      >
+                        <ActionLabel icon={<FocusGlyph />} long="Focus" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className={ACTION}
+                        onClick={() => playerControls.current?.fullscreen()}
+                        disabled={!playerShown}
+                      >
+                        <ActionLabel
+                          icon={<FocusGlyph />}
+                          long="Full screen"
+                          note={playerShown ? undefined : 'once open'}
+                        />
+                      </button>
+                    ))}
                 </div>
-              )}
-
-              {!focus && upcoming && !fromList && !next && (
-                <AiringNext key={id} animeId={id} upcoming={upcoming} alerting={!!detail.data?.notify?.on} />
               )}
 
               {startTogether.isError && (
@@ -1017,7 +1258,6 @@ export function Watch({
                   host
                   title={showTitle}
                   name={trackerName}
-                  // A failure closes the card for the message below, with its Set up HTTPS.
                   onJoin={(name) => startTogether.mutateAsync(name).catch(() => {}).finally(() => setNaming(false))}
                   onCancel={() => setNaming(false)}
                 />
@@ -1054,84 +1294,6 @@ export function Watch({
                 </div>
               )}
 
-              {focus ? null : !prefs.data ? (
-                <Skeleton className="h-12 w-full rounded-lg" />
-              ) : (
-                <>
-                  {/* A phone keeps the switches folded: they're set once a show, not every episode. */}
-                  <button
-                    type="button"
-                    aria-expanded={optionsOpen}
-                    onClick={() => setOptionsOpen((v) => !v)}
-                    className="flex min-h-11 w-full items-center justify-between rounded-lg bg-base-900/60 px-3 text-sm text-base-200 shadow-card sm:hidden"
-                  >
-                    Playback options
-                    <span aria-hidden className={cx('transition-transform', optionsOpen && 'rotate-180')}>
-                      ▾
-                    </span>
-                  </button>
-                  <div
-                    className={cx(
-                      'flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg bg-base-900/60 p-2.5 shadow-card',
-                      !optionsOpen && 'max-sm:hidden',
-                    )}
-                  >
-                    {/* Three scopes, each a group that wraps whole, so its label never leaves its switches. */}
-                    <OptionGroup label="This show">
-                      {/* Switching resolves another release, as most carry one language. */}
-                      <Segmented
-                        size="sm"
-                        value={wantAudio}
-                        onChange={setAudio}
-                        options={[
-                          { value: 'sub', label: 'Sub' },
-                          { value: 'dub', label: 'Dub' },
-                          { value: 'either', label: 'Either' },
-                        ]}
-                      />
-                      <Toggle
-                        label="Skip filler"
-                        on={skipFiller}
-                        onChange={(v) => setPref.mutate({ key: 'playback.skip_filler', value: String(v), animeId: id })}
-                      />
-                      {/* Per show: some openings are worth hearing every time. Settings holds the default. */}
-                      <Toggle
-                        label="Skip opening"
-                        on={flag('playback.autoskip_op')}
-                        onChange={(v) => setPref.mutate({ key: 'playback.autoskip_op', value: String(v), animeId: id })}
-                      />
-                      <Toggle
-                        label="Skip ending"
-                        on={flag('playback.autoskip_ed')}
-                        onChange={(v) => setPref.mutate({ key: 'playback.autoskip_ed', value: String(v), animeId: id })}
-                      />
-                    </OptionGroup>
-
-                    {/* A toggle flipped here becomes the new default. */}
-                    <OptionGroup label="Everywhere">
-                      <Toggle label="Auto play" on={flag('playback.autoplay')} onChange={setFlag('playback.autoplay')} />
-                      <Toggle label="Auto next" on={flag('playback.autonext')} onChange={setFlag('playback.autonext')} />
-                    </OptionGroup>
-
-                    {!playingInMpv && (
-                      <OptionGroup label="This device">
-                        <button
-                          onClick={() => setTuning(true)}
-                          className={cx(
-                            'rounded-md px-2.5 py-1 text-xs font-medium transition-colors pointer-coarse:min-h-11',
-                            upscaling.enabled
-                              ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
-                              : 'bg-base-800 text-base-300 hover:bg-base-700',
-                          )}
-                        >
-                          Anime4K{upscaling.enabled ? ` · ${upscaling.mode}` : ''}
-                        </button>
-                      </OptionGroup>
-                    )}
-                  </div>
-                </>
-              )}
-
               {steppedTo && (
                 <p className="text-xs text-base-400">
                   {steppedTo === 'off'
@@ -1146,13 +1308,7 @@ export function Watch({
 
               {!focus && (
                 <>
-                  <EpisodeAbout
-                    title={showTitle}
-                    label={episodeLabel}
-                    overview={current?.overview}
-                    still={current?.still}
-                    file={play.data?.title}
-                  />
+                  {!side && episodesSection}
                   <CharacterRail animeId={id} limit={8} title="Cast" />
                 </>
               )}
@@ -1163,43 +1319,24 @@ export function Watch({
             )}
           </div>
 
-          {!mini && !focus && (
-          <aside className="px-3 pb-8 sm:px-0">
-            <h2 className="mb-2 section-title">
-              Episodes
-            </h2>
-            {list.length > 0 ? (
-              <EpisodeList animeId={id} episodes={list} current={ep} compact />
-            ) : (
-              <p className="rounded-lg border border-base-850 p-4 text-sm text-base-500">
-                No episode list available.
-              </p>
-            )}
-          </aside>
-          )}
+          {!mini && !focus && side && <aside className="pb-8">{episodesSection}</aside>}
         </div>
       </div>
 
-      <Anime4KDialog
-        open={tuning}
-        enabled={upscaling.enabled}
-        mode={upscaling.mode}
-        onClose={() => setTuning(false)}
-        onChange={setUpscale}
-        device={deviceChoice}
-        onDevice={(choice) => {
-          setDeviceUpscale(choice)
-          setDeviceChoice(choice)
-          // Choosing Auto again starts it from the top.
-          if (choice === 'auto') {
-            setAutoTier(null)
-            setSettled(null)
-          }
-          setSteppedTo(null)
-          // The device's default just changed; this episode follows it.
-          setUpscale(null)
-        }}
-      />
+      {!playerShown && anime4kDialog}
+      <Sheet open={avSheet} onClose={() => setAvSheet(false)} title="Audio & subtitles">
+        <div className="-mx-4 sm:-mx-5">
+          <PanelGroup title="Audio">{audioChoice}</PanelGroup>
+          <PanelGroup title="Subtitles">
+            <p className="px-4 py-2 text-sm text-base-400">
+              {playingInMpv
+                ? `${play.data?.player === 'vlc' ? 'VLC' : 'mpv'} shows its own subtitle tracks while it plays.`
+                : "The episode's subtitle tracks, size and look are here once it opens."}
+            </p>
+          </PanelGroup>
+          <PanelGroup title="Playback">{playbackRows}</PanelGroup>
+        </div>
+      </Sheet>
 
       {picking && (
         <ReleasePicker
@@ -1219,48 +1356,88 @@ export function Watch({
   )
 }
 
-/** What the episode is, under the player, beyond a release filename. */
-function EpisodeAbout({
-  title,
-  label,
-  overview,
-  still,
-  file,
-}: {
-  title: string
-  label: string
-  overview?: string
-  still?: string
-  file?: string
-}) {
-  if (!title && !overview) return null
-
+function Synopsis({ text, file }: { text?: string; file?: string }) {
+  const [open, setOpen] = useState(false)
+  if (!text) return null
   return (
-    <section className="flex gap-4 rounded-lg bg-base-900/60 p-4 shadow-card">
-      {still && (
-        <img
-          src={still}
-          alt=""
-          loading="lazy"
-          className="hidden h-24 w-40 shrink-0 rounded-md object-cover sm:block"
-        />
-      )}
-      <div className="min-w-0">
-        <h2 className="truncate text-base font-semibold text-base-100">{title}</h2>
-        <p className="mt-0.5 text-sm text-accent-400">{label}</p>
-        {overview ? (
-          <p className="mt-2 line-clamp-3 text-sm leading-relaxed text-base-300">{overview}</p>
-        ) : (
-          <p className="mt-2 text-sm text-base-500">No synopsis for this episode yet.</p>
-        )}
-        {/* The release is worth being able to check, but it is not the title. */}
-        {file && <p className="mt-2 truncate text-xs text-base-500">{file}</p>}
-      </div>
-    </section>
+    <div className="text-sm text-base-300">
+      <p className={cx('leading-relaxed', !open && 'line-clamp-2')}>{text}</p>
+      {open && file && <p className="mt-1.5 text-xs break-all text-base-400">Release: {file}</p>}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="tap relative mt-0.5 text-sm font-semibold text-base-100 transition-colors hover:text-white"
+      >
+        {open ? 'Less' : 'More'}
+      </button>
+    </div>
   )
 }
 
-/** What a starting episode is waiting on, as the server reports it. */
+function outDay(unix: number | undefined, now: number): string {
+  if (!unix) return 'not out yet'
+  const ms = unix * 1000 - now
+  if (ms < 86_400_000) return `out ${relativeTime(unix)}`
+  if (ms < 6 * 86_400_000) return `out ${new Date(unix * 1000).toLocaleDateString(undefined, { weekday: 'short' })}`
+  return `out ${new Date(unix * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
+}
+
+function outFull(unix: number): string {
+  const day = new Date(unix * 1000).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })
+  return `${day} at ${airTime(unix)}`
+}
+
+function NotOut({ label, children }: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  const anchor = useRef<HTMLButtonElement>(null)
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen(true)}
+        className={cx(buttonClass('secondary'), 'min-w-0 text-base-300 max-sm:min-h-12')}
+      >
+        <span className="truncate">{label}</span>
+      </button>
+      <PopSheet open={open} onClose={() => setOpen(false)} title="Not out yet" anchor={anchor} width={340}>
+        <div className="p-2.5 max-sm:px-0">{children}</div>
+      </PopSheet>
+    </>
+  )
+}
+
+function SequelLater({ sequel }: { sequel: Season }) {
+  const alert = useSetNotify(sequel.id)
+  const alertsOff = useAlertsOff()
+  const name = sequel.english || sequel.romaji
+  return (
+    <>
+      <p className="text-sm text-base-100">
+        {name} is {sequel.year ? `coming in ${sequel.year}` : 'announced'}. This was the last episode out so far.
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {alertsOff ? (
+          <LinkButton to="/settings?tab=Notifications">Alerts are off: turn them on</LinkButton>
+        ) : alert.isSuccess ? (
+          <p role="status" className="text-sm text-base-200">
+            You get an alert when it starts.
+          </p>
+        ) : (
+          <Button variant="primary" onClick={() => alert.mutate(true)} disabled={alert.isPending}>
+            Tell me when it starts
+          </Button>
+        )}
+        <LinkButton to={`/anime/${sequel.id}`}>Open {name}</LinkButton>
+      </div>
+      {alert.isError && <p className="mt-2 text-xs text-recap">{(alert.error as Error).message}</p>}
+    </>
+  )
+}
+
 interface PlayStage {
   step?: 'search' | 'files' | 'data' | 'start'
   release?: string
@@ -1268,9 +1445,7 @@ interface PlayStage {
   bytes?: number
 }
 
-/** Starting is search, file list, first data, file start; the wait says which step and for how long. */
-function useStartingNote(animeId: number, episode: number, waiting: boolean): { title: string; detail: string } {
-  // Counted per wait: a new episode, or a wait starting again, begins at zero (set during render, no effect).
+function useStartingNote(animeId: number, episode: number, display: number, waiting: boolean, found: boolean): Starting {
   const wait = waiting ? `${animeId}:${episode}` : ''
   const [count, setCount] = useState({ wait, seconds: 0 })
   if (count.wait !== wait) setCount({ wait, seconds: 0 })
@@ -1289,67 +1464,49 @@ function useStartingNote(animeId: number, episode: number, waiting: boolean): { 
     gcTime: 0,
   }).data
 
-  const clock = seconds >= 20 ? ` · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : ''
+  const name = `Episode ${display}`
   switch (stage?.step) {
     case 'files':
-      return { title: 'Getting the file list…', detail: `${stage.release ?? 'From the people sharing it'}${clock}` }
-    case 'data': {
-      const swarm = stage.peers
-        ? `${stage.peers} ${stage.peers === 1 ? 'peer' : 'peers'}, ${bytes(stage.bytes ?? 0)} so far`
-        : 'no peers connected yet'
-      return { title: 'Waiting for the first data…', detail: `${stage.release ? `${stage.release} · ` : ''}${swarm}${clock}` }
-    }
+      return {
+        step: 1,
+        seconds,
+        status: 'Found a release. Asking the people sharing it for its list of files.',
+      }
+    case 'data':
+      return {
+        step: 1,
+        seconds,
+        status: stage.peers
+          ? `Connected to ${stage.peers} ${stage.peers === 1 ? 'person' : 'people'} sharing this release${
+              stage.bytes ? `, ${bytes(stage.bytes)} so far` : ''
+            }. This usually takes a few seconds.`
+          : 'Looking for people sharing this release. No one has answered yet.',
+      }
     case 'start':
       return {
-        title: 'Reading the start of the file…',
-        detail: `A large release on a slow connection can take a few minutes${clock}`,
+        step: 2,
+        seconds,
+        status: 'Reading the start of the episode. A large release on a slow connection can take a few minutes.',
       }
     default:
+      if (found) return { step: 2, seconds, status: `Opening ${name}.` }
       return {
-        title: 'Searching for a release…',
-        detail: `${seconds < 6 ? 'Checking the release sites under each of the show’s titles' : 'Still looking; searches are rate limited'}${clock}`,
+        step: 0,
+        seconds,
+        status:
+          seconds < 8
+            ? `Checking release sites for ${name}.`
+            : 'Still checking release sites. Sites limit how fast we can search, so this can take a minute.',
+        stuck: seconds >= 60 ? `No release found yet for ${name}` : undefined,
       }
   }
 }
 
-// Clear of the header at the top; on a phone a full-width bar, above the tabs at the bottom.
 const DOCK: Record<Corner, string> = {
   tl: 'top-20 left-4 max-sm:top-[4.5rem]',
   tr: 'top-20 right-4 max-sm:top-[4.5rem]',
   bl: 'bottom-4 left-4 max-sm:bottom-[calc(4.5rem+env(safe-area-inset-bottom))]',
   br: 'right-4 bottom-4 max-sm:bottom-[calc(4.5rem+env(safe-area-inset-bottom))]',
-}
-
-function AiringNext({ animeId, upcoming, alerting }: { animeId: number; upcoming: Episode; alerting: boolean }) {
-  const alert = useSetNotify(animeId)
-  const alertsOff = useAlertsOff()
-  const at = upcoming.airDate
-  const when = at
-    ? `${new Date(at * 1000).toLocaleDateString(undefined, { weekday: 'long' })} ${airTime(at)} · ${relativeTime(at)}`
-    : 'later'
-  return (
-    <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-base-400">
-      <span>
-        Episode {upcoming.display || upcoming.number} airs <span className="text-base-200">{when}</span>
-      </span>
-      {alertsOff ? (
-        <Link to="/settings?tab=Notifications" className="text-xs font-medium text-base-400 hover:text-white">
-          Alerts are off in Settings
-        </Link>
-      ) : alerting ? (
-        <span className="text-xs font-medium text-emerald-300">Alerts on</span>
-      ) : (
-        <button
-          onClick={() => alert.mutate(true)}
-          disabled={alert.isPending}
-          className="tap relative text-sm font-medium text-accent-300 hover:text-accent-200 disabled:opacity-60"
-        >
-          Alert me
-        </button>
-      )}
-      {alert.isError && <span className="text-xs text-recap">{(alert.error as Error).message}</span>}
-    </p>
-  )
 }
 
 function MiniBar({ title, episode, onExpand, onClose }: { title: string; episode: string; onExpand: () => void; onClose: () => void }) {
@@ -1381,19 +1538,17 @@ function MiniBar({ title, episode, onExpand, onClose }: { title: string; episode
   )
 }
 
-function Searching({ note }: { note: { title: string; detail: string } }) {
-  return (
-    <div className="grid aspect-video place-items-center">
-      <div className="max-w-md px-4 text-center">
-        <Spinner className="mx-auto size-8" />
-        <p className="mt-3 text-sm text-base-300">{note.title}</p>
-        <p className="mt-1 text-xs break-words text-base-500 tabular-nums">{note.detail}</p>
-      </div>
-    </div>
-  )
-}
-
-function WhenOut({ animeId, episode }: { animeId: number; episode: number }) {
+function WhenOut({
+  animeId,
+  episode,
+  alerting = false,
+  start = false,
+}: {
+  animeId: number
+  episode: number
+  alerting?: boolean
+  start?: boolean
+}) {
   const qc = useQueryClient()
   const [done, setDone] = useState<'notify' | 'want' | null>(null)
   const notify = useSetNotify(animeId)
@@ -1410,7 +1565,7 @@ function WhenOut({ animeId, episode }: { animeId: number; episode: number }) {
   const failed = (notify.error ?? want.error) as Error | null
   if (done) {
     return (
-      <p role="status" className="mt-4 text-sm text-base-200">
+      <p role="status" className={cx('text-sm text-base-200', start ? 'mt-3' : 'mt-4')}>
         {done === 'notify'
           ? 'You get an alert when it is out.'
           : alertsOff
@@ -1420,9 +1575,11 @@ function WhenOut({ animeId, episode }: { animeId: number; episode: number }) {
     )
   }
   return (
-    <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+    <div className={cx('flex flex-wrap items-center gap-2', start ? 'mt-3 justify-start' : 'mt-4 justify-center')}>
       {alertsOff ? (
         <LinkButton to="/settings?tab=Notifications">Alerts are off: turn them on</LinkButton>
+      ) : alerting ? (
+        <p className="basis-full text-sm text-base-300">Alerts are on for this show.</p>
       ) : (
         <Button variant="primary" onClick={() => notify.mutate(true, { onSuccess: () => setDone('notify') })} disabled={pending}>
           Tell me when it's out
@@ -1436,7 +1593,6 @@ function WhenOut({ animeId, episode }: { animeId: number; episode: number }) {
   )
 }
 
-// Usually "nobody has subbed this yet", said plainly with the ways out.
 function NoRelease({
   message,
   animeId,
@@ -1453,13 +1609,10 @@ function NoRelease({
   message: string
   animeId: number
   episode?: number
-  /** Not aired yet, or out raw only: worth waiting for. */
   notOut?: boolean
   rawAvailable?: boolean
   rawTitle?: string
-  // Covering a player rather than standing in for one.
   inPlayer?: boolean
-  // Retrying can't help; offer Setup instead.
   needsTranscoder?: boolean
   onRetry: () => void
   onPlayRaw?: () => void
@@ -1473,7 +1626,6 @@ function NoRelease({
       )}
     >
       <div className="max-w-lg">
-        {/* Server reasons are Go errors, lower-case: here one starts a sentence. */}
         <p className="text-sm text-base-200">{message.charAt(0).toUpperCase() + message.slice(1)}</p>
 
         {rawAvailable && (
@@ -1482,7 +1634,7 @@ function NoRelease({
               A raw broadcast is seeding now. It has no subtitles.
             </p>
             {rawTitle && (
-              <p className="mt-1 line-clamp-2 font-mono text-[11px] text-base-500">{rawTitle}</p>
+              <p className="mt-1 line-clamp-2 font-mono text-xs text-base-500">{rawTitle}</p>
             )}
             <button
               onClick={onPlayRaw}
@@ -1502,8 +1654,10 @@ function NoRelease({
           </div>
         ) : (
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-          <Button onClick={onRetry}>Try again</Button>
-          <Button onClick={onPick}>Choose a release</Button>
+          <Button variant="primary" onClick={onRetry}>
+            Retry
+          </Button>
+          <Button onClick={onPick}>Try another release</Button>
           <LinkButton to={`/anime/${animeId}`}>Other episodes</LinkButton>
           <LinkButton to="/settings?tab=Downloads" variant="ghost">Quality settings</LinkButton>
         </div>
@@ -1513,9 +1667,7 @@ function NoRelease({
   )
 }
 
-/** mpv plays in its own window, so this page only offers Stop and says which player is in charge. */
 function MpvPanel({ title, animeId, episode, player }: { title: string; animeId: number; episode: number; player: string }) {
-  // The episode too, so the server also stops fetching what nobody is watching now.
   const stop = useMutation({ mutationFn: () => api.post('/api/stop', { animeId, episode }) })
 
   return (
@@ -1547,10 +1699,10 @@ function MpvPanel({ title, animeId, episode, player }: { title: string; animeId:
 
 const UP_NEXT_SECONDS = 5
 
-// Over the credits at the end: counts down with auto-next on, else offers the button.
 function UpNext({
   label,
   line,
+  thumb,
   then,
   auto,
   stopped,
@@ -1558,13 +1710,11 @@ function UpNext({
   onCancel,
 }: {
   label: string
-  line: string
-  /** What follows it on the Up next list. */
+  line?: string
+  thumb?: string
   then?: string
   auto: boolean
-  /** The sleep timer held back the countdown: said, so a missing one isn't a mystery. */
   stopped?: boolean
-  /** By the countdown running out, or a press on the card. */
   onPlay: (by: 'countdown' | 'card') => void
   onCancel: () => void
 }) {
@@ -1583,40 +1733,63 @@ function UpNext({
     <div
       role="dialog"
       aria-label="Up next"
-      className="absolute right-4 bottom-20 z-20 w-72 animate-rise rounded-xl border border-base-700 bg-base-950/90 p-3 shadow-xl shadow-black/60 backdrop-blur-sm"
+      className="absolute right-3 bottom-16 z-20 w-[23rem] max-w-[calc(100%-1.5rem)] animate-rise rounded-sheet bg-base-950/90 p-3 shadow-xl shadow-black/60 ring-1 ring-white/10 backdrop-blur-sm sm:right-4 sm:bottom-20"
     >
-      <p className="text-[11px] font-medium tracking-wide text-base-400 uppercase">{label}</p>
-      <p className="mt-0.5 truncate text-sm text-base-100">{line}</p>
-      {then && <p className="mt-0.5 truncate text-xs text-base-500">{then}</p>}
-      {stopped && <p className="mt-1 text-xs text-base-400">The sleep timer stopped auto next.</p>}
+      <div className="flex items-start gap-3">
+        {thumb && (
+          <img src={thumb} alt="" className="hidden h-[72px] w-32 shrink-0 rounded-md object-cover ring-1 ring-white/10 sm:block" />
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold text-white">{label}</p>
+          {line && <p className="mt-0.5 line-clamp-2 text-[13px] text-base-300">{line}</p>}
+          {then && <p className="mt-0.5 truncate text-xs text-base-400">{then}</p>}
+          {stopped && <p className="mt-1 text-xs text-base-400">The sleep timer stopped auto next.</p>}
+        </div>
+        {auto && <CountdownRing left={left} total={UP_NEXT_SECONDS} />}
+      </div>
       <div className="mt-2.5 flex items-center gap-2">
         <button
           onClick={() => onPlay('card')}
-          className="rounded-md bg-white px-3 py-1.5 text-sm font-semibold text-base-950 hover:bg-base-100 pointer-coarse:min-h-11"
+          className="min-h-11 flex-1 rounded-xl bg-white px-4 text-sm font-semibold text-base-950 transition-colors hover:bg-base-100"
         >
-          {auto ? `Play now · ${left}` : 'Play next'}
+          Play now
         </button>
         <button
           onClick={onCancel}
-          className="rounded-md px-3 py-1.5 text-sm text-base-300 hover:bg-base-800 hover:text-white pointer-coarse:min-h-11"
+          className="min-h-11 rounded-xl px-4 text-sm text-base-200 transition-colors hover:bg-base-800 hover:text-white"
         >
           {auto ? 'Cancel' : 'Dismiss'}
         </button>
       </div>
-      {auto && (
-        <div className="mt-2 h-0.5 overflow-hidden rounded-full bg-base-800">
-          <div
-            className="h-full bg-accent-500 transition-[width] duration-1000 ease-linear"
-            style={{ width: `${((UP_NEXT_SECONDS - left) / UP_NEXT_SECONDS) * 100}%` }}
-          />
-        </div>
-      )}
     </div>
   )
 }
 
-// Nothing aired to play on to: when the next episode airs; or at a finale, the coming season (Plan to watch, an
-// alert), a score for this one, and with no season to come, a few shows like it.
+function CountdownRing({ left, total }: { left: number; total: number }) {
+  const r = 15
+  const around = 2 * Math.PI * r
+  return (
+    <span role="timer" aria-label={`Plays in ${left} seconds`} className="relative grid size-11 shrink-0 place-items-center">
+      <svg viewBox="0 0 36 36" className="absolute inset-0 size-full -rotate-90" aria-hidden>
+        <circle cx="18" cy="18" r={r} fill="none" stroke="rgb(255 255 255 / 0.15)" strokeWidth="3" />
+        <circle
+          cx="18"
+          cy="18"
+          r={r}
+          fill="none"
+          stroke="var(--color-accent-400)"
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeDasharray={around}
+          strokeDashoffset={around * (1 - left / total)}
+          className="transition-[stroke-dashoffset] duration-1000 ease-linear"
+        />
+      </svg>
+      <span className="text-sm font-semibold text-white tabular-nums">{left}</span>
+    </span>
+  )
+}
+
 function EndOfAired({
   animeId,
   upcoming,
@@ -1629,7 +1802,6 @@ function EndOfAired({
   upcoming?: Episode
   sequel?: Season
   score: number
-  /** Alerts are on for this show already: said, not offered. */
   alerting: boolean
   onClose: () => void
 }) {
@@ -1660,9 +1832,9 @@ function EndOfAired({
     <div
       role="dialog"
       aria-label={upcoming ? 'Next episode' : 'Season finale'}
-      className="absolute right-4 bottom-20 z-20 w-[22rem] max-w-[calc(100%-2rem)] animate-rise rounded-xl border border-base-700 bg-base-950/90 p-3 shadow-xl shadow-black/60 backdrop-blur-sm"
+      className="absolute right-4 bottom-20 z-20 w-[22rem] max-w-[calc(100%-2rem)] animate-rise rounded-sheet bg-base-950/90 p-3 shadow-xl shadow-black/60 ring-1 ring-white/10 backdrop-blur-sm"
     >
-      <p className="text-[11px] font-medium tracking-wide text-base-400 uppercase">
+      <p className="text-[13px] font-semibold text-base-400">
         {upcoming ? 'Up next' : sequel ? 'Season finale' : 'The end'}
       </p>
       <p className="mt-0.5 text-sm text-base-100">
@@ -1705,7 +1877,7 @@ function EndOfAired({
 
       {!upcoming && (
         <div className="mt-3 border-t border-base-800 pt-2">
-          <p className="text-[11px] text-base-400">Your score</p>
+          <p className="text-xs text-base-400">Your score</p>
           <div className="mt-1 flex flex-wrap gap-1" role="group" aria-label="Your score">
             {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
               <button
@@ -1726,7 +1898,7 @@ function EndOfAired({
 
       {theEnd && (recs.data?.items.length ?? 0) > 0 && (
         <div className="mt-3 border-t border-base-800 pt-2">
-          <p className="text-[11px] text-base-400">More like this</p>
+          <p className="text-xs text-base-400">More like this</p>
           <div className="mt-1.5 grid grid-cols-3 gap-2">
             {recs.data!.items.slice(0, 3).map((r) => (
               <Link key={r.id} to={`/anime/${r.id}`} className="group min-w-0">
@@ -1736,7 +1908,7 @@ function EndOfAired({
                   loading="lazy"
                   className="aspect-[2/3] w-full rounded-md object-cover ring-1 ring-white/10 transition-transform group-hover:scale-[1.03]"
                 />
-                <p className="mt-1 line-clamp-1 text-[11px] text-base-300 group-hover:text-white">{r.title}</p>
+                <p className="mt-1 line-clamp-1 text-xs text-base-300 group-hover:text-white">{r.title}</p>
               </Link>
             ))}
           </div>
@@ -1747,11 +1919,8 @@ function EndOfAired({
   )
 }
 
-// After a run of episodes auto next started with no one touching anything: asks before going on, and can take
-// back the ticks those episodes earned, in case no one saw them.
 function StillWatching({ run, onKeep, onStop }: { run: Unattended[]; onKeep: () => void; onStop: () => void }) {
   const qc = useQueryClient()
-  // Unwatching an episode rewinds everything after it too: one call per show, from its first.
   const firsts = [...new Map(run.map((e) => [e.animeId, e])).keys()].map((animeId) => ({
     animeId,
     episode: Math.min(...run.filter((e) => e.animeId === animeId).map((e) => e.episode)),
@@ -1777,7 +1946,7 @@ function StillWatching({ run, onKeep, onStop }: { run: Unattended[]; onKeep: () 
     <div
       role="dialog"
       aria-label="Still watching?"
-      className="absolute right-4 bottom-20 z-20 w-80 max-w-[calc(100%-2rem)] animate-rise rounded-xl border border-base-700 bg-base-950/90 p-3 shadow-xl shadow-black/60 backdrop-blur-sm"
+      className="absolute right-4 bottom-20 z-20 w-80 max-w-[calc(100%-2rem)] animate-rise rounded-sheet bg-base-950/90 p-3 shadow-xl shadow-black/60 ring-1 ring-white/10 backdrop-blur-sm"
     >
       <p className="text-sm font-semibold text-base-100">Still watching?</p>
       <p className="mt-0.5 text-xs text-base-400">
@@ -1809,50 +1978,33 @@ function StillWatching({ run, onKeep, onStop }: { run: Unattended[]; onKeep: () 
   )
 }
 
-// A scope's label and its controls, kept together when the row wraps.
-function OptionGroup({ label, children }: { label: string; children: React.ReactNode }) {
+const ACTION =
+  'press relative flex h-10 min-w-0 shrink-0 items-center justify-center gap-2 rounded-xl bg-base-800 px-3.5 text-sm font-medium text-base-100 transition-colors hover:bg-base-750 disabled:opacity-50 max-sm:h-auto max-sm:min-h-16 max-sm:flex-col max-sm:gap-1 max-sm:px-1 max-sm:py-2 max-sm:text-xs'
+
+function ActionLabel({ icon, long, short, note }: { icon: React.ReactNode; long: string; short?: string; note?: string }) {
   return (
-    <div role="group" aria-label={label} className="flex flex-wrap items-center gap-2">
-      <span className="text-[10px] font-semibold tracking-wider text-base-500 uppercase">{label}</span>
-      {children}
-    </div>
+    <>
+      {icon}
+      <span className="max-sm:hidden">{long}</span>
+      <span className="leading-tight sm:hidden">{short ?? long}</span>
+      {note && <span className="text-xs font-normal text-base-400 max-sm:-mt-1">{note}</span>}
+    </>
   )
 }
 
-function Toggle({
-  label,
-  on,
-  onChange,
-}: {
-  label: string
-  on: boolean
-  onChange: (value: boolean) => void
-}) {
+function Glyph({ d }: { d: string }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      onClick={() => onChange(!on)}
-      className={cx(
-        'flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors pointer-coarse:min-h-11 pointer-coarse:px-3',
-        on ? 'bg-accent-500/20 text-accent-400' : 'bg-base-850 text-base-400 hover:text-base-200',
-      )}
-    >
-      <span
-        className={cx(
-          'relative h-3.5 w-6 rounded-full transition-colors',
-          on ? 'bg-accent-500' : 'bg-base-700',
-        )}
-      >
-        <span
-          className={cx(
-            'absolute top-0.5 size-2.5 rounded-full bg-white transition-all',
-            on ? 'left-3' : 'left-0.5',
-          )}
-        />
-      </span>
-      {label}
-    </button>
+    <svg viewBox="0 0 24 24" className="size-4 shrink-0 max-sm:size-5" aria-hidden>
+      <path d={d} fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   )
 }
+
+const ReleaseGlyph = () => <Glyph d="M4 6h16M4 12h16M4 18h10" />
+const DownloadGlyph = () => <Glyph d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14" />
+const DoneGlyph = () => <Glyph d="m5 13 4 4L19 7" />
+const OpenGlyph = () => <Glyph d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+const PhoneGlyph = () => <Glyph d="M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1ZM12 8v6m0 0 2.5-2.5M12 14l-2.5-2.5M11 18h2" />
+const TogetherGlyph = () => <Glyph d="M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 19c0-3 2.7-5 6-5s6 2 6 5M16 5.2a3 3 0 0 1 0 5.6M18 14.4c1.8.7 3 2.3 3 4.6" />
+const FocusGlyph = () => <Glyph d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+const SubtitlesGlyph = () => <Glyph d="M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2ZM7 15h4M13 15h4M7 11h10" />

@@ -32,7 +32,7 @@ export function MobileDataCard({
   const { title, note } = where()
   return (
     <div className="absolute inset-0 z-20 grid place-items-center bg-black/70 p-4">
-      <div role="dialog" aria-label={title} className="w-80 max-w-full animate-rise rounded-xl border border-base-700 bg-base-950/95 p-4 shadow-xl shadow-black/60">
+      <div role="dialog" aria-label={title} className="w-80 max-w-full animate-rise rounded-sheet bg-base-950/95 p-4 shadow-xl shadow-black/60 ring-1 ring-white/10">
         <p className="text-sm font-semibold text-base-100">{title}</p>
         {card === 'ask' ? (
           <>
@@ -80,7 +80,7 @@ export function MobileDataCard({
 /** A note over the playing picture, with one action and a close: mid-episode, nothing stops on its own. */
 export function NetworkNote({ text, action, onAction, onClose }: { text: string; action: string; onAction: () => void; onClose: () => void }) {
   return (
-    <div role="status" className="absolute top-4 left-1/2 z-20 flex w-max max-w-[calc(100%-2rem)] -translate-x-1/2 animate-rise flex-wrap items-center gap-2 rounded-xl border border-base-700 bg-base-950/90 py-1.5 pr-1.5 pl-3 text-sm text-base-100 shadow-xl shadow-black/60 backdrop-blur-sm">
+    <div role="status" className="absolute top-4 left-1/2 z-20 flex w-max max-w-[calc(100%-2rem)] -translate-x-1/2 animate-rise flex-wrap items-center gap-2 rounded-xl bg-base-950/90 py-1.5 ring-1 ring-white/10 pr-1.5 pl-3 text-sm text-base-100 shadow-xl shadow-black/60 backdrop-blur-sm">
       <span>{text}</span>
       <button onClick={onAction} className={cx(button, 'bg-white font-semibold text-base-950 hover:bg-base-100')}>
         {action}

@@ -77,29 +77,22 @@ page.on('console', (m) => m.type() === 'error' && errors.push(m.text().slice(0, 
 page.on('pageerror', (e) => errors.push(`uncaught: ${e.message.slice(0, 200)}`))
 
 await page.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
-// Both rows are one show's, so they sit in its group; the badges counted are the episodes', not the group's.
-const group = page.getByRole('button', { name: /^Show downloads of / })
-await group.first().waitFor({ timeout: 15_000 }).catch(() => {})
-check((await group.count()) === 1, 'the two downloads of one show are grouped')
-await group.first().click()
-// Episode rows sit inside the show's card, itself a list item.
-const episodeRows = page.locator('li li').filter({ hasText: /Episode \d/ })
-const downloadedBadge = episodeRows.getByText('Downloaded', { exact: true })
-const cachedBadge = episodeRows.getByText('Cached', { exact: true })
-await downloadedBadge.first().waitFor({ timeout: 15_000 }).catch(() => {})
-check((await downloadedBadge.count()) === 1, 'a kept download shows as Downloaded')
-check((await cachedBadge.count()) === 1, 'a watched episode shows as Cached')
+const keptHeading = page.getByRole('heading', { name: 'Kept', exact: true })
+const passingHeading = page.getByRole('heading', { name: 'Not kept', exact: true })
+await keptHeading.waitFor({ timeout: 15_000 }).catch(() => {})
+check(await keptHeading.isVisible(), 'a kept download sits under Kept')
+check(await passingHeading.isVisible(), 'a watched episode sits under Not kept')
+const keepButtons = page.getByRole('button', { name: 'Keep', exact: true })
+check((await keepButtons.and(page.locator('[aria-pressed="true"]')).count()) === 1, 'only the kept one shows as kept')
 await page.screenshot({ path: `${shots}/downloads-tiers.png` })
 
-// Keep moves the cached one over; the budget no longer sees it.
-await episodeRows.filter({ hasText: 'Cached' }).getByRole('button', { name: 'Keep', exact: true }).click()
+await keepButtons.and(page.locator('[aria-pressed="false"]')).first().click()
 let keptBoth = false
 for (let i = 0; i < 20 && !keptBoth; i++) {
   await sleep(250)
-  keptBoth = (await downloadedBadge.count()) === 2
+  keptBoth = !(await passingHeading.isVisible()) && (await page.getByRole('button', { name: 'Keep all', exact: true }).getAttribute('aria-pressed').catch(() => null)) === 'true'
 }
-check(keptBoth, 'Keep moves a cached episode to the downloaded tier')
-// The row flips optimistically, before the server has answered.
+check(keptBoth, 'Keep moves a watched episode under Kept, grouped with the other')
 let usage = await api('/api/cache')
 for (let i = 0; i < 20 && usage.body?.kept !== 2; i++) {
   await sleep(250)
@@ -115,11 +108,12 @@ await page.screenshot({ path: `${shots}/downloads-kept.png` })
 // Settings offer the auto-delete rule, and the downloads toggle only once it is on.
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
 await page.getByRole('tab', { name: 'Storage' }).click()
-const autodelete = page.getByRole('combobox').filter({ has: page.locator('option[value="keep2"]') })
+const autodelete = page.getByRole('combobox', { name: 'Auto-delete watched' })
 // The tab is in the URL now, so its panel renders a moment after the click.
 check(await autodelete.waitFor({ timeout: 5000 }).then(() => true, () => false), 'auto-delete watched setting is offered')
 check(!(await page.getByText('Also delete downloaded episodes').isVisible()), 'downloads toggle hidden while auto-delete is off')
-await autodelete.selectOption('keep2')
+await autodelete.click()
+await page.getByRole('option', { name: 'Once two more are watched', exact: true }).click()
 const toggleShown = await page
   .getByText('Also delete downloaded episodes')
   .waitFor({ timeout: 5_000 })
@@ -129,7 +123,8 @@ check(toggleShown, 'downloads toggle appears once auto-delete is on')
 const saved = await api('/api/prefs')
 check(saved.body?.effective?.['cache.autodelete'] === 'keep2', 'auto-delete choice is saved', JSON.stringify(saved.body?.effective?.['cache.autodelete']))
 await page.screenshot({ path: `${shots}/settings-cache.png` })
-await autodelete.selectOption('off')
+await autodelete.click()
+await page.getByRole('option', { name: 'Off', exact: true }).click()
 
 // ---------------------------------------------------------------- playback
 // Progress goes by sendBeacon, whose body the request API can't read, so it is recorded at the source.
@@ -222,10 +217,16 @@ check(
   'stream opens on the Japanese track of a dual-audio file',
   JSON.stringify({ audio: streamOpen?.audio?.length, track: streamOpen?.audioTrack }),
 )
+const avPanel = page.getByRole('dialog', { name: 'Audio & subtitles' })
+const audioTracks = avPanel.getByRole('radiogroup', { name: 'Audio track' })
+await page.getByRole('button', { name: 'Audio & subtitles', exact: true }).last().click({ timeout: 10_000 }).catch(() => {})
+await audioTracks.waitFor({ timeout: 5000 }).catch(() => {})
 check(
-  await page.locator('button[title="Audio"]').isVisible().catch(() => false),
+  (await audioTracks.getByRole('radio').count()) === 2,
   'audio picker shown for a dual-audio file',
+  `${await audioTracks.getByRole('radio').count()} audio tracks`,
 )
+await avPanel.getByRole('button', { name: 'Done', exact: true }).click({ timeout: 5000 }).catch(() => {})
 
 // Subtitle track was fetched and the server labels it complete (a local file).
 await sleep(6000)
@@ -390,8 +391,8 @@ if (streamOpen?.id) {
 // Reopening resumes there.
 await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
 await sleep(2500)
-const button = await page.locator('a', { hasText: /Continue episode/ }).first().innerText().catch(() => '')
-check(/Continue episode 1 · \d+:\d\d/.test(button), 'series page button names the episode and time', button)
+const button = await page.locator('a', { hasText: /Resume Ep/ }).first().innerText().catch(() => '')
+check(/Resume Ep 1 · (\d+ min left|\d+:\d\d)/.test(button), 'series page button names the episode and time', button)
 
 // Opening the series page asks for that episode's release to be found now,
 // rather than when play is pressed — the "Searching for a release" wait.

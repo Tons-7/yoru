@@ -23,6 +23,7 @@ for (const show of shows) {
   if (episode < 1) continue
   await api(`/api/anime/${show.id}`)
   await post('/api/upnext', { animeId: show.id, episode })
+  await post('/api/status', { animeId: show.id, status: listed === 2 ? 'PLANNING' : 'CURRENT' })
   listed++
 }
 const show = shows.find((s) => s.nextEpisode > 3) ?? shows[0]
@@ -41,11 +42,38 @@ for (const [i, episode, position] of watched) {
 }
 
 const browser = await chromium.launch()
-const views = [
+const sized = process.env.SIZES?.split(',').map((s) => {
+  const [width, height] = s.split('x').map(Number)
+  const touch = width < 1024
+  return { name: `${width}`, viewport: { width, height }, deviceScaleFactor: 1, isMobile: width < 640, hasTouch: touch }
+})
+const views = sized ?? [
   { name: 'desktop', viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 },
   { name: 'phone', viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
   { name: 'wide', viewport: { width: 2000, height: 1000 }, deviceScaleFactor: 1, only: ['home'] },
 ]
+const overflow = () =>
+  page.evaluate(() => {
+    const width = document.documentElement.clientWidth
+    const scrolls = (el) => {
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        const s = getComputedStyle(p)
+        if (/(auto|scroll)/.test(s.overflowX) && p !== document.body && p !== document.documentElement) return true
+      }
+      return false
+    }
+    const out = []
+    for (const el of document.querySelectorAll('body *')) {
+      const box = el.getBoundingClientRect()
+      if (box.width === 0 || box.height === 0) continue
+      if (box.right > width + 1 || box.left < -1) {
+        if (scrolls(el) || getComputedStyle(el).position === 'fixed') continue
+        out.push(`${el.tagName.toLowerCase()}.${String(el.className).split(' ').slice(0, 3).join('.')} ${Math.round(box.left)}..${Math.round(box.right)}`)
+      }
+    }
+    return { page: document.documentElement.scrollWidth - width, out: out.slice(0, 6) }
+  })
+let page
 const all = [
   { name: 'home', path: '/', full: true },
   { name: 'schedule', path: '/schedule', full: false },
@@ -58,20 +86,25 @@ const all = [
   { name: 'saved', path: '/saved', full: false },
   { name: 'history', path: '/history', full: false },
   { name: 'settings', path: '/settings', full: false },
+  { name: 'settings-playback', path: '/settings?tab=Playback', full: false },
   { name: 'notifications', path: '/notifications', full: false },
+  { name: 'you', path: '/you', full: false },
+  { name: 'search-typed', path: '/browse?q=frieren', full: false },
 ]
 const only = process.env.PAGES?.split(',')
 const pages = only ? all.filter((p) => only.includes(p.name)) : all
 for (const { only: viewOnly, ...view } of views) {
   const context = await browser.newContext(view)
-  const page = await context.newPage()
+  page = await context.newPage()
   for (const p of pages.filter((p) => !viewOnly || viewOnly.includes(p.name))) {
     await page.goto(BASE + p.path, { waitUntil: 'domcontentloaded' })
     await page.waitForLoadState('networkidle', { timeout: 20_000 }).catch(() => {})
     await sleep(2500)
     const file = join(OUT, `${PREFIX}-${p.name}-${view.name}.png`)
-    await page.screenshot({ path: file, fullPage: p.full && !viewOnly })
+    await page.screenshot({ path: file, fullPage: (p.full || process.env.FULL === '1') && !viewOnly })
     console.log(`ok   ${file}`)
+    const spill = await overflow()
+    if (spill.page > 0 || spill.out.length > 0) console.log(`WARN ${p.name} ${view.name} page +${spill.page}px: ${spill.out.join(' | ')}`)
     if (p.name === 'home') {
       const box = page.getByRole('combobox', { name: 'Search anime' })
       if (await box.isVisible().catch(() => false)) {
@@ -93,6 +126,33 @@ for (const { only: viewOnly, ...view } of views) {
       await page.screenshot({ path: menu })
       console.log(`ok   ${menu}`)
       await page.keyboard.press('Escape')
+    }
+    const week = page.getByRole('tab', { name: 'Week', exact: true })
+    if (p.name === 'schedule' && (await week.isVisible().catch(() => false))) {
+      await week.click()
+      await sleep(1500)
+      const weekly = join(OUT, `${PREFIX}-schedule-week-${view.name}.png`)
+      await page.screenshot({ path: weekly })
+      console.log(`ok   ${weekly}`)
+      await page.getByRole('tab', { name: 'Day', exact: true }).click()
+    }
+    const asList = page.getByRole('group', { name: 'Show as' }).getByRole('button', { name: 'List' })
+    if (p.name === 'library' && (await asList.isVisible().catch(() => false))) {
+      await asList.click()
+      await sleep(1200)
+      const listed = join(OUT, `${PREFIX}-library-list-${view.name}.png`)
+      await page.screenshot({ path: listed })
+      console.log(`ok   ${listed}`)
+      const edit = page.getByRole('button', { name: /^Edit / }).first()
+      if (await edit.isVisible().catch(() => false)) {
+        await edit.click()
+        await sleep(700)
+        const editing = join(OUT, `${PREFIX}-library-edit-${view.name}.png`)
+        await page.screenshot({ path: editing })
+        console.log(`ok   ${editing}`)
+        await page.keyboard.press('Escape')
+      }
+      await page.getByRole('group', { name: 'Show as' }).getByRole('button', { name: 'Grid' }).click()
     }
     const focus = page.getByRole('button', { name: 'Focus', exact: true })
     if (p.name === 'watch' && (await focus.isVisible().catch(() => false))) {

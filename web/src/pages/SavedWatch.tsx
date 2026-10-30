@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Button, Centered, Empty, Spinner } from '../components/ui'
+import { Button, Centered, Empty, LinkButton, Spinner } from '../components/ui'
 import { bytes } from '../lib/format'
 import { asSubLook } from '../player/subLook'
-import { noteWatched, resumeAt, useSaved, useWatched, type SavedEpisode } from '../lib/offline'
+import { skipMode } from '../player/skipMode'
+import { noteWatched, resumeAt, saveNextAfter, useSaved, useWatched, type SavedEpisode } from '../lib/offline'
 import { Player } from '../player/Player'
 
 export function SavedWatch({ offline = false }: { offline?: boolean }) {
@@ -13,7 +14,6 @@ export function SavedWatch({ offline = false }: { offline?: boolean }) {
   const watched = useWatched()
   const e = saved.find((s) => s.key === key)
   const suffix = offline ? '?offline=1' : ''
-  // Once per episode: the place moves as it plays.
   const [start, setStart] = useState<{ key: string; at: number } | null>(null)
   if (e && start?.key !== e.key) setStart({ key: e.key, at: resumeAt(e, watched) })
 
@@ -33,7 +33,16 @@ export function SavedWatch({ offline = false }: { offline?: boolean }) {
     )
   }
   if (!e || !look || !start) {
-    return <Empty title="This episode isn't saved on this device" action={<Link to={`/saved${suffix}`}>On this device</Link>} />
+    return (
+      <Empty
+        title="This episode isn't saved on this device"
+        action={
+          <LinkButton to={`/saved${suffix}`} variant="primary">
+            Downloads
+          </LinkButton>
+        }
+      />
+    )
   }
 
   return (
@@ -45,6 +54,7 @@ export function SavedWatch({ offline = false }: { offline?: boolean }) {
           startAt={start.at}
           skips={e.skips}
           autoSkip={look.autoSkip}
+          skipOff={look.skipOff}
           autoPlay={look.autoPlay}
           subLanguages={look.subLanguages}
           withDub={look.withDub}
@@ -53,8 +63,14 @@ export function SavedWatch({ offline = false }: { offline?: boolean }) {
           title={e.title}
           subtitle={e.label}
           artwork={e.cover}
-          onProgress={(position, duration, played, final) => noteWatched(e, position, duration, played, final)}
-          onEnded={() => setEnded(e.key)}
+          onProgress={(position, duration, played, final) => {
+            noteWatched(e, position, duration, played, final)
+            if (final && duration > 0 && position / duration >= 0.9) saveNextAfter(e.animeId, e.episode)
+          }}
+          onEnded={() => {
+            setEnded(e.key)
+            saveNextAfter(e.animeId, e.episode)
+          }}
           onResume={() => setEnded(null)}
           onNext={next ? () => go(next) : undefined}
           onPrevious={previous ? () => go(previous) : undefined}
@@ -66,8 +82,8 @@ export function SavedWatch({ offline = false }: { offline?: boolean }) {
         />
       </div>
       <div className="space-y-1 px-3 py-3 sm:px-0">
-        <Link to={`/saved${suffix}`} className="text-sm text-accent-300 underline-offset-2 hover:underline">
-          ‹ On this device
+        <Link to={`/saved${suffix}`} className="tap relative text-sm text-accent-300 underline-offset-2 hover:underline max-sm:hidden">
+          ‹ Downloads
         </Link>
         <h1 className="text-lg font-semibold text-white">{e.title}</h1>
         <p className="text-sm text-base-300">{e.label}</p>
@@ -97,9 +113,10 @@ function lookFrom(e: SavedEpisode) {
     subRaised: flag('subtitle.raise'),
     autoPlay: flag('playback.autoplay'),
     autoNext: flag('playback.autonext'),
+    skipOff: { op: skipMode(p['playback.autoskip_op']) === 'off', ed: skipMode(p['playback.autoskip_ed']) === 'off' },
     autoSkip: {
-      op: flag('playback.autoskip_op') && !(e.bookend && p['playback.skip_keep_bookends'] !== 'false'),
-      ed: flag('playback.autoskip_ed') && !(e.bookend && p['playback.skip_keep_bookends'] !== 'false'),
+      op: skipMode(p['playback.autoskip_op']) === 'auto' && !(e.bookend && p['playback.skip_keep_bookends'] !== 'false'),
+      ed: skipMode(p['playback.autoskip_ed']) === 'auto' && !(e.bookend && p['playback.skip_keep_bookends'] !== 'false'),
       recap: flag('playback.autoskip_recap'),
       preview: flag('playback.autoskip_preview'),
     },

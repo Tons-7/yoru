@@ -2,12 +2,15 @@ package server
 
 import (
 	"errors"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
 	"yoru/internal/anilist"
 	"yoru/internal/jobs"
+	"yoru/internal/library"
 	"yoru/internal/store"
 )
 
@@ -24,7 +27,6 @@ func (s *Server) runJob(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "scheduler unavailable"})
 		return
 	}
-	// Started, not awaited: leaving the page must not cancel the job.
 	err := s.jobs.Trigger(r.PathValue("name"))
 	switch {
 	case errors.Is(err, jobs.ErrRunning):
@@ -53,15 +55,16 @@ type scheduleItem struct {
 	Progress   int     `json:"progress"`
 	Behind     int     `json:"behind"`
 	Watched    bool    `json:"watched"`
-	// Out: on the list, aired, and a release already found or held, from what Yoru knows, no search made.
-	Out bool `json:"out"`
-	// DelayedFrom is when this episode was due before AniList moved it later, unix seconds.
+	Out        bool    `json:"out"`
+	Watch      bool    `json:"watch,omitempty"`
+	CheckedAt  int64   `json:"checkedAt,omitempty"`
+	Position   float64 `json:"position,omitempty"`
+	Duration   float64 `json:"duration,omitempty"`
+
 	DelayedFrom int64 `json:"delayedFrom,omitempty"`
 
-	// A late-night broadcast's Japanese date, which fansub sites quote, can differ from the viewer's.
 	JSTWeekday string `json:"jstWeekday"`
 
-	// The full show card, for the hover panel.
 	Show *discoverItem `json:"show,omitempty"`
 }
 
@@ -83,9 +86,7 @@ func midnight(t time.Time, offsetMinutes int) time.Time {
 	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
 }
 
-// groupByDay splits entries into count local days (empties too), by the client's UTC offset.
 func groupByDay(items []scheduleItem, offsetMinutes int, start int64, count int) []scheduleDay {
-	// The handler takes 1 to 28 days; held here too, as it sizes an allocation.
 	if count < 0 {
 		count = 0
 	} else if count > 28 {
@@ -119,8 +120,6 @@ func groupByDay(items []scheduleItem, offsetMinutes int, start int64, count int)
 	return days
 }
 
-// schedule returns what airs in a window. Timestamps stay as UTC integers:
-// grouping by day belongs to the client, whose timezone this is not.
 func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -129,7 +128,6 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 		days = 7
 	}
 
-	// tz is the browser's getTimezoneOffset negated (it gives minutes from local to UTC).
 	offset, grouped := 0, false
 	if raw := q.Get("tz"); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v >= -1440 && v <= 1440 {
@@ -137,7 +135,6 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Snapped to local midnight, so a week is seven day tabs, not eight.
 	start := time.Now().Add(-24 * time.Hour).Unix()
 	if v, err := strconv.ParseInt(q.Get("start"), 10, 64); err == nil && v > 0 {
 		start = v
@@ -184,6 +181,30 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 	mineOnly := q.Get("mine") == "true"
 	titles := s.store.TitleMode(r.Context(), 0)
 	items := make([]scheduleItem, 0, len(entries))
+	coverage := map[int]library.Coverage{}
+	if s.watcher != nil {
+		coverage = s.watcher.Coverage(r.Context())
+	}
+	known, listedIDs := map[int]bool{}, map[int]bool{}
+	for _, e := range entries {
+		_, listed := onList[e.MediaID]
+		_, watching := coverage[e.MediaID]
+		if listed || watching {
+			known[e.MediaID] = true
+		}
+		if listed {
+			listedIDs[e.MediaID] = true
+		}
+	}
+	ready, err := s.store.ReadyEpisodes(r.Context(), slices.Collect(maps.Keys(known)))
+	if err != nil {
+		s.log.Warn("ready episodes", "err", err)
+	}
+	resume, err := s.store.ResumePoints(r.Context(), slices.Collect(maps.Keys(listedIDs)))
+	if err != nil {
+		s.log.Warn("resume points", "err", err)
+	}
+	now := time.Now().Unix()
 
 	for n, e := range entries {
 		progress, listed := onList[e.MediaID]
@@ -212,15 +233,25 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 		item.Title = store.PickTitle(titles, item.Romaji, item.English)
 		item.JSTWeekday = time.Unix(int64(e.AiringAt), 0).In(jst).Format("Monday")
 
-		// All before the next airing is out, so anything past the user's progress awaits watching.
 		if listed && e.Episode > 1 {
 			if behind := (e.Episode - 1) - progress; behind > 0 {
 				item.Behind = behind
 			}
 		}
 		item.Watched = listed && progress >= e.Episode
-		if listed && !item.Watched && int64(e.AiringAt) <= time.Now().Unix() {
-			item.Out = s.store.EpisodeFetched(r.Context(), e.MediaID, e.Episode) || s.store.HeldEpisode(r.Context(), e.MediaID, e.Episode)
+		key := [2]int{e.MediaID, e.Episode}
+		if !item.Watched {
+			aired := int64(e.AiringAt) <= now
+			item.Out = aired && ready[key]
+			if c, ok := coverage[e.MediaID]; ok && !item.Out && aired && c.Searches(e.Episode) {
+				item.Watch = true
+				if at, ok := s.watcher.CheckedAt(e.MediaID, e.Episode); ok {
+					item.CheckedAt = at.Unix()
+				}
+			}
+			if p, ok := resume[key]; ok {
+				item.Position, item.Duration = p[0], p[1]
+			}
 		}
 		if d, ok := s.store.ShowDelay(r.Context(), e.MediaID); ok && d.Episode == e.Episode {
 			item.DelayedFrom = d.WasAt

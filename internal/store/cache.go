@@ -141,16 +141,16 @@ type CacheEntry struct {
 
 // Bytes is what the budget sees; kept downloads are reported beside it.
 type CacheUsage struct {
-	Bytes     int64        `json:"bytes"`
-	Budget    int64        `json:"budget"`
-	Files     int          `json:"files"`
-	Pinned    int          `json:"pinned"`
-	Kept      int          `json:"kept"`
-	KeptBytes int64        `json:"keptBytes"`
-	Entries   []CacheEntry `json:"entries,omitempty"`
-	// Room left on the downloads drive, filled in by the server; nil when the drive can't say.
-	FreeBytes *int64 `json:"freeBytes,omitempty"`
-	Drive     string `json:"drive,omitempty"`
+	Bytes      int64        `json:"bytes"`
+	Budget     int64        `json:"budget"`
+	Files      int          `json:"files"`
+	Pinned     int          `json:"pinned"`
+	Kept       int          `json:"kept"`
+	KeptBytes  int64        `json:"keptBytes"`
+	Entries    []CacheEntry `json:"entries,omitempty"`
+	FreeBytes  *int64       `json:"freeBytes,omitempty"`
+	TotalBytes *int64       `json:"totalBytes,omitempty"`
+	Drive      string       `json:"drive,omitempty"`
 }
 
 // torrent_file is joined loosely: only played downloads have one.

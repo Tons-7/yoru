@@ -1,5 +1,3 @@
-// Finished downloads of one show are listed as one group; a later season is its own entry and group.
-// The list is fed to the page, so no torrent is involved.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -77,45 +75,79 @@ await page.route(/\/api\/downloads\/[a-z0-9]+(\/(keep|unkeep))?$/, (route) => {
 await page.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
 const toggle = (title) => page.getByRole('button', { name: new RegExp(`downloads of ${title}$`) })
 const rowOf = (title) => toggle(title).locator('xpath=ancestor::li')
+const list = page.locator('main ul.space-y-2')
+const heading = (name) => list.getByRole('heading', { name, exact: true })
 await toggle('Show One').waitFor({ timeout: 10_000 })
 
-check((await toggle('Show One').count()) === 1, 'the three downloads of a show are one group')
-check((await toggle('Show One Season 2').count()) === 1, 'its second season is a group of its own')
+check((await heading('Kept').count()) === 1 && (await heading('Not kept').count()) === 1, 'finished downloads are in two labelled sections')
+const sectionOf = (title) =>
+  rowOf(title).evaluate((li) => {
+    for (let el = li.previousElementSibling; el; el = el.previousElementSibling) {
+      const h = el.querySelector('h2')
+      if (h) return h.textContent
+    }
+    return ''
+  })
+check((await toggle('Show One').count()) === 1, 'the two downloads of a show not kept are one group')
+check((await sectionOf('Show One')) === 'Not kept', 'under Not kept')
+check((await toggle('Show One Season 2').count()) === 1 && (await sectionOf('Show One Season 2')) === 'Kept', 'its kept second season is a group of its own, under Kept')
+check((await list.locator('li', { hasText: /^Show One\s*episode 1/ }).count()) === 1, 'the kept episode of the first season is a plain row under Kept')
 check((await toggle('Lone Film').count()) === 0, 'a show with one download stays a plain row')
 check((await toggle('Still Coming').count()) === 0, 'unfinished downloads are not grouped')
-check((await page.locator('li', { hasText: 'Still Coming' }).count()) === 2, 'each unfinished download keeps its own row')
+check((await list.locator('li', { hasText: 'Still Coming' }).count()) === 2, 'each unfinished download keeps its own row')
 
-check(/3 episodes · 3(\.0)? GB/i.test(await rowOf('Show One').innerText()), 'a group counts its episodes and size', (await rowOf('Show One').innerText()).replace(/\n/g, ' | '))
+check(/2 episodes · 2(\.0)? GB/i.test(await rowOf('Show One').innerText()), 'a group counts its episodes and size', (await rowOf('Show One').innerText()).replace(/\n/g, ' | '))
 check(/3 episodes/.test(await rowOf('Show One Season 2').innerText()), 'a pack counts every episode it holds')
-check(/1 of 3 kept/.test(await rowOf('Show One').innerText()), 'a partly kept group says how many are kept')
-check(/Downloaded/.test(await rowOf('Show One Season 2').innerText()), 'a fully kept group reads as downloaded')
+check((await rowOf('Show One Season 2').getByRole('button', { name: 'Keep all' }).getAttribute('aria-pressed')) === 'true', 'a kept group shows its Keep all pressed')
+check(!/Downloaded|Cached/.test(await list.innerText()), 'no Downloaded or Cached words: the sections say it')
 
 // Collapsed until asked; opened, the episodes are in order whatever order they finished in.
 check((await page.getByText(/^Episode \d/).count()) === 0, 'groups start collapsed')
 await toggle('Show One').click()
 const listed = await page.getByText(/^Episode \d/).allInnerTexts()
-check(listed.join(',') === 'Episode 1,Episode 2,Episode 3', 'an opened group lists its episodes in order', listed.join(','))
+check(listed.join(',') === 'Episode 2,Episode 3', 'an opened group lists its episodes in order', listed.join(','))
 await page.screenshot({ path: `${SHOTS}/downloads-groups.png` })
 await toggle('Show One').click()
 check((await page.getByText(/^Episode \d/).count()) === 0, 'and closes again')
 
-// Keep all touches only the ones not kept yet.
 await rowOf('Show One').getByRole('button', { name: 'Keep all' }).click()
-await rowOf('Show One').getByText('Downloaded').waitFor({ timeout: 8000 }).catch(() => {})
+await page.getByText(/^Kept 2 episodes\./).waitFor({ timeout: 8000 }).catch(() => {})
 check(calls.toSorted().join(' | ') === 'POST a2 keep | POST a3 keep', 'keep all keeps the rest', calls.join(' | '))
-check(/Downloaded/.test(await rowOf('Show One').innerText()), 'the group then reads as downloaded')
+check(await page.getByRole('button', { name: 'Undo' }).isVisible(), 'keeping says so, with Undo')
+await page.waitForFunction(() => /3 episodes/.test(document.querySelector('[aria-label$="downloads of Show One"]')?.closest('li')?.textContent ?? ''), null, { timeout: 8000 }).catch(() => {})
+check(/3 episodes/.test(await rowOf('Show One').innerText()) && (await sectionOf('Show One')) === 'Kept', 'the whole show is then one group under Kept')
 
-// Delete all asks first, and leaves the episode that is playing.
 calls.length = 0
-await rowOf('Show One').getByRole('button', { name: /^Delete every download/ }).click()
-check(calls.length === 0, 'deleting a group asks first')
-const confirm = rowOf('Show One').getByRole('button', { name: /^Delete 2(\.0)? GB/i })
+await rowOf('Show One').getByRole('button', { name: 'More for Show One' }).click()
+await page.getByRole('menuitem', { name: 'Remove 2 episodes' }).click()
+check(calls.length === 0, 'removing a group asks first')
+const confirm = rowOf('Show One').getByRole('button', { name: /^Remove 2 episodes · 2(\.0)? GB/i })
 check((await confirm.count()) === 1, 'the confirmation states what it frees, without the one playing')
 await confirm.click()
 await page.waitForFunction(() => !document.querySelector('[aria-label^="Show downloads of Show One"]:not([aria-label$="Season 2"])'), null, { timeout: 8000 }).catch(() => {})
 check(calls.toSorted().join(' | ') === 'DELETE a1 | DELETE a3', 'only the ones not playing are deleted', calls.join(' | '))
 check((await toggle('Show One').count()) === 0, 'one download left: the show is a plain row again')
 check((await toggle('Show One Season 2').count()) === 1, 'the other season is untouched')
+
+calls.length = 0
+await page.getByRole('button', { name: 'More for Lone Film episode 1' }).click()
+await page.getByRole('menuitem', { name: 'Remove', exact: true }).click()
+check((await page.getByRole('button', { name: 'More for Lone Film episode 1' }).count()) === 0 && calls.length === 0, 'a removed episode hides at once, nothing deleted yet')
+await page.getByRole('button', { name: 'Undo' }).last().click()
+check(await page.getByRole('button', { name: 'More for Lone Film episode 1' }).isVisible(), 'Undo puts it back')
+await page.waitForTimeout(7000)
+check(calls.length === 0, 'and nothing is deleted', calls.join(' | '))
+
+await page.getByRole('button', { name: 'Select', exact: true }).click()
+await page.getByRole('checkbox', { name: 'Select Lone Film episode 1' }).click()
+const bar = page.getByRole('toolbar', { name: 'Selected episodes' })
+check(/Remove 1 episode · 1(\.0)? GB/.test(await bar.innerText()), 'the bar says what goes', (await bar.innerText()).replace(/\n/g, ' | '))
+await page.getByRole('checkbox', { name: 'Select every download of Show One Season 2' }).click()
+await bar.getByRole('button', { name: /^Remove 4 episodes · / }).click()
+check(await bar.getByRole('button', { name: 'Remove 4 episodes', exact: true }).isVisible() && calls.length === 0, 'a whole show in the selection asks first')
+await bar.getByRole('button', { name: 'Keep' }).click()
+await bar.getByRole('button', { name: 'Cancel' }).click()
+check((await page.getByRole('checkbox').count()) === 0, 'Cancel leaves select mode')
 
 // Pausing one download lets the next in line start, so stopping everything is its own control.
 // In the page itself: the layout's own status region (what a screen reader hears of a new page) is always there.
@@ -165,10 +197,9 @@ const dead8Text = (await dead8.first().innerText()).replace(/\n/g, ' | ')
 check((await dead8.count()) === 1 && /tries again at \d/.test(dead8Text) && /the seeders never answered/.test(dead8Text) && !/Paused/.test(dead8Text),
   'a download waiting for a later try says when and why', dead8Text)
 
-// Each download is its own outlined card, with a gap before the next.
 const cards = await page.locator('ul.space-y-2 > li').evaluateAll((rows) =>
   rows
-    .filter((li) => parseFloat(getComputedStyle(li).borderTopWidth) > 0)
+    .filter((li) => getComputedStyle(li).backgroundColor !== 'rgba(0, 0, 0, 0)')
     .map((li) => ({ top: li.getBoundingClientRect().top, bottom: li.getBoundingClientRect().bottom })),
 )
 const gaps = cards.slice(1).map((c, i) => Math.round(c.top - cards[i].bottom))

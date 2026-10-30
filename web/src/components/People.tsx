@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { statusLabel } from '../lib/api'
 import { cx, personName } from '../lib/format'
@@ -66,11 +66,33 @@ export function Face({ image, name, className }: { image?: string; name: string;
   )
 }
 
+export function PersonRow({ id, name, image }: { id?: number; name: string; image?: string }) {
+  const said = personName(name)
+  const body = (
+    <>
+      <Face image={image} name={said} className="size-8" />
+      <span className="min-w-0 flex-1 text-base text-base-100 sm:text-sm">{said}</span>
+    </>
+  )
+  if (!id) return <div className="flex min-h-11 items-center gap-3 px-2">{body}</div>
+  return (
+    <Link
+      to={`/person/${id}`}
+      className="flex min-h-11 items-center gap-3 rounded-lg px-2 transition-colors hover:bg-base-800"
+    >
+      {body}
+      <svg viewBox="0 0 24 24" className="size-4 shrink-0 text-base-500" aria-hidden>
+        <path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </Link>
+  )
+}
+
 /** On the list: its status on the card, as the Library would say it. */
 export function ListBadge({ status }: { status?: string }) {
   if (!status) return null
   return (
-    <span className="rounded-md bg-base-950/85 px-1.5 py-0.5 text-[10px] font-semibold text-base-100 ring-1 ring-white/15 backdrop-blur-sm">
+    <span className="rounded-md bg-base-950/85 px-1.5 py-0.5 text-xs font-semibold text-base-100 ring-1 ring-white/15 backdrop-blur-sm">
       {statusLabel(status)}
     </span>
   )
@@ -126,6 +148,17 @@ export function PeopleHeader({
   about?: string
 }) {
   const [open, setOpen] = useState(false)
+  const text = useRef<HTMLParagraphElement>(null)
+  const [clamped, setClamped] = useState(false)
+  useLayoutEffect(() => {
+    const el = text.current
+    if (!el || open) return
+    const measure = () => setClamped(el.scrollHeight > el.clientHeight + 1)
+    measure()
+    const watcher = new ResizeObserver(measure)
+    watcher.observe(el)
+    return () => watcher.disconnect()
+  }, [about, open])
   return (
     <header className="flex flex-col gap-5 sm:flex-row sm:items-start">
       <div className="w-36 shrink-0 overflow-hidden rounded-card bg-base-850 shadow-card sm:w-44">
@@ -143,14 +176,14 @@ export function PeopleHeader({
         {facts.length > 0 && <p className="mt-2 text-sm text-base-400">{facts.join(' · ')}</p>}
         {about && (
           <div className="mt-4 max-w-3xl">
-            {/* Folded: MyAnimeList's notes run long and can tell what happens. */}
-            <p className={cx('text-sm leading-relaxed whitespace-pre-line text-base-300', !open && 'line-clamp-4')}>
-              {/* MyAnimeList spaces each fact with a blank line, which spent the folded lines on nothing. */}
+            <p ref={text} className={cx('text-sm leading-relaxed whitespace-pre-line text-base-300', !open && 'line-clamp-4')}>
               {about.replace(/\n\s*\n+/g, '\n')}
             </p>
-            <button onClick={() => setOpen((v) => !v)} className="tap relative mt-1 text-sm text-accent-300 hover:underline">
-              {open ? 'Show less' : 'Show more'}
-            </button>
+            {(open || clamped) && (
+              <button onClick={() => setOpen((v) => !v)} className="tap relative mt-1 text-sm text-accent-300 hover:underline">
+                {open ? 'Show less' : 'Show more'}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -169,11 +202,13 @@ export function PeopleSkeleton() {
           <Skeleton className="h-16 w-full max-w-3xl" />
         </div>
       </div>
-      <PortraitGrid>
-        {Array.from({ length: 12 }, (_, i) => (
-          <Skeleton key={i} className="aspect-[2/3] w-full" />
-        ))}
-      </PortraitGrid>
+      <div className="max-h-[calc(100dvh-24rem)] overflow-hidden">
+        <PortraitGrid>
+          {Array.from({ length: 40 }, (_, i) => (
+            <Skeleton key={i} className="aspect-[2/3] w-full" />
+          ))}
+        </PortraitGrid>
+      </div>
     </div>
   )
 }

@@ -52,8 +52,8 @@ export function SetupPage() {
             <li key={c.name} className="flex items-start gap-3 p-4">
               <span
                 className={cx(
-                  'mt-0.5 grid size-5 shrink-0 place-items-center rounded-full text-[11px]',
-                  c.present ? 'bg-accent-500/20 text-accent-400' : 'bg-base-800 text-base-500',
+                  'mt-0.5 grid size-5 shrink-0 place-items-center rounded-full text-xs',
+                  c.present ? 'bg-emerald-400/15 text-emerald-300' : 'bg-base-800 text-base-500',
                 )}
               >
                 {c.present ? '✓' : '·'}
@@ -167,7 +167,7 @@ export function SetupPage() {
         <p className="mt-3 text-xs text-base-500">
           Watched episodes stay cached so a rewatch is instant; the oldest are
           removed once the budget is reached. Both are adjustable in{' '}
-          <Link to="/settings" className="text-accent-400 hover:underline">
+          <Link to="/settings" className="text-accent-300 hover:underline">
             settings
           </Link>
           .

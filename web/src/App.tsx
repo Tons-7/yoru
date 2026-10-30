@@ -1,12 +1,10 @@
 import { lazy, Suspense, useEffect } from 'react'
-import { Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { Centered, LinkButton, Spinner } from './components/ui'
 import { resumeSaving } from './lib/offline'
 import { Home } from './pages/Home'
 
-// The player pulls in hls.js and the subtitle renderer, which no other screen
-// needs; keeping it out of the initial bundle is most of the payload.
 const Anime = lazy(() => import('./pages/Anime').then((m) => ({ default: m.Anime })))
 const Browse = lazy(() => import('./pages/Browse').then((m) => ({ default: m.Browse })))
 const Library = lazy(() => import('./pages/Library').then((m) => ({ default: m.Library })))
@@ -25,8 +23,8 @@ const SetupPage = lazy(() => import('./pages/Setup').then((m) => ({ default: m.S
 const Open = lazy(() => import('./pages/Open').then((m) => ({ default: m.Open })))
 const Person = lazy(() => import('./pages/Person').then((m) => ({ default: m.Person })))
 const CharacterPage = lazy(() => import('./pages/Character').then((m) => ({ default: m.CharacterPage })))
-const SavedPage = lazy(() => import('./pages/Saved').then((m) => ({ default: m.SavedPage })))
 const SavedWatch = lazy(() => import('./pages/SavedWatch').then((m) => ({ default: m.SavedWatch })))
+const You = lazy(() => import('./pages/You').then((m) => ({ default: m.You })))
 
 function Loading() {
   return (
@@ -36,7 +34,6 @@ function Loading() {
   )
 }
 
-// Sent here by the worker when the PC can't be reached.
 const offline = window.location.pathname.startsWith('/saved') && new URLSearchParams(window.location.search).has('offline')
 
 export function App() {
@@ -48,7 +45,7 @@ export function App() {
       <Suspense fallback={<Loading />}>
         <Routes>
           <Route path="saved/:key" element={<SavedWatch offline />} />
-          <Route path="*" element={<SavedPage offline />} />
+          <Route path="*" element={<Downloads offline />} />
         </Routes>
       </Suspense>
     )
@@ -58,20 +55,21 @@ export function App() {
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<Home />} />
-          {/* Drawn by the layout itself, so it can stay docked once you leave. */}
           <Route path="watch/:animeId/:episode" element={null} />
           <Route path="anime/:animeId" element={<Anime />} />
           <Route path="person/:personId" element={<Person />} />
           <Route path="character/:characterId" element={<CharacterPage />} />
           <Route path="browse" element={<Browse />} />
+          <Route path="search" element={<ToSearch />} />
           <Route path="schedule" element={<SchedulePage />} />
           <Route path="recent" element={<RecentPage />} />
           <Route path="library" element={<Library />} />
           <Route path="history" element={<History />} />
+          <Route path="you" element={<You />} />
           <Route path="settings" element={<Settings />} />
           <Route path="notifications" element={<Notifications />} />
           <Route path="downloads" element={<Downloads />} />
-          <Route path="saved" element={<SavedPage />} />
+          <Route path="saved" element={<Downloads phone />} />
           <Route path="saved/:key" element={<SavedWatch />} />
           <Route path="local" element={<LocalFiles />} />
           <Route path="setup" element={<SetupPage />} />
@@ -81,6 +79,11 @@ export function App() {
       </Routes>
     </Suspense>
   )
+}
+
+function ToSearch() {
+  const { search, hash } = useLocation()
+  return <Navigate to={`/browse${search}${hash}`} replace />
 }
 
 function NotFound() {
@@ -96,7 +99,7 @@ function NotFound() {
           <LinkButton to="/" variant="primary">
             Go home
           </LinkButton>
-          <LinkButton to="/browse">Browse anime</LinkButton>
+          <LinkButton to="/browse">Search anime</LinkButton>
         </div>
       </div>
     </Centered>

@@ -544,12 +544,12 @@ func (s *Server) togetherPage(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	fmt.Fprint(w, `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b0d12">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b0c10">
 <title>Watch together on Yoru</title><style>
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d12;color:#d6dbe6;font:18px/1.5 system-ui,sans-serif}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0c10;color:#d6dbe6;font:18px/1.5 system-ui,sans-serif}
 main{max-width:32rem;padding:2rem;text-align:center}h1{font-size:1.5rem;margin:0 0 .75rem}p{margin:0 0 1rem;color:#8b93a7}
 code{display:block;margin:1rem 0;padding:.75rem;border-radius:.6rem;background:#161a23;color:#fff;font-size:.8rem;word-break:break-all}
-button{font:inherit;font-weight:600;padding:.6rem 1.2rem;border:0;border-radius:.6rem;background:#6f5cff;color:#fff;cursor:pointer}
+button{font:inherit;font-weight:600;padding:.6rem 1.2rem;border:0;border-radius:.6rem;background:#6a55f5;color:#fff;cursor:pointer}
 </style></head><body><main><h1>Watch together on Yoru</h1>
 <p>Open your own Yoru and paste this link into its search. It fetches the episode itself and joins the room.</p>
 <code id="link">`+html.EscapeString(link)+`</code>

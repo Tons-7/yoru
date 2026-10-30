@@ -289,9 +289,12 @@ type Download struct {
 	Mbps     float64 `json:"mbps,omitempty"`
 	Peers    int     `json:"peers,omitempty"`
 	// Warning: the engine can't write it to disk, with the drive's free space when that is why.
-	Warning   string `json:"warning,omitempty"`
-	FreeBytes *int64 `json:"freeBytes,omitempty"`
-	Drive     string `json:"drive,omitempty"`
+	Warning    string `json:"warning,omitempty"`
+	FreeBytes  *int64 `json:"freeBytes,omitempty"`
+	Drive      string `json:"drive,omitempty"`
+	Group      string `json:"group,omitempty"`
+	Resolution string `json:"resolution,omitempty"`
+	Codec      string `json:"codec,omitempty"`
 }
 
 // DownloadStatus reports what the engine holds, percentages from the sweeper's cache table.

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { readKey, writeKey } from './storage'
 
 // The browser player's video: for the docked player's Play, and whether leaving the watch page docks it.
 
@@ -20,7 +21,19 @@ export function detachVideo(v: HTMLVideoElement | null) {
   if (video === v) attachVideo(null)
 }
 
-export const playingNow = () => !!video && !video.paused && !video.ended
+const playing = () => !!video && !video.paused && !video.ended
+
+let minimized = false
+
+export function minimize() {
+  minimized = true
+}
+
+export function unminimize() {
+  minimized = false
+}
+
+export const playingNow = () => playing() || minimized
 
 export const currentVideo = () => video
 
@@ -40,7 +53,7 @@ export function usePlayingNow(): boolean {
       listeners.add(l)
       return () => listeners.delete(l)
     },
-    playingNow,
+    playing,
   )
 }
 
@@ -54,12 +67,8 @@ export type Corner = 'tl' | 'tr' | 'bl' | 'br'
 const CORNER_KEY = 'yoru.mini.corner'
 
 function savedCorner(): Corner {
-  try {
-    const c = localStorage.getItem(CORNER_KEY)
-    return c === 'tl' || c === 'tr' || c === 'bl' ? c : 'br'
-  } catch {
-    return 'br'
-  }
+  const c = readKey(CORNER_KEY)
+  return c === 'tl' || c === 'tr' || c === 'bl' ? c : 'br'
 }
 
 /** The docked player held and moved; let go, it glides to the nearest corner, kept per device. */
@@ -122,11 +131,7 @@ export function useDockDrag(on: boolean) {
       from.current = r
       setCorner(next)
       setDrops((n) => n + 1)
-      try {
-        localStorage.setItem(CORNER_KEY, next)
-      } catch {
-        // This visit only.
-      }
+      writeKey(CORNER_KEY, next)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)

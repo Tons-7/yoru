@@ -1,19 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { activityWords, deviceActivity, joinActivity, pcActivity, useDoneFlash } from '../lib/activity'
 import { api } from '../lib/api'
 import { copyText, downloadProgress, downloadsReport, retryNote, sortDownloads } from '../lib/downloads'
 import { cx, episodeSpan } from '../lib/format'
-import { refreshDownloads, useDownloadQueue, useDownloads, useSpeedUnit, type Download, type Queued } from '../lib/queries'
+import { savedKey, useSaved } from '../lib/offline'
+import { refreshDownloads, useAccess, useDownloadQueue, useDownloads, useSpeedUnit, type Download, type Queued } from '../lib/queries'
+import { ActivityMark } from './ActivityRing'
+import { SavingJob } from './SavingJob'
 import { ProgressBar } from './ui'
 import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 import { plainKey, usePortalHome } from './keys'
 
-/** Downloads at a glance over the episode playing (D toggles it); look-only, so a stray key removes nothing. */
 export function DownloadsPanel() {
   const [open, setOpen] = useState(false)
-  // Opened by D it is a glance: focus stays where it was, so Space still pauses the video, not every download.
   const [glance, setGlance] = useState(false)
   const [copied, setCopied] = useState(false)
   const close = useCallback(() => setOpen(false), [])
@@ -37,15 +39,22 @@ export function DownloadsPanel() {
   const sections = sortDownloads(downloads.data?.items ?? [], queue.data?.items ?? [])
   const { active, held, finished, searching, waitingQueue, failed } = sections
   const busy = active.length + searching.length
+  const access = useAccess()
+  const device = useSaved()
+  const elsewhere = !!access.data && !access.data.host
+  const jobs = elsewhere ? device.jobs : []
+  const activity = joinActivity(pcActivity(sections), deviceActivity(jobs, device.status))
+  const done = useDoneFlash(activity)
+  const words = activityWords(activity, done)
+  const { pathname } = useLocation()
+  const here = pathname.startsWith('/downloads') || pathname.startsWith('/saved')
 
-  // The one control here: it stops and starts everything, and cannot lose a download.
   const qc = useQueryClient()
   const paused = queue.data?.paused ?? false
   const pauseAll = useMutation({
     mutationFn: (pause: boolean) => api.post(`/api/download/queue/${pause ? 'pause' : 'resume'}`),
     onSuccess: () => refreshDownloads(qc),
   })
-  // Standing down for an episode on screen that is still arriving; said, with the way past it.
   const watching = !paused && (queue.data?.watching ?? false) && waitingQueue.length > 0
   const proceed = useMutation({
     mutationFn: () => api.post('/api/download/queue/proceed'),
@@ -57,12 +66,9 @@ export function DownloadsPanel() {
     window.setTimeout(() => setCopied(false), 2000)
   }
 
-  // Under its button, or the corner when fullscreen hides the button.
-  // A hidden button (a narrow window) measures zero, so that is the corner too.
   const anchored = useAnchorBox(trigger, open)
   const measured = home === document.body ? anchored : undefined
   const box = measured && measured.width > 0 ? measured : undefined
-  // Portalled to the end of the page: without this, keyboard focus never reached its buttons.
   const panel = useRef<HTMLDivElement>(null)
   useModalFocus(panel, open && !glance)
 
@@ -73,18 +79,21 @@ export function DownloadsPanel() {
         type="button"
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={busy ? `Downloads, ${busy} in progress` : 'Downloads'}
+        aria-current={here ? 'page' : undefined}
+        aria-label={words ? `Downloads, ${words}` : 'Downloads'}
         title="Downloads (D)"
         onClick={() => {
           setGlance(false)
           setOpen((v) => !v)
         }}
-        className="tap relative grid size-9 place-items-center rounded-md text-base-300 transition-colors hover:bg-base-800 hover:text-white"
-      >
-        <ArrowIcon />
-        {busy > 0 && (
-          <span className="absolute top-1.5 right-1.5 size-2 rounded-full bg-accent-500 ring-2 ring-base-950" />
+        className={cx(
+          'tap relative grid size-9 place-items-center rounded-md transition-colors hover:bg-base-800 hover:text-white',
+          here ? 'bg-base-800 text-accent-300' : 'text-base-300',
         )}
+      >
+        <ActivityMark activity={activity} done={done}>
+          <ArrowIcon />
+        </ActivityMark>
       </button>
 
       {open &&
@@ -98,12 +107,12 @@ export function DownloadsPanel() {
               top: box ? box.bottom + 8 : 16,
               right: box ? Math.max(8, window.innerWidth - box.right) : 16,
             }}
-            className="fixed z-50 w-96 max-w-[calc(100vw-1rem)] animate-rise overflow-hidden rounded-xl border border-base-750 bg-base-850 shadow-panel"
+            className="fixed z-50 w-96 max-w-[calc(100vw-1rem)] animate-rise overflow-hidden rounded-sheet bg-base-750 shadow-panel"
           >
             <div className="flex items-center justify-between gap-2 border-b border-base-750 px-3 py-2">
               <p className="text-sm font-medium text-base-100">
                 Downloads
-                {paused && <span className="ml-1.5 rounded bg-amber-400/15 px-1.5 text-[11px] text-amber-300">Paused</span>}
+                {paused && <span className="ml-1.5 rounded bg-amber-400/15 px-1.5 text-xs text-amber-300">Paused</span>}
               </p>
               <div className="flex items-center gap-1">
                 {(paused || busy + held.length + waitingQueue.length > 0) && (
@@ -111,7 +120,7 @@ export function DownloadsPanel() {
                     onClick={() => pauseAll.mutate(!paused)}
                     disabled={pauseAll.isPending}
                     title={paused ? 'Start downloading again' : 'Stop every download until you resume'}
-                    className="rounded px-1.5 py-0.5 text-[11px] text-base-300 transition-colors hover:bg-base-800 hover:text-white"
+                    className="rounded px-1.5 py-0.5 text-xs text-base-300 transition-colors hover:bg-base-800 hover:text-white"
                   >
                     {paused ? 'Resume' : 'Pause all'}
                   </button>
@@ -119,7 +128,7 @@ export function DownloadsPanel() {
                 <button
                   onClick={copy}
                   title="Copy this list as text, to paste into a report"
-                  className="rounded px-1.5 py-0.5 text-[11px] text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+                  className="rounded px-1.5 py-0.5 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white"
                 >
                   {copied ? 'Copied' : 'Copy details'}
                 </button>
@@ -132,16 +141,29 @@ export function DownloadsPanel() {
                 <button
                   onClick={() => proceed.mutate()}
                   disabled={proceed.isPending}
-                  className="shrink-0 rounded bg-base-800 px-2 py-1 text-[11px] font-medium text-base-100 transition-colors hover:bg-base-750"
+                  className="shrink-0 rounded bg-base-800 px-2 py-1 text-xs font-medium text-base-100 transition-colors hover:bg-base-750"
                 >
                   Download anyway
                 </button>
               </div>
             )}
 
-            {/* Shows, in the order the queue works them; each episode line says where it stands. */}
+            {jobs.length > 0 && (
+              <div className="border-b border-base-700 px-3 pt-2">
+                <p className="text-xs font-medium text-base-200">Saving to this device</p>
+                <ul className="divide-y divide-white/[0.06]">
+                  {jobs.map((j, i) => {
+                    const key = savedKey(j.animeId, j.episode)
+                    return <SavingJob key={key} job={j} status={device.status.get(key)} place={i + 1} compact />
+                  })}
+                </ul>
+              </div>
+            )}
+
             {busy + held.length + waitingQueue.length + failed.length === 0 ? (
-              <p className="px-3 py-6 text-center text-xs text-base-500">Nothing is downloading.</p>
+              <p className="px-3 py-6 text-center text-xs text-base-500">
+                {jobs.length > 0 ? 'Nothing is downloading on the PC.' : 'Nothing is downloading.'}
+              </p>
             ) : (
               <ul className="max-h-[60vh] space-y-2.5 overflow-y-auto p-2.5 scrollbar-thin">
                 {byShow([
@@ -159,9 +181,9 @@ export function DownloadsPanel() {
             <Link
               to="/downloads"
               onClick={close}
-              className="block border-t border-base-750 px-3 py-2 text-center text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+              className="block border-t border-base-700 px-3 py-2.5 text-center text-sm font-medium text-accent-300 transition-colors hover:bg-base-800"
             >
-              {finished.length > 0 ? `${finished.length} on disk · open Downloads` : 'Open Downloads'}
+              {finished.length > 0 ? `${finished.length} on disk · See all downloads` : 'See all downloads'}
             </Link>
           </div>,
           home,
@@ -171,7 +193,7 @@ export function DownloadsPanel() {
 }
 
 // One card per show, as on the Downloads page.
-const row = 'rounded-lg border border-white/[0.08] bg-base-900/60 px-3 py-2.5'
+const row = 'rounded-lg bg-base-800 px-3 py-2.5'
 
 /** A torrent or a queue entry, with the note a queue entry carries (why it waits, why it failed). */
 interface Entry {
@@ -225,7 +247,7 @@ function ShowCard({ group }: { group: ShowGroup }) {
         {group.entries.map((e, i) =>
           i === first ? (
             <li key="waiting">
-              <p className="flex items-baseline gap-2 text-[11px]">
+              <p className="flex items-baseline gap-2 text-xs">
                 <span className="shrink-0 font-medium text-base-200">{episodeSpan(waiting)}</span>
                 <span className="text-base-500">waiting</span>
               </p>
@@ -248,12 +270,12 @@ function EpisodeLine({ d }: { d: Download }) {
   const unit = useSpeedUnit()
   return (
     <li title={d.name}>
-      <p className="flex items-baseline gap-2 text-[11px]">
+      <p className="flex items-baseline gap-2 text-xs">
         {label && <span className="shrink-0 font-medium text-base-200">{label}</span>}
         {d.pinned && <span className="shrink-0 text-accent-300">playing</span>}
         <span className="min-w-0 truncate text-base-500">{downloadProgress(d, unit)}</span>
       </p>
-      {retry && <p className="truncate text-[11px] text-amber-300">{retry} · {d.queued?.error}</p>}
+      {retry && <p className="truncate text-xs text-amber-300">{retry} · {d.queued?.error}</p>}
       <ProgressBar value={d.percent} className="mt-1.5" />
     </li>
   )
@@ -264,7 +286,7 @@ function QueuedLine({ q, note, failed }: Entry) {
   const got = q!.torrent
   return (
     <li>
-      <p className="flex items-baseline gap-2 text-[11px]">
+      <p className="flex items-baseline gap-2 text-xs">
         <span className="shrink-0 font-medium text-base-200">Episode {q!.episode}</span>
         {got && <span className="shrink-0 text-base-500">{Math.round(got.percent)}% on disk</span>}
         {note && <span className={cx('min-w-0 truncate', failed ? 'text-recap' : 'text-base-500')}>{note}</span>}

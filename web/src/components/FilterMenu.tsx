@@ -4,7 +4,6 @@ import { cx } from '../lib/format'
 import { TextInput } from './ui'
 import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 
-/** A multi-value filter (a native select holds one), portalled so the scrolling bar can't clip it. */
 export function FilterMenu({
   label,
   values,
@@ -25,15 +24,12 @@ export function FilterMenu({
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
-  // A portal sits at the end of the tab order: focus moves in and back out.
   const menuRef = useRef<HTMLDivElement>(null)
   useModalFocus(menuRef, open)
 
   const pretty = (option: string) => labels?.[option] ?? option.replace(/_/g, ' ').toLowerCase()
   const box = useAnchorBox(trigger, open)
 
-  // A long list in one narrow column has to be scrolled to be read. Two
-  // columns puts twenty genres on screen at once, which is the whole list.
   const wide = options.length > 12
   const shown = term
     ? options.filter((o) => pretty(o).toLowerCase().includes(term.toLowerCase()))
@@ -59,19 +55,19 @@ export function FilterMenu({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className={cx(
-          'flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium ring-1 transition-colors',
-          open && 'ring-accent-400/60',
+          'flex h-9 items-center gap-1.5 rounded-full px-3.5 text-sm font-medium transition-colors pointer-coarse:min-h-11',
           values.length > 0
-            ? 'bg-accent-500/15 text-accent-200 ring-accent-500/40'
-            : 'bg-base-850 text-base-200 ring-white/[0.07] hover:bg-base-800 hover:text-white',
+            ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
+            : open
+              ? 'bg-base-750 text-white'
+              : 'bg-base-800 text-base-200 hover:bg-base-750 hover:text-white',
         )}
       >
-        {/* One choice reads as its value; a list keeps its name and count, the values in chips. */}
-        <span className="capitalize">
+        <span className="first-letter:uppercase">
           {!multiple && values.length === 1 ? pretty(values[0]) : label}
         </span>
         {multiple && values.length > 0 && (
-          <span className="grid min-w-4 place-items-center rounded-full bg-accent-500 px-1 text-[10px] font-bold text-white tabular-nums">
+          <span className="grid min-w-4 place-items-center rounded-full bg-accent-500 px-1 text-xs font-bold text-white tabular-nums">
             {values.length}
           </span>
         )}
@@ -94,8 +90,7 @@ export function FilterMenu({
               ),
             }}
             className={cx(
-              // Never wider than the screen: a phone is narrower than two columns.
-              'fixed z-50 max-w-[calc(100vw-16px)] animate-rise rounded-xl border border-base-750 bg-base-850 p-1.5 shadow-panel',
+              'fixed z-50 max-w-[calc(100vw-16px)] animate-rise rounded-xl bg-base-750 p-1.5 shadow-panel',
               wide ? 'w-[27rem]' : 'w-60',
             )}
           >
@@ -112,8 +107,9 @@ export function FilterMenu({
 
             {values.length > 0 && (
               <button
+                type="button"
                 onClick={() => onChange([])}
-                className="mb-1 w-full rounded-lg px-2.5 py-1.5 text-left text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+                className="mb-1 w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-base-400 transition-colors hover:bg-base-700 hover:text-white pointer-coarse:min-h-11"
               >
                 Clear {label.toLowerCase()}
               </button>
@@ -130,19 +126,20 @@ export function FilterMenu({
               return (
                 <button
                   key={option}
+                  type="button"
                   role="option"
                   aria-selected={on}
                   onClick={() => toggle(option)}
                   className={cx(
-                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm capitalize transition-colors',
-                    on ? 'bg-accent-500/15 text-accent-200' : 'text-base-200 hover:bg-base-800',
+                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors pointer-coarse:min-h-11',
+                    on ? 'bg-accent-500/20 text-accent-300' : 'text-base-200 hover:bg-base-700',
                   )}
                 >
                   {multiple && (
                     <span
                       className={cx(
                         'grid size-4 shrink-0 place-items-center rounded border transition-colors',
-                        on ? 'border-accent-400 bg-accent-500 text-white' : 'border-base-600',
+                        on ? 'border-accent-400 bg-accent-500 text-white' : 'border-base-500',
                       )}
                     >
                       {on && (
@@ -159,12 +156,12 @@ export function FilterMenu({
                       )}
                     </span>
                   )}
-                  {pretty(option)}
+                  <span className="first-letter:uppercase">{pretty(option)}</span>
                 </button>
               )
             })}
             {shown.length === 0 && (
-              <p className="col-span-2 px-2.5 py-3 text-center text-xs text-base-500">
+              <p className="col-span-2 px-2.5 py-3 text-center text-[13px] text-base-400">
                 Nothing matches “{term}”.
               </p>
             )}

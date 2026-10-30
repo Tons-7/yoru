@@ -44,7 +44,6 @@ export function LinkButton({
   )
 }
 
-/** An on/off filter as a pill, which reads better than a bare checkbox. */
 export function FilterToggle({
   on,
   onChange,
@@ -79,7 +78,6 @@ export function FilterToggle({
   )
 }
 
-/** Title, optional subtitle and the page's actions on one line. */
 export function PageHeader({
   title,
   subtitle,
@@ -105,17 +103,14 @@ export function PageHeader({
   )
 }
 
-/** The one text field look, for inputs that can't be a TextInput (a select's sibling, a textarea). */
 export const inputClass =
-  'rounded-lg bg-base-900 px-3 py-1.5 text-sm text-base-100 ring-1 ring-white/[0.07] transition-[box-shadow] placeholder:text-base-500 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500 disabled:opacity-50'
+  'h-10 rounded-xl bg-base-800 px-3 text-sm text-base-100 transition-[box-shadow] placeholder:text-base-500 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400 disabled:opacity-50 pointer-coarse:h-12'
 
-/** A text field; without a visible <label>, aria-label (or the settings row's label) names it. */
 export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   const rowLabel = useContext(ControlLabel)
   return <input aria-label={rowLabel} className={cx(inputClass, className)} {...props} />
 }
 
-/** Text input with a leading magnifier, for filtering a list in place. */
 export function SearchInput({
   className,
   inputClassName,
@@ -140,7 +135,6 @@ export function SearchInput({
   )
 }
 
-/** The inline "are you sure" step: what it costs, the act itself, and Cancel, which takes the focus. */
 export function ConfirmInline({
   label,
   onConfirm,
@@ -159,12 +153,10 @@ export function ConfirmInline({
   note?: ReactNode
 }) {
   return (
-    // contents: the buttons sit in the caller's own row; Escape backs out without closing a menu around it.
     <span
       className="contents"
       onKeyDown={(e) => {
         if (e.key !== 'Escape') return
-        // Esc is also a close request (Back's CloseWatcher), which only preventDefault keeps from the menu.
         e.preventDefault()
         e.stopPropagation()
         onCancel()
@@ -181,7 +173,6 @@ export function ConfirmInline({
   )
 }
 
-/** Previous, the page, Next; a page change starts at the top, as the pager sits under the list. */
 export function Pager({
   page,
   hasMore,
@@ -245,7 +236,7 @@ export function Empty({
   return (
     <Centered>
       <div className="flex max-w-sm flex-col items-center px-4 text-center">
-        <span className="mb-4 grid size-14 place-items-center rounded-2xl bg-base-850 text-base-500 ring-1 ring-white/[0.06]">
+        <span className="mb-4 grid size-14 place-items-center rounded-2xl bg-base-900 text-base-400">
           {icon ?? <EmptyIcon />}
         </span>
         <p className="font-medium text-base-100">{title}</p>
@@ -301,9 +292,7 @@ interface SaveState {
   submittedAt: number
 }
 
-/** A blur-saved field's state beside it: Saving…, Saved for a moment, or what failed. */
 export function SaveHint({ state }: { state: SaveState }) {
-  // Saved shows until its two seconds pass; only the timer sets state, so a save draws once.
   const [faded, setFaded] = useState<number>()
   useEffect(() => {
     if (!state.isSuccess) return
@@ -318,7 +307,6 @@ export function SaveHint({ state }: { state: SaveState }) {
   return shown ? <span className="text-xs text-emerald-300">Saved</span> : null
 }
 
-/** A background refresh failed: what's on screen stays, with this one line above it. */
 export function RefreshFailed({ retry }: { retry: () => void }) {
   return (
     <p role="status" className="flex flex-wrap items-center gap-2 text-xs text-base-400">
@@ -330,11 +318,9 @@ export function RefreshFailed({ retry }: { retry: () => void }) {
   )
 }
 
-/** Grey block that holds layout while data loads, so nothing jumps. */
 export function Skeleton({ className }: { className?: string }) {
   return (
     <div
-      // Something still on its way: a search across tabs doesn't call an empty result before it lands.
       data-loading
       className={cx(
         'animate-shimmer rounded-lg bg-base-850 bg-[linear-gradient(90deg,transparent_25%,var(--color-base-800)_50%,transparent_75%)] bg-[length:200%_100%]',
@@ -344,7 +330,6 @@ export function Skeleton({ className }: { className?: string }) {
   )
 }
 
-// Sideways within the strip only: scrollIntoView also scrolled the page or dialog to it on every render.
 function keepInStrip(el: HTMLElement | null) {
   const strip = el?.parentElement
   if (!el || !strip) return
@@ -353,45 +338,57 @@ function keepInStrip(el: HTMLElement | null) {
   else if (left + el.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = left + el.offsetWidth - strip.clientWidth
 }
 
-/** One choice among a few as a filled track; underlined links read as navigation. */
 export function Segmented<T extends string>({
   options,
   value,
   onChange,
   size = 'md',
+  full = false,
+  className,
+  label,
 }: {
   options: ReadonlyArray<{ value: T; label: string; count?: number }>
   value: T
   onChange: (value: T) => void
   size?: 'sm' | 'md'
+  full?: boolean
+  className?: string
+  label?: string
 }) {
   return (
     <div
-      role="tablist"
-      className="inline-flex max-w-full gap-0.5 overflow-x-auto rounded-lg bg-base-900 p-1 no-scrollbar"
+      role={label ? 'radiogroup' : 'tablist'}
+      aria-label={label}
+      className={cx(
+        'max-w-full gap-0.5 overflow-x-auto rounded-xl bg-base-900 p-1 no-scrollbar',
+        full ? 'flex w-full' : 'inline-flex',
+        className,
+      )}
     >
       {options.map((option) => {
         const active = option.value === value
         return (
           <button
             key={option.value}
-            role="tab"
-            aria-selected={active}
-            // The strip scrolls with no bar; the selected tab must stay in view.
+            role={label ? 'radio' : 'tab'}
+            aria-selected={label ? undefined : active}
+            aria-checked={label ? active : undefined}
             ref={active ? keepInStrip : undefined}
             onClick={() => onChange(option.value)}
             className={cx(
-              // 44px on touch: the strip scrolls, so a tap overlay would be clipped.
-              'shrink-0 rounded-md font-medium whitespace-nowrap transition-colors pointer-coarse:min-h-11',
-              size === 'sm' ? 'px-2.5 py-1 text-xs' : 'px-3.5 py-1.5 text-sm',
+              'shrink-0 rounded-lg font-medium whitespace-nowrap transition-colors pointer-coarse:min-h-11',
+              full && 'flex-1',
+              size === 'sm' ? 'h-7 px-2.5 text-xs' : 'h-8 px-3.5 text-sm',
               active
-                ? 'bg-base-750 text-white shadow-card'
-                : 'text-base-400 hover:text-base-100',
+                ? 'bg-base-750 font-semibold text-white'
+                : option.count === 0
+                  ? 'text-base-500 hover:text-base-300'
+                  : 'text-base-300 hover:text-white',
             )}
           >
             {option.label}
             {option.count !== undefined && (
-              <span className={cx('ml-1.5 tabular-nums', active ? 'text-base-400' : 'text-base-600')}>
+              <span className={cx('ml-1.5 tabular-nums', active ? 'text-base-300' : 'text-base-500')}>
                 {option.count}
               </span>
             )}
@@ -413,7 +410,7 @@ export function ProgressBar({ value, className, label }: { value: number; classN
       className={cx('h-1 w-full overflow-hidden rounded-full bg-base-800', className)}
     >
       <div
-        className="h-full rounded-full bg-gradient-to-r from-accent-500 to-accent-400 transition-[width] duration-300"
+        className="h-full rounded-full bg-accent-400 transition-[width] duration-300"
         style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
       />
     </div>
@@ -425,24 +422,24 @@ export function Badge({
   tone = 'neutral',
 }: {
   children: ReactNode
-  tone?: 'neutral' | 'filler' | 'recap' | 'accent' | 'success' | 'warning' | 'overlay' | 'overlay-success' | 'overlay-neutral'
+  tone?: 'neutral' | 'filler' | 'recap' | 'accent' | 'success' | 'warning' | 'sky' | 'overlay' | 'overlay-success' | 'overlay-neutral'
 }) {
   const tones = {
     neutral: 'bg-base-800 text-base-300',
-    filler: 'bg-filler/15 text-filler',
-    recap: 'bg-recap/15 text-recap',
-    accent: 'bg-accent-500/15 text-accent-400',
-    success: 'bg-emerald-500/15 text-emerald-400',
-    warning: 'bg-amber-500/15 text-amber-400',
-    // Over poster art, where a 15% tint leaves the text sitting on whatever the cover happens to be.
-    overlay: 'bg-base-950/85 text-accent-200 ring-1 ring-accent-400/30 backdrop-blur-sm',
-    'overlay-success': 'bg-base-950/85 text-emerald-300 ring-1 ring-emerald-400/30 backdrop-blur-sm',
-    'overlay-neutral': 'bg-base-950/85 text-base-200 ring-1 ring-white/15 backdrop-blur-sm',
+    filler: 'bg-filler/15 text-amber-300',
+    recap: 'bg-recap/15 text-red-300',
+    accent: 'bg-accent-500/20 text-accent-300',
+    success: 'bg-emerald-500/15 text-emerald-300',
+    warning: 'bg-amber-500/15 text-amber-300',
+    sky: 'bg-sky-400/15 text-sky-300',
+    overlay: 'bg-base-950/85 text-base-100 backdrop-blur-sm',
+    'overlay-success': 'bg-base-950/85 text-emerald-300 backdrop-blur-sm',
+    'overlay-neutral': 'bg-base-950/85 text-base-200 backdrop-blur-sm',
   }
   return (
     <span
       className={cx(
-        'rounded-md px-1.5 py-0.5 text-[11px] leading-tight font-medium whitespace-nowrap',
+        'rounded-md px-1.5 py-0.5 text-xs leading-tight font-semibold whitespace-nowrap',
         tones[tone],
       )}
     >
@@ -451,7 +448,6 @@ export function Badge({
   )
 }
 
-/** A styled select keeping the real element, for the native keyboard and phone picker. */
 export function Select({
   value,
   onChange,
@@ -472,7 +468,7 @@ export function Select({
         value={value}
         aria-label={label ?? rowLabel}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full appearance-none rounded-lg bg-base-800 py-1.5 pr-8 pl-3 text-sm text-base-100 ring-1 ring-white/[0.07] transition-colors hover:bg-base-750 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-500"
+        className="h-10 w-full appearance-none rounded-xl bg-base-800 pr-8 pl-3 text-sm text-base-100 transition-colors hover:bg-base-750 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400 pointer-coarse:h-12"
       >
         {children}
       </select>
@@ -524,12 +520,17 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!on)}
       className={cx(
-        'tap relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-60',
-        'focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400',
+        'tap relative h-6 w-11 shrink-0 rounded-full transition-colors duration-[120ms] disabled:opacity-60 pointer-coarse:h-8 pointer-coarse:w-[3.25rem]',
+        'focus:outline-hidden focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-base-950',
         on ? 'bg-accent-500' : 'bg-base-700',
       )}
     >
-      <span className={cx('absolute top-0.5 size-4 rounded-full bg-white transition-all', on ? 'left-[1.125rem]' : 'left-0.5')} />
+      <span
+        className={cx(
+          'absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow-sm transition-transform duration-[120ms] pointer-coarse:size-7',
+          on && 'translate-x-5',
+        )}
+      />
     </button>
   )
 }

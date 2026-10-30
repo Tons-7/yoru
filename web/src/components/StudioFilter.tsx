@@ -11,7 +11,6 @@ interface Studio {
   name: string
 }
 
-/** Browse by the studio that made it; there are too many to list, so it searches. */
 export function StudioFilter({
   value,
   onChange,
@@ -26,7 +25,6 @@ export function StudioFilter({
   const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
   const box = useAnchorBox(trigger, open)
-  // As FilterMenu: focus goes in on open and back to the pill on close.
   const menuRef = useRef<HTMLDivElement>(null)
   useModalFocus(menuRef, open)
 
@@ -38,7 +36,6 @@ export function StudioFilter({
     staleTime: 60 * 60_000,
   })
 
-  // A pill like the other filters; the chip row below is where it is removed.
   return (
     <div className="relative" ref={ref}>
       <button
@@ -48,15 +45,17 @@ export function StudioFilter({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className={cx(
-          'flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium ring-1 transition-colors',
+          'flex h-9 items-center gap-1.5 rounded-full px-3.5 text-sm font-medium transition-colors pointer-coarse:min-h-11',
           value
-            ? 'bg-accent-500/15 text-accent-200 ring-accent-500/40'
-            : 'bg-base-850 text-base-200 ring-white/[0.07] hover:bg-base-800 hover:text-white',
+            ? 'bg-accent-500/15 text-accent-300 hover:bg-accent-500/25'
+            : open
+              ? 'bg-base-750 text-white'
+              : 'bg-base-800 text-base-200 hover:bg-base-750 hover:text-white',
         )}
       >
         {value ? value.name : 'Studio'}
-        <svg viewBox="0 0 24 24" className="size-3 opacity-70" aria-hidden>
-          <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+        <svg viewBox="0 0 24 24" className="size-3.5 opacity-60" aria-hidden>
+          <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
         </svg>
       </button>
       {open &&
@@ -69,7 +68,7 @@ export function StudioFilter({
               top: Math.min(box.bottom + 6, window.innerHeight - 340),
               left: Math.max(8, Math.min(box.left, window.innerWidth - 264)),
             }}
-            className="fixed z-50 w-64 animate-rise rounded-xl border border-base-750 bg-base-850 p-2 shadow-panel"
+            className="fixed z-50 w-64 animate-rise rounded-xl bg-base-750 p-2 shadow-panel"
           >
             <TextInput
               autoFocus
@@ -99,7 +98,7 @@ export function StudioFilter({
                         setOpen(false)
                         setTerm('')
                       }}
-                      className={cx('w-full rounded-lg px-2.5 py-1.5 text-left text-sm text-base-200 hover:bg-base-800')}
+                      className="w-full rounded-lg px-2.5 py-1.5 text-left text-sm text-base-200 hover:bg-base-700 pointer-coarse:min-h-11"
                     >
                       {s.name}
                     </button>

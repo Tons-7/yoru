@@ -85,7 +85,7 @@ try {
   check(await until(async () => !(await playing())), 'a press after a drag still works')
   await page.getByRole('button', { name: 'Play', exact: true }).click()
 
-  await page.getByRole('link', { name: 'Browse', exact: true }).first().click()
+  await page.getByRole('link', { name: 'Search', exact: true }).first().click()
   check(await until(async () => new URL(page.url()).pathname === '/browse') && (await dock.isVisible()), 'it stays docked page to page')
   check((await box()).top < 120, 'in the corner it was put in')
 
@@ -115,8 +115,9 @@ try {
   await page.locator('video').first().waitFor({ timeout: 30_000 })
   await page.evaluate(() => { const v = document.querySelector('video'); v.muted = true; v.play().catch(() => {}) })
   await until(() => playing())
-  await page.getByRole('link', { name: 'Home' }).last().click()
-  check(await until(() => dock.isVisible()), 'on a phone it docks too')
+  await page.locator('video').first().hover()
+  await page.getByRole('button', { name: 'Minimize', exact: true }).click()
+  check(await until(() => dock.isVisible()), 'on a phone Minimize docks it')
   const bar = await page.locator('video').first().evaluate((v) => v.closest('.fixed')?.getBoundingClientRect().toJSON())
   const tabs = await page.locator('nav').last().boundingBox()
   check(bar && tabs && bar.bottom <= tabs.y + 1 && bar.right <= 390, 'as a bar above the tabs', JSON.stringify({ bar, tabs }))

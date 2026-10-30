@@ -17,25 +17,20 @@ a browser player and one config file.
 
 ## What it does
 
+- **Laid out like a streaming app.** Home leads with what you're watching and
+  what just came out, in rows you can rearrange; Search answers as you type. On
+  a phone, five tabs along the bottom; on a wide screen, more in every row.
 - **Streams while downloading.** Seeking into a part not yet downloaded jumps
   ahead of everything else queued; the rest is fetched in the background so the
   next episode is already there.
 - **Built-in torrent engine.** Picks the best release (resolution, codec, group,
-  seeders, SeaDex and its notes, TRaSH Guides' group grades, a v2 over its v1),
-  or the best up to 720p or 480p if you'd rather, skips groups and words you
-  avoid, handles season packs, and needs nothing else installed.
-- **Plays anywhere.** In the browser by default, so a phone or TV on the same
-  network works the same as the laptop. mpv and VLC are available as external
-  players, with Anime4K upscaling. On a phone, **Open in app** hands the
-  original file to VLC, mpv or Infuse, subtitles and all. In Chrome or Brave,
-  the player's **Cast** button sends the episode to a Chromecast or Google TV,
-  the player becoming its remote; until casting can start, the button lists what
-  is missing (the TV must reach Yoru, so access from other devices goes on).
-  Subtitles go as plain text, or drawn into the picture with their fonts.
+  seeders, SeaDex, TRaSH Guides' grades), skips groups you avoid, handles
+  season packs, and needs nothing else installed.
+- **Plays anywhere.** In the browser, so a phone or TV on your network works
+  like the laptop, or in mpv and VLC with Anime4K upscaling. **Cast** sends an
+  episode to a Chromecast or Google TV.
 - **Sends each device what it can play.** HEVC, 10-bit, AV1 and E-AC-3 go as
-  they are wherever the device decodes them, and are converted only where it
-  can't. HDR is tone-mapped for ordinary screens, interlaced sources are
-  deinterlaced, and 5.1 reaches surround speakers as 5.1.
+  they are where the device decodes them, converted only where it can't.
 - **Careful with a phone's data.** On mobile data it asks first, with the
   episode's size, and offers data saver; each device can stream on Wi-Fi only,
   or at a quality of its own.
@@ -45,41 +40,31 @@ a browser player and one config file.
 - **Knows 34,000+ anime**, including the ~11,700 that exist on MyAnimeList but
   not AniList.
 - **Marks filler and recap episodes**, so a rewatch can skip them.
-- **Skips openings and endings**, if you ask it to, for every show or one, with
-  **Watch it** to go back; recaps, previews and eyecatches too. The times come
-  from the file's chapters, AniSkip or your own marks, and when none has them
-  Yoru finds them in the sound episodes share. A show's first opening and last
-  ending still play. Nothing is skipped by default.
-- **Watches like a TV service:** an episode can count as watched once its
-  ending starts, auto next asks *Still watching?* after three episodes nobody
-  touched, a sleep timer stops at a time or at the end of the episode, later
-  episodes hide their titles and pictures until you reach them, and a finale
-  leads on to the next season.
-- **Follows airing shows:** notifies you of new episodes, delays and new seasons,
-  and can download them, waiting a few hours for your preferred group if you
-  like; **Notify me** works on any show, even one not out yet. Alerts carry
-  Download and Up next buttons, and reach a phone even with Yoru closed (over
-  its HTTPS address; on an iPhone, once Yoru is added to the Home Screen).
+- **Skips openings and endings**, with a Skip button or automatically, per show;
+  recaps and previews too. The times come from the file's chapters, AniSkip or
+  your own marks, and Yoru finds them in the sound when none has them.
+- **Watches like a TV service:** autoplay asks *Still watching?*, a sleep timer,
+  spoiler-free titles for episodes you haven't reached, and a finale leads on to
+  the next season.
+- **Follows airing shows:** alerts you when a new episode can actually be
+  played, and of delays and new seasons, and can download them, waiting a few
+  hours for your preferred group. Alerts reach a phone even with Yoru closed.
 - **Up next list.** Line up episodes from any shows and they play one after
   another; watched ones leave the list by themselves. One button adds the next
   episode of everything you're watching.
 - **Plays files you already have.** Point it at a folder and matched episodes
   play instantly with no torrent involved.
+- **Saves episodes to a phone** to watch with the PC off, subtitles and all,
+  and saves the next one when you finish an episode, if you like.
 - **Tracks progress** on AniList and MyAnimeList, in both directions, with
-  scores, favourites and rewatches. History shows what you watched and when,
-  with your watch time.
+  scores, favourites and rewatches, and keeps a history of what you watched.
 - **Lets you choose the release** when you want to: every one found, best
   first, and why any was ruled out.
-- **Cleans up after itself.** Downloads stay within a cache size you set, and
-  watched episodes can delete themselves; keep any you want forever. On a full
-  drive downloads wait for room, and episodes that aired while Yoru was off are
-  caught up.
-- **Player comforts:** picture-in-picture, media keys and the lock screen,
-  keyboard shortcuts you can change, thumbnails on the seek bar (even while
-  downloading), and sound options such as clearer voices and night mode. Speed,
-  quality, the sleep timer and skip times are in the player's ⚙ menu, and
-  Playback info says what is sent and why. On a phone: tabs along the bottom,
-  touch gestures in the player, and an Install button.
+- **Cleans up after itself.** Downloads stay within a size you set and watched
+  episodes can delete themselves; keep the ones you want.
+- **Player comforts:** picture-in-picture, media keys, seek-bar thumbnails,
+  keyboard shortcuts you can change, and clearer voices. On a phone it stays
+  pinned while you scroll and swipes down into a miniplayer.
 - **Works with a keyboard and screen reader**, respects high-contrast mode, and
   can soften sudden bright flashes (off by default; not a guarantee).
 - **Looks after the PC it runs on:** starts with Windows in the tray if you
@@ -226,7 +211,7 @@ also be made to wait until you accept it on this machine: *Once* remembers it,
 *Every time* asks again after 30 minutes away or a restart. Requests pop up on
 whatever Yoru page is open here, and the list of devices is in Settings.
 
-**Open in app** on the Watch page gives a phone's video app a link of its own:
+**Open or save** on the Watch page gives a phone's video app a link of its own:
 one file, for 12 hours, ended by a restart or by resetting the pairing. It
 never carries the access token.
 

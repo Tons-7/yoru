@@ -9,7 +9,6 @@ import { Rail } from './Rail'
 import { Skeleton } from './ui'
 
 export interface Voice {
-  /** Their MyAnimeList id, which their page opens by. */
   id?: number
   name: string
   image?: string
@@ -30,12 +29,10 @@ function useCharacters(animeId: number | undefined) {
     enabled: !!animeId,
     queryKey: ['characters', animeId],
     queryFn: () => api.get<{ items: Character[] }>(`/api/anime/${animeId}/characters`),
-    // A cast does not change once a show has aired.
     staleTime: 12 * 60 * 60_000,
   })
 }
 
-/** Who is in the show and who played them; MyAnimeList records one cast per series. */
 export function CharacterRail({
   animeId,
   limit = 24,
@@ -46,11 +43,9 @@ export function CharacterRail({
   title?: string
 }) {
   const { data, isPending } = useCharacters(animeId)
-  // The show's own sub/dub choice, over the global one.
   const prefs = usePrefs(animeId)
   const [expanded, setExpanded] = useState(false)
 
-  // Follow the performance being watched, else the original cast (most shows were never dubbed).
   const dubbed = prefs.data?.effective['audio.prefer'] === 'dub'
   const voiceOf = (c: Character) => {
     const voices = c.voices ?? []
@@ -58,14 +53,13 @@ export function CharacterRail({
     return voices[0]
   }
 
-  // Capped (Conan lists two thousand), but generously, as the rail scrolls.
   const cast = data?.items ?? []
   const shown = expanded ? cast.slice(0, 120) : cast.slice(0, limit)
 
   if (isPending) {
     return (
       <Rail title={title}>
-        {Array.from({ length: limit }, (_, i) => (
+        {Array.from({ length: 16 }, (_, i) => (
           <Skeleton key={i} className="h-[174px] w-[116px] shrink-0 rounded-card" />
         ))}
       </Rail>
@@ -79,23 +73,22 @@ export function CharacterRail({
       action={
         cast.length > limit && (
           <button
+            type="button"
             onClick={() => setExpanded(!expanded)}
-            className="rounded-md px-2 py-1 text-sm text-base-400 transition-colors hover:bg-base-850 hover:text-white"
+            className="tap relative px-1 py-1 text-sm font-medium text-base-400 transition-colors hover:text-white"
           >
             {expanded ? 'Show less' : cast.length > 120 ? 'Show more' : `Show all ${cast.length}`}
           </button>
         )
       }
     >
-      {/* One poster-shaped portrait each, the actor's face a small avatar on it. */}
-      {/* Two ways in: the character (picture and name) and who voiced them (face and name). */}
       {shown.map((c) => {
         const voice = voiceOf(c)
         const name = personName(c.name)
         const voiceName = voice && personName(voice.name)
         return (
           <div key={c.id} className="group/cast w-[116px] shrink-0 snap-start">
-            <div className="relative overflow-hidden rounded-card shadow-card">
+            <div className="relative overflow-hidden rounded-card bg-base-850">
               <Link to={`/character/${c.id}`} tabIndex={-1} aria-hidden className="block">
                 {realImage(c.image) ? (
                   <img
@@ -105,12 +98,11 @@ export function CharacterRail({
                     className="h-[174px] w-[116px] object-cover transition-transform duration-300 group-hover/cast:scale-105"
                   />
                 ) : (
-                  <div className="h-[174px] w-[116px] bg-base-850" />
+                  <div className="h-[174px] w-[116px]" />
                 )}
               </Link>
-              {/* Only "Main" earns a badge: SUPPORTING on nine cards in ten says nothing. */}
               {c.role?.toUpperCase() === 'MAIN' && (
-                <span className="pointer-events-none absolute top-1.5 left-1.5 rounded-full bg-accent-500/85 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">
+                <span className="pointer-events-none absolute top-1.5 left-1.5 rounded-full bg-base-950/85 px-1.5 py-0.5 text-xs font-semibold text-base-100 backdrop-blur-sm">
                   Main
                 </span>
               )}
@@ -138,13 +130,13 @@ export function CharacterRail({
                 <Link
                   to={`/person/${voice.id}`}
                   aria-label={`${voiceName}, ${voice.language} voice`}
-                  className="line-clamp-2 text-xs leading-snug text-base-500 transition-colors hover:text-base-200"
+                  className="line-clamp-2 text-[13px] leading-snug text-base-400 transition-colors hover:text-base-200"
                   title={`${voiceName} · ${voice.language}`}
                 >
                   {voiceName}
                 </Link>
               ) : (
-                <p className="line-clamp-2 text-xs leading-snug text-base-500" title={`${voiceName} · ${voice.language}`}>
+                <p className="line-clamp-2 text-[13px] leading-snug text-base-400" title={`${voiceName} · ${voice.language}`}>
                   {voiceName}
                 </p>
               ))}

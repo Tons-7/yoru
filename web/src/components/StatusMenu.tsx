@@ -11,12 +11,14 @@ export function StatusMenu({
   current,
   compact,
   quiet,
+  tile,
   onDone,
 }: {
   animeId: number
   current?: string | null
   compact?: boolean
   quiet?: boolean
+  tile?: boolean
   onDone?: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -56,19 +58,26 @@ export function StatusMenu({
           remove.reset()
         }}
         className={cx(
-          'flex items-center gap-1.5 font-medium transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-300',
-          compact ? 'tap relative size-8 justify-center rounded-full' : 'rounded-lg px-4 py-2 text-sm pointer-coarse:min-h-11',
+          'flex items-center gap-1.5 font-medium transition-colors focus:outline-hidden focus-visible:ring-2 focus-visible:ring-white',
+          compact
+            ? 'tap relative size-8 justify-center rounded-full'
+            : 'press h-10 rounded-xl px-4 text-sm pointer-coarse:min-h-11',
+          tile &&
+            'justify-center max-sm:h-auto max-sm:min-h-16 max-sm:w-full max-sm:flex-col max-sm:gap-1 max-sm:px-1 max-sm:py-2 max-sm:text-xs [&_svg:first-child]:max-sm:size-5',
           compact
             ? active && !quiet
-              ? 'bg-accent-500 text-white shadow-md shadow-black/40 hover:bg-accent-400'
-              : 'bg-base-950/55 text-white/90 backdrop-blur-sm hover:bg-base-950/80 hover:text-white'
-            : active
-              ? 'bg-accent-500/25 text-accent-300 ring-1 ring-accent-400/60 hover:bg-accent-500/35'
-              : 'bg-base-800/90 text-base-100 ring-1 ring-white/10 hover:bg-base-700',
+              ? 'bg-accent-500 text-white shadow-md shadow-black/40 hover:bg-accent-600'
+              : 'bg-base-950/60 text-white/90 backdrop-blur-sm hover:bg-base-950/80 hover:text-white'
+            : 'bg-base-800 text-base-100 hover:bg-base-750',
         )}
       >
         <BookmarkIcon filled={!!active} />
         {!compact && <span>{active?.label ?? 'Add to list'}</span>}
+        {!compact && (
+          <svg viewBox="0 0 20 20" className={cx('size-3.5 text-base-400', tile && 'max-sm:hidden')} aria-hidden>
+            <path d="M6 8l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
       </button>
 
       {open && menu && createPortal(
@@ -77,7 +86,7 @@ export function StatusMenu({
           role="menu"
           data-portal-menu
           style={{ top: menu.top, left: menu.left }}
-          className="fixed z-50 w-44 origin-top-right animate-rise overflow-hidden rounded-lg border border-base-700 bg-base-850 py-1 shadow-xl shadow-black/50"
+          className="fixed z-50 w-48 origin-top-right animate-rise overflow-hidden rounded-xl bg-base-750 p-1 shadow-panel"
         >
           {LIST_STATUSES.map((status) => (
             <button
@@ -103,10 +112,10 @@ export function StatusMenu({
                 )
               }}
               className={cx(
-                'flex w-full items-center justify-between px-3 py-1.5 text-left text-sm transition-colors',
+                'flex min-h-10 w-full items-center justify-between rounded-lg px-2.5 text-left text-sm transition-colors pointer-coarse:min-h-11',
                 status.value === current
-                  ? 'text-accent-400'
-                  : 'text-base-200 hover:bg-base-750',
+                  ? 'text-accent-300'
+                  : 'text-base-100 hover:bg-base-700',
               )}
             >
               {status.label}
@@ -163,13 +172,13 @@ export function StatusMenu({
                   e.stopPropagation()
                   setConfirmRemove(true)
                 }}
-                className="flex w-full items-center border-t border-base-750 px-3 py-1.5 text-left text-sm text-red-300 transition-colors hover:bg-recap/15"
+                className="mt-1 flex min-h-10 w-full items-center rounded-lg px-2.5 text-left text-sm text-red-300 transition-colors hover:bg-recap/15 pointer-coarse:min-h-11"
               >
                 Remove from list
               </button>
             ))}
           {(setStatus.isError || remove.isError) && (
-            <p className="border-t border-base-750 px-3 py-1.5 text-xs text-recap">
+            <p className="mt-1 border-t border-base-700 px-2.5 pt-1.5 pb-1 text-xs text-red-300">
               {((setStatus.error ?? remove.error) as Error).message}
             </p>
           )}
@@ -185,7 +194,7 @@ function Confirming({ note, children }: { note: string; children: ReactNode }) {
   return (
     <div
       onClick={(e) => e.stopPropagation()}
-      className="flex flex-wrap items-center gap-2 border-t border-base-750 px-3 py-2"
+      className="mt-1 flex flex-wrap items-center gap-2 border-t border-base-700 px-2.5 py-2"
     >
       <span className="basis-full text-xs text-base-400">{note}</span>
       {children}

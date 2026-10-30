@@ -167,9 +167,9 @@ await page.keyboard.press('d')
 check(/D is kept for Downloads/.test(await status.innerText()), 'a key the page uses is refused', await status.innerText())
 await page.keyboard.press('b')
 check(/Mute: B/.test(await status.innerText()), 'a free key is taken at once', await status.innerText())
-await keyButton('Fullscreen').click()
+await keyButton('Full screen').click()
 await page.keyboard.press('b')
-check(/Fullscreen: B\. Mute took F in its place/.test(await status.innerText()), 'a key another action holds swaps the two', await status.innerText())
+check(/Full screen: B\. Mute took F in its place/.test(await status.innerText()), 'a key another action holds swaps the two', await status.innerText())
 await page.keyboard.press('Escape')
 await sleep(300)
 check((await help.count()) === 0, 'Escape closes the list')
@@ -206,10 +206,10 @@ await page.locator('body').click({ position: { x: 5, y: 400 } })
 
 // The player teaches its own keys: each button's tooltip names one, and one button opens the list.
 const tip = (name) => page.getByRole('button', { name, exact: true }).first().getAttribute('title').catch(() => null)
-const tips = [await tip(/^(Play|Pause)$/), await tip('Back 10 seconds'), await tip('Forward 10 seconds'), await tip(/^(Mute|Unmute)$/), await tip('Fullscreen')]
+const tips = [await tip(/^(Play|Pause)$/), await tip('Back 10 seconds'), await tip('Forward 10 seconds'), await tip(/^(Mute|Unmute)$/), await tip('Full screen')]
 check(tips.join(' | ') && /\(K\)/.test(tips[0]) && /\(J\)/.test(tips[1]) && /\(L\)/.test(tips[2]) && /\(M\)/.test(tips[3]) && /\(F\)/.test(tips[4]),
   'player buttons name their key in the tooltip', tips.join(' | '))
-check(/\(N\)/.test((await tip('Next episode')) ?? ''), 'the Next episode button names N', await tip('Next episode'))
+check(/\(N\)/.test((await tip(/^Next: Episode/)) ?? ''), 'the Next button names N', await tip(/^Next: Episode/))
 await page.locator('video').first().hover()
 await page.getByRole('button', { name: /^Player settings/ }).click()
 await page.getByRole('menuitem', { name: /^Keyboard shortcuts/ }).click()

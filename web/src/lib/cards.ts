@@ -32,6 +32,7 @@ export interface CardAnime {
   endDate?: string | null
   duration?: number | null
   studios?: { id: number; name: string }[] | null
+  alertOn?: boolean | null
 }
 
 export function toCard(item: DiscoverItem | LibraryItem): CardAnime {
@@ -67,5 +68,6 @@ export function toCard(item: DiscoverItem | LibraryItem): CardAnime {
     endDate: discover.endDate ?? null,
     duration: discover.duration ?? null,
     studios: discover.studios ?? null,
+    alertOn: discover.alertOn ?? null,
   }
 }

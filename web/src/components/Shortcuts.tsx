@@ -132,7 +132,7 @@ export function Shortcuts() {
           </p>
 
           <section className="mt-2">
-            <h3 className="mb-1 text-[11px] font-semibold tracking-wider text-base-400 uppercase">While watching</h3>
+            <h3 className="mb-1 text-[13px] font-semibold text-base-400">While watching</h3>
             <p className="mb-1 text-xs text-base-500">Choose a key to change it.</p>
             <dl className="divide-y divide-base-800">
               {KEY_ACTIONS.map((a) => (
@@ -222,7 +222,7 @@ export function Shortcuts() {
           </section>
 
           <section className="mt-4">
-            <h3 className="mb-1 text-[11px] font-semibold tracking-wider text-base-400 uppercase">Anywhere</h3>
+            <h3 className="mb-1 text-[13px] font-semibold text-base-400">Anywhere</h3>
             <dl className="divide-y divide-base-800">
               {PAGE_SHORTCUTS.map((s) => (
                 <div key={s.does} className="flex items-center justify-between gap-4 py-1.5">

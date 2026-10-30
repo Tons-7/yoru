@@ -140,7 +140,7 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		"audio":      session.Info.Audio,
 		"audioTrack": session.AudioTrack(),
 		"sound":      session.Sound(),
-		"complete": s.sourceComplete(r.Context(), session),
+		"complete":   s.sourceComplete(r.Context(), session),
 	}
 
 	// AirPlay's address for this session (an Apple TV can't carry the page's cookie), when a TV can reach it.

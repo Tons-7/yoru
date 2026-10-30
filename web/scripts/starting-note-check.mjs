@@ -32,18 +32,19 @@ await page.route('**/api/play/stage**', (route) => route.fulfill({ json: stage }
 
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 const says = (text) => page.getByText(text).first().waitFor({ timeout: 6000 }).then(() => true, () => false)
+const atStep = (name) =>
+  page.getByRole('list', { name: 'Starting the episode' }).locator('[aria-current="step"]', { hasText: name }).waitFor({ timeout: 6000 }).then(() => true, () => false)
 
-check(await says('Searching for a release…'), 'it starts by saying it is searching')
+check(await says('Checking release sites for Episode 1.'), 'it starts by saying it is searching')
 stage = { step: 'files', release: '[Group] Show - 01 [1080p].mkv' }
-check(await says('Getting the file list…'), 'then that it is getting the file list')
-check(await says('[Group] Show - 01 [1080p].mkv'), 'and names the release')
+check(await says('Found a release. Asking the people sharing it for its list of files.'), 'then that it is getting the file list')
+check(await atStep('Connect'), 'with the release found, on the step Connect')
 stage = { step: 'data', release: '[Group] Show - 01 [1080p].mkv', peers: 2, bytes: 3 * 1024 * 1024 }
-check(await says('Waiting for the first data…'), 'then that it is waiting for data')
-check(await says(/2 peers, 3\.0 MB so far/), 'with the peers and what has arrived')
+check(await says(/Connected to 2 people sharing this release, 3\.0 MB so far/), 'then the people sharing it and what has arrived')
 stage = { step: 'data', release: '[Group] Show - 01 [1080p].mkv', peers: 0, bytes: 0 }
-check(await says(/no peers connected yet/), 'and says when nobody is connected')
+check(await says('Looking for people sharing this release. No one has answered yet.'), 'and says when nobody is connected')
 stage = { step: 'start' }
-check(await says('Reading the start of the file…'), 'then that it is reading the start of the file')
+check(await says(/^Reading the start of the episode/), 'then that it is reading the start of the episode')
 await page.screenshot({ path: `${SHOTS}/starting-note.png` })
 
 // Let it start: the notes go, and the bar shows what is loaded ahead of the playhead.
@@ -52,7 +53,7 @@ release()
 const video = page.locator('video').first()
 await video.waitFor({ timeout: 30_000 })
 await page.waitForFunction(() => (document.querySelector('video')?.currentTime ?? 0) > 1, null, { timeout: 30_000 }).catch(() => {})
-check((await page.getByText('Reading the start of the file…').count()) === 0, 'the note is gone once it plays')
+check((await page.getByText(/^Reading the start of the episode/).count()) === 0, 'the note is gone once it plays')
 
 await sleep(1500)
 const bar = await page.evaluate(() => {

@@ -62,7 +62,7 @@ export function CharacterPage() {
                   </span>
                 </>
               )
-              const row = 'flex min-w-0 items-center gap-3 rounded-xl bg-base-900/60 py-2 pr-4 pl-2 ring-1 ring-white/[0.06]'
+              const row = 'flex min-w-0 items-center gap-3 rounded-xl bg-base-900 py-2 pr-4 pl-2'
               return (
                 <li key={`${v.id ?? v.name}-${v.language}`}>
                   {v.id ? (

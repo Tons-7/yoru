@@ -193,7 +193,7 @@ function Row({
         className={cx('block w-full rounded-lg px-3 py-2 text-left', !active && 'hover:bg-base-850')}
       >
         <p className="line-clamp-2 text-sm text-base-100">{r.Torrent.title}</p>
-        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-base-400">
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-base-400">
           {rel.Group && <span className="text-base-200">{rel.Group}</span>}
           {specs.map((s) => (
             <span key={String(s)}>{s}</span>
@@ -223,7 +223,7 @@ function Row({
 function CuratorNotes({ notes, compare, long }: { notes?: string; compare: string[]; long: boolean }) {
   const [open, setOpen] = useState(false)
   return (
-    <div className="space-y-1 px-3 pb-2 text-[11px] text-base-400">
+    <div className="space-y-1 px-3 pb-2 text-xs text-base-400">
       {notes && <p className={cx('whitespace-pre-line', long && !open && 'line-clamp-2')}>{notes}</p>}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {long && (

@@ -129,9 +129,11 @@ const plays = (page) =>
   // Settings, Devices: the same two choices, this device's.
   await page.goto(`${BASE}/settings?tab=Devices`, { waitUntil: 'domcontentloaded' })
   const quality = page.getByRole('combobox', { name: 'Streaming quality' })
-  check(await until(async () => (await quality.inputValue().catch(() => '')) === '720'), 'Settings shows this device’s quality')
-  await quality.selectOption('auto')
-  await page.getByRole('combobox', { name: 'On mobile data' }).selectOption('saver')
+  check(await until(async () => (await quality.innerText().catch(() => '')) === '720p'), 'Settings shows this device’s quality')
+  await quality.click()
+  await page.getByRole('option', { name: 'Auto', exact: true }).click()
+  await page.getByRole('combobox', { name: 'On mobile data' }).click()
+  await page.getByRole('option', { name: 'Data saver', exact: true }).click()
   check((await page.evaluate(() => [localStorage.getItem('yoru.quality'), localStorage.getItem('yoru.mobileData')].join())) === ',saver',
     'and sets both')
   await context.close()

@@ -1,14 +1,5 @@
 import { Select } from './ui'
-import { waitLabel } from '../lib/format'
-
-// How long auto-download holds a new episode for a preferred group or the top resolution; "0" takes the first.
-const WAITS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: '0', label: "Don't wait" },
-  { value: '1', label: 'Up to 1 hour' },
-  { value: '3', label: 'Up to 3 hours' },
-  { value: '6', label: 'Up to 6 hours' },
-  { value: '12', label: 'Up to 12 hours' },
-]
+import { WAITS, waitLabel } from '../lib/format'
 
 /** The wait, or with inherit set the choice to follow Settings (value ""), named with what Settings say. */
 export function WaitSelect({

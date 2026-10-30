@@ -43,7 +43,7 @@ type Anime struct {
 	TrailerSite  *string
 	NextEpisode  *int
 	NextAiringAt *int
-	// Media is AniList's answer as JSON for a finished show, whose page is served from it unasked.
+
 	Media *string
 }
 
@@ -71,7 +71,6 @@ type ImportResult struct {
 type LibraryItem struct {
 	ID int `json:"id"`
 
-	// Both spellings travel, so the display preference flips without a refetch; Title is its pick.
 	Title   string  `json:"title"`
 	Romaji  string  `json:"romaji"`
 	English *string `json:"english"`
@@ -84,8 +83,11 @@ type LibraryItem struct {
 	Score        int     `json:"score"`
 	NextEpisode  *int    `json:"nextEpisode"`
 	NextAiringAt *int    `json:"nextAiringAt"`
+	Format       *string `json:"format,omitempty"`
+	SeasonYear   *int    `json:"seasonYear,omitempty"`
+	Airing       *string `json:"airing,omitempty"`
+	Favourite    bool    `json:"favourite"`
 
-	// Where playback stopped, so the card can offer "Resume 12:04" instead of making the user remember.
 	Resume *Resume `json:"resume,omitempty"`
 }
 
@@ -99,14 +101,12 @@ type Resume struct {
 	LastPlayed int      `json:"lastPlayed"`
 }
 
-// Percent drives the progress bar, guarded as a stream can end before a duration is reported.
 func (r *Resume) compute() {
 	if r.Duration != nil && *r.Duration > 0 {
 		r.Percent = r.Position / *r.Duration * 100
 	}
 }
 
-// Compared before rewriting: a sync mostly brings shows back unchanged, and writes compete with playback.
 var animeContent = []string{
 	"mal_id", "title_romaji", "title_english", "title_native", "synonyms", "status", "episode_count",
 	"duration", "format", "season", "season_year", "country", "is_adult", "description", "cover_url",
@@ -115,10 +115,8 @@ var animeContent = []string{
 	"next_episode", "next_airing_at", "media",
 }
 
-// An unchanged row is restamped after this, well inside what the airing refresh calls stale.
 const resyncAfter = time.Hour
 
-// animeChanged is true when a content column differs from the row's, or the row is due a fresh stamp.
 func animeChanged() string {
 	mine, theirs := make([]string, len(animeContent)), make([]string, len(animeContent))
 	for i, c := range animeContent {
@@ -142,7 +140,6 @@ ON CONFLICT(id) DO UPDATE SET
     title_english=excluded.title_english, title_native=excluded.title_native,
     synonyms=excluded.synonyms, status=excluded.status,
     episode_count=excluded.episode_count, duration=excluded.duration,
-    -- A stub row starts with these unset, so a later hydrate must fill them (is_adult picks trackers).
     format=excluded.format, season=excluded.season, season_year=excluded.season_year,
     country=excluded.country, is_adult=excluded.is_adult,
     description=excluded.description, cover_url=excluded.cover_url,
@@ -164,7 +161,6 @@ const entryUpdateSet = `
     started_at=excluded.started_at, completed_at=excluded.completed_at,
     remote_updated_at=excluded.remote_updated_at, dirty=0`
 
-// Upserts on anime_id too (local rows have negative ids); guard skips unpushed edits and older remote rows.
 func buildUpsertEntry(guard bool) string {
 	where := ""
 	if guard {
@@ -188,9 +184,7 @@ var (
 type ImportMode string
 
 const (
-	// Keeps local-only entries and lets an unpushed edit outrank the remote.
-	ImportMerge ImportMode = "merge"
-	// Overwrites unpushed edits and deletes entries missing upstream.
+	ImportMerge   ImportMode = "merge"
 	ImportReplace ImportMode = "replace"
 )
 
@@ -206,7 +200,6 @@ func (s *Store) IsAdult(ctx context.Context, animeID int) (bool, error) {
 	return adult == 1, nil
 }
 
-// Format is the catalogue's format for the entry (TV, MOVIE, OVA...), else the corpus's; nil when unknown.
 func (s *Store) Format(ctx context.Context, animeID int) *string {
 	var format *string
 	if err := s.r.QueryRowContext(ctx, `
@@ -272,8 +265,6 @@ func (s *Store) ImportList(ctx context.Context, anime []Anime, entries []Entry, 
 	return ImportResult{Anime: len(anime), Entries: len(entries), Removed: removed}, nil
 }
 
-// Compared in Go rather than a NOT IN clause, which would hit SQLite's bind-parameter limit on a large list.
-// MAL-only shows (negative ids) are never on AniList's list, so they stay.
 func dropMissingEntries(ctx context.Context, tx *sql.Tx, keep []Entry) (int, error) {
 	wanted := make(map[int]struct{}, len(keep))
 	for _, e := range keep {
@@ -310,7 +301,6 @@ func dropMissingEntries(ctx context.Context, tx *sql.Tx, keep []Entry) (int, err
 	return len(stale), nil
 }
 
-// latestPlayback joins each anime's most recently played episode.
 const latestPlayback = `
 LEFT JOIN (
     SELECT anime_id, ep_key, position_s, duration_s, watched, last_played_at,
@@ -322,18 +312,25 @@ LEFT JOIN episode ep ON ep.anime_id = a.id AND ep.ep_key = p.ep_key`
 
 const libraryColumns = `
 a.id, a.title_romaji, a.title_english, a.cover_url, a.cover_color, a.episode_count,
-e.status, e.progress, e.score, a.next_episode, a.next_airing_at,
+e.status, e.progress, e.score, a.next_episode, a.next_airing_at, a.status, a.format,
+coalesce((SELECT ua.favourite FROM user_anime ua WHERE ua.anime_id = a.id AND ua.hidden = 0), 0),
 p.ep_key, ep.number, p.position_s, p.duration_s, p.watched, p.last_played_at`
 
-// LibrarySorts are the orderings the library accepts; the first is the default.
-var LibrarySorts = []string{"updated", "title", "score", "airing", "progress"}
+var LibrarySorts = []string{"updated", "title", "score", "airing", "progress", "watched", "new", "added", "status"}
 
 var librarySortSQL = map[string]string{
 	"updated":  "e.local_updated_at DESC, a.title_romaji",
-	"title":    "lower(coalesce(a.title_english, a.title_romaji)), a.title_romaji",
+	"title":    "{title}, a.title_romaji",
 	"score":    "e.score DESC, e.local_updated_at DESC",
 	"airing":   "a.next_airing_at IS NULL, a.next_airing_at, a.title_romaji",
 	"progress": "e.progress DESC, e.local_updated_at DESC",
+	"watched":  "coalesce(p.last_played_at, 0) DESC, e.remote_updated_at DESC, e.local_updated_at DESC, a.title_romaji",
+	"new": `(a.status = 'RELEASING' AND coalesce(a.next_episode, 1) - 1 > coalesce(e.progress, 0)) DESC,
+	        coalesce(p.last_played_at, 0) DESC, e.local_updated_at DESC, a.title_romaji`,
+	"added": "e.id < 0 DESC, abs(e.id) DESC",
+	"status": `CASE e.status WHEN 'CURRENT' THEN 0 WHEN 'PLANNING' THEN 1 WHEN 'REPEATING' THEN 2
+	           WHEN 'PAUSED' THEN 3 WHEN 'COMPLETED' THEN 4 WHEN 'DROPPED' THEN 5 ELSE 6 END,
+	           {title}`,
 }
 
 const libraryWhere = `
@@ -341,21 +338,48 @@ WHERE (?1 = '' OR e.status = ?1)
   AND (?2 = '' OR a.title_romaji LIKE ?2 ESCAPE '\' OR a.title_english LIKE ?2 ESCAPE '\'
        OR a.synonyms LIKE ?2 ESCAPE '\')`
 
-func libraryQuery(sort string) string {
+const favouritesFrom = `
+FROM user_anime u
+JOIN anime a ON a.id = u.anime_id
+LEFT JOIN list_entry e ON e.anime_id = a.id
+`
+
+const favouritesWhere = `u.favourite = 1 AND u.hidden = 0`
+
+func libraryFrom(favourite bool) string {
+	if favourite {
+		return favouritesFrom
+	}
+	return `
+FROM list_entry e
+JOIN anime a ON a.id = e.anime_id
+`
+}
+
+func libraryFilterWhere(favourite bool) string {
+	if favourite {
+		return libraryWhere + `
+  AND ` + favouritesWhere
+	}
+	return libraryWhere
+}
+
+func libraryQuery(sort string, favourite bool, mode string) string {
 	order, ok := librarySortSQL[sort]
 	if !ok {
 		order = librarySortSQL[LibrarySorts[0]]
 	}
+	title := "lower(coalesce(a.title_english, a.title_romaji))"
+	if mode == TitleRomaji {
+		title = "lower(a.title_romaji)"
+	}
+	order = strings.ReplaceAll(order, "{title}", title)
 	return `
-SELECT ` + libraryColumns + `
-FROM list_entry e
-JOIN anime a ON a.id = e.anime_id
-` + latestPlayback + libraryWhere + `
+SELECT ` + libraryColumns + libraryFrom(favourite) + latestPlayback + libraryFilterWhere(favourite) + `
 ORDER BY ` + order + `
 LIMIT ?3 OFFSET ?4`
 }
 
-// Continue watching: each show's latest episode, if started and unfinished by resumable()'s rule.
 const inProgress = `dismissed = 0 AND position_s >= 15
       AND NOT (coalesce(duration_s, 0) > 0 AND position_s >= duration_s * coalesce(
           (SELECT CAST(value AS REAL) FROM anime_pref
@@ -364,11 +388,8 @@ const inProgress = `dismissed = 0 AND position_s >= 15
       AND NOT (coalesce(done_s, 0) > 0 AND position_s >= done_s)
       AND NOT (coalesce(duration_s, 0) <= 0 AND watched = 1)`
 
-// latestFirst: newest first; within one second, the unfinished row is the one being played.
 const latestFirst = `ORDER BY last_played_at DESC, watched, ep_key DESC`
 
-// Two ways to continue: an episode stopped part way, or the next one of a show
-// being watched. Without the second, finishing an episode emptied the row.
 const continuePicks = `
 WITH resume AS (
     SELECT anime_id, ep_key, position_s, duration_s, watched, last_played_at, rn
@@ -384,11 +405,9 @@ upnext AS (
                     e.local_updated_at) AS last_played_at
     FROM list_entry e
     JOIN anime a ON a.id = e.anime_id
-    -- A fresh rewatch has no progress yet and offers episode 1.
     WHERE e.status IN ('CURRENT','REPEATING')
       AND (e.progress > 0 OR e.status = 'REPEATING')
       AND (a.episode_count IS NULL OR e.progress < a.episode_count)
-      -- Not one still to broadcast: the card would sit there all week and fail when clicked.
       AND (a.next_episode IS NULL OR a.next_airing_at IS NULL
            OR e.progress + 1 < a.next_episode OR a.next_airing_at <= unixepoch())
       AND e.anime_id NOT IN (SELECT anime_id FROM resume WHERE rn = 1)
@@ -416,26 +435,25 @@ LIMIT ?2 OFFSET ?3`
 
 const continueCountQuery = continuePicks + `SELECT count(*) FROM picks`
 
-// LibraryFilter narrows and orders the list; an empty or unknown Sort is the default.
 type LibraryFilter struct {
-	Status string
-	Query  string
-	Sort   string
+	Status    string
+	Query     string
+	Sort      string
+	Favourite bool
 }
 
-// Library fetches one extra row so the page can report hasMore without a second query.
 func (s *Store) Library(ctx context.Context, f LibraryFilter, p Paging) (Page[LibraryItem], error) {
 	like := ""
 	if q := strings.TrimSpace(f.Query); q != "" {
 		like = "%" + escapeLike(q) + "%"
 	}
-	items, err := s.libraryRows(ctx, libraryQuery(f.Sort), f.Status, like, p.PerPage+1, p.Offset())
+	items, err := s.libraryRows(ctx, libraryQuery(f.Sort, f.Favourite, s.TitleMode(ctx, 0)), f.Status, like, p.PerPage+1, p.Offset())
 	if err != nil {
 		return Page[LibraryItem]{}, err
 	}
 
 	total, err := s.countRows(ctx,
-		`SELECT count(*) FROM list_entry e JOIN anime a ON a.id = e.anime_id`+libraryWhere, f.Status, like)
+		`SELECT count(*)`+libraryFrom(f.Favourite)+libraryFilterWhere(f.Favourite), f.Status, like)
 	if err != nil {
 		return Page[LibraryItem]{}, err
 	}
@@ -443,39 +461,46 @@ func (s *Store) Library(ctx context.Context, f LibraryFilter, p Paging) (Page[Li
 }
 
 type LibraryCounts struct {
-	Total      int            `json:"total"`
-	Statuses   map[string]int `json:"statuses"`
-	Favourites int            `json:"favourites"`
+	Total             int            `json:"total"`
+	Statuses          map[string]int `json:"statuses"`
+	Favourites        int            `json:"favourites"`
+	FavouriteStatuses map[string]int `json:"favouriteStatuses"`
 }
 
-// LibraryCounts is how many entries carry each list status, for the tabs.
 func (s *Store) LibraryCounts(ctx context.Context) (LibraryCounts, error) {
-	out := LibraryCounts{Statuses: map[string]int{}}
-	rows, err := s.r.QueryContext(ctx, `
+	out := LibraryCounts{Statuses: map[string]int{}, FavouriteStatuses: map[string]int{}}
+	total, err := s.statusCounts(ctx, `
 		SELECT e.status, count(*) FROM list_entry e
 		JOIN anime a ON a.id = e.anime_id
-		GROUP BY e.status`)
+		GROUP BY e.status`, out.Statuses)
 	if err != nil {
 		return out, err
 	}
+	out.Total = total
+	out.Favourites, err = s.statusCounts(ctx,
+		`SELECT e.status, count(*)`+favouritesFrom+`WHERE `+favouritesWhere+` GROUP BY e.status`, out.FavouriteStatuses)
+	return out, err
+}
+
+func (s *Store) statusCounts(ctx context.Context, query string, into map[string]int) (int, error) {
+	rows, err := s.r.QueryContext(ctx, query)
+	if err != nil {
+		return 0, err
+	}
 	defer rows.Close()
+	total := 0
 	for rows.Next() {
 		var status *string
 		var n int
 		if err := rows.Scan(&status, &n); err != nil {
-			return out, err
+			return 0, err
 		}
 		if status != nil {
-			out.Statuses[*status] = n
+			into[*status] = n
 		}
-		out.Total += n
+		total += n
 	}
-	if err := rows.Err(); err != nil {
-		return out, err
-	}
-	out.Favourites, err = s.countRows(ctx,
-		`SELECT count(*) FROM user_anime WHERE favourite = 1 AND hidden = 0`)
-	return out, err
+	return total, rows.Err()
 }
 
 func (s *Store) ContinueWatching(ctx context.Context, p Paging) (Page[LibraryItem], error) {
@@ -520,15 +545,17 @@ func (s *Store) libraryRows(ctx context.Context, query string, args ...any) ([]L
 			dur     *float64
 			watched *int
 			played  *int
+			fav     int
 		)
 		if err := rows.Scan(&it.ID, &it.Romaji, &it.English, &it.Cover, &it.Color, &it.Episodes,
-			&status, &prog, &score, &it.NextEpisode, &it.NextAiringAt,
+			&status, &prog, &score, &it.NextEpisode, &it.NextAiringAt, &it.Airing, &it.Format, &fav,
 			&epKey, &epNum, &pos, &dur, &watched, &played); err != nil {
 			return nil, err
 		}
 
 		it.Title = PickTitle(mode, it.Romaji, it.English)
 		it.Status = status
+		it.Favourite = fav == 1
 		if prog != nil {
 			it.Progress = *prog
 		}
@@ -572,7 +599,6 @@ func nullable(s string) any {
 	return s
 }
 
-// The JSON columns are NOT NULL, so an unset field has to become an empty array rather than the zero string.
 func orJSON(s string) string {
 	if s == "" {
 		return "[]"

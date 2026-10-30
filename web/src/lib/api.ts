@@ -1,5 +1,3 @@
-// A LAN client is handed a token in the URL on first visit; the server then
-// sets a cookie, so it only has to be remembered for that first request.
 export const TOKEN_KEY = 'yoru.token'
 
 function readToken(): string {
@@ -8,10 +6,7 @@ function readToken(): string {
   if (fromUrl) {
     try {
       localStorage.setItem(TOKEN_KEY, fromUrl)
-    } catch {
-      // Private mode: the cookie the server set carries it from here.
-    }
-    // Out of the address bar, history and any screenshot: the cookie holds it now.
+    } catch {}
     params.delete('token')
     const rest = params.toString()
     window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}${window.location.hash}`)
@@ -37,7 +32,6 @@ export class ApiError extends Error {
   }
 }
 
-// Age of the saved copy the server is answering from (unix s), null while live.
 let savedAt: number | null = null
 const savedListeners = new Set<() => void>()
 
@@ -71,11 +65,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       body = await res.json()
       const err = (body as { error?: string })?.error
       if (err) message = err
-      // The host's acceptance lapsed or was removed: a reload lands on the waiting page.
       if (res.status === 403 && (body as { approval?: string })?.approval) window.location.reload()
-    } catch {
-      // A non-JSON error body is still an error; the status carries it.
-    }
+    } catch {}
     throw new ApiError(res.status, message, body)
   }
 
@@ -83,14 +74,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
-// A query's own signal, so a superseded request is abandoned.
 export const api = {
   get: <T>(path: string, signal?: AbortSignal) => request<T>(path, { signal }),
   post: <T>(path: string, body?: unknown, signal?: AbortSignal) =>
     request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined, signal }),
   put: <T>(path: string, body: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
-  /** The file as sent; the server tells the formats apart by content. */
   upload: <T>(path: string, file: File) =>
     request<T>(path, {
       method: 'POST',
@@ -99,24 +88,38 @@ export const api = {
     }),
 }
 
+let keptAlive = 0
+const KEEPALIVE_BUDGET = 48_000
+
 export async function fetchAuthed(path: string, init?: RequestInit): Promise<Response> {
   const token = readToken()
   const headers = new Headers(init?.headers)
   if (token) headers.set('Authorization', `Bearer ${token}`)
-  const res = await fetch(path, { ...init, headers, credentials: 'same-origin' })
-  // A revoked device fails every call alike, so the app says so once, not per page.
-  if (res.status === 401) window.dispatchEvent(new Event(UNPAIRED_EVENT))
-  return res
+  const body = init?.body
+  const size = typeof body === 'string' ? new Blob([body]).size : 0
+  const leaving =
+    init?.keepalive === undefined &&
+    document.visibilityState === 'hidden' &&
+    !!init?.method &&
+    init.method !== 'GET' &&
+    (body == null || typeof body === 'string') &&
+    keptAlive + size <= KEEPALIVE_BUDGET
+  if (leaving) keptAlive += size
+  try {
+    const res = await fetch(path, { ...init, headers, credentials: 'same-origin', keepalive: init?.keepalive ?? leaving })
+    if (res.status === 401) window.dispatchEvent(new Event(UNPAIRED_EVENT))
+    return res
+  } finally {
+    if (leaving) keptAlive -= size
+  }
 }
 
-/** The path with the access token in its query, for requests that cannot set a header. */
 export function withToken(path: string): string {
   const token = readToken()
   if (!token) return path
   return `${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
 }
 
-/** Fire-and-forget, for progress reports that must survive the page closing. */
 export function beacon(path: string, body: unknown) {
   const url = withToken(path)
   const blob = new Blob([JSON.stringify(body)], { type: 'application/json' })
@@ -135,7 +138,6 @@ export function query(params: Record<string, string | number | boolean | undefin
   return s ? `?${s}` : ''
 }
 
-// ---------------------------------------------------------------- types
 
 export interface Page<T> {
   items: T[]
@@ -151,9 +153,9 @@ export interface Resume {
   position: number
   duration: number | null
   watched: boolean
+  lastPlayed?: number
 }
 
-/** One episode on the Up next list, in play order. */
 export interface UpNextItem {
   animeId: number
   episode: number
@@ -163,7 +165,6 @@ export interface UpNextItem {
   minutes?: number
   position?: number
   duration?: number
-  /** The episode title is held back by the show's spoiler rule. */
   spoiler?: boolean
 }
 
@@ -180,6 +181,10 @@ export interface LibraryItem {
   score: number
   nextEpisode: number | null
   nextAiringAt: number | null
+  format?: string | null
+  seasonYear?: number | null
+  airing?: string | null
+  favourite?: boolean
   resume?: Resume
 }
 
@@ -188,9 +193,7 @@ export interface DiscoverItem {
   title: string
   romaji: string
   english?: string
-  /** Poster sized for a card. Use thumb in list rows and banner for the hero. */
   cover?: string
-  /** The same poster at twice the size, for dense screens and large placements. */
   coverLarge?: string
   thumb?: string
   banner?: string
@@ -206,16 +209,13 @@ export interface DiscoverItem {
   description?: string
   onList: boolean
   progress: number
-  /** Which list it is on. `status` above is the airing state. */
   listStatus?: string | null
+  alertOn?: boolean
   malId?: number
-  /** The next episode to air and when (unix seconds), while airing. */
   nextEpisode?: number
   nextAiringAt?: number
-  /** As far as known: 2021-04-11, 2021-04 or 2021. */
   startDate?: string
   endDate?: string
-  /** Minutes per episode. */
   duration?: number
   studios?: { id: number; name: string }[]
 }
@@ -237,13 +237,24 @@ export interface ScheduleItem {
   progress: number
   behind: number
   watched: boolean
-  /** On the list and a release is already found or held, so playing it starts straight away. */
   out?: boolean
-  /** When this episode was due before AniList moved it later, unix seconds. */
+  watch?: boolean
+  checkedAt?: number
+  position?: number
+  duration?: number
   delayedFrom?: number
   jstWeekday: string
-  /** The full show, for the hover panel. */
   show?: DiscoverItem
+}
+
+export interface AlertShow {
+  animeId: number
+  title: string
+  cover?: string
+  status?: string
+  nextEpisode?: number
+  nextAiringAt?: number
+  because: 'followed' | 'watching' | 'auto'
 }
 
 export interface ScheduleDay {
@@ -256,9 +267,7 @@ export interface ScheduleDay {
 export interface Episode {
   animeId: number
   epKey: string
-  /** As catalogued, which is what playback and release matching use. */
   number: number
-  /** Position within this entry, so a later cour still reads as 1..N. */
   display: number
   absolute?: number
   titleEn?: string
@@ -267,27 +276,20 @@ export interface Episode {
   still?: string
   airDate?: number
   runtime?: number
-  /** Numbered from the catalogue's episode count; nothing is known about it. */
   planned?: boolean
-  /** "filler" | "mixed" | "manga-canon" | "anime-canon"; absent means unknown. */
   filler?: string
   recap: boolean
   watched: boolean
   position?: number
   duration?: number
-  /** The position is worth going back to, by the same rule playback resumes on. */
   resumable?: boolean
   onDisk: boolean
-  /** A library folder holds it: it plays from there, so there is nothing to download. */
   local?: boolean
-  /** Title, synopsis and still held back by the show's spoiler rule until watched or tapped open. */
   spoiler?: boolean
-  /** MyAnimeList's 1 to 5 rating and discussion thread, sent only once it's watched. */
   score?: number
   forumUrl?: string
 }
 
-/** Mixed episodes are part filler, so they carry the filler colour too. */
 export function hasFiller(episode: Episode) {
   return episode.filler === 'filler' || episode.filler === 'mixed'
 }
@@ -304,18 +306,15 @@ export interface PlaySession {
   localPath?: string
   startAt: number
   player: string
-  /** The file's bytes, what playing it as it is costs a data plan. */
   size?: number
 }
 
-/** One release the finder ranked for an episode; the manual picker's row. */
 export interface ReleaseCandidate {
   Torrent: {
     title: string
     infoHash: string
     size: number
     seeders: number
-    /** False from an indexer that publishes no peer counts. */
     seedersKnown: boolean
     leechers: number
     trusted?: boolean
@@ -334,10 +333,8 @@ export interface ReleaseCandidate {
     Subtitles?: string[]
   }
   SeaDexBest?: boolean
-  /** SeaDex lists this exact release; without SeaDexBest it's one of its alternatives. */
   SeaDexListed?: boolean
   SeaDexGroup?: boolean
-  /** The SeaDex entry's notes and comparison pages, and whether its curation is still open. */
   SeaDexNotes?: string
   SeaDexCompare?: string[]
   SeaDexIncomplete?: boolean
@@ -349,7 +346,6 @@ export interface ReleaseCandidate {
   blocked?: string
 }
 
-/** Whether a show's new episodes alert, and why; and an episode to download when it's out. */
 export interface FollowState {
   on: boolean
   because?: 'followed' | 'watching' | 'auto'
@@ -369,9 +365,7 @@ export interface SubtitleTrack {
   language?: string
   url: string
   default?: boolean
-  /** PGS: the url is a .sup file of pictures, drawn by libpgs. */
   pictures?: boolean
-  /** Whole as it is (a file of this device's, or Jimaku's): asked for once, not again as it grows. */
   whole?: boolean
 }
 
@@ -384,7 +378,6 @@ export interface AudioTrack {
   default?: boolean
 }
 
-/** One episode inside a downloaded pack. */
 export interface DownloadFile {
   fileIndex: number
   epKey: string
@@ -392,36 +385,30 @@ export interface DownloadFile {
   complete: boolean
 }
 
-/** Whether the swarm keeps up with the picture, in numbers. */
 export interface StreamHealth {
   mbps: number
   needed: number
   peers: number
   complete: boolean
   slow: boolean
-  /** The converter's pace against real time, while it runs. */
   speed?: number
-  /** How much of the file is on disk. */
   percent?: number
 }
 
 export type VoiceLevel = 'off' | 'medium' | 'high'
 export const VOICE_LEVELS: VoiceLevel[] = ['off', 'medium', 'high']
 
-/** What is done to the audio on its way out; see the server's sound package. */
 export interface SoundOptions {
   voice: VoiceLevel
   night: boolean
   headphones: boolean
   mono: boolean
-  /** The whole mix raised, apart from the voice. */
   boost: VoiceLevel
 }
 export const DEFAULT_SOUND: SoundOptions = { voice: 'off', night: false, headphones: false, mono: false, boost: 'off' }
 export const SOUND_PREFS: Record<keyof SoundOptions, string> = {
   voice: 'playback.voice', night: 'playback.night', headphones: 'playback.headphones', mono: 'playback.mono', boost: 'playback.boost',
 }
-/** The server says "" for off. */
 export function soundFrom(raw?: Partial<SoundOptions> | null): SoundOptions {
   return {
     voice: raw?.voice || 'off', night: !!raw?.night, headphones: !!raw?.headphones, mono: !!raw?.mono, boost: raw?.boost || 'off',
@@ -435,18 +422,14 @@ export interface StreamInfo {
   id: string
   playlist: string
   duration: number
-  /** What the server does on the way out: the codecs it converts to when not copying, and why. */
   plan?: {
     videoCopy?: boolean
     audioCopy?: boolean
     videoCodec?: string
     audioCodec?: string
     reason?: string
-    /** A converted track's channels: 2, up to 6 for surround speakers; absent keeps the source's. */
     channels?: number
-    /** Something is copied only because this device said it decodes it. */
     forDevice?: boolean
-    /** Picture changes: HDR tone-mapped, deinterlaced, flashing softened, a cap (height, bits a second). */
     toneMap?: boolean
     deinterlace?: boolean
     soften?: boolean
@@ -459,25 +442,18 @@ export interface StreamInfo {
     width?: number
     height?: number
     bitDepth?: number
-    /** smpte2084 is HDR10, arib-std-b67 HLG. */
     transfer?: string
     fieldOrder?: string
     dvProfile?: number
   }
   audio?: AudioTrack[]
-  /** Position in `audio` of the track being sent. */
   audioTrack?: number
-  /** What is being done to the audio. */
   sound?: Partial<SoundOptions>
   subtitles: SubtitleTrack[]
   fonts: string[]
-  /** Present when the file has subtitles; fonts are extracted in the background. */
   fontsUrl?: string
-  /** The file's only subtitles are pictures (PGS, VobSub), which the browser can't draw. */
   imageSubtitles?: boolean
-  /** The signed playlist an Apple TV fetches itself, while a TV can reach Yoru. */
   airplay?: string
-  /** Played from this device's storage (lib/offline.ts). */
   saved?: boolean
   complete?: boolean
 }
@@ -486,13 +462,10 @@ export interface SkipRange {
   kind: string
   start: number
   end: number
-  /** chapters, aniskip, found (in two episodes' shared sound) or marked (by the viewer). */
   source?: string
-  /** AniSkip's id, for a vote on it. */
   id?: string
 }
 
-/** A saved mark, as the server lined it up: with the file's chapters, the song's sound, or as given (""). */
 export interface SkipMarkResult {
   start: number
   end: number
@@ -522,7 +495,6 @@ export interface Tracker {
   redirect: string
   register: string
   secretRequired: boolean
-  /** AniList only: asks for a code to paste back, on Yoru's own client, so no keys are needed. */
   tokenUrl?: string
 }
 

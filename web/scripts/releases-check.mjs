@@ -55,12 +55,14 @@ await page.route('**/api/download/release', (route) => {
 
 // Settings: the wait, avoided groups and words, and the low-quality switch are saved.
 await page.goto(`${BASE}/settings?tab=Downloads`, { waitUntil: 'domcontentloaded' })
-const wait = row('Wait for a better release').getByLabel('Wait for a better release')
+const wait = row('Wait for a better release').getByRole('combobox', { name: 'Wait for a better release' })
 check(await until(() => wait.isVisible()), 'Downloads offers a wait for a better release')
-await wait.selectOption('3')
+await wait.click()
+await page.getByRole('option', { name: 'Up to 3 hours', exact: true }).click()
 check(await until(async () => (await prefs()).effective['autodownload.wait_hours'] === '3'), 'a 3-hour wait is saved')
 check(await until(() => row('Wait for a better release').getByText(/up to 3 hours for a preferred group/).isVisible()), 'and says what it does')
-await wait.selectOption('0')
+await wait.click()
+await page.getByRole('option', { name: "Don't wait", exact: true }).click()
 
 for (const [label, key, typed, stored] of [
   ['Avoided release groups', 'release.avoid_groups', 'BadGroup', '["BadGroup"]'],

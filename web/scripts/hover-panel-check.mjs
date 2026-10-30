@@ -19,7 +19,8 @@ page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 async function hoverFirst(statuses, shot) {
   // An airing show with a total announced, so "10/13" is what should show.
   const api = await (await fetch(`${BASE}/api/browse?statuses=${statuses}&formats=TV&sort=popular&perPage=42`)).json()
-  const pick = (api.items ?? []).find((i) => (statuses === 'RELEASING' ? i.episodes && i.nextEpisode : true))
+  const pick = (api.items ?? []).find((i) =>
+    statuses === 'RELEASING' ? i.episodes && i.nextEpisode && i.nextAiringAt * 1000 > Date.now() + 60_000 : true)
   await page.goto(`${BASE}/browse?statuses=${statuses}&formats=TV&sort=popular`, { waitUntil: 'domcontentloaded' })
   const card = pick
     ? page.locator(`a[href="/anime/${pick.id}"]`).filter({ has: page.locator('img') }).first()
@@ -28,7 +29,7 @@ async function hoverFirst(statuses, shot) {
   await page.mouse.move(0, 0)
   // Off-centre: the middle is the card's play button.
   await card.hover({ position: { x: 12, y: 60 } })
-  const panel = page.locator('div.fixed.z-50.rounded-2xl')
+  const panel = page.locator('div.fixed.z-50.rounded-sheet')
   await panel.waitFor({ timeout: 5000 }).catch(() => {})
   // The art arrives a moment after the panel.
   await panel

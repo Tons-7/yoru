@@ -39,6 +39,23 @@ func TestPrefsFallBackToDefaults(t *testing.T) {
 	}
 }
 
+func TestSkipModeReadsOldSwitches(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	for value, want := range map[string]string{
+		"": SkipButton, "true": SkipAuto, "false": SkipButton, "auto": SkipAuto, "off": SkipOff, "button": SkipButton,
+	} {
+		if err := s.SetSetting(ctx, "playback.autoskip_op", value); err != nil {
+			t.Fatal(err)
+		}
+		p, _ := s.Prefs(ctx, 0)
+		if got := p.SkipMode("playback.autoskip_op"); got != want {
+			t.Errorf("stored %q reads as %q, want %q", value, got, want)
+		}
+	}
+}
+
 // A per-show override beats the global value, and removing it falls back.
 func TestAnimePrefOverridesGlobal(t *testing.T) {
 	s := newTestStore(t)

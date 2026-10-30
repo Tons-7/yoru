@@ -1,5 +1,3 @@
-// Change release on the downloads page: every row offers it, the picker opens for that episode, the
-// pick is sent as the episode's release, and a queued row shows what was chosen.
 import { spawnSync } from 'node:child_process'
 import { chromium } from 'playwright'
 
@@ -56,12 +54,14 @@ await page.route('**/api/download/queue', (route) =>
 )
 
 await page.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
-// A show with several downloads is one closed card; its rows are inside.
+const more = page.getByRole('button', { name: /^More for .*episode 3$/ })
 const group = page.getByRole('button', { name: /^Show downloads of / }).first()
-if (await until(() => group.isVisible(), 10_000)) await group.click()
-const change = page.getByRole('button', { name: 'Change release for episode 3' })
-check(await until(() => change.first().isVisible()), 'a download on disk offers Change release')
-await change.first().click()
+if (!(await until(() => more.first().isVisible(), 10_000)) && (await group.isVisible())) await group.click()
+check(await until(() => more.first().isVisible()), 'a download on disk has a menu')
+await more.first().click()
+const change = page.getByRole('menuitem', { name: 'Change release' })
+check(await until(() => change.isVisible()), 'which offers Change release')
+await change.click()
 const dialog = page.getByRole('dialog', { name: 'Choose a release' })
 check(await until(() => dialog.isVisible()), 'the picker opens')
 check(await until(() => dialog.getByText('downloads it instead').isVisible()), 'and says the pick downloads instead of the current release')
@@ -72,7 +72,9 @@ check(chosen[0]?.animeId === ANIME && chosen[0]?.episode === 3 && chosen[0]?.inf
 check(await until(async () => (await dialog.count()) === 0), 'and the picker closes')
 // The copy on disk stands for the queued swap, so it is the row that says what is coming.
 check(await until(() => page.getByText('Changing to: [Other] Yoru Test Show - 03 [720p]').isVisible()), 'the row on disk shows the release it is changing to')
-check(await until(() => change.count().then((n) => n >= 1)), 'and still offers to change it')
+await more.first().click()
+check(await until(() => change.isVisible()), 'and still offers to change it')
+await page.keyboard.press('Escape')
 await page.screenshot({ path: `${SHOTS}/change-release-queued.png` })
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))

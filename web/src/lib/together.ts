@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { readKey, writeKey } from './storage'
 
 // Watch together: the room lives on the host's Yoru; this page talks to it directly, its own plays video.
 
@@ -98,19 +99,11 @@ const OVERLAY_KEY = 'yoru.together.overlay'
 
 /** Messages shown over the picture, chosen per device; on unless turned off. */
 export function overlayOn(): boolean {
-  try {
-    return localStorage.getItem(OVERLAY_KEY) !== 'off'
-  } catch {
-    return true
-  }
+  return readKey(OVERLAY_KEY) !== 'off'
 }
 
 export function setOverlay(on: boolean) {
-  try {
-    localStorage.setItem(OVERLAY_KEY, on ? 'on' : 'off')
-  } catch {
-    // This visit only.
-  }
+  writeKey(OVERLAY_KEY, on ? 'on' : 'off')
 }
 
 export type RoomStatus ='connecting' | 'pending' | 'in' | 'refused' | 'ended'
