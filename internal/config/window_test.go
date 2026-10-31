@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,7 +42,6 @@ func TestOpenAppStopsWhenTheWindowStaysUp(t *testing.T) {
 	}
 }
 
-// After an update the old window still holds the profile, so a browser that can't take it exits blank.
 func TestOpenAppRetriesOnceBeforeGivingUp(t *testing.T) {
 	var attempts atomic.Int32
 	tabs := stubWindow(t, func(context.Context, string) *launched {
@@ -61,7 +61,6 @@ func TestOpenAppRetriesOnceBeforeGivingUp(t *testing.T) {
 	}
 }
 
-// A browser that merely started is not success: one that showed nothing left no interface.
 func TestOpenAppFallsBackToATab(t *testing.T) {
 	var attempts atomic.Int32
 	tabs := stubWindow(t, func(context.Context, string) *launched {
@@ -96,7 +95,6 @@ func TestOpenAppGivesUpWhenCancelled(t *testing.T) {
 	}
 }
 
-// Quitting during the wait between attempts must not open anything.
 func TestOpenAppRetryHonoursCancellation(t *testing.T) {
 	var attempts atomic.Int32
 	ctx, cancel := context.WithCancel(context.Background())
@@ -126,7 +124,6 @@ func TestOpenAppRetryHonoursCancellation(t *testing.T) {
 	}
 }
 
-// The window goes with Yoru, so the profile is free for whatever starts next.
 func TestCloseEndsTheWindowProcess(t *testing.T) {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
@@ -160,12 +157,10 @@ func TestCloseEndsTheWindowProcess(t *testing.T) {
 		t.Error("Close waited on the timeout rather than the process")
 	}
 
-	// Closing again, or a window that was never opened, is nothing.
 	w.Close()
 	(&Window{}).Close()
 }
 
-// Fullscreen unless the setting asks for a maximized window.
 func TestWindowModeFlag(t *testing.T) {
 	has := func(args []string, flag string) bool {
 		return slices.Contains(args, flag)
@@ -177,6 +172,11 @@ func TestWindowModeFlag(t *testing.T) {
 	max := windowArgs("http://x", "p", true)
 	if !has(max, "--start-maximized") || has(max, "--start-fullscreen") {
 		t.Errorf("maximized = %v", max)
+	}
+	for _, arg := range append(full, max...) {
+		if strings.HasPrefix(arg, "--window-size") {
+			t.Errorf("%s also sizes the picture-in-picture window, which then opens off screen", arg)
+		}
 	}
 
 	var got bool
@@ -199,7 +199,6 @@ func TestCloseHasNothingToDoAfterAHandOff(t *testing.T) {
 	w.Close()
 }
 
-// Not a test: the stand-in browser of the tests below, up for $YORU_SLEEPER.
 func TestSleeper(t *testing.T) {
 	d, err := time.ParseDuration(os.Getenv("YORU_SLEEPER"))
 	if err != nil {
@@ -210,7 +209,6 @@ func TestSleeper(t *testing.T) {
 	os.Exit(code)
 }
 
-// browserFor starts the stand-in browser, up for d, as a launched window; code is how it exits.
 func browserFor(t *testing.T, d time.Duration, code ...int) *launched {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestSleeper$")
 	cmd.Env = append(os.Environ(), "YORU_SLEEPER="+d.String())
@@ -229,7 +227,6 @@ func browserFor(t *testing.T, d time.Duration, code ...int) *launched {
 	return &launched{cmd: cmd, exited: exited}
 }
 
-// A window closed by the person (its browser gone) is reported, so Yoru can exit with it.
 func TestAWindowClosedByItsBrowserIsReported(t *testing.T) {
 	l := browserFor(t, 300*time.Millisecond)
 	stubWindow(t, func(context.Context, string) *launched { return l })
@@ -242,7 +239,6 @@ func TestAWindowClosedByItsBrowserIsReported(t *testing.T) {
 	}
 }
 
-// A browser that crashed didn't close the window on purpose: Yoru and its downloads keep going.
 func TestACrashedBrowserIsNotAClose(t *testing.T) {
 	l := browserFor(t, 300*time.Millisecond, 3)
 	stubWindow(t, func(context.Context, string) *launched { return l })
@@ -255,7 +251,6 @@ func TestACrashedBrowserIsNotAClose(t *testing.T) {
 	}
 }
 
-// Yoru closing its own window on the way out isn't the person closing it.
 func TestYorusOwnCloseIsNotReported(t *testing.T) {
 	l := browserFor(t, time.Minute)
 	stubWindow(t, func(context.Context, string) *launched { return l })

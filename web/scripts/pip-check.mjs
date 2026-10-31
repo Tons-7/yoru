@@ -1,5 +1,3 @@
-// Picture in picture: the compact player moves into the floating window with
-// its controls working and the subtitles still drawn, and comes back.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -55,7 +53,6 @@ if (pip) {
   check(!state.fullscreenButton, 'controls that do not fit a small window are left out')
   check(state.fontsLoaded, 'the app fonts load in the window')
 
-  // A delegated React handler has to work in the other document.
   const before = await pip.evaluate(() => document.querySelector('video').currentTime)
   await pip.hover('video')
   await pip.getByRole('button', { name: 'Forward 10 seconds' }).click()
@@ -64,6 +61,38 @@ if (pip) {
   check(after - before > 5, 'its buttons work', `${before.toFixed(1)} → ${after.toFixed(1)}`)
   await pip.screenshot({ path: `${SHOTS}/pip.png` })
 
+  await pip.setViewportSize({ width: 640, height: 360 })
+  await pip.waitForTimeout(1500)
+  await page.evaluate(() => {
+    window.subtitleResizes = 0
+    const post = Worker.prototype.postMessage
+    Worker.prototype.postMessage = function (message, ...rest) {
+      if (JSON.stringify(message?.path ?? '').includes('_resizeCanvas')) window.subtitleResizes++
+      return post.call(this, message, ...rest)
+    }
+  })
+  const look = () =>
+    pip.evaluate(() => {
+      const v = document.querySelector('video')
+      const c = document.querySelector('canvas.JASSUB')
+      const host = v.closest('body > *')
+      return { video: v.clientWidth, canvas: c ? parseFloat(c.style.width) : null, dimmed: host?.style.opacity === '0.99' }
+    })
+  for (let i = 1; i <= 30; i++) {
+    await pip.setViewportSize({ width: 640 + i * 12, height: 360 + i * 7 })
+    await pip.waitForTimeout(20)
+  }
+  const dragged = { ...(await look()), resizes: await page.evaluate(() => window.subtitleResizes) }
+  check(dragged.video > 900, 'the picture follows the window while its edge is dragged', JSON.stringify(dragged))
+  check(dragged.dimmed, 'kept off the display overlay meanwhile', JSON.stringify(dragged))
+  check(dragged.canvas === null || Math.abs(dragged.canvas - dragged.video) < 2, 'the subtitles stretch along with it', JSON.stringify(dragged))
+  check(dragged.resizes === 0, 'without redrawing them on every step', JSON.stringify(dragged))
+  await pip.waitForTimeout(1500)
+  const fitted = { ...(await look()), resizes: await page.evaluate(() => window.subtitleResizes) }
+  check(!fitted.dimmed && fitted.resizes === 1, 'once the drag stops they are redrawn once, at full opacity', JSON.stringify(fitted))
+  check(fitted.canvas === null || Math.abs(fitted.canvas - fitted.video) < 2, 'matching the picture', JSON.stringify(fitted))
+
+  await pip.hover('video')
   await pip.getByRole('button', { name: /Back to tab/ }).click()
   await page.waitForTimeout(1500)
   check(

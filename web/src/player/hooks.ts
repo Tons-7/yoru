@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState, type RefObject } from 'react'
 import type Hls from 'hls.js'
 import type JASSUB from 'jassub'
-// ?worker&url, not ?url: the plain form copies worker.js verbatim, leaving its
-// relative imports pointing at paths that do not exist in a flat bundle.
 import jassubWorkerUrl from './subtitle-worker?worker&url'
 import jassubWasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url'
 import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
@@ -12,21 +10,16 @@ import type { SkipRange, StreamInfo, SubtitleTrack } from '../lib/api'
 import { restyle as restyleASS, type SubLook } from './subLook'
 import { airplayHere } from './airplay'
 
-// hls.js's details for a codec the browser won't take at all.
 const REFUSED_CODEC = new Set<string>(['bufferAddCodecError', 'bufferIncompatibleCodecsError', 'manifestIncompatibleCodecsError'])
 
-/** Attaches HLS with hls.js wherever it runs (Chrome's own HLS hides errors); native only without MSE. */
 export function useHlsSource(
   video: HTMLVideoElement | null,
   playlist?: string,
   startAt = 0,
   onGone?: () => void,
-  /** A decode failure; true when it is handled (reopened converted), so no error is shown. */
   onUndecodable?: () => boolean,
-  /** The playlist an Apple TV fetches itself, offered beside the page's own source where AirPlay is. */
   airplay?: string,
 ) {
-  // Tagged with what it was about: the last episode's error never sits over the next one's search.
   const [failure, setFailure] = useState<{
     video: HTMLVideoElement
     playlist: string
@@ -36,24 +29,18 @@ export function useHlsSource(
   const current = failure && failure.video === video && failure.playlist === playlist ? failure : null
   const error = current?.message ?? null
   const hls = useRef<Hls | null>(null)
-  // hls.js has appended the playlist's last segment: what is buffered is all there will be.
   const streamEnded = useRef(false)
-  // Read at attach time, not tracked: a resume update mid-episode must not tear the player down.
   const readStart = useEffectEvent(() => startAt)
   const gone = useEffectEvent(() => onGone?.())
   const undecodable = useEffectEvent(() => !!onUndecodable?.())
-  // Read at attach time too: a new signed link mid-episode needn't rebuild the player.
   const readAirplay = useEffectEvent(() => airplay)
-  // The Apple TV's source beside hls.js's, where AirPlay is.
   const alternative = useRef<HTMLSourceElement | null>(null)
-  // Its link follows the subtitles picked here as they change, for when an Apple TV is picked.
   useEffect(() => {
     if (alternative.current && airplay) alternative.current.src = airplay
   }, [airplay])
 
   useEffect(() => {
     if (!video || !playlist) return
-    // final: trying the same release again can't help.
     const setError = (message: string, final = false) => setFailure({ video, playlist, message, final })
 
     let cancelled = false
@@ -62,7 +49,6 @@ export function useHlsSource(
     let seek: (() => void) | undefined
     let recoveries = 0
     let recoveredAt = 0
-    // Native HLS (iOS) reports failure only here.
     const onMediaError = () => {
       if (!native) return
       const code = video.error?.code
@@ -71,14 +57,12 @@ export function useHlsSource(
       setError(decode ? "This device can't decode this release." : 'Playback failed')
     }
     video.addEventListener('error', onMediaError)
-    // A seek takes hls.js out of its ended state; it says so again once it reaches the end.
     const onSeeking = () => {
       streamEnded.current = false
     }
     video.addEventListener('seeking', onSeeking)
 
     void (async () => {
-      // A stale chunk after an update otherwise left the player loading forever.
       const loaded = await import('hls.js').catch(() => null)
       if (cancelled) return
       if (!loaded) {
@@ -94,7 +78,6 @@ export function useHlsSource(
         }
         native = true
         video.setAttribute('src', playlist)
-        // A plain src reload starts at zero unless seeked by hand.
         const at = readStart()
         if (at > 0) {
           seek = () => {
@@ -107,12 +90,9 @@ export function useHlsSource(
 
       const start = readStart()
       const instance = new HlsCtor({
-        // The resume segment first, so the encoder started there isn't restarted from zero.
         startPosition: start > 0 ? start : -1,
-        // A modest lookahead: asking far past one in-order encoder reads as a stall.
         maxBufferLength: 20,
         maxMaxBufferLength: 60,
-        // No LL-HLS parts here; it only adds edge-seeking behaviour to a plain on-demand transcode.
         lowLatencyMode: false,
         manifestLoadingMaxRetry: 8,
         manifestLoadingRetryDelay: 800,
@@ -123,18 +103,15 @@ export function useHlsSource(
       instance.on(HlsCtor.Events.BUFFER_EOS, () => {
         streamEnded.current = true
       })
-      // A recovery empties the buffers: what was all there is no longer is.
       instance.on(HlsCtor.Events.BUFFER_RESET, () => {
         streamEnded.current = false
       })
       instance.on(HlsCtor.Events.ERROR, (_event, data) => {
-        // 422: the encoder fails every pass (transcode.Unconvertible); said now, not after hls.js retries.
         if (data.response?.code === 422) {
           instance.stopLoad()
           setError("Yoru couldn't convert this release to play here. Try another release, or mpv.", true)
           return
         }
-        // A codec refused outright, even one track of two (the picture would play silent): no recovery helps.
         if (REFUSED_CODEC.has(data.details) && undecodable()) {
           instance.stopLoad()
           return
@@ -142,8 +119,6 @@ export function useHlsSource(
         if (!data.fatal) return
         switch (data.type) {
           case HlsCtor.ErrorTypes.NETWORK_ERROR:
-            // 404 means the session was reaped, not a flaky network; retrying
-            // can never succeed. Stop and let the reopen rebuild the player.
             if (data.response?.code === 404) {
               instance.stopLoad()
               gone()
@@ -152,8 +127,6 @@ export function useHlsSource(
             }
             break
           case HlsCtor.ErrorTypes.MEDIA_ERROR: {
-            // A codec this browser cannot decode fails the same way forever;
-            // recover twice (the second time swapping audio codec), then say so.
             const now = Date.now()
             recoveries = now - recoveredAt < 10_000 ? recoveries + 1 : 1
             recoveredAt = now
@@ -170,7 +143,6 @@ export function useHlsSource(
             break
           }
           default:
-            // hls.js names like "manifestParsingError" mean nothing to a viewer.
             setError(
               /manifest|level/i.test(data.details ?? '')
                 ? "The episode's stream could not be loaded."
@@ -179,12 +151,9 @@ export function useHlsSource(
         }
       })
 
-      // Safari's managed media source goes to an Apple TV only beside an HLS source it fetches: that one,
-      // second. hls.js empties the sources and turns remote playback off on each attach, a recovery's too.
       const offer = () => {
         const remote = readAirplay()
         if (!remote || !airplayHere() || cancelled) return
-        // The attribute behind disableRemotePlayback, which hls.js set.
         video.removeAttribute('disableremoteplayback')
         const source = (alternative.current ??= video.ownerDocument.createElement('source'))
         source.type = 'application/x-mpegURL'
@@ -205,14 +174,11 @@ export function useHlsSource(
       video.removeEventListener('seeking', onSeeking)
       hls.current?.destroy()
       hls.current = null
-      // Before the reload below, or Safari would play the Apple TV's source here.
       alternative.current?.remove()
       alternative.current = null
       if (native && seek) video.removeEventListener('loadedmetadata', seek)
-      // Episodes share the element, emptied so the next source doesn't attach to a finished one.
       video.removeAttribute('src')
       video.load()
-      // Every release of an episode has the same playlist URL: the next attach starts without this one's error.
       setFailure(null)
     }
   }, [video, playlist])
@@ -220,14 +186,12 @@ export function useHlsSource(
   return { error, final: !!current?.final, hls, streamEnded }
 }
 
-/** Nudges a phone decoder that stops presenting frames after a seek, only while the page itself paints. */
 export function useSeekRecovery(video: HTMLVideoElement | null, hls: RefObject<Hls | null>) {
   useEffect(() => {
     if (!video) return
     const request = video.requestVideoFrameCallback?.bind(video)
     if (!request) return
 
-    // Frames and paints are counted only while a seek is being watched, not for the player's whole life.
     let frames = 0
     let painted = 0
     let videoHandle = 0
@@ -267,10 +231,8 @@ export function useSeekRecovery(video: HTMLVideoElement | null, hls: RefObject<H
           unwatch()
           return
         }
-        // Nothing is expected while paused, still buffering, or out of sight.
         if (video.paused || video.seeking || video.readyState < 3) return
         if (document.visibilityState !== 'visible') return
-        // The page is not painting either, so the video is not the odd one out.
         if (painted - paintedAtSeek < 10) return
         if (video.currentTime - timeAtSeek < 3) return
 
@@ -292,10 +254,8 @@ export function useSeekRecovery(video: HTMLVideoElement | null, hls: RefObject<H
   }, [video, hls])
 }
 
-// Well under the server's ten-minute idle reaper, even with hidden-tab throttling.
 const KEEPALIVE_EVERY = 45_000
 
-/** Pings the playlist while playing (not paused) so the reaper keeps it; a 404 has onLost reopen it. */
 export function useKeepAlive(
   video: HTMLVideoElement | null,
   playlist?: string,
@@ -311,9 +271,7 @@ export function useKeepAlive(
       try {
         const res = await fetch(playlist, { credentials: 'same-origin' })
         if (!cancelled && res.status === 404) lost()
-      } catch {
-        // Offline or mid-restart; the next ping tries again.
-      }
+      } catch {}
     }
     const kick = () => void ping()
 
@@ -335,12 +293,10 @@ export function useKeepAlive(
   }, [video, playlist])
 }
 
-// A stall counts once it lasts this long, and this many within the window make a slow link.
 const STALL_COUNTS = 2_000
 const SLOW_STALLS = 2
 const SLOW_WINDOW = 90_000
 
-/** Tells onSlow when playback keeps stalling while it plays on: not the first buffering, nor a seek's. */
 export function useSlowLink(video: HTMLVideoElement | null, onSlow?: () => void) {
   const slow = useEffectEvent(() => onSlow?.())
   const watching = !!onSlow
@@ -350,7 +306,6 @@ export function useSlowLink(video: HTMLVideoElement | null, onSlow?: () => void)
     let stalls: number[] = []
     let seeking = false
     const waiting = () => {
-      // Startup and seeks wait for data on any link.
       if (!seeking && video.currentTime > 10) since = Date.now()
     }
     const resumed = () => {
@@ -384,7 +339,6 @@ export function useSlowLink(video: HTMLVideoElement | null, onSlow?: () => void)
   }, [video, watching])
 }
 
-/** Pokes a clock stopped with data buffered ahead (tiny seek, then recovery); no buffer is a slow encoder. */
 export function useStallWatchdog(video: HTMLVideoElement | null, hls: RefObject<Hls | null>) {
   useEffect(() => {
     if (!video) return
@@ -423,43 +377,33 @@ export function useStallWatchdog(video: HTMLVideoElement | null, hls: RefObject<
 }
 
 export interface SubtitleLook {
-  /** Dialogue size as a multiple of the file's own. */
   scale: number
-  /** Seconds the subtitles show late; negative shows them early. */
   delay: number
-  /** How dialogue is drawn over the file's own styling (see subLook.ts). */
   preset?: SubLook
   raised?: boolean
 }
 
 type ASSStyle = Awaited<ReturnType<JASSUB['renderer']['getStyles']>>[number]
 
-// Signs and songs are typeset to the picture; only dialogue is resized.
 const TYPESET_STYLE = /sign|song|kara|title|logo|note|insert|\b(op|ed)\b/i
 
-/** Renders ASS subtitles with JASSUB, as native tracks lose the styling and embedded fonts; true once it can draw. */
 export function useSubtitles(
   video: HTMLVideoElement | null,
   stream: StreamInfo | undefined,
   trackIndex: number | null,
-  /** The episode's fonts, null until the server has said which. */
   fonts: string[] | null = [],
   rebuild?: unknown,
   look: SubtitleLook = { scale: 1, delay: 0 },
-  /** Why a track can't show yet, in words for the viewer. */
   onProblem?: (message: string) => void,
 ): boolean {
   const instance = useRef<JASSUB | null>(null)
   const pictures = useRef<PgsRenderer | null>(null)
-  // The last instance's teardown, which the next one waits for.
   const destroying = useRef<Promise<unknown> | undefined>(undefined)
   const lookRef = useRef(look)
   lookRef.current = look
-  // Set per renderer: re-applies the size, and redraws the current cue.
   const restyle = useRef<(() => Promise<void>) | null>(null)
   const repaint = useRef<(() => void) | null>(null)
 
-  // Late fonts join the running renderer: rebuilding for them blanked an episode's opening lines.
   const fontsRef = useRef<string[]>([])
   fontsRef.current = fonts ?? []
   const fontsKnown = useRef(false)
@@ -467,11 +411,9 @@ export function useSubtitles(
   const fontKey = fonts?.join('|') ?? null
   const fontsIn = useRef(new Set<string>())
   const fontsLoading = useRef<Promise<unknown>>(Promise.resolve())
-  // What the running renderer draws ("stream|track"), and what it has its track and every font for.
   const drawing = useRef('')
   const [readyFor, setReadyFor] = useState('')
 
-  // Hands the renderer the fonts it lacks; ready once all of the episode's are known and in.
   const catchUp = useEffectEvent(async () => {
     const r = instance.current
     const drawn = drawing.current
@@ -481,7 +423,6 @@ export function useSubtitles(
     if (fresh.length) fontsLoading.current = Promise.all([fontsLoading.current, r.renderer?.addFonts(fresh).catch(() => {})])
     await fontsLoading.current
     if (instance.current !== r) return
-    // JASSUB doesn't redraw for a font it was given.
     if (fresh.length) repaint.current?.()
     if (fontsKnown.current) setReadyFor(drawn)
   })
@@ -489,8 +430,6 @@ export function useSubtitles(
     void catchUp().catch(() => {})
   }, [fontKey])
 
-  // A fullscreen transition leaves the canvas opaque over the video: black
-  // picture, controls and audio fine. It belongs to a worker, so rebuild it.
   const [surface, setSurface] = useState(0)
   useEffect(() => {
     const rebuild = () => setSurface((n) => n + 1)
@@ -498,8 +437,6 @@ export function useSubtitles(
     return () => document.removeEventListener('fullscreenchange', rebuild)
   }, [])
 
-  // Same opaque canvas at startup: the renderer sizes against the video, so
-  // attaching before dimensions exist leaves it covering the picture. Rebuild.
   useEffect(() => {
     if (!video) return
     const rebuild = () => setSurface((n) => n + 1)
@@ -521,18 +458,13 @@ export function useSubtitles(
     let detach: (() => void) | undefined
 
     void (async () => {
-      // Overlap left a dead renderer on screen; capped, as a teardown waits out a renderer still starting.
       await Promise.race([destroying.current?.catch(() => {}), new Promise((done) => setTimeout(done, 250))])
-      // Superseded while waiting: the renderer here now is the next run's, which every cleanup hands over.
       if (cancelled || !track) return
 
-      // No dimensions yet, no canvas; the listeners above rerun this once they arrive.
       if (!video.videoWidth || !video.videoHeight) return
       const drawn = `${stream.id}|${track.index}`
-      // Nothing more is coming for this track (it failed, or the problem was said): don't wait on it.
       const settle = () => !cancelled && setReadyFor(drawn)
 
-      // The track, or null once its problem is said; pictures still downloading (409) are asked for again.
       const load = async (what: string): Promise<Response | null> => {
         for (let said = false; !cancelled; await new Promise((r) => setTimeout(r, 30_000))) {
           const res = await fetch(track.url).catch(() => null)
@@ -557,7 +489,6 @@ export function useSubtitles(
         const pgs = new PgsRenderer({ video, workerUrl: pgsWorkerUrl, timeOffset: -lookRef.current.delay })
         pictures.current = pgs
         await pgs.loadFromBuffer(data).catch(() => onProblem?.("Couldn't read these picture subtitles"))
-        // libpgs never draws the first set (it starts as "last drawn") nor on a paused video: drawn here.
         if (!cancelled) {
           pgs.renderAtTimestamp(-1)
           pgs.renderAtTimestamp(video.currentTime + pgs.timeOffset)
@@ -566,11 +497,9 @@ export function useSubtitles(
       }
 
       const { default: Renderer } = await import('jassub')
-      // A whole track is read here and handed over as text, so a failure (Jimaku busy, a key gone) is said.
       const whole = track.whole ? await load('these subtitles').then((r) => r?.text() ?? null) : undefined
       if (cancelled || whole === null) return settle()
 
-      // No fonts here: JASSUB fetches every one before the track, which a slow link waited seconds on.
       fontsIn.current = new Set()
       fontsLoading.current = Promise.resolve()
       const renderer = new Renderer({
@@ -579,15 +508,12 @@ export function useSubtitles(
         workerUrl: jassubWorkerUrl,
         wasmUrl: jassubWasmUrl,
         modernWasmUrl: jassubModernWasmUrl,
-        // Subtitles are authored at 1080p; rendering above that is waste.
         prescaleFactor: 0.8,
-        // Capped: uncapped, every resize step repaints, and dragging a window edge locked the machine.
         maxRenderHeight: 1080,
         timeOffset: -lookRef.current.delay,
       })
       instance.current = renderer
 
-      // Without this a startup failure is silent: nothing is ever drawn.
       try {
         await renderer.ready
       } catch (err) {
@@ -595,11 +521,9 @@ export function useSubtitles(
       }
       if (cancelled) return
 
-      // Draw the cue the clock is on now; the next frame, paused, never comes.
       const resync = () => {
         if (document.visibilityState !== 'visible') return
         if (!video.videoWidth || !video.videoHeight) return
-        // Caught: a call still in flight when the renderer is torn down rejects on its released worker.
         void renderer
           .manualRender(
             {
@@ -613,11 +537,31 @@ export function useSubtitles(
           ?.catch(() => {})
       }
       document.addEventListener('visibilitychange', resync)
-      // A paused seek may present no new frame, leaving the old cue up.
       video.addEventListener('seeked', resync)
+      const elsewhere = video.ownerDocument.defaultView
+      let refit = 0
+      const follow = () => {
+        if (!elsewhere) return
+        const canvas = video.parentElement?.querySelector<HTMLCanvasElement>('canvas.JASSUB')
+        if (canvas && video.videoWidth && video.videoHeight) {
+          const ratio = video.videoWidth / video.videoHeight
+          const width = Math.min(video.clientWidth, video.clientHeight * ratio)
+          const height = width / ratio
+          canvas.style.width = `${Math.round(width)}px`
+          canvas.style.height = `${Math.round(height)}px`
+          canvas.style.left = `${video.offsetLeft + (video.clientWidth - width) / 2}px`
+          canvas.style.top = `${video.offsetTop + (video.clientHeight - height) / 2}px`
+        }
+        elsewhere.clearTimeout(refit)
+        refit = elsewhere.setTimeout(() => void renderer.resize().catch(() => {}), pipSettleMs)
+      }
+      const sized = elsewhere && elsewhere !== window ? new elsewhere.ResizeObserver(follow) : null
+      sized?.observe(video)
       detach = () => {
         document.removeEventListener('visibilitychange', resync)
         video.removeEventListener('seeked', resync)
+        sized?.disconnect()
+        elsewhere?.clearTimeout(refit)
       }
       repaint.current = resync
 
@@ -689,10 +633,8 @@ function cueCount(ass: string): number {
   return (ass.match(/^Dialogue:/gm) ?? []).length
 }
 
-// A gap larger than this is an unfilled hole in the download, not the silence between two lines of dialogue.
 const CUE_GAP = 30
 
-/** How far the cues cover contiguously from `from` seconds, not the furthest cue (holes). */
 export function coverageFrom(ass: string, from: number): number {
   const cues: Array<[number, number]> = []
   for (const m of ass.matchAll(
@@ -713,14 +655,11 @@ export function coverageFrom(ass: string, from: number): number {
 }
 
 const FILL_SOON = 5_000
-// The shortest gap between asks when new video keeps arriving.
 const FILL_FRESH = 1_000
 const FILL_EVERY = 15_000
 const FILL_QUIET = 45_000
-// How far past the playhead the track should reach before polling can relax.
 const FILL_AHEAD = 120
 
-/** Where the buffered video around the playhead ends. */
 function bufferedEnd(video: HTMLVideoElement): number {
   const at = video.currentTime
   for (let i = 0; i < video.buffered.length; i++) {
@@ -729,17 +668,13 @@ function bufferedEnd(video: HTMLVideoElement): number {
   return at
 }
 
-// Polls wait here: on a paused or hidden tab they'd keep the session alive and hold the queue.
-// Without a video, only until the page is on screen.
 export async function untilWatching(video: HTMLVideoElement | null, cancelled: () => boolean) {
   while (!cancelled() && (document.visibilityState !== 'visible' || (video && video.paused))) {
     await new Promise((r) => setTimeout(r, 1000))
   }
 }
 
-/** Rereads a track while the source grows, counting cues, not reach (head and tail load first). */
 async function keepFilling(
-  // Behind a Comlink proxy, so setTrack is called as a method, or Comlink posts the proxy itself.
   renderer: { renderer?: { setTrack?: (content: string) => unknown } },
   url: string,
   video: HTMLVideoElement,
@@ -752,15 +687,12 @@ async function keepFilling(
   let cues = 0
   let loaded = ''
   let quiet = 0
-  // How far the video was buffered at the last ask: the encoder writes a segment's lines with it.
   let askedUpTo = 0
 
   for (let attempt = 0; !cancelled(); attempt++) {
-    // Poll sooner while just ahead of the playhead is uncovered, whatever a tail cue suggests.
     const near = coverageFrom(loaded, video.currentTime) - video.currentTime < FILL_AHEAD
     const wait = near ? (quiet >= 6 ? FILL_EVERY : FILL_SOON) : quiet >= 3 ? FILL_QUIET : FILL_EVERY
     const began = Date.now()
-    // A seek lands somewhere with no lines yet, and new video brings new lines; ask then, not on the timer.
     await new Promise<void>((r) => {
       let soon = 0
       const done = () => {
@@ -784,9 +716,7 @@ async function keepFilling(
     if (cancelled()) return
 
     try {
-      // fill defeats the cache; at is the viewer's place, read directly while downloading.
       const res = await fetch(`${url}?fill=${attempt}&at=${Math.floor(video.currentTime)}`)
-      // The session is gone; so is the player, shortly.
       if (res.status === 404) return
       if (!res.ok) continue
 
@@ -803,20 +733,15 @@ async function keepFilling(
         quiet++
       }
       if (complete) return
-    } catch {
-      // A failed refresh just means trying again.
-    }
+    } catch {}
   }
 }
 
-/** Fonts arrive after the stream opens, null until the server says; a new generation (rebuilt session) asks again. */
 export function useEmbeddedFonts(fontsUrl?: string, generation = 0): string[] | null {
-  // Kept with the URL it answers, so a new episode's fonts read as unknown again.
   const [answer, setAnswer] = useState<{ url: string; fonts: string[] }>()
 
   useEffect(() => {
     if (!fontsUrl) return
-    // Same list: keep the identity, so nothing is added again.
     const answered = (fonts: string[]) =>
       setAnswer((prev) =>
         prev?.url === fontsUrl && prev.fonts.join('|') === fonts.join('|') ? prev : { url: fontsUrl, fonts },
@@ -827,7 +752,6 @@ export function useEmbeddedFonts(fontsUrl?: string, generation = 0): string[] | 
 
     const poll = async () => {
       if (cancelled) return
-      // Given up: none, so the episode's start stops waiting on them.
       if (attempts++ > 40) {
         setAnswer((prev) => (prev?.url === fontsUrl ? prev : { url: fontsUrl, fonts: [] }))
         return
@@ -843,10 +767,7 @@ export function useEmbeddedFonts(fontsUrl?: string, generation = 0): string[] | 
           answered(body.fonts.map((f) => f.url))
           return
         }
-      } catch {
-        // A failed poll is not worth surfacing; the default font is readable.
-      }
-      // Quick at first: an episode's first lines wait on this answer.
+      } catch {}
       window.setTimeout(poll, Math.min(2000, 250 * 2 ** (attempts - 1)))
     }
 
@@ -856,14 +777,12 @@ export function useEmbeddedFonts(fontsUrl?: string, generation = 0): string[] | 
     }
   }, [fontsUrl, generation])
 
-  // None offered is a known none.
   if (!fontsUrl) return NO_FONTS
   return answer?.url === fontsUrl ? answer.fonts : null
 }
 
 const NO_FONTS: string[] = []
 
-/** What an AniSkip range is: op and mixed-op open, ed and mixed-ed end, recap is its own. */
 export type SkipName = 'opening' | 'ending' | 'recap' | 'preview' | 'eyecatch' | 'chapter'
 
 export function skipKind(kind: string): SkipName | undefined {
@@ -873,7 +792,6 @@ export function skipKind(kind: string): SkipName | undefined {
   if (k === 'recap') return 'recap'
   if (k === 'preview') return 'preview'
   if (k === 'eyecatch') return 'eyecatch'
-  // A chapter named in Settings as one to skip.
   if (k === 'skip') return 'chapter'
   return undefined
 }
@@ -900,13 +818,10 @@ function wanted(kind: SkipName | undefined, on: AutoSkip): boolean {
 
 export type Skipped = { range: SkipRange; at: number; byHand?: boolean }
 
-// A tap this soon after the offer shows is the second half of a double tap on Skip, in the same place.
 export const SKIPPED_GUARD = 500
 
 const SKIPPED_FOR = 5000
 
-// Each range skips once: seeking back into one is deliberate. onKept hears of a skip left standing (no
-// "Watch it", no "Wrong skip") once its moment has passed.
 export function useAutoSkip(
   video: HTMLVideoElement | null,
   ranges: SkipRange[],
@@ -915,7 +830,6 @@ export function useAutoSkip(
 ) {
   const skipped = useRef<Set<string>>(new Set())
   const [last, setLast] = useState<Skipped | null>(null)
-  // The skip on offer, until it's undone or its moment passes; a newer one replacing it counts it kept.
   const pending = useRef<SkipRange | null>(null)
   const onKeptRef = useRef(onKept)
   useEffect(() => {
@@ -937,7 +851,6 @@ export function useAutoSkip(
     const onTime = () => {
       const t = video.currentTime
       for (const range of ranges) {
-        // A shape change upstream must not throw inside timeupdate.
         if (!range?.kind || !wanted(skipKind(range.kind), enabled)) continue
 
         const key = `${range.kind}-${range.start}`
@@ -965,12 +878,10 @@ export function useAutoSkip(
     return () => window.clearTimeout(id)
   }, [last])
 
-  // Its key stays skipped, so "Watch it" seeking back to the start plays it through this time.
   const dismiss = useCallback(() => {
     pending.current = null
     setLast(null)
   }, [])
-  // A Skip pressed by hand: kept, and open to a "Wrong skip" when it's AniSkip's.
   const note = useCallback(
     (range: SkipRange) => {
       skipped.current.add(`${range.kind}-${range.start}`)
@@ -981,7 +892,6 @@ export function useAutoSkip(
   return { skipped: last, dismiss, note }
 }
 
-/** Floats the whole player (native PiP drops subtitles); container must be a portal host, to keep handlers. */
 export function useDocumentPiP(container: HTMLElement | null) {
   const [active, setActive] = useState(false)
   const [win, setWin] = useState<Window | null>(null)
@@ -994,7 +904,7 @@ export function useDocumentPiP(container: HTMLElement | null) {
     const dpip = (window as unknown as {
       documentPictureInPicture: {
         window: Window | null
-        requestWindow: (o: { width: number; height: number }) => Promise<Window>
+        requestWindow: (o: { width: number; height: number; preferInitialWindowPlacement?: boolean }) => Promise<Window>
       }
     }).documentPictureInPicture
 
@@ -1005,10 +915,8 @@ export function useDocumentPiP(container: HTMLElement | null) {
     }
 
     const rect = container.getBoundingClientRect()
-    // Not the on-page size: full width on a wide monitor opens a window partly off screen.
-    const pip = await dpip.requestWindow(pipSize(container))
+    const pip = await dpip.requestWindow({ ...pipSize(container), preferInitialWindowPlacement: true })
 
-    // Styles are copied across, linked sheets relinked: inlined, their font URLs resolve against about:blank.
     for (const sheet of Array.from(document.styleSheets)) {
       if (sheet.href) {
         const link = pip.document.createElement('link')
@@ -1023,9 +931,7 @@ export function useDocumentPiP(container: HTMLElement | null) {
           .map((rule) => rule.cssText)
           .join('')
         pip.document.head.append(style)
-      } catch {
-        // A cross-origin sheet cannot be read; nothing here depends on one.
-      }
+      } catch {}
     }
     pip.document.title = document.title
     pip.document.body.style.margin = '0'
@@ -1033,7 +939,6 @@ export function useDocumentPiP(container: HTMLElement | null) {
     pip.document.documentElement.style.height = '100%'
     pip.document.body.style.height = '100%'
 
-    // A placeholder holds the moved player's place, or the page collapses around the gap.
     const placeholder = document.createElement('div')
     placeholder.style.cssText = [
       `height:${Math.round(rect.height)}px`,
@@ -1048,11 +953,21 @@ export function useDocumentPiP(container: HTMLElement | null) {
 
     container.replaceWith(placeholder)
     container.style.setProperty('height', '100%')
+    pip.document.body.style.overflow = 'hidden'
     pip.document.body.append(container)
     setActive(true)
     setWin(pip)
 
+    let settle = 0
+    pip.addEventListener('resize', () => {
+      container.style.setProperty('opacity', '0.99')
+      pip.clearTimeout(settle)
+      settle = pip.setTimeout(() => container.style.removeProperty('opacity'), pipSettleMs)
+    })
+
     pip.addEventListener('pagehide', () => {
+      pip.clearTimeout(settle)
+      container.style.removeProperty('opacity')
       container.style.removeProperty('height')
       placeholder.replaceWith(container)
       setActive(false)
@@ -1060,7 +975,6 @@ export function useDocumentPiP(container: HTMLElement | null) {
     })
   }
 
-  // Leaving the page takes the player with it, so the floating window would be left holding a dead one.
   useEffect(() => {
     return () => {
       const w = (window as unknown as { documentPictureInPicture?: { window: Window | null } })
@@ -1077,7 +991,6 @@ type WebkitVideo = HTMLVideoElement & {
   webkitPresentationMode?: string
 }
 
-/** The video alone in the system's floating window (phones, Safari); subtitles go as its text track. */
 export function useVideoPiP(video: HTMLVideoElement | null) {
   const [active, setActive] = useState(false)
   const v = video as WebkitVideo | null
@@ -1109,7 +1022,6 @@ export function useVideoPiP(video: HTMLVideoElement | null) {
   return { supported, active, toggle }
 }
 
-/** An iPhone's fullscreen: the system's own player, which shows only the video's text tracks. */
 export function useSystemFullscreen(video: HTMLVideoElement | null) {
   const [active, setActive] = useState(false)
   useEffect(() => {
@@ -1126,9 +1038,9 @@ export function useSystemFullscreen(video: HTMLVideoElement | null) {
   return active
 }
 
-// Small enough to sit over other windows (a third of the screen at most), shaped like the video.
 const pipMinWidth = 320
 const pipMaxWidth = 800
+const pipSettleMs = 250
 
 function pipSize(container: HTMLElement) {
   const video = container.querySelector('video')
@@ -1137,14 +1049,14 @@ function pipSize(container: HTMLElement) {
       ? video.videoWidth / video.videoHeight
       : 16 / 9
 
-  const available = window.screen?.availWidth || window.innerWidth || 1280
+  const availableWidth = window.screen?.availWidth || window.innerWidth || 1280
+  const availableHeight = window.screen?.availHeight || window.innerHeight || 720
   const width = Math.round(
-    Math.min(pipMaxWidth, Math.max(pipMinWidth, available * 0.35)),
+    Math.min(pipMaxWidth, Math.max(pipMinWidth, availableWidth * 0.35), availableHeight * 0.45 * ratio),
   )
   return { width, height: Math.round(width / ratio) }
 }
 
-/** The scrub preview sheet, once ffmpeg has laid it out. */
 export interface Sheet {
   ready: boolean
   interval: number
@@ -1154,15 +1066,12 @@ export interface Sheet {
   width: number
   height: number
   url: string
-  /** A downloading file's sheet so far: have holds a 1 for each tile there, version counts them. */
   partial?: boolean
   have?: string
   version?: number
 }
 
-/** Asks for the preview sheet, polling while it is built and while a downloading file's fills in. */
 export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null): Sheet | undefined {
-  // Tagged with its stream, so another episode never shows this one's sheet while it asks for its own.
   const [found, setFound] = useState<{ stream: string; sheet: Sheet }>()
 
   useEffect(() => {
@@ -1175,7 +1084,6 @@ export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null
     let asked = false
     const ask = async () => {
       try {
-        // The first answer may already be ready; only the re-polls wait.
         if (asked) await untilWatching(video ?? null, () => cancelled)
         asked = true
         if (cancelled) return
@@ -1185,24 +1093,18 @@ export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null
         if (cancelled || !body.interval) return
 
         if (body.ready) {
-          // Each release of an episode has the same URL; stamped, the browser can't paint the last one's sheet.
           const url = `/api/stream/${streamId}/thumbs.jpg?at=${opened}&v=${body.partial ? (body.version ?? 0) : 'whole'}`
-          // The same answer again keeps the sheet as it is, so the image isn't fetched anew.
           setFound((was) => (was?.stream === streamId && was.sheet.url === url ? was : { stream: streamId, sheet: { ...body, url } }))
           if (!body.partial) return
         }
-        // Asked for as long as it plays: tiles come as the file downloads, the whole sheet once it has.
         timer = window.setTimeout(ask, 15_000)
-      } catch {
-        // A preview is a nicety; failing to get one is not worth reporting.
-      }
+      } catch {}
     }
     void ask()
 
     return () => {
       cancelled = true
       window.clearTimeout(timer)
-      // Another release reopens under the same id; its sheet is asked for afresh.
       setFound(undefined)
     }
   }, [streamId, video])
@@ -1210,14 +1112,12 @@ export function useThumbnails(streamId?: string, video?: HTMLVideoElement | null
   return found && found.stream === streamId ? found.sheet : undefined
 }
 
-/** Whether the upscaler's canvas holds the video's current frame, which a pause, seek or lost device spoils. */
 export function useFreshFrames(video: HTMLVideoElement | null, enabled: boolean): boolean {
   const [fresh, setFresh] = useState(false)
 
   useEffect(() => {
     if (!video || !enabled) return
 
-    // Without it the canvas never claims to be current, costing upscaling, not the picture.
     const request = video.requestVideoFrameCallback?.bind(video)
     if (!request) return
 
@@ -1231,7 +1131,6 @@ export function useFreshFrames(video: HTMLVideoElement | null, enabled: boolean)
     }
     handle = request(onFrame)
 
-    // A seek leaves the canvas on the old frame, so it stands down until the renderer catches up.
     const stale = () => setFresh(false)
     video.addEventListener('seeking', stale)
     video.addEventListener('emptied', stale)
@@ -1241,7 +1140,6 @@ export function useFreshFrames(video: HTMLVideoElement | null, enabled: boolean)
       video.cancelVideoFrameCallback?.(handle)
       video.removeEventListener('seeking', stale)
       video.removeEventListener('emptied', stale)
-      // Another video, or upscaling off, leaves the canvas on this one's last frame.
       setFresh(false)
     }
   }, [video, enabled])
