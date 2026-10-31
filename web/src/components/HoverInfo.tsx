@@ -22,6 +22,7 @@ export interface HoverAnime {
   progress?: number
   play?: { to: string; label: string }
   cover?: string | null
+  coverLarge?: string | null
   banner?: string | null
   malId?: number | null
   nextEpisode?: number | null
@@ -136,7 +137,7 @@ function Panel({
 }) {
   const now = useNow()
   const hue = readableTint(anime.color) ?? '#8b7cff'
-  const art = anime.banner ?? anime.cover
+  const art = anime.banner ?? anime.coverLarge ?? anime.cover
   const state = airingState(anime)
   const count = episodeCount(anime)
   const other = anime.romaji && anime.romaji !== anime.title ? anime.romaji : anime.english
@@ -164,7 +165,7 @@ function Panel({
           <img
             src={art}
             alt=""
-            className={cx('size-full object-cover', !anime.banner && 'scale-110 blur-md brightness-75')}
+            className={cx('size-full object-cover', !anime.banner && 'object-[center_22%]')}
           />
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-base-800 via-base-800/30 to-transparent" />

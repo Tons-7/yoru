@@ -1,4 +1,3 @@
-// A card shows its list tag ("Completed", not "Add to list") and a long-runner's progress.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -27,14 +26,12 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 160)))
 
-// The API must carry the list tag, not just "on the list".
 const browse = await (await fetch(`${BASE}/api/browse?q=Chainsaw%20Man&perPage=10`)).json()
 const item = (browse.items ?? []).find((i) => i.id === ANIME)
 check(!!item, 'the show is in the browse results')
 check(item?.onList === true, 'the API says it is on the list')
 check(item?.listStatus === 'COMPLETED', 'the API says which list', String(item?.listStatus))
 
-// Home's rails come from another endpoint; tag one of its results so the check can't pass on nothing.
 const trending = await (await fetch(`${BASE}/api/discover?sort=trending&perPage=20`)).json()
 const pick = (trending.items ?? [])[0]
 check(!!pick, 'the home rail returned something to tag')
@@ -49,8 +46,13 @@ if (pick) {
 await page.goto(`${BASE}/browse?q=${encodeURIComponent('Chainsaw Man')}`, { waitUntil: 'domcontentloaded' })
 const row = page.locator(`a[href="/anime/${ANIME}"]`).first()
 check(await until(() => row.isVisible()), 'the show is in the search results')
-check(await until(async () => /Completed/.test(await row.innerText())), 'its row says it is completed',
-  (await row.innerText().catch(() => '')).replace(/\s+/g, ' '))
+const listed = page
+  .locator(`xpath=//a[@href="/anime/${ANIME}"]/ancestor::div[.//button[starts-with(@aria-label,"Listed as")]][1]`)
+  .first()
+  .getByRole('button', { name: /Listed as/ })
+  .first()
+check(await until(async () => (await listed.getAttribute('aria-label').catch(() => '')) === 'Listed as Completed'),
+  'its card says it is completed', String(await listed.getAttribute('aria-label').catch(() => '')))
 
 if (pick) {
   await page.goto(`${BASE}/browse?sort=trending`, { waitUntil: 'domcontentloaded' })
@@ -69,7 +71,6 @@ if (pick) {
   check(label === 'Listed as On hold', 'the bookmark says which list it is on', String(label))
 }
 
-// A show with no announced total: the card measures against what has aired.
 const lib = await (await fetch(`${BASE}/api/library?status=&perPage=50`)).json()
 const ongoing = (lib.items ?? []).find((i) => !i.episodes && i.nextEpisode)
 if (ongoing) {

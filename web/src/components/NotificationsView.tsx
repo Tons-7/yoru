@@ -105,7 +105,7 @@ export function NotificationsView() {
         }
       />
 
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,680px)_20rem] lg:gap-8">
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-8 xl:grid-cols-[minmax(0,1fr)_28rem]">
         <div className="space-y-4 lg:col-start-2 lg:row-start-1">
           <DeviceStatus />
           {next && <NextAlert show={next} now={now} />}

@@ -40,7 +40,6 @@ import { SaveToDevice } from '../components/SaveToDevice'
 import { toast } from '../lib/toast'
 import { saveNextAfter } from '../lib/offline'
 import { Anime4KDialog } from '../components/Anime4KDialog'
-import { CharacterRail } from '../components/CharacterRail'
 import { EpisodeList } from '../components/EpisodeList'
 import { isUnaired } from '../lib/episodes'
 import { ReleasePicker } from '../components/ReleasePicker'
@@ -1301,12 +1300,7 @@ export function Watch({
                 <p className="text-xs text-recap">{(download.error as Error).message}</p>
               )}
 
-              {!focus && (
-                <>
-                  {!side && episodesSection}
-                  <CharacterRail animeId={id} limit={8} title="Cast" />
-                </>
-              )}
+              {!focus && !side && episodesSection}
             </div>
             )}
             {mini && (

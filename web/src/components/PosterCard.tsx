@@ -29,11 +29,13 @@ export function PosterCard({
   to,
   quietList,
   alert,
+  onOpen,
 }: {
   anime: CardAnime
   to?: string
   quietList?: boolean
   alert?: boolean
+  onOpen?: () => void
 }) {
   const href = to ?? `/anime/${anime.id}`
   const now = useNow(600_000) / 1000
@@ -66,6 +68,7 @@ export function PosterCard({
         to={href}
         viewTransition
         onClick={(e) => {
+          onOpen?.()
           const img = e.currentTarget.querySelector('img')
           if (img) img.style.viewTransitionName = 'show-art'
         }}
