@@ -43,7 +43,6 @@ import { PlayIcon, PosterCard } from '../components/PosterCard'
 import { toCard } from '../lib/cards'
 import { Rail, RailItem } from '../components/Rail'
 import { PopSheet } from '../components/PopSheet'
-import { SeasonSwitch } from '../components/SeasonSwitch'
 import { Sheet } from '../components/Sheet'
 import { WaitSelect } from '../components/WaitSelect'
 import { BetterCopyOffer } from '../components/BetterCopy'
@@ -640,10 +639,7 @@ export function Anime() {
           )}
 
           <section>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-              <h2 className="section-title">Episodes</h2>
-              <SeasonSwitch seasons={franchise.data?.seasons ?? []} current={id} />
-            </div>
+            <h2 className="mb-3 section-title">Episodes</h2>
 
             {episodes.isPending ? (
               <Skeleton className="h-80 w-full" />

@@ -22,7 +22,7 @@ const NAMED_KEYS = /^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Insert|
 
 function Keycap({ children }: { children: ReactNode }) {
   return (
-    <kbd className="min-w-7 rounded-md bg-base-800 px-1.5 py-0.5 text-center font-sans text-xs text-base-100 ring-1 ring-white/10">
+    <kbd className="min-w-7 rounded-md bg-base-700 px-1.5 py-0.5 text-center font-sans text-xs font-medium text-white shadow-[inset_0_-2px_0_rgb(0_0_0/0.35)] ring-1 ring-white/10">
       {children}
     </kbd>
   )
@@ -31,10 +31,38 @@ function Keycap({ children }: { children: ReactNode }) {
 const does = (id: KeyAction) => KEY_ACTIONS.find((a) => a.id === id)!.does
 const named = (key: string) => keyLabel(key).join('+')
 
-/** Every keyboard shortcut behind "?", the player's changeable: keys nobody is told about go unused. */
+type KeyGroup = { title: string; ids: KeyAction[]; tenths?: boolean }
+
+const LEFT: KeyGroup[] = [
+  {
+    title: 'Playback',
+    ids: ['play', 'back5', 'forward5', 'back10', 'forward10', 'slower', 'faster', 'frameBack', 'frameForward'],
+    tenths: true,
+  },
+  { title: 'Episodes', ids: ['next', 'previous', 'skip'] },
+  { title: 'Skip times', ids: ['markStart', 'markEnd'] },
+]
+
+const RIGHT: KeyGroup[] = [
+  { title: 'Subtitles', ids: ['subtitles', 'subEarlier', 'subLater', 'subBigger', 'subSmaller'] },
+  { title: 'Sound', ids: ['volumeUp', 'volumeDown', 'mute', 'voice'] },
+  { title: 'Picture', ids: ['fullscreen', 'focus', 'info'] },
+]
+
+const LISTED = new Set([...LEFT, ...RIGHT].flatMap((g) => g.ids))
+const OTHER: KeyGroup = { title: 'More', ids: KEY_ACTIONS.map((a) => a.id).filter((id) => !LISTED.has(id)) }
+
+function Group({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="mb-3">
+      <h3 className="mb-1 px-2 text-[11px] font-semibold tracking-wider text-base-400 uppercase">{title}</h3>
+      <dl className="divide-y divide-white/[0.05]">{children}</dl>
+    </section>
+  )
+}
+
 export function Shortcuts() {
   const [open, setOpen] = useState(false)
-  // The action whose key is being changed: the next press is its new key.
   const [capturing, setCapturing] = useState<KeyAction | null>(null)
   const [said, setSaid] = useState('')
   const close = useCallback(() => {
@@ -61,7 +89,6 @@ export function Shortcuts() {
     }
   }, [])
 
-  // Heard before anything else on the page, so the press is a new key and nothing else: not ?, not Esc's close.
   useEffect(() => {
     if (!capturing) return
     const onKey = (e: KeyboardEvent) => {
@@ -78,7 +105,6 @@ export function Shortcuts() {
         return
       }
       const key = pressedKey(e)
-      // A character, or a key named on its cap; not a dead key, an IME's or one the browser can't name.
       if (key.length !== 1 && !NAMED_KEYS.test(key)) {
         setSaid("That key can't be used here; try another")
         return
@@ -105,75 +131,106 @@ export function Shortcuts() {
 
   if (!open) return null
   const changed = Object.keys(keymap.keys).length > 0
+  const message = said || (capturing && `Press the new key for ${does(capturing).toLowerCase()}, or Esc to keep ${named(keyOf(capturing))}`)
+  const row = 'flex min-h-9 items-center justify-between gap-4 px-2'
+  const group = (g: KeyGroup) => (
+    <Group key={g.title} title={g.title}>
+      {g.ids.map((id) => {
+        const a = KEY_ACTIONS.find((x) => x.id === id)!
+        return (
+          <div key={a.id} className={row}>
+            <dt className="text-sm text-base-200">{a.does}</dt>
+            <dd className="flex shrink-0 items-center gap-1">
+              {a.fixed?.map((k) => <Keycap key={k}>{keyLabel(k).join('+')}</Keycap>)}
+              <button
+                onClick={() => {
+                  setCapturing(capturing === a.id ? null : a.id)
+                  setSaid('')
+                }}
+                aria-label={`${a.does}: ${named(keyOf(a.id))}. Change`}
+                aria-pressed={capturing === a.id}
+                className={cx(
+                  'tap relative flex min-h-8 items-center gap-1 rounded-md px-1 transition-colors hover:bg-white/[0.06] hover:ring-1 hover:ring-accent-400/60',
+                  capturing === a.id && 'bg-accent-500/20 ring-1 ring-accent-400',
+                )}
+              >
+                {capturing === a.id ? (
+                  <span className="px-1 text-xs text-accent-200">Press a key</span>
+                ) : (
+                  keyLabel(keyOf(a.id)).map((k) => <Keycap key={k}>{k}</Keycap>)
+                )}
+              </button>
+            </dd>
+          </div>
+        )
+      })}
+      {g.tenths && (
+        <div className={row}>
+          <dt className="text-sm text-base-200">Jump to that tenth of the episode</dt>
+          <dd className="flex shrink-0 items-center gap-1">
+            <Keycap>0</Keycap>
+            <span className="text-xs text-base-500">to</span>
+            <Keycap>9</Keycap>
+          </dd>
+        </div>
+      )}
+    </Group>
+  )
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-      <div ref={backdrop} className="relative w-full max-w-md">
+      <div ref={backdrop} className="relative w-full max-w-3xl">
         <div
           ref={panel}
           role="dialog"
           aria-modal="true"
           aria-label="Keyboard shortcuts"
-          className="animate-fade-in max-h-[85vh] overflow-y-auto rounded-xl border border-base-800 bg-base-900 p-4 shadow-2xl scrollbar-thin"
+          className="flex max-h-[92vh] animate-fade-in flex-col overflow-hidden rounded-card bg-base-850 shadow-panel ring-1 ring-white/[0.06]"
         >
-          <div className="mb-1 flex items-center justify-between gap-4">
-            <h2 className="text-base font-semibold text-base-100">Keyboard shortcuts</h2>
+          <div className="flex shrink-0 items-start justify-between gap-4 px-5 pt-5 pb-3">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Keyboard shortcuts</h2>
+              <p className="mt-0.5 text-sm text-base-400">Choose a key to change it.</p>
+            </div>
             <button
               onClick={close}
               aria-label="Close"
-              className="tap relative grid size-7 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+              className="press grid size-9 shrink-0 place-items-center rounded-full bg-base-800 text-base-300 transition-colors hover:bg-base-700 hover:text-white"
             >
-              ✕
+              <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+                <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+              </svg>
             </button>
           </div>
-          <p role="status" className="sticky -top-4 z-10 -mx-4 min-h-6 bg-base-900 px-4 py-1 text-xs text-accent-300">
-            {said || (capturing && `Press the new key for ${does(capturing).toLowerCase()}, or Esc to keep ${named(keyOf(capturing))}`)}
+          <p role="status" className={cx('shrink-0 px-5 text-sm text-accent-300', message ? 'pb-3' : 'sr-only')}>
+            {message}
           </p>
 
-          <section className="mt-2">
-            <h3 className="mb-1 text-[13px] font-semibold text-base-400">While watching</h3>
-            <p className="mb-1 text-xs text-base-500">Choose a key to change it.</p>
-            <dl className="divide-y divide-base-800">
-              {KEY_ACTIONS.map((a) => (
-                <div key={a.id} className="flex items-center justify-between gap-4 py-1">
-                  <dt className="text-sm text-base-200">{a.does}</dt>
-                  <dd className="flex shrink-0 items-center gap-1">
-                    {a.fixed?.map((k) => <Keycap key={k}>{keyLabel(k).join('+')}</Keycap>)}
-                    <button
-                      onClick={() => {
-                        setCapturing(capturing === a.id ? null : a.id)
-                        setSaid('')
-                      }}
-                      aria-label={`${a.does}: ${named(keyOf(a.id))}. Change`}
-                      aria-pressed={capturing === a.id}
-                      className={cx(
-                        'tap relative flex min-h-8 items-center gap-1 rounded-md px-1 transition-colors hover:bg-base-800',
-                        capturing === a.id && 'bg-accent-500/20 ring-1 ring-accent-400',
-                      )}
-                    >
-                      {capturing === a.id ? (
-                        <span className="px-1 text-xs text-accent-200">Press a key</span>
-                      ) : (
-                        keyLabel(keyOf(a.id)).map((k) => <Keycap key={k}>{k}</Keycap>)
-                      )}
-                    </button>
-                  </dd>
-                </div>
-              ))}
-              <div className="flex items-center justify-between gap-4 py-1.5">
-                <dt className="text-sm text-base-200">Jump to that tenth of the episode</dt>
-                <dd className="flex shrink-0 gap-1">
-                  <Keycap>0</Keycap>
-                  <span className="text-xs text-base-500">to</span>
-                  <Keycap>9</Keycap>
-                </dd>
-              </div>
-            </dl>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 scrollbar-thin sm:grid sm:grid-cols-2 sm:gap-x-6">
+            <div>{LEFT.map(group)}</div>
+            <div>
+              {RIGHT.map(group)}
+              {OTHER.ids.length > 0 && group(OTHER)}
+              <Group title="Anywhere">
+                {PAGE_SHORTCUTS.map((s) => (
+                  <div key={s.does} className={row}>
+                    <dt className="text-sm text-base-200">{s.does}</dt>
+                    <dd className="flex shrink-0 gap-1">
+                      {s.keys.map((k) => (
+                        <Keycap key={k}>{k}</Keycap>
+                      ))}
+                    </dd>
+                  </div>
+                ))}
+              </Group>
+            </div>
+          </div>
 
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-              <div role="radiogroup" aria-label="Single keys work" className="flex items-center gap-1 text-xs">
-                <span className="mr-1 text-base-400">Keys work</span>
+          <div className="shrink-0 border-t border-white/[0.06] px-5 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div role="radiogroup" aria-label="Single keys work" className="flex items-center gap-1 rounded-lg bg-base-900 p-0.5 text-xs">
+                <span className="mr-1 pl-2 text-base-400">Keys work</span>
                 {(
                   [
                     ['page', 'Anywhere on the page'],
@@ -184,7 +241,6 @@ export function Shortcuts() {
                     key={value}
                     role="radio"
                     aria-checked={keymap.scope === value}
-                    // One stop in the tab order, arrows between the two, as a radio group is.
                     tabIndex={keymap.scope === value ? 0 : -1}
                     onKeyDown={(e) => {
                       if (!e.key.startsWith('Arrow')) return
@@ -217,25 +273,9 @@ export function Shortcuts() {
               </button>
             </div>
             {keymap.scope === 'player' && (
-              <p className="mt-1 text-xs text-base-500">Click the picture or tab to it first; a screen reader keeps its own keys elsewhere.</p>
+              <p className="mt-2 text-xs text-base-500">Click the picture or tab to it first; a screen reader keeps its own keys elsewhere.</p>
             )}
-          </section>
-
-          <section className="mt-4">
-            <h3 className="mb-1 text-[13px] font-semibold text-base-400">Anywhere</h3>
-            <dl className="divide-y divide-base-800">
-              {PAGE_SHORTCUTS.map((s) => (
-                <div key={s.does} className="flex items-center justify-between gap-4 py-1.5">
-                  <dt className="text-sm text-base-200">{s.does}</dt>
-                  <dd className="flex shrink-0 gap-1">
-                    {s.keys.map((k) => (
-                      <Keycap key={k}>{k}</Keycap>
-                    ))}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </section>
+          </div>
         </div>
       </div>
     </div>,

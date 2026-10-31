@@ -70,27 +70,23 @@ const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await until(() => page.getByRole('region', { name: 'Video player' }).isVisible(), 30_000), 'player rendered')
-await page.getByRole('button', { name: 'Audio & subtitles', exact: true }).last().click()
-check(await until(() => page.getByRole('switch', { name: 'Start playing when opened' }).isVisible()), 'player controls rendered')
+await page.getByRole('region', { name: 'Video player' }).hover()
+await page.getByRole('button', { name: /^Player settings/ }).click()
+const autoNext = page.getByRole('menuitemcheckbox', { name: /^Play next by itself/ })
+check(await until(() => autoNext.isVisible()), 'player settings rendered')
 
-const state = async (name) =>
-  page.getByRole('switch', { name }).getAttribute('aria-checked')
-const skipOp = page.getByRole('radiogroup', { name: 'Skip openings' })
-const skipState = async () => skipOp.getByRole('radio', { checked: true }).textContent()
+const shownNext = await autoNext.getAttribute('aria-checked')
+check(shownNext === 'true', 'Play next by itself shows the setting the user turned on', shownNext)
+const autoplay = page.getByRole('menuitemcheckbox', { name: /^Start playing when opened/ })
+const shownPlay = await autoplay.getAttribute('aria-checked')
+check(shownPlay === 'true', 'Start playing when opened shows the setting the user turned on', shownPlay)
 
-const shown = {
-  'Start playing when opened': await state('Start playing when opened'),
-  'Play the next episode by itself': await state('Play the next episode by itself'),
-  'Skip openings': await skipState(),
-}
-console.log('   shown:', JSON.stringify(shown))
+await page.getByRole('menuitem', { name: /^Skipping/ }).click()
+const skipOp = page.getByRole('group', { name: 'Openings' })
+const skipState = async () => skipOp.getByRole('menuitemradio', { checked: true }).textContent()
+check((await skipState()) === 'Auto', 'Skip openings shows the override in effect', await skipState())
 
-check(shown['Start playing when opened'] === 'true', 'Start playing when opened shows the setting the user turned on', shown['Start playing when opened'])
-check(shown['Play the next episode by itself'] === 'true', 'Play the next episode by itself shows the setting the user turned on', shown['Play the next episode by itself'])
-// What is in effect for this show, which is what the episode will actually do.
-check(shown['Skip openings'] === 'Auto', 'Skip openings shows the override in effect', shown['Skip openings'])
-
-await skipOp.getByRole('radio', { name: 'Off' }).click()
+await skipOp.getByRole('menuitemradio', { name: 'Off' }).click()
 check(
   await until(async () => (await skipState()) === 'Off'),
   'choosing Off for a setting backed by an override shows Off',
@@ -106,14 +102,18 @@ check(
 )
 
 // A key with no override still edits the global, the default for every other show.
-await page.getByRole('switch', { name: 'Start playing when opened' }).click()
+await page.getByRole('menuitem', { name: 'Back from Skipping' }).click()
+await autoNext.click()
+check(await until(async () => (await autoNext.getAttribute('aria-checked')) === 'false'), 'a switch with no override still flips')
 check(
-  await until(async () => (await state('Start playing when opened')) === 'false'),
-  'a switch with no override still flips',
-)
-check(
-  (await api('/api/prefs')).body?.effective?.['playback.autoplay'] === 'false',
+  await until(async () => (await api('/api/prefs')).body?.effective?.['playback.autonext'] === 'false'),
   'with no override the global setting is what changed',
+)
+await autoplay.click()
+check(await until(async () => (await autoplay.getAttribute('aria-checked')) === 'false'), 'Start playing when opened flips too')
+check(
+  await until(async () => (await api('/api/prefs')).body?.effective?.['playback.autoplay'] === 'false'),
+  'and its global setting is what changed',
 )
 
 await browser.close()

@@ -5,7 +5,6 @@ import { Button, Switch, TextInput } from './ui'
 
 const REACTIONS = ['😂', '😮', '❤️', '👏']
 
-/** The room beside the player: who's here, the invite, the host's settings, and the chat. */
 export function TogetherPanel({
   room,
   invite,
@@ -22,7 +21,6 @@ export function TogetherPanel({
   const [text, setText] = useState('')
   const [copied, setCopied] = useState(false)
   const feed = useRef<HTMLOListElement>(null)
-  // Follows new lines unless scrolled up to read; by id, as the feed stops growing at 200.
   const atEnd = useRef(true)
   const last = room.lines[room.lines.length - 1]?.id
   useEffect(() => {
@@ -127,7 +125,7 @@ export function TogetherPanel({
           const el = e.currentTarget
           atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
         }}
-        className="max-h-56 space-y-1 overflow-y-auto text-sm">
+        className="max-h-56 space-y-1 overflow-y-auto text-sm scrollbar-thin">
         {room.lines.length === 0 ? (
           <li className="text-base-500">Messages and what everyone does show here.</li>
         ) : (
@@ -191,7 +189,6 @@ function Notice({ children }: { children: React.ReactNode }) {
   return <p className="surface p-4 text-sm text-base-300">{children}</p>
 }
 
-/** The name the room shows, asked before joining or opening one. */
 export function JoinCard({
   title,
   name: suggested,
@@ -252,19 +249,16 @@ export function JoinCard({
   )
 }
 
-/** Over the picture, in fullscreen too: the newest message for a moment, one at a time, then gone. */
 export function TogetherToasts({ room, on }: { room: Room; on: boolean }) {
   const [shown, setShown] = useState<RoomLine | null>(null)
   const [extra, setExtra] = useState(0)
   const seen = useRef(room.lines.length ? room.lines[room.lines.length - 1].id : 0)
-  // One timer, replaced only by a new toast: a line not worth one mustn't leave the last up for good.
   const timer = useRef(0)
   useEffect(() => () => window.clearTimeout(timer.current), [])
   useEffect(() => {
     const fresh = room.lines.filter((l) => l.id > seen.current)
     if (fresh.length === 0) return
     seen.current = fresh[fresh.length - 1].id
-    // Pauses and jumps matter to what's on screen; joins and leaves stay in the panel.
     const worth = fresh.filter((l) => l.kind !== 'event' || /paused|jumped/.test(l.text))
     if (!on || worth.length === 0) return
     const last = worth[worth.length - 1]

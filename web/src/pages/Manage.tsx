@@ -362,7 +362,7 @@ function Columns({ list, top, rest }: { list: ReactNode; top: ReactNode; rest: R
   return (
     <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start lg:gap-8">
       <div className="order-2 min-w-0 lg:order-none">{list}</div>
-      <div className="contents lg:sticky lg:top-22 lg:block lg:max-h-[calc(100dvh-6.5rem)] lg:space-y-4 lg:overflow-y-auto lg:scrollbar-thin">
+      <div className="contents lg:sticky lg:top-22 lg:block lg:max-h-[calc(100dvh-6.5rem)] lg:space-y-4 lg:overflow-y-auto scrollbar-thin">
         <div className="order-1 empty:hidden lg:order-none">{top}</div>
         <div className="order-3 space-y-4 empty:hidden lg:order-none">{rest}</div>
       </div>
@@ -1686,7 +1686,6 @@ interface SearchHit {
   episodes?: number
 }
 
-// Match a file to a show and episode by hand: search, pick, number, save.
 function AssignFile({ file, onDone }: { file: LocalFile; onDone: () => void }) {
   const qc = useQueryClient()
   const [term, setTerm] = useState(file.parsedTitle ?? '')
@@ -1707,7 +1706,6 @@ function AssignFile({ file, onDone }: { file: LocalFile; onDone: () => void }) {
     mutationFn: () =>
       api.post('/api/local/assign', { id: file.id, animeId: picked!.id, episode: Number(episode) }),
     onSuccess: () => {
-      // The show's episode list marks what is on disk and counts Download all without it.
       for (const key of ['localFiles', 'local', 'episodes', 'anime']) void qc.invalidateQueries({ queryKey: [key] })
       onDone()
     },
@@ -1822,7 +1820,6 @@ export function LocalFiles() {
     },
   })
   const [assigning, setAssigning] = useState<number | null>(null)
-  // Assigning the last unmatched files of a later page empties it.
   useClampPage(data?.items.length === 0, page, data?.total, 100, setPage)
 
   if (isError && !data) return <ErrorState error={error} retry={() => refetch()} />

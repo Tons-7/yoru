@@ -18,8 +18,10 @@ const browser = await chromium.launch()
 // A phone: short enough that the dialog has to scroll.
 const page = await browser.newPage({ viewport: { width: 412, height: 700 }, isMobile: true, hasTouch: true })
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
-await page.getByRole('button', { name: 'Audio & subs', exact: true }).click()
-await page.getByRole('button', { name: /^Sharper picture \(Anime4K\)/ }).click()
+await page.locator('video').first().waitFor({ timeout: 30_000 })
+await page.evaluate(() => document.querySelector('video')?.pause())
+await page.getByRole('region', { name: 'Video player' }).getByRole('button', { name: /^More/ }).click()
+await page.getByRole('menuitem', { name: /^Sharper picture/ }).click()
 const dialog = page.getByRole('dialog', { name: 'Anime4K' })
 await dialog.waitFor()
 

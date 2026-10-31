@@ -69,7 +69,8 @@ import { ENCODERS } from './encoders'
 import { readSubtitleFile } from './ownSubs'
 import { castStyle, previewStyle, SUB_LOOKS, subLookLabel, type SubLook } from './subLook'
 import { StartingSteps, type Starting } from './Starting'
-import { ChoiceRow, Choices, PanelGroup, SegmentRow } from './panel'
+import { ActionRow, ChoiceRow, Choices, PanelGroup, SegmentRow } from './panel'
+import { SKIP_MODES, type SkipMode } from './skipMode'
 
 function toggleFullscreen(shell: HTMLElement | null, video: HTMLVideoElement | null, onNoLock?: () => void) {
   if (document.fullscreenElement) {
@@ -199,6 +200,21 @@ function savePersisted(patch: Persisted) {
   }
 }
 
+export interface SkipSetting {
+  value: SkipMode
+  caption: string
+  onChange: (value: SkipMode) => void
+}
+
+export interface PlaybackSettings {
+  openings: SkipSetting
+  endings: SkipSetting
+  filler: { on: boolean; onChange: (on: boolean) => void }
+  autoNext: { on: boolean; caption: string; onChange: (on: boolean) => void }
+  autoplay: { on: boolean; caption: string; onChange: (on: boolean) => void }
+  upscale?: { value: string; onOpen: () => void }
+}
+
 export interface PlayerControls {
   fullscreen: () => void
   settings: (open: boolean) => void
@@ -219,7 +235,7 @@ export interface PlayerProps {
   autoSkip: AutoSkip
   skipOff?: { op: boolean; ed: boolean }
   onMinimize?: () => void
-  settings?: { audio?: ReactNode; playback?: ReactNode }
+  settings?: { audio?: ReactNode; playback?: PlaybackSettings }
   controls?: RefObject<PlayerControls | null>
   theatre?: boolean
   onTheatre?: () => void
@@ -1383,7 +1399,7 @@ export function Player({
       win={pip.window ?? undefined}
       floating={pip.active}
       audioChoice={pip.active ? undefined : settings?.audio}
-      playback={settings?.playback}
+      preferred={subLanguages}
       audio={audioMenu}
       tracks={stream ? subtitleTracks : undefined}
       value={track}
@@ -1415,6 +1431,7 @@ export function Player({
       video={video}
       marking={markingMenu}
       sound={soundMenu}
+      playback={pip.active ? undefined : settings?.playback}
       onOpen={holdForMenu}
       onInfo={toggleInfo}
       more={!wide}
@@ -2117,7 +2134,7 @@ function AudioSubtitlesPanel({
   win,
   floating,
   audioChoice,
-  playback,
+  preferred,
   audio,
   tracks,
   value,
@@ -2138,7 +2155,7 @@ function AudioSubtitlesPanel({
   win?: Window
   floating: boolean
   audioChoice?: ReactNode
-  playback?: ReactNode
+  preferred?: string[]
   audio?: { tracks: AudioTrack[]; value: number; onChange: (index: number) => void }
   tracks?: StreamInfo['subtitles']
   value: number | null
@@ -2160,6 +2177,7 @@ function AudioSubtitlesPanel({
   const narrow = !useMediaQuery('(min-width: 40rem)') && !floating
   const room = useRoomAbove(ref, open && !narrow, win)
   const picker = useRef<HTMLInputElement>(null)
+  const scroller = useRef<HTMLDivElement>(null)
   const jimakuFiles = useQuery({
     queryKey: ['jimaku-files', jimaku?.streamId],
     queryFn: () => api.get<{ files: JimakuFile[] }>(`/api/stream/${jimaku!.streamId}/jimaku`),
@@ -2172,6 +2190,54 @@ function AudioSubtitlesPanel({
   const name = (t: StreamInfo['subtitles'][number]) => subtitleLabel(tracks ?? [], t)
   const kept = !!onKeepDelay && delay !== 0 && delay === keptDelay
   const sub = 'px-4 pt-2 pb-0.5 text-xs font-medium text-base-300'
+  const [roomLeft, setRoomLeft] = useState(0)
+  useLayoutEffect(() => {
+    if (!open) return
+    const view = win ?? window
+    const measure = () => setRoomLeft(ref.current?.getBoundingClientRect().right ?? 0)
+    measure()
+    view.addEventListener('resize', measure)
+    const shell = ref.current?.closest('[role="region"]')
+    const observer = shell ? new ResizeObserver(measure) : null
+    if (shell) observer?.observe(shell)
+    return () => {
+      view.removeEventListener('resize', measure)
+      observer?.disconnect()
+    }
+  }, [open, win, ref])
+  const columns = !narrow && !floating && !!(audioChoice || audio) && roomLeft >= 576
+  const [view, setView] = useState<'main' | 'style'>('main')
+  const go = (next: 'main' | 'style') => {
+    setView(next)
+    scroller.current?.scrollTo({ top: 0 })
+  }
+  const [moreFor, setMoreFor] = useState<string | null>(null)
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (!open) {
+      setView('main')
+      setMoreFor(null)
+    }
+  }
+  const base = (code?: string) => languageName(code?.split(/[-_]/)[0])
+  const wanted = new Set((preferred?.length ? preferred : ['en']).map(base))
+  const foreign = (tracks ?? []).filter((t) => {
+    const language = base(t.language)
+    return !!language && !wanted.has(language)
+  })
+  const foreignKey = foreign.map((t) => t.index).join(',')
+  const more = !!foreignKey && moreFor === foreignKey
+  const others = foreign.filter((t) => t.index !== value)
+  const folded = others.length > 1 && !more
+  const shown = (tracks ?? []).filter((t) => !folded || !others.includes(t))
+  const styleValue = [
+    SUB_SIZES.find((s) => s.value === String(scale))?.name,
+    look && !active?.pictures ? subLookLabel(look.value) : undefined,
+    delay !== 0 ? delayLabel(delay) : undefined,
+  ]
+    .filter(Boolean)
+    .join(' · ')
 
   return (
     <div className="relative" ref={ref}>
@@ -2202,12 +2268,29 @@ function AudioSubtitlesPanel({
             'z-50 flex animate-rise flex-col overflow-hidden bg-base-750 text-left shadow-xl shadow-black/60 ring-1 ring-white/[0.06]',
             narrow
               ? 'fixed inset-x-0 bottom-0 max-h-[60dvh] rounded-t-sheet pb-[max(0.5rem,env(safe-area-inset-bottom))]'
-              : 'absolute right-0 bottom-full mb-2 w-[340px] max-w-[calc(100vw-1rem)] origin-bottom-right rounded-xl',
+              : cx(
+                  'absolute right-0 bottom-full mb-2 max-w-[calc(100vw-1rem)] origin-bottom-right rounded-xl',
+                  columns ? 'w-[560px]' : 'w-[340px]',
+                ),
           )}
         >
           {narrow && <div aria-hidden className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-base-600" />}
           <div className="flex shrink-0 items-center justify-between gap-3 py-1 pr-1.5 pl-4">
-            <h2 className="text-sm font-semibold text-white">Audio &amp; subtitles</h2>
+            {view === 'style' ? (
+              <button
+                type="button"
+                onClick={() => go('main')}
+                aria-label="Back to audio and subtitles"
+                className="-ml-2 flex min-h-11 items-center gap-2 rounded-lg px-2 text-sm font-semibold text-white transition-colors hover:bg-white/10"
+              >
+                <span aria-hidden className="text-base-400">
+                  ‹
+                </span>
+                Size, look and timing
+              </button>
+            ) : (
+              <h2 className="text-sm font-semibold text-white">Audio &amp; subtitles</h2>
+            )}
             <button
               type="button"
               onClick={close}
@@ -2216,147 +2299,177 @@ function AudioSubtitlesPanel({
               Done
             </button>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain scrollbar-thin">
-            {(audioChoice || audio) && (
-              <PanelGroup title="Audio">
-                {audioChoice}
-                {audio && (
-                  <>
-                    <p className={sub}>Tracks in this release · this episode</p>
-                    <Choices label="Audio track">
-                      {audio.tracks.map((_, i) => (
-                        <ChoiceRow
-                          key={i}
-                          label={audioLabel(audio.tracks, i)}
-                          selected={i === audio.value}
-                          onClick={() => audio.onChange(i)}
-                        />
+          <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overscroll-contain scrollbar-thin">
+            {view === 'main' && (
+              <div className={cx(columns && 'grid grid-cols-2 divide-x divide-white/[0.06] [&>section]:border-t-0')}>
+                {(audioChoice || audio) && (
+                  <PanelGroup title="Audio" note={audioChoice ? 'This show' : undefined}>
+                    {audioChoice}
+                    {audio && (
+                      <>
+                        <p className={sub}>Tracks in this release · this episode</p>
+                        <Choices label="Audio track">
+                          {audio.tracks.map((_, i) => (
+                            <ChoiceRow
+                              key={i}
+                              label={audioLabel(audio.tracks, i)}
+                              selected={i === audio.value}
+                              onClick={() => audio.onChange(i)}
+                            />
+                          ))}
+                        </Choices>
+                      </>
+                    )}
+                  </PanelGroup>
+                )}
+
+                <PanelGroup title="Subtitles" note={tracks ? 'This episode' : undefined}>
+                  {tracks ? (
+                    <Choices label="Subtitle track">
+                      <ChoiceRow label="Off" selected={value === null} onClick={() => onChange(null)} />
+                      {shown.map((t) => (
+                        <ChoiceRow key={t.index} label={name(t)} selected={t.index === value} onClick={() => onChange(t.index)} />
                       ))}
                     </Choices>
-                  </>
-                )}
-              </PanelGroup>
+                  ) : (
+                    <p className="px-4 py-2 text-xs text-base-400">The episode's tracks show here once it opens.</p>
+                  )}
+                  {others.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setMoreFor(more ? null : foreignKey)}
+                      aria-expanded={more}
+                      className="mx-2 flex min-h-10 w-[calc(100%-1rem)] items-center gap-3 rounded-lg px-2.5 py-1.5 text-left text-sm text-base-200 transition-colors hover:bg-white/[0.05] pointer-coarse:min-h-12"
+                    >
+                      <span className="min-w-0 flex-1">
+                        {more ? 'Fewer languages' : `More languages · ${others.length}`}
+                        {!more && (
+                          <span className="mt-0.5 block truncate text-xs text-base-400">
+                            {[...new Set(others.map((t) => languageName(t.language)))].join(', ')}
+                          </span>
+                        )}
+                      </span>
+                      <span aria-hidden className={cx('text-base-500 transition-transform', more && '-rotate-90')}>
+                        ›
+                      </span>
+                    </button>
+                  )}
+                  {jimaku && (
+                    <>
+                      <p className={sub}>Jimaku · Japanese</p>
+                      {jimakuFiles.isPending ? (
+                        <p className="px-4 py-2 text-xs text-base-400">Looking…</p>
+                      ) : jimakuFiles.isError ? (
+                        <p className="px-4 py-2 text-xs text-recap">{(jimakuFiles.error as Error).message}</p>
+                      ) : jimakuFiles.data.files.length === 0 ? (
+                        <p className="px-4 py-2 text-xs text-base-400">None for this episode</p>
+                      ) : (
+                        <Choices label="Jimaku subtitles">
+                          {jimakuFiles.data.files.map((f) => (
+                            <ChoiceRow
+                              key={f.index}
+                              label={<span className="break-all">{f.name}</span>}
+                              selected={JIMAKU_TRACK - f.index === value}
+                              onClick={() => jimaku.onPick(f)}
+                            />
+                          ))}
+                        </Choices>
+                      )}
+                    </>
+                  )}
+                  {tracks && (
+                    <button
+                      type="button"
+                      onClick={() => picker.current?.click()}
+                      className="mx-2 mt-1 flex min-h-10 items-center rounded-lg px-2.5 text-left text-xs font-medium text-accent-300 transition-colors hover:bg-white/[0.05] pointer-coarse:min-h-11"
+                    >
+                      Load a subtitle file…
+                    </button>
+                  )}
+                  <input
+                    ref={picker}
+                    type="file"
+                    accept=".ass,.ssa,.srt,.vtt"
+                    hidden
+                    onChange={(e) => {
+                      const file = e.currentTarget.files?.[0]
+                      e.currentTarget.value = ''
+                      if (file) onLoadFile(file)
+                    }}
+                  />
+                </PanelGroup>
+              </div>
+            )}
+            {view === 'main' && (
+              <div className="border-t border-white/[0.06]">
+                <ActionRow label="Size, look and timing" value={styleValue} onClick={() => go('style')} />
+              </div>
             )}
 
-            <PanelGroup title="Subtitles">
-              {tracks ? (
-                <Choices label="Subtitle track">
-                  <ChoiceRow label="Off" selected={value === null} onClick={() => onChange(null)} />
-                  {tracks.map((t) => (
-                    <ChoiceRow
-                      key={t.index}
-                      label={name(t)}
-                      caption={t.index === value ? 'This episode' : undefined}
-                      selected={t.index === value}
-                      onClick={() => onChange(t.index)}
-                    />
-                  ))}
-                </Choices>
-              ) : (
-                <p className="px-4 py-2 text-xs text-base-400">The episode's tracks show here once it opens.</p>
-              )}
-              {jimaku && (
-                <>
-                  <p className={sub}>Jimaku · Japanese</p>
-                  {jimakuFiles.isPending ? (
-                    <p className="px-4 py-2 text-xs text-base-400">Looking…</p>
-                  ) : jimakuFiles.isError ? (
-                    <p className="px-4 py-2 text-xs text-recap">{(jimakuFiles.error as Error).message}</p>
-                  ) : jimakuFiles.data.files.length === 0 ? (
-                    <p className="px-4 py-2 text-xs text-base-400">None for this episode</p>
-                  ) : (
-                    <Choices label="Jimaku subtitles">
-                      {jimakuFiles.data.files.map((f) => (
-                        <ChoiceRow
-                          key={f.index}
-                          label={<span className="break-all">{f.name}</span>}
-                          selected={JIMAKU_TRACK - f.index === value}
-                          onClick={() => jimaku.onPick(f)}
-                        />
-                      ))}
-                    </Choices>
-                  )}
-                </>
-              )}
-              {tracks && (
-                <button
-                  type="button"
-                  onClick={() => picker.current?.click()}
-                  className="flex min-h-12 w-full items-center px-4 text-left text-sm text-base-200 transition-colors hover:bg-white/[0.06]"
-                >
-                  Load a subtitle file…
-                </button>
-              )}
-              <input
-                ref={picker}
-                type="file"
-                accept=".ass,.ssa,.srt,.vtt"
-                hidden
-                onChange={(e) => {
-                  const file = e.currentTarget.files?.[0]
-                  e.currentTarget.value = ''
-                  if (file) onLoadFile(file)
-                }}
-              />
-              <SegmentRow
-                label="Size"
-                caption={here}
-                value={String(scale)}
-                options={SUB_SIZES}
-                onChange={(v) => onScale(Number(v))}
-              />
-              {look &&
-                (active?.pictures ? (
-                  <p className="px-4 py-2 text-xs text-base-400">Picture subtitles keep the look they were made with.</p>
-                ) : (
-                  <>
-                    <p className={sub}>Look · all devices</p>
-                    <div
-                      aria-hidden
-                      className="mx-4 my-1 flex h-14 items-end justify-center rounded-lg bg-[linear-gradient(135deg,#384868,#6e5546)] pb-2 font-semibold"
-                      style={{ fontSize: `${0.875 * scale}rem`, ...(look.raised ? { paddingBottom: '1.4rem' } : {}) }}
-                    >
-                      <span style={previewStyle(look.value)}>Where to next?</span>
-                    </div>
-                    <Choices label="Subtitle look">
-                      {SUB_LOOKS.map((l) => (
-                        <ChoiceRow key={l.value} label={l.label} selected={look.value === l.value} onClick={() => look.onChange(l.value)} />
-                      ))}
-                    </Choices>
-                    {look.onRaised && (
-                      <SegmentRow
-                        label="Position"
-                        caption="All devices · raised clears burned-in text"
-                        value={look.raised ? 'raised' : 'low'}
-                        options={[
-                          { value: 'low', label: 'Low' },
-                          { value: 'raised', label: 'Raised' },
-                        ]}
-                        onChange={(v) => look.onRaised?.(v === 'raised')}
-                      />
+            {view === 'style' && (
+              <div className={cx(columns && look && 'grid grid-cols-2 divide-x divide-white/[0.06] [&>section]:border-t-0')}>
+                {look && (
+                  <PanelGroup title="Look" note="All devices">
+                    {active?.pictures ? (
+                      <p className="px-4 py-2 text-xs text-base-400">Picture subtitles keep the look they were made with.</p>
+                    ) : (
+                      <>
+                        <div
+                          aria-hidden
+                          className="mx-4 mb-2 flex h-16 items-end justify-center rounded-lg bg-[linear-gradient(135deg,#384868,#6e5546)] pb-2 font-semibold"
+                          style={{ fontSize: `${0.875 * scale}rem`, ...(look.raised ? { paddingBottom: '1.4rem' } : {}) }}
+                        >
+                          <span style={previewStyle(look.value)}>Where to next?</span>
+                        </div>
+                        <Choices label="Subtitle look">
+                          {SUB_LOOKS.map((l) => (
+                            <ChoiceRow key={l.value} label={l.label} selected={look.value === l.value} onClick={() => look.onChange(l.value)} />
+                          ))}
+                        </Choices>
+                      </>
                     )}
-                  </>
-                ))}
-              <Stepper
-                label="Delay"
-                caption={kept ? 'Kept for this show and group' : 'This episode'}
-                value={delayLabel(delay)}
-                onLess={() => onDelay(Math.round((delay - DELAY_STEP) * 10) / 10)}
-                onMore={() => onDelay(Math.round((delay + DELAY_STEP) * 10) / 10)}
-                onReset={() => onDelay(0)}
-              />
-              {onKeepDelay && delay !== (keptDelay ?? 0) && (
-                <button
-                  type="button"
-                  onClick={() => onKeepDelay(delay)}
-                  className="flex min-h-11 w-full items-center px-4 text-left text-xs font-medium text-accent-300 transition-colors hover:bg-white/[0.06]"
-                >
-                  {delay === 0 ? 'Stop keeping a delay for this show' : 'Keep this delay for this show'}
-                </button>
-              )}
-            </PanelGroup>
-
-            {playback && <PanelGroup title="Playback">{playback}</PanelGroup>}
+                  </PanelGroup>
+                )}
+                <PanelGroup title="Size and timing">
+                  <SegmentRow
+                    label="Size"
+                    caption={here}
+                    value={String(scale)}
+                    options={SUB_SIZES}
+                    onChange={(v) => onScale(Number(v))}
+                  />
+                  {look?.onRaised && !active?.pictures && (
+                    <SegmentRow
+                      label="Position"
+                      caption="All devices · raised clears burned-in text"
+                      value={look.raised ? 'raised' : 'low'}
+                      options={[
+                        { value: 'low', label: 'Low' },
+                        { value: 'raised', label: 'Raised' },
+                      ]}
+                      onChange={(v) => look.onRaised?.(v === 'raised')}
+                    />
+                  )}
+                  <Stepper
+                    label="Delay"
+                    caption={kept ? 'Kept for this show and group' : 'This episode'}
+                    value={delayLabel(delay)}
+                    onLess={() => onDelay(Math.round((delay - DELAY_STEP) * 10) / 10)}
+                    onMore={() => onDelay(Math.round((delay + DELAY_STEP) * 10) / 10)}
+                    onReset={() => onDelay(0)}
+                  />
+                  {onKeepDelay && delay !== (keptDelay ?? 0) && (
+                    <button
+                      type="button"
+                      onClick={() => onKeepDelay(delay)}
+                      className="flex min-h-11 w-full items-center px-4 text-left text-xs font-medium text-accent-300 transition-colors hover:bg-white/[0.06]"
+                    >
+                      {delay === 0 ? 'Stop keeping a delay for this show' : 'Keep this delay for this show'}
+                    </button>
+                  )}
+                </PanelGroup>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2473,8 +2586,9 @@ function SoundPicker({
           aria-label="Sound"
           onKeyDown={walkMenu}
           style={{ maxHeight: room }}
-          className="absolute right-0 bottom-full z-50 mb-2 w-52 origin-bottom-right animate-rise overflow-y-auto rounded-xl bg-base-750 py-1 shadow-xl shadow-black/60 ring-1 ring-white/[0.06] scrollbar-thin"
+          className="absolute right-0 bottom-full z-50 mb-2 w-80 max-w-[calc(100vw-1rem)] origin-bottom-right animate-rise overflow-y-auto rounded-xl bg-base-750 py-1 shadow-xl shadow-black/60 ring-1 ring-white/[0.06] scrollbar-thin"
         >
+          <p className="px-3.5 pt-2 pb-1 text-sm font-semibold text-white">Sound</p>
           <SoundRows value={value} onChange={onChange} />
         </div>
       )}
@@ -2483,26 +2597,61 @@ function SoundPicker({
 }
 
 function SoundRows({ value, onChange }: { value: SoundOptions; onChange: (patch: Partial<SoundOptions>) => void }) {
-  const heading = 'px-3 pt-2 pb-1 text-[13px] font-semibold text-base-400'
   return (
     <>
-      <p className={heading}>Voice boost</p>
-      {VOICE_LEVELS.map((level) => (
-        <MenuRow key={level} selected={level === value.voice} onClick={() => onChange({ voice: level })}>
-          {LEVEL_LABELS[level]}
-        </MenuRow>
-      ))}
-      <p className={heading}>Enhance</p>
-      <MenuRow selected={value.night} onClick={() => onChange({ night: !value.night })}>Night mode</MenuRow>
-      <MenuRow selected={value.headphones} onClick={() => onChange({ headphones: !value.headphones })}>Headphones</MenuRow>
-      <MenuRow selected={value.mono} onClick={() => onChange({ mono: !value.mono })}>Mono</MenuRow>
-      <p className={heading}>Volume boost</p>
-      {VOICE_LEVELS.map((level) => (
-        <MenuRow key={level} selected={level === value.boost} onClick={() => onChange({ boost: level })}>
-          {LEVEL_LABELS[level]}
-        </MenuRow>
-      ))}
+      <LevelRow label="Voice boost" caption="Clearer dialogue" options={LEVEL_OPTIONS} value={value.voice} onChange={(voice) => onChange({ voice })} />
+      <LevelRow label="Volume boost" caption="Louder overall" options={LEVEL_OPTIONS} value={value.boost} onChange={(boost) => onChange({ boost })} />
+      <div className="my-1 border-t border-white/[0.06]" />
+      <MenuToggle label="Night mode" caption="Evens out loud and quiet" on={value.night} onChange={(night) => onChange({ night })} />
+      <MenuToggle
+        label="Headphones"
+        caption="Softer stereo for headphones"
+        on={value.headphones}
+        onChange={(headphones) => onChange({ headphones })}
+      />
+      <MenuToggle label="Mono" caption="Both sides in both ears" on={value.mono} onChange={(mono) => onChange({ mono })} />
     </>
+  )
+}
+
+const LEVEL_OPTIONS = VOICE_LEVELS.map((level) => ({ value: level, label: LEVEL_LABELS[level] }))
+
+function LevelRow<T extends string>({
+  label,
+  caption,
+  options,
+  value,
+  onChange,
+}: {
+  label: string
+  caption?: string
+  options: ReadonlyArray<{ value: T; label: string }>
+  value: T
+  onChange: (value: T) => void
+}) {
+  return (
+    <div role="group" aria-label={label} className="flex items-center justify-between gap-3 px-3.5 py-2">
+      <span className="min-w-0 text-sm text-base-100">
+        {label}
+        {caption && <span className="block text-xs text-base-500">{caption}</span>}
+      </span>
+      <span className="flex shrink-0 gap-0.5 rounded-lg bg-base-900 p-0.5">
+        {options.map((o) => (
+          <button
+            key={o.value}
+            role="menuitemradio"
+            aria-checked={o.value === value}
+            onClick={() => onChange(o.value)}
+            className={cx(
+              'h-7 rounded-md px-2 text-xs font-medium transition-colors pointer-coarse:h-10',
+              o.value === value ? 'bg-base-700 text-white' : 'text-base-300 hover:text-white',
+            )}
+          >
+            {o.label}
+          </button>
+        ))}
+      </span>
+    </div>
   )
 }
 
@@ -2527,7 +2676,15 @@ const SKIP_SOURCES: Record<string, string> = {
 
 const SLEEP_MINUTES = [15, 30, 45, 60]
 
-type MenuView = 'main' | 'speed' | 'sleep' | 'skips' | 'sound' | 'quality'
+type MenuView = 'main' | 'speed' | 'sleep' | 'skips' | 'sound' | 'quality' | 'skipping'
+
+const skipShort = (mode: SkipMode) => SKIP_MODES.find((c) => c.value === mode)?.label ?? mode
+
+function skipSummary(p: PlaybackSettings): string {
+  const op = skipShort(p.openings.value)
+  const ed = skipShort(p.endings.value)
+  return op === ed ? op : `Openings ${op.toLowerCase()}, endings ${ed.toLowerCase()}`
+}
 
 function PlayerMenu({
   rate,
@@ -2537,6 +2694,7 @@ function PlayerMenu({
   video,
   marking,
   sound,
+  playback,
   onOpen,
   onInfo,
   more = false,
@@ -2548,6 +2706,7 @@ function PlayerMenu({
   video: HTMLVideoElement | null
   marking?: Marking
   sound?: { value: SoundOptions; onChange: (patch: Partial<SoundOptions>) => void }
+  playback?: PlaybackSettings
   onOpen: (open: boolean) => void
   onInfo: () => void
   more?: boolean
@@ -2615,21 +2774,57 @@ function PlayerMenu({
           aria-label="Player settings"
           onKeyDown={walkMenu}
           style={sheetStyle}
-          className={sheetClass('w-64', 'py-1')}
+          className={sheetClass('w-72', 'py-1')}
         >
           {view === 'main' && (
             <>
-              {!wide && sound && <MenuItem label="Sound" value={soundSummary(sound.value)} onClick={() => setView('sound')} />}
-              <MenuItem label="Speed" value={rate === 1 ? 'Normal' : `${rate}×`} onClick={() => setView('speed')} />
-              <MenuItem label="Quality" value={QUALITIES.find((q) => q.value === net.quality)?.label ?? 'Auto'} onClick={() => setView('quality')} />
-              <MenuItem label="Sleep timer" value={sleepValue} onClick={() => setView('sleep')} />
-              {marking && (
+              {!wide && sound && <MenuItem label="Sound" value={soundSummary(sound.value)} onClick={() => setView('sound')} next />}
+              <MenuItem label="Speed" value={rate === 1 ? 'Normal' : `${rate}×`} onClick={() => setView('speed')} next />
+              <MenuItem
+                label="Quality"
+                value={QUALITIES.find((q) => q.value === net.quality)?.label ?? 'Auto'}
+                onClick={() => setView('quality')}
+                next
+              />
+              {playback?.upscale && (
+                <MenuItem
+                  label="Sharper picture"
+                  value={playback.upscale.value}
+                  onClick={() => {
+                    close()
+                    playback.upscale?.onOpen()
+                  }}
+                  next
+                />
+              )}
+              <div aria-hidden className="my-1 border-t border-white/[0.06]" />
+              {playback && <MenuItem label="Skipping" value={skipSummary(playback)} onClick={() => setView('skipping')} next />}
+              {playback && (
+                <MenuToggle
+                  label="Play next by itself"
+                  caption={playback.autoNext.caption}
+                  on={playback.autoNext.on}
+                  onChange={playback.autoNext.onChange}
+                />
+              )}
+              {playback && (
+                <MenuToggle
+                  label="Start playing when opened"
+                  caption={playback.autoplay.caption}
+                  on={playback.autoplay.on}
+                  onChange={playback.autoplay.onChange}
+                />
+              )}
+              <MenuItem label="Sleep timer" value={sleepValue} onClick={() => setView('sleep')} next />
+              {marking && !playback && (
                 <MenuItem
                   label="Skip times"
                   value={from ? 'Marking' : skips.length ? `${skips.length} known` : 'None known'}
                   onClick={() => setView('skips')}
+                  next
                 />
               )}
+              <div aria-hidden className="my-1 border-t border-white/[0.06]" />
               <MenuItem label="Playback info" value={coarse ? '' : keyHint('info')} onClick={() => (onInfo(), close())} />
               <div className="pointer-coarse:hidden">
                 <MenuItem label="Keyboard shortcuts" value="?" onClick={() => (window.dispatchEvent(new Event(SHOW_SHORTCUTS)), close())} />
@@ -2687,9 +2882,41 @@ function PlayerMenu({
             </>
           )}
 
+          {view === 'skipping' && playback && (
+            <>
+              <MenuBack label="Skipping" onClick={() => setView('main')} />
+              <LevelRow
+                label="Openings"
+                caption={playback.openings.caption}
+                options={SKIP_MODES}
+                value={playback.openings.value}
+                onChange={playback.openings.onChange}
+              />
+              <LevelRow
+                label="Endings"
+                caption={playback.endings.caption}
+                options={SKIP_MODES}
+                value={playback.endings.value}
+                onChange={playback.endings.onChange}
+              />
+              <p className="px-3.5 pt-0.5 pb-2 text-xs text-base-500">Button shows Skip while it plays. Auto skips by itself, with Undo.</p>
+              <div className="mt-1 border-t border-white/[0.06] pt-1">
+                <MenuToggle label="Skip filler episodes" caption="This show" on={playback.filler.on} onChange={playback.filler.onChange} />
+                {marking && (
+                  <MenuItem
+                    label="Skip times"
+                    value={from ? 'Marking' : skips.length ? `${skips.length} known` : 'None known'}
+                    onClick={() => setView('skips')}
+                    next
+                  />
+                )}
+              </div>
+            </>
+          )}
+
           {view === 'skips' && marking && (
             <>
-              <MenuBack label="Skip times" onClick={() => setView('main')} />
+              <MenuBack label="Skip times" onClick={() => setView(playback ? 'skipping' : 'main')} />
               <SkipTimesPanel skips={skips} video={video} marking={marking} />
             </>
           )}
@@ -2810,7 +3037,7 @@ function PlaybackInfo({
       ref={panel}
       role="region"
       aria-label="Playback info"
-      className="pointer-events-auto absolute top-20 left-4 z-30 max-h-[calc(100%-6rem)] w-80 max-w-[calc(100%-2rem)] overflow-y-auto rounded-lg bg-base-950/90 p-3 text-xs text-base-200 ring-1 ring-white/15 backdrop-blur-sm"
+      className="pointer-events-auto absolute top-20 left-4 z-30 max-h-[calc(100%-6rem)] w-80 max-w-[calc(100%-2rem)] overflow-y-auto rounded-lg bg-base-950/90 p-3 text-xs text-base-200 ring-1 ring-white/15 backdrop-blur-sm scrollbar-thin"
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <p className="text-sm font-medium text-white">Playback info</p>
@@ -2842,30 +3069,58 @@ function PlaybackInfo({
   )
 }
 
-function MenuItem({ label, value, onClick }: { label: string; value: string; onClick: () => void }) {
+const menuRow =
+  'mx-1 flex w-[calc(100%-0.5rem)] items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-white/[0.06] pointer-coarse:min-h-11'
+
+function MenuItem({ label, value, onClick, next = false }: { label: string; value: string; onClick: () => void; next?: boolean }) {
   return (
-    <button
-      role="menuitem"
-      onClick={onClick}
-      className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-base-100 transition-colors hover:bg-base-750 pointer-coarse:min-h-11"
-    >
-      <span>{label}</span>
-      <span className="truncate text-xs text-base-400">{value}</span>
+    <button role="menuitem" onClick={onClick} className={cx(menuRow, 'text-base-100')}>
+      <span className="shrink-0">{label}</span>
+      <span className="ml-auto min-w-0 truncate text-xs text-base-400">{value}</span>
+      {next && (
+        <span aria-hidden className="-ml-1.5 text-base-500">
+          ›
+        </span>
+      )}
+    </button>
+  )
+}
+
+function MenuToggle({
+  label,
+  caption,
+  on,
+  onChange,
+}: {
+  label: string
+  caption?: string
+  on: boolean
+  onChange: (on: boolean) => void
+}) {
+  return (
+    <button role="menuitemcheckbox" aria-checked={on} onClick={() => onChange(!on)} className={cx(menuRow, 'justify-between text-base-100')}>
+      <span className="min-w-0">
+        <span className="block">{label}</span>
+        {caption && <span className="block text-xs text-base-500">{caption}</span>}
+      </span>
+      <span aria-hidden className={cx('relative h-5 w-9 shrink-0 rounded-full transition-colors', on ? 'bg-accent-500' : 'bg-base-700')}>
+        <span className={cx('absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform', on && 'translate-x-4')} />
+      </span>
     </button>
   )
 }
 
 function MenuBack({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <button
-      role="menuitem"
-      onClick={onClick}
-      aria-label={`Back from ${label}`}
-      className="mb-1 flex w-full items-center gap-2 border-b border-base-750 px-3 py-2 text-left text-sm font-medium text-base-100 transition-colors hover:bg-base-750 pointer-coarse:min-h-11"
-    >
-      <span aria-hidden className="text-base-400">‹</span>
-      {label}
-    </button>
+    <>
+      <button role="menuitem" onClick={onClick} aria-label={`Back from ${label}`} className={cx(menuRow, 'gap-2 font-semibold text-white')}>
+        <span aria-hidden className="text-base-400">
+          ‹
+        </span>
+        {label}
+      </button>
+      <div aria-hidden className="my-1 border-t border-white/[0.06]" />
+    </>
   )
 }
 
@@ -2914,7 +3169,7 @@ function SkipTimesPanel({ skips, video, marking }: { skips: SkipRange[]; video: 
           {r.source && <span className="text-xs text-base-500">{SKIP_SOURCES[r.source] ?? r.source}</span>}
         </div>
       ))}
-      <div className="mt-1 border-t border-base-750 pt-1">
+      <div className="mt-1 border-t border-white/[0.06] pt-1">
         {from ? (
           <>
             <p className="px-3 py-1.5 text-xs text-base-400">
@@ -2977,12 +3232,12 @@ function MenuRow({
       role="menuitemradio"
       aria-checked={selected}
       onClick={onClick}
-      className={cx(
-        'block w-full truncate px-3 py-1.5 text-left text-sm transition-colors pointer-coarse:py-3',
-        selected ? 'text-accent-300' : 'text-base-200 hover:bg-base-750',
-      )}
+      className={cx(menuRow, 'py-1.5', selected ? 'bg-white/[0.08] font-medium text-white' : 'text-base-200')}
     >
-      {children}
+      <span className="min-w-0 flex-1 truncate">{children}</span>
+      <svg viewBox="0 0 24 24" aria-hidden className={cx('size-4 shrink-0 text-accent-300', !selected && 'invisible')}>
+        <path d="m5 13 4 4L19 7" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
     </button>
   )
 }

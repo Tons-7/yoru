@@ -11,17 +11,11 @@ import (
 	"yoru/internal/store"
 )
 
-// Pairing with a code: a TV without the token is shown a short code, not a refusal; typed under Settings,
-// Devices on a device already in, it gives the TV the token, so nobody types a long link with a remote.
-
 const (
-	pairCookie = "yoru_pair"
-	pairFor    = 10 * time.Minute
-	// maxPairing: enough for a household; past it a flood of pages can't keep a real one waiting for long.
-	maxPairing = 20
-	// pairPerAddr: a scanner or link preview keeping no cookies takes its own few places, not everyone's.
-	pairPerAddr = 3
-	// pairAlphabet has nothing to mistake across a room: no 0 and O, no 1 and I.
+	pairCookie   = "yoru_pair"
+	pairFor      = 10 * time.Minute
+	maxPairing   = 20
+	pairPerAddr  = 3
 	pairAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 )
 
@@ -33,7 +27,6 @@ type pairing struct {
 	approved bool
 }
 
-// newPairCode is six letters and digits from pairAlphabet, shown as "K7Q-2MX".
 func newPairCode() string {
 	b := make([]byte, 6)
 	rand.Read(b)
@@ -43,7 +36,6 @@ func newPairCode() string {
 	return string(b)
 }
 
-// normalPairCode is what was typed, without its dash or spaces and in capitals, so "k7q 2mx" finds "K7Q2MX".
 func normalPairCode(typed string) string {
 	return strings.Map(func(r rune) rune {
 		if r == '-' || r == ' ' {
@@ -53,12 +45,10 @@ func normalPairCode(typed string) string {
 	}, strings.ToUpper(strings.TrimSpace(typed)))
 }
 
-// expirePairs drops codes past pairFor; s.pairMu is held.
 func (s *Server) expirePairs(now time.Time) {
 	maps.DeleteFunc(s.pairs, func(_ string, p *pairing) bool { return now.Sub(p.created) > pairFor })
 }
 
-// pairOf is the pairing a request's cookie names, unexpired; s.pairMu is held.
 func (s *Server) pairOf(r *http.Request, now time.Time) (string, *pairing) {
 	s.expirePairs(now)
 	c, err := r.Cookie(pairCookie)
@@ -68,7 +58,6 @@ func (s *Server) pairOf(r *http.Request, now time.Time) (string, *pairing) {
 	return c.Value, s.pairs[c.Value]
 }
 
-// pairPage shows a device without the token the code to pair it with, the same one again on a reload.
 func (s *Server) pairPage(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	s.pairMu.Lock()
@@ -98,8 +87,6 @@ func (s *Server) pairPage(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(pairingPage(code, name)))
 }
 
-// pairWait is the pairing page asking "accepted yet?"; once so, the device gets the token (and with device
-// approval on, an accepted identity), and the page opens Yoru.
 func (s *Server) pairWait(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	s.pairMu.Lock()
@@ -123,8 +110,6 @@ func (s *Server) pairWait(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// acceptPaired gives a paired device an accepted identity when device approval is on: the code was the host's
-// say, so it isn't asked again.
 func (s *Server) acceptPaired(w http.ResponseWriter, r *http.Request, name string) {
 	a := &s.approvals
 	a.mu.Lock()
@@ -147,7 +132,6 @@ func (s *Server) acceptPaired(w http.ResponseWriter, r *http.Request, name strin
 	a.status[id], a.seen[id] = store.DeviceApproved, time.Now()
 }
 
-// pairApprove takes the code a TV shows. With device approval on only the host may, as the host decides.
 func (s *Server) pairApprove(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Code string `json:"code"`
@@ -180,7 +164,6 @@ func (s *Server) pairApprove(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusNotFound, map[string]any{"error": "No device is showing that code. Codes last 10 minutes; reload the TV's page for a new one."})
 }
 
-// pairingPage is what a device without the token sees: self-contained, as the app stays behind the token.
 func pairingPage(code, name string) string {
 	shown := `<p>Too many devices are waiting to pair. Try again in a few minutes.</p>`
 	if code != "" {
@@ -191,6 +174,7 @@ Pair a device:</p><div class="code">` + code[:3] + "-" + code[3:] + `</div><p cl
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b0c10">
 <title>Pair with Yoru</title><style>
+html{scrollbar-width:thin;scrollbar-color:#1e212a #0b0c10}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0c10;color:#d6dbe6;font:18px/1.5 system-ui,sans-serif}
 main{max-width:30rem;padding:2rem;text-align:center}h1{font-size:1.5rem;margin:0 0 .75rem}p{margin:0;color:#8b93a7}
 .code{margin:1.5rem 0;font:600 3.5rem/1 ui-monospace,monospace;letter-spacing:.15em;color:#fff}.small{font-size:.9rem}

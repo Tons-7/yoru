@@ -219,7 +219,8 @@ check(
 )
 const avPanel = page.getByRole('dialog', { name: 'Audio & subtitles' })
 const audioTracks = avPanel.getByRole('radiogroup', { name: 'Audio track' })
-await page.getByRole('button', { name: 'Audio & subtitles', exact: true }).last().click({ timeout: 10_000 }).catch(() => {})
+await page.getByRole('region', { name: 'Video player' }).hover().catch(() => {})
+await page.getByRole('region', { name: 'Video player' }).getByRole('button', { name: 'Audio & subtitles', exact: true }).click({ timeout: 10_000 }).catch(() => {})
 await audioTracks.waitFor({ timeout: 5000 }).catch(() => {})
 check(
   (await audioTracks.getByRole('radio').count()) === 2,

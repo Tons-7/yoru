@@ -19,25 +19,21 @@ const (
 	deviceCookie    = "yoru_device"
 
 	approvalOff    = "off"
-	approvalOnce   = "once"   // the host accepts a device once and it is remembered
-	approvalAlways = "always" // an accepted device asks again after approvalIdle away, or a restart
+	approvalOnce   = "once"
+	approvalAlways = "always"
 
 	approvalIdle = 30 * time.Minute
-	// Enough for a household; past it a flood of requests cannot bury the real one.
-	maxPending = 20
+	maxPending   = 20
 )
 
-// approvals is the host's say over which paired devices get in. Memory answers
-// every request; the database keeps the decisions across restarts.
 type approvals struct {
 	mu     sync.Mutex
 	loaded bool
 	mode   string
 	status map[string]string
-	seen   map[string]time.Time // approvalAlways: an approved device's last request
+	seen   map[string]time.Time
 }
 
-// load must be called with a.mu held.
 func (s *Server) loadApprovals(ctx context.Context) {
 	a := &s.approvals
 	if a.loaded {
@@ -53,7 +49,6 @@ func (s *Server) loadApprovals(ctx context.Context) {
 	}
 	devices, err := s.store.Devices(ctx)
 	if err != nil {
-		// Not marked loaded: fail closed now and read again on the next request.
 		s.log.Warn("load devices", "err", err)
 		a.mode = approvalOnce
 		return
@@ -64,13 +59,11 @@ func (s *Server) loadApprovals(ctx context.Context) {
 	a.loaded = true
 }
 
-// deviceID is what the database holds, so a copied table cannot be replayed as a cookie.
 func deviceID(secret string) string {
 	sum := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(sum[:16])
 }
 
-// requestDevice is the device ID the request's cookie names, or "" for a device given none.
 func requestDevice(r *http.Request) string {
 	if c, err := r.Cookie(deviceCookie); err == nil && c.Value != "" {
 		return deviceID(c.Value)
@@ -78,7 +71,6 @@ func requestDevice(r *http.Request) string {
 	return ""
 }
 
-// admit lets an approved device in (token already checked); any other is recorded and shown the waiting page.
 func (s *Server) admit(w http.ResponseWriter, r *http.Request) bool {
 	a := &s.approvals
 	a.mu.Lock()
@@ -96,12 +88,11 @@ func (s *Server) admit(w http.ResponseWriter, r *http.Request) bool {
 			a.mu.Unlock()
 			return true
 		}
-		status = "" // lapsed: ask again
+		status = ""
 	}
 
 	navigation := r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html")
 	name := deviceName(r.UserAgent())
-	// A cookieless request that is not a page load is a script; it earns no request row.
 	if status == "" && (id != "" || navigation) {
 		status = s.requestAccess(w, r, id, name)
 	}
@@ -123,7 +114,6 @@ func (s *Server) admit(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-// requestAccess records the device as pending, with a new identity if it has none. approvals.mu is held.
 func (s *Server) requestAccess(w http.ResponseWriter, r *http.Request, id, name string) string {
 	a := &s.approvals
 	pending := 0
@@ -135,11 +125,9 @@ func (s *Server) requestAccess(w http.ResponseWriter, r *http.Request, id, name 
 	if pending >= maxPending {
 		return "full"
 	}
-	// A denied device that drops its cookie is still the denied device: its address answers for it.
 	if id == "" && s.deniedAddr(r) {
 		return store.DeviceDenied
 	}
-	// Through a proxy that names no client every device shares its address: only the cookie tells them apart.
 	addr := clientAddr(r)
 	if id == "" && addr != "" && s.store.PendingFrom(r.Context(), addr, name) {
 		return store.DevicePending
@@ -158,7 +146,6 @@ func (s *Server) requestAccess(w http.ResponseWriter, r *http.Request, id, name 
 	return store.DevicePending
 }
 
-// deniedAddr reports a request from the address of a device the host turned down.
 func (s *Server) deniedAddr(r *http.Request) bool {
 	addr := clientAddr(r)
 	if addr == "" {
@@ -176,7 +163,6 @@ func (s *Server) deniedAddr(r *http.Request) bool {
 	return false
 }
 
-// deviceName is a label the host can recognise, from the User-Agent.
 func deviceName(ua string) string {
 	pick := func(names ...string) string {
 		for i := 0; i < len(names); i += 2 {
@@ -186,7 +172,6 @@ func deviceName(ua string) string {
 		}
 		return ""
 	}
-	// Order matters: Android says Linux, iPad says Mac OS X, Edge and Opera say Chrome.
 	system := pick("Android", "Android", "iPhone", "iPhone", "iPad", "iPad", "Windows", "Windows",
 		"Mac OS X", "Mac", "CrOS", "ChromeOS", "Linux", "Linux")
 	browser := pick("Firefox", "Firefox", "Edg", "Edge", "OPR", "Opera", "SamsungBrowser", "Samsung Internet",
@@ -200,7 +185,6 @@ func deviceName(ua string) string {
 	return "Unknown device"
 }
 
-// accessMe reaches its handler only for an admitted device; admit answers the rest.
 func (s *Server) accessMe(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"status": store.DeviceApproved})
 }
@@ -215,7 +199,6 @@ func (s *Server) accessDevices(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	s.loadApprovals(r.Context())
 	mode := a.mode
-	// Under approvalAlways an accepted device that went quiet has to ask again.
 	if mode == approvalAlways {
 		for i, d := range devices {
 			if d.Status == store.DeviceApproved && time.Since(a.seen[d.ID]) > approvalIdle {
@@ -272,7 +255,6 @@ func (s *Server) decideDevice(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "decide device", err)
 		return
 	}
-	// Only a device that had access can have made links; declining a stranger ends nobody's playback.
 	if body.Status == store.DeviceDenied {
 		if a.status[id] == store.DeviceApproved {
 			s.grantEpoch.Add(1)
@@ -307,7 +289,6 @@ func (s *Server) removeDevice(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"removed": true})
 }
 
-// waitingPage is what a device sees until the host decides; self-contained, so the app stays behind the gate.
 func waitingPage(status, name string) string {
 	title, detail := "Waiting for the host", "Ask the person running Yoru to accept this device. This page opens Yoru as soon as they do."
 	switch status {
@@ -319,6 +300,7 @@ func waitingPage(status, name string) string {
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b0c10">
 <title>Yoru</title><style>
+html{scrollbar-width:thin;scrollbar-color:#1e212a #0b0c10}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0c10;color:#d6dbe6;font:16px/1.5 system-ui,sans-serif}
 main{max-width:22rem;padding:2rem;text-align:center}h1{font-size:1.25rem;margin:0 0 .5rem}p{margin:0;color:#8b93a7}
 code{display:inline-block;margin-top:1rem;padding:.25rem .6rem;border-radius:.4rem;background:#151822;color:#d6dbe6}

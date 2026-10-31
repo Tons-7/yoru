@@ -165,7 +165,7 @@ export function MoreMenu({
               top: below ? box.bottom + 6 : Math.max(8, box.top - 6 - height),
               left: Math.max(8, Math.min(box.right - 240, window.innerWidth - 248)),
             }}
-            className="fixed z-[60] max-h-[calc(100dvh-1rem)] w-60 animate-rise overflow-y-auto rounded-card bg-base-750 p-1 shadow-panel"
+            className="fixed z-[60] max-h-[calc(100dvh-1rem)] w-60 animate-rise overflow-y-auto rounded-card bg-base-750 p-1 shadow-panel scrollbar-thin"
           >
             {title && (
               <>

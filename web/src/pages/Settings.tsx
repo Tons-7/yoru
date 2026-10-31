@@ -1348,7 +1348,7 @@ function StorageTab() {
           )}
         </Row>
         {found && found.removed > 0 && (
-          <ul className="my-3 max-h-40 overflow-y-auto rounded-md bg-base-950 px-3 py-2 font-mono text-xs text-base-400">
+          <ul className="my-3 max-h-40 overflow-y-auto rounded-md bg-base-950 px-3 py-2 font-mono text-xs text-base-400 scrollbar-thin">
             {found.files.map((f) => (
               <li key={f.name} className="flex justify-between gap-4">
                 <span className="truncate">{f.name}</span>

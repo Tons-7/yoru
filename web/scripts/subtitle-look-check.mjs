@@ -89,6 +89,7 @@ const sizeIs = (name) =>
 const openMenu = async () => {
   await page.getByRole('region', { name: 'Video player' }).getByRole('button', { name: 'Audio & subtitles' }).click()
   await menu.waitFor({ timeout: 5000 })
+  await menu.getByRole('button', { name: /^Size, look and timing/ }).click()
 }
 
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })

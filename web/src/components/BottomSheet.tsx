@@ -108,8 +108,8 @@ export function BottomSheet({
         </div>
         <div
           className={cx(
-            'min-h-0 flex-1 overflow-y-auto overscroll-contain',
-            panel ? 'px-4 scrollbar-thin sm:px-5' : 'px-2',
+            'min-h-0 flex-1 overflow-y-auto overscroll-contain scrollbar-thin',
+            panel ? 'px-4 sm:px-5' : 'px-2',
             footer ? 'pb-4' : bottom,
           )}
         >

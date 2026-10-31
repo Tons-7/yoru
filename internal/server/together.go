@@ -15,9 +15,6 @@ import (
 	"yoru/internal/config"
 )
 
-// Watch together: a room on the host's Yoru that friends with their own Yoru join by link. Each plays
-// its own copy of the same release; only play, pause, seek, ready and chat pass through here.
-
 const (
 	togetherMax  = 8
 	togetherFor  = 24 * time.Hour
@@ -29,12 +26,12 @@ var togetherReactions = []string{"😂", "😮", "❤️", "👏"}
 type togetherState struct {
 	Playing  bool    `json:"playing"`
 	Position float64 `json:"position"`
-	// At is when Position held, in server milliseconds, so a player can work out where the room is now.
+
 	At       int64  `json:"at"`
 	AnimeID  int    `json:"animeId"`
 	Episode  int    `json:"episode"`
 	InfoHash string `json:"infoHash,omitempty"`
-	// Waiting: a play held until everyone is ready.
+
 	Waiting bool `json:"waiting"`
 }
 
@@ -48,7 +45,7 @@ type togetherMember struct {
 	token     string
 	streams   int
 	events    chan []byte
-	// When they last went (or asked to join), for clearing out seats nobody comes back to.
+
 	gone time.Time
 }
 
@@ -94,7 +91,6 @@ func (r *togetherRoom) view() map[string]any {
 		"state": r.state, "members": members, "now": nowMillis()}
 }
 
-// send goes to every admitted member, or only to those given.
 func (r *togetherRoom) send(event map[string]any, to ...*togetherMember) {
 	event["now"] = nowMillis()
 	raw, _ := json.Marshal(event)
@@ -123,8 +119,6 @@ func (r *togetherRoom) host() *togetherMember {
 	return nil
 }
 
-// tidy clears seats left 2 minutes (a closed tab) and knocks left unanswered 10, and keeps a host: the
-// longest here takes over, or nobody could let anyone in.
 func (r *togetherRoom) tidy() {
 	r.members = slices.DeleteFunc(r.members, func(m *togetherMember) bool {
 		if m.Connected || m.gone.IsZero() {
@@ -147,7 +141,6 @@ func (r *togetherRoom) tidy() {
 	}
 }
 
-// allReady: everyone here has the room's spot loaded; someone not connected doesn't hold the room.
 func (r *togetherRoom) allReady() bool {
 	for _, m := range r.members {
 		if m.Admitted && m.Connected && !m.Ready {
@@ -187,7 +180,6 @@ func (s *Server) togetherRoom(w http.ResponseWriter, req *http.Request) *togethe
 	return room
 }
 
-// togetherCORS lets a friend's page, served by their own Yoru, talk to this one: the link is the key.
 func togetherCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
@@ -216,7 +208,6 @@ func (s *Server) createTogether(w http.ResponseWriter, req *http.Request) {
 	if names := s.httpsNames(); len(names) > 0 {
 		base = fmt.Sprintf("https://%s:%s", names[0], s.port())
 	} else if config.Env("TOGETHER_LOCAL") != "" {
-		// End-to-end checks only: a scratch instance has no HTTPS.
 		base = requestOrigin(req)
 	}
 	if base == "" {
@@ -249,7 +240,6 @@ func (s *Server) createTogether(w http.ResponseWriter, req *http.Request) {
 	send(w, http.StatusOK, map[string]any{"code": room.code, "link": link, "member": host.ID, "token": host.token})
 }
 
-// expireRooms drops rooms a day old, or left empty a while; s.togetherMu is held.
 func (s *Server) expireRooms() {
 	for code, room := range s.rooms {
 		room.mu.Lock()
@@ -277,7 +267,6 @@ func cleanName(name, fallback string) string {
 	return name
 }
 
-// uniqueName numbers a name already in the room, Friend then Friend 2, so the feed tells people apart.
 func uniqueName(members []*togetherMember, name string) string {
 	taken := func(n string) bool {
 		return slices.ContainsFunc(members, func(m *togetherMember) bool { return strings.EqualFold(m.Name, n) })
@@ -372,7 +361,6 @@ func (s *Server) togetherEvents(w http.ResponseWriter, req *http.Request) {
 		room.mu.Lock()
 		if m.streams--; m.streams == 0 {
 			m.Connected, m.Ready, m.gone = false, false, time.Now()
-			// Someone gone mustn't keep the room waiting.
 			if room.state.Waiting && room.allReady() {
 				room.play(false)
 				room.send(map[string]any{"type": "state", "state": room.state})
@@ -419,7 +407,7 @@ func (s *Server) togetherAct(w http.ResponseWriter, req *http.Request) {
 		Episode  int     `json:"episode"`
 		InfoHash string  `json:"infoHash"`
 		Text     string  `json:"text"`
-		// Host only.
+
 		Ask   *bool  `json:"ask"`
 		Wait  *bool  `json:"wait"`
 		Admit string `json:"admit"`
@@ -473,7 +461,6 @@ func (s *Server) togetherAct(w http.ResponseWriter, req *http.Request) {
 			room.play(false)
 			state("ready")
 		case !body.Ready && st.Playing && room.wait:
-			// Someone's connection can't keep up: the room waits for them.
 			st.Position, st.At, st.Playing, st.Waiting = st.at(now), now, false, true
 			state("buffering")
 		default:
@@ -538,7 +525,6 @@ func (s *Server) togetherAct(w http.ResponseWriter, req *http.Request) {
 	send(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// togetherPage: a friend opening the link in a browser is told to paste it into their own Yoru.
 func (s *Server) togetherPage(w http.ResponseWriter, req *http.Request) {
 	link := "https://" + req.Host + req.URL.RequestURI()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -546,6 +532,7 @@ func (s *Server) togetherPage(w http.ResponseWriter, req *http.Request) {
 	fmt.Fprint(w, `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b0c10">
 <title>Watch together on Yoru</title><style>
+html{scrollbar-width:thin;scrollbar-color:#1e212a #0b0c10}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0c10;color:#d6dbe6;font:18px/1.5 system-ui,sans-serif}
 main{max-width:32rem;padding:2rem;text-align:center}h1{font-size:1.5rem;margin:0 0 .75rem}p{margin:0 0 1rem;color:#8b93a7}
 code{display:block;margin:1rem 0;padding:.75rem;border-radius:.6rem;background:#161a23;color:#fff;font-size:.8rem;word-break:break-all}

@@ -2,20 +2,23 @@ import type { ReactNode } from 'react'
 import { cx } from '../lib/format'
 import { Switch } from '../components/ui'
 
-export function PanelGroup({ title, children }: { title: string; children: ReactNode }) {
+export function PanelGroup({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
-    <section aria-label={title} className="border-t border-white/[0.06] pb-1 first:border-t-0">
-      <h3 className="px-4 pt-3 pb-1 text-[13px] font-semibold text-base-400">{title}</h3>
+    <section aria-label={title} className="border-t border-white/[0.06] pb-2 first:border-t-0">
+      <h3 className="flex items-baseline justify-between gap-2 px-4 pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-base-400 uppercase">
+        {title}
+        {note && <span className="font-medium tracking-normal text-base-500 normal-case">{note}</span>}
+      </h3>
       {children}
     </section>
   )
 }
 
-function Label({ label, caption }: { label: ReactNode; caption?: ReactNode }) {
+function Label({ label, caption, selected }: { label: ReactNode; caption?: ReactNode; selected?: boolean }) {
   return (
-    <span className="min-w-0 flex-1 text-sm text-base-100">
+    <span className={cx('min-w-0 flex-1 text-sm', selected === undefined ? 'text-base-100' : selected ? 'font-medium text-white' : 'text-base-200')}>
       {label}
-      {caption && <span className="mt-0.5 block text-xs text-base-400">{caption}</span>}
+      {caption && <span className="mt-0.5 block text-xs font-normal text-base-400">{caption}</span>}
     </span>
   )
 }
@@ -45,9 +48,12 @@ export function ChoiceRow({
       role="radio"
       aria-checked={selected}
       onClick={onClick}
-      className="flex min-h-12 w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-white/[0.06]"
+      className={cx(
+        'mx-2 flex min-h-10 w-[calc(100%-1rem)] items-center gap-3 rounded-lg px-2.5 py-1.5 text-left transition-colors pointer-coarse:min-h-12',
+        selected ? 'bg-white/[0.08]' : 'hover:bg-white/[0.05]',
+      )}
     >
-      <Label label={label} caption={caption} />
+      <Label label={label} caption={caption} selected={selected} />
       <svg viewBox="0 0 24 24" aria-hidden className={cx('size-5 shrink-0 text-accent-300', !selected && 'invisible')}>
         <path d="m5 13 4 4L19 7" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
@@ -130,10 +136,10 @@ export function ActionRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-12 w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-white/[0.06]"
+      className="flex min-h-12 w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-white/[0.05]"
     >
       <Label label={label} caption={caption} />
-      <span className="shrink-0 text-xs text-base-300">{value}</span>
+      <span className="min-w-0 truncate text-xs text-base-300">{value}</span>
       <span aria-hidden className="text-base-500">
         ›
       </span>

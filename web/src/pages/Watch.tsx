@@ -55,7 +55,7 @@ import { buttonClass } from '../lib/ui'
 import { getSleep, noteAutoStart, noteInput, setSleep, unattendedRun, useSleep, type Unattended } from '../lib/watching'
 
 type AudioChoice = 'sub' | 'dub' | 'either'
-import { Player, type PlayerControls, type PlayerFacts } from '../player/Player'
+import { Player, type PlaybackSettings, type PlayerControls, type PlayerFacts } from '../player/Player'
 import { StartingSteps, type Starting } from '../player/Starting'
 import { ActionRow, ChoiceRow, Choices, PanelGroup, SegmentRow, SwitchRow } from '../player/panel'
 import { SKIP_MODES, skipMode } from '../player/skipMode'
@@ -792,66 +792,59 @@ export function Watch({
     <Choices label="Audio">
       {(
         [
-          { value: 'sub', label: `Japanese audio, ${subtitleLanguage} subtitles` },
-          { value: 'dub', label: 'English dub' },
-          { value: 'either', label: 'Whichever is ready first' },
+          { value: 'sub', label: 'Japanese', caption: `${subtitleLanguage} subtitles` },
+          { value: 'dub', label: 'English dub', caption: undefined },
+          { value: 'either', label: 'Whichever is ready first', caption: undefined },
         ] as const
       ).map((c) => (
         <ChoiceRow
           key={c.value}
           label={c.label}
-          caption={c.value === wantAudio ? 'This show' : undefined}
+          caption={c.caption}
           selected={c.value === wantAudio}
           onClick={() => setAudio(c.value)}
         />
       ))}
     </Choices>
   )
-  const playbackRows = (
-    <>
-      <SegmentRow
-        label="Skip openings"
-        caption={skipCaption('op')}
-        value={opMode}
-        options={SKIP_MODES}
-        onChange={(v) => setPref.mutate({ key: 'playback.autoskip_op', value: v, animeId: id })}
-      />
-      <SegmentRow
-        label="Skip endings"
-        caption={skipCaption('ed')}
-        value={edMode}
-        options={SKIP_MODES}
-        onChange={(v) => setPref.mutate({ key: 'playback.autoskip_ed', value: v, animeId: id })}
-      />
-      <SwitchRow
-        label="Skip filler episodes"
-        caption="This show"
-        on={skipFiller}
-        onChange={(v) => setPref.mutate({ key: 'playback.skip_filler', value: String(v), animeId: id })}
-      />
-      <SwitchRow
-        label="Play the next episode by itself"
-        caption={scope('playback.autonext')}
-        on={flag('playback.autonext')}
-        onChange={setFlag('playback.autonext')}
-      />
-      <SwitchRow
-        label="Start playing when opened"
-        caption={scope('playback.autoplay')}
-        on={flag('playback.autoplay')}
-        onChange={setFlag('playback.autoplay')}
-      />
-      {!playingInMpv && (
-        <ActionRow
-          label="Sharper picture (Anime4K)"
-          caption={wide ? 'This device' : 'This phone'}
-          value={upscaling.enabled ? `On · ${upscaling.mode}` : 'Off'}
-          onClick={() => {
+  const playbackSettings: PlaybackSettings = {
+    openings: {
+      value: opMode,
+      caption: skipCaption('op'),
+      onChange: (v) => setPref.mutate({ key: 'playback.autoskip_op', value: v, animeId: id }),
+    },
+    endings: {
+      value: edMode,
+      caption: skipCaption('ed'),
+      onChange: (v) => setPref.mutate({ key: 'playback.autoskip_ed', value: v, animeId: id }),
+    },
+    filler: {
+      on: skipFiller,
+      onChange: (v) => setPref.mutate({ key: 'playback.skip_filler', value: String(v), animeId: id }),
+    },
+    autoNext: { on: flag('playback.autonext'), caption: scope('playback.autonext'), onChange: setFlag('playback.autonext') },
+    autoplay: { on: flag('playback.autoplay'), caption: scope('playback.autoplay'), onChange: setFlag('playback.autoplay') },
+    upscale: playingInMpv
+      ? undefined
+      : {
+          value: upscaling.enabled ? `On · ${upscaling.mode}` : 'Off',
+          onOpen: () => {
             playerControls.current?.settings(false)
             setAvSheet(false)
             setTuning(true)
-          }}
-        />
+          },
+        },
+  }
+  const p = playbackSettings
+  const playbackRows = (
+    <>
+      <SegmentRow label="Skip openings" caption={p.openings.caption} value={p.openings.value} options={SKIP_MODES} onChange={p.openings.onChange} />
+      <SegmentRow label="Skip endings" caption={p.endings.caption} value={p.endings.value} options={SKIP_MODES} onChange={p.endings.onChange} />
+      <SwitchRow label="Skip filler episodes" caption="This show" on={p.filler.on} onChange={p.filler.onChange} />
+      <SwitchRow label="Play the next episode by itself" caption={p.autoNext.caption} on={p.autoNext.on} onChange={p.autoNext.onChange} />
+      <SwitchRow label="Start playing when opened" caption={p.autoplay.caption} on={p.autoplay.on} onChange={p.autoplay.onChange} />
+      {p.upscale && (
+        <ActionRow label="Sharper picture (Anime4K)" caption={wide ? 'This device' : 'This phone'} value={p.upscale.value} onClick={p.upscale.onOpen} />
       )}
     </>
   )
@@ -957,7 +950,7 @@ export function Watch({
                   autoSkip={autoSkip}
                   skipOff={skipOff}
                   onMinimize={!mini && !focus ? onMinimize : undefined}
-                  settings={{ audio: audioChoice, playback: playbackRows }}
+                  settings={{ audio: audioChoice, playback: playbackSettings }}
                   controls={playerControls}
                   theatre={focus}
                   onTheatre={wide ? toggleFocus : undefined}
@@ -1212,9 +1205,11 @@ export function Watch({
                       />
                     </button>
                   )}
-                  <button type="button" className={ACTION} onClick={openAudioSubtitles} aria-haspopup="dialog">
-                    <ActionLabel icon={<SubtitlesGlyph />} long="Audio & subtitles" short="Audio & subs" />
-                  </button>
+                  {!playerShown && (
+                    <button type="button" className={ACTION} onClick={openAudioSubtitles} aria-haspopup="dialog">
+                      <ActionLabel icon={<SubtitlesGlyph />} long="Audio & subtitles" short="Audio & subs" />
+                    </button>
+                  )}
                   {!playingInMpv &&
                     (wide ? (
                       <button
@@ -1326,7 +1321,9 @@ export function Watch({
       {!playerShown && anime4kDialog}
       <Sheet open={avSheet} onClose={() => setAvSheet(false)} title="Audio & subtitles">
         <div className="-mx-4 sm:-mx-5">
-          <PanelGroup title="Audio">{audioChoice}</PanelGroup>
+          <PanelGroup title="Audio" note="This show">
+            {audioChoice}
+          </PanelGroup>
           <PanelGroup title="Subtitles">
             <p className="px-4 py-2 text-sm text-base-400">
               {playingInMpv
