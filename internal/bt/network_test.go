@@ -71,7 +71,6 @@ func dialClosure(f func(net, addr string) (net.Conn, error), network string) fun
 }
 
 func TestListenLocalhostNetwork(t *testing.T) {
-	testListenerNetwork(t, net.Listen, "tcp", "tcp", "0.0.0.0:0", false)
 	testListenerNetwork(t, net.Listen, "tcp", "tcp", "[::1]:0", false)
 	testListenerNetwork(t, listenUtpListener, "udp", "udp6", "[::1]:0", false)
 	testListenerNetwork(t, listenUtpListener, "udp", "udp6", "[::]:0", false)

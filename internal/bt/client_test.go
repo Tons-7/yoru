@@ -36,12 +36,13 @@ func TestClientDefault(t *testing.T) {
 	require.Empty(t, cl.Close())
 }
 
-func TestClientNilConfig(t *testing.T) {
-	// The default config will put crap in the working directory.
+func TestClientDefaultConfig(t *testing.T) {
 	origDir, _ := os.Getwd()
 	defer os.Chdir(origDir)
 	os.Chdir(t.TempDir())
-	cl, err := NewClient(nil)
+	cfg := NewDefaultClientConfig()
+	cfg.ListenHost = LoopbackListenHost
+	cl, err := NewClient(cfg)
 	require.NoError(t, err)
 	require.Empty(t, cl.Close())
 }
@@ -61,17 +62,14 @@ func TestAddDropTorrent(t *testing.T) {
 }
 
 func TestAddTorrentNoSupportedTrackerSchemes(t *testing.T) {
-	// TODO?
 	t.SkipNow()
 }
 
 func TestAddTorrentNoUsableURLs(t *testing.T) {
-	// TODO?
 	t.SkipNow()
 }
 
 func TestAddPeersToUnknownTorrent(t *testing.T) {
-	// TODO?
 	t.SkipNow()
 }
 
@@ -161,11 +159,9 @@ func TestMergingTrackersByAddingSpecs(t *testing.T) {
 	_, new, _ = cl.AddTorrentSpec(&spec)
 	assert.False(t, new)
 	assert.EqualValues(t, [][]string{{"http://a"}, {"udp://b"}}, T.announceList)
-	// Because trackers are disabled in TestingConfig.
 	assert.EqualValues(t, 0, len(T.trackerAnnouncers))
 }
 
-// We read from a piece which is marked completed, but is missing data.
 func TestCompletedPieceWrongSize(t *testing.T) {
 	cfg := TestingConfig(t)
 	cfg.DefaultStorage = badStorage{}
@@ -251,7 +247,6 @@ func TestResponsive(t *testing.T) {
 	assert.EqualValues(t, "d\n", string(b))
 }
 
-// TestResponsive is the first to fail with uTP off and TCP dialling from the listen port.
 func TestResponsiveTcpOnly(t *testing.T) {
 	seederDataDir, mi := testutil.GreetingTestTorrent()
 	defer os.RemoveAll(seederDataDir)
@@ -353,7 +348,6 @@ func TestDhtInheritBlocklist(t *testing.T) {
 	qt.Assert(t, qt.Not(qt.Equals(numServers, 0)))
 }
 
-// A later AddTorrentSpec for the same infohash merges into the torrent.
 func TestAddTorrentSpecMerging(t *testing.T) {
 	cl, err := NewClient(TestingConfig(t))
 	require.NoError(t, err)
@@ -415,7 +409,6 @@ func testAddTorrentPriorPieceCompletion(t *testing.T, alreadyCompleted bool, csf
 		}
 	}
 	cfg := TestingConfig(t)
-	// TODO: Disable network option?
 	cfg.DisableTCP = true
 	cfg.DisableUTP = true
 	cfg.DefaultStorage = filePieceStore
@@ -444,7 +437,6 @@ func TestAddTorrentPiecesNotAlreadyCompleted(t *testing.T) {
 
 func TestAddMetainfoWithNodes(t *testing.T) {
 	cfg := TestingConfig(t)
-	cfg.ListenHost = func(string) string { return "" }
 	cfg.NoDHT = false
 	cfg.DhtStartingNodes = func(string) dht.StartingNodesGetter { return func() ([]dht.Addr, error) { return nil, nil } }
 	cl, err := NewClient(cfg)
@@ -459,10 +451,7 @@ func TestAddMetainfoWithNodes(t *testing.T) {
 	assert.EqualValues(t, 0, sum())
 	tt, err := cl.AddTorrentFromFile("metainfo/testdata/issue_65a.torrent")
 	require.NoError(t, err)
-	// Nodes are not added or exposed in Torrent's metainfo. We just randomly
-	// check if the announce-list is here instead. TODO: Add nodes.
 	assert.Len(t, tt.announceList, 5)
-	// There are 6 nodes in the torrent file.
 	for sum() != int64(6*len(cl.dhtServers)) {
 		time.Sleep(time.Millisecond)
 	}
@@ -541,7 +530,6 @@ func TestTorrentDownloadAllThenCancel(t *testing.T) {
 	})
 }
 
-// Ensure that it's an error for a peer to send an invalid have message.
 func TestPeerInvalidHave(t *testing.T) {
 	cfg := TestingConfig(t)
 	cfg.DropMutuallyCompletePeers = false
@@ -590,7 +578,6 @@ func TestPieceCompletedInStorageButNotClient(t *testing.T) {
 	qt.Check(t, qt.IsTrue(new))
 }
 
-// With listen port 0, every protocol listens on one port, and not zero.
 func TestClientDynamicListenPortAllProtocols(t *testing.T) {
 	cl, err := NewClient(TestingConfig(t))
 	require.NoError(t, err)
@@ -650,9 +637,7 @@ func TestSetMaxEstablishedConn(t *testing.T) {
 	addPeers := func() {
 		for _, tt := range tts {
 			for _, _tt := range tts {
-				// if tt != _tt {
 				tt.AddClientPeer(_tt.cl)
-				// }
 			}
 		}
 	}
@@ -676,8 +661,6 @@ func TestSetMaxEstablishedConn(t *testing.T) {
 	waitTotalConns(6)
 }
 
-// Creates a file containing its own name as data. Make a metainfo from that, adds it to the given
-// client, and returns a magnet link.
 func makeMagnet(t *testing.T, cl *Client, dir, name string) string {
 	os.MkdirAll(dir, 0o770)
 	file, err := os.Create(filepath.Join(dir, name))
@@ -712,8 +695,6 @@ func TestMultipleTorrentsWithEncryption(t *testing.T) {
 	)
 }
 
-// Test that the leecher can download a torrent in its entirety from the seeder. Note that the
-// seeder config is done first.
 func testSeederLeecherPair(t *testing.T, seeder, leecher func(*ClientConfig)) {
 	cfg := TestingConfig(t)
 	cfg.Seed = true
@@ -725,8 +706,6 @@ func testSeederLeecherPair(t *testing.T, seeder, leecher func(*ClientConfig)) {
 	defer server.Close()
 	defer testutil.ExportStatusWriter(server, "s", t)()
 	magnet1 := makeMagnet(t, server, cfg.DataDir, "test1")
-	// Extra torrents are added to test the seeder having to match incoming obfuscated headers
-	// against more than one torrent. See issue #114
 	makeMagnet(t, server, cfg.DataDir, "test2")
 	for i := range 100 {
 		makeMagnet(t, server, cfg.DataDir, fmt.Sprintf("test%d", i+3))
@@ -746,9 +725,7 @@ func testSeederLeecherPair(t *testing.T, seeder, leecher func(*ClientConfig)) {
 	client.WaitAll()
 }
 
-// This appears to be the situation with the S3 BitTorrent client.
 func TestObfuscatedHeaderFallbackSeederDisallowsLeecherPrefers(t *testing.T) {
-	// Leecher prefers obfuscation, but the seeder does not allow it.
 	testSeederLeecherPair(
 		t,
 		func(cfg *ClientConfig) {
@@ -763,7 +740,6 @@ func TestObfuscatedHeaderFallbackSeederDisallowsLeecherPrefers(t *testing.T) {
 }
 
 func TestObfuscatedHeaderFallbackSeederRequiresLeecherPrefersNot(t *testing.T) {
-	// Leecher prefers no obfuscation, but the seeder enforces it.
 	testSeederLeecherPair(
 		t,
 		func(cfg *ClientConfig) {

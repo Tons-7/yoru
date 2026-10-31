@@ -349,6 +349,10 @@ function Genres({ genres }: { genres: string[] }) {
   )
 }
 
+function plainText(html: string): string {
+  return new DOMParser().parseFromString(html, 'text/html').body.textContent ?? ''
+}
+
 function Synopsis({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
   const [clamped, setClamped] = useState(false)
@@ -481,7 +485,7 @@ export function Anime() {
   const cover = media?.coverImage?.extraLarge ?? media?.cover
   const banner = media?.bannerImage
   const art = banner ?? cover
-  const description = (media?.description ?? media?.Description ?? '').replace(/<[^>]+>/g, '')
+  const description = plainText(media?.description ?? media?.Description ?? '')
   const trailer =
     (media?.trailer?.site?.toLowerCase() === 'youtube' ? media.trailer.id : undefined) ??
     youtubeID(extra.data?.trailer) ??

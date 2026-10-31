@@ -1,5 +1,3 @@
-// A local swarm for the browser checks: seeds copies of the test episode (one torrent each), dials the
-// throwaway Yoru's engine, and answers as a nyaa site listing them. One JSON line once ready, then runs.
 package main
 
 import (
@@ -59,6 +57,7 @@ func run(src, dir, title string, count, listen int, peer, httpAddr string) error
 	cfg.DisablePEX = true
 	cfg.DisableIPv6 = true
 	cfg.NoDefaultPortForwarding = true
+	cfg.ListenHost = bt.LoopbackListenHost
 	cfg.ListenPort = listen
 	cl, err := bt.NewClient(cfg)
 	if err != nil {
@@ -88,15 +87,12 @@ func run(src, dir, title string, count, listen int, peer, httpAddr string) error
 		torrents = append(torrents, t)
 		listing = append(listing, seeded{Episode: i, InfoHash: mi.HashInfoBytes().HexString(), Title: name, Size: size})
 	}
-	// Seeding needs every piece checked first.
 	for _, t := range torrents {
 		for t.BytesMissing() > 0 {
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
 
-	// The engine under test learns of this seeder by being dialled; a dial before it holds the torrent
-	// fails and is forgotten, so it is repeated.
 	addr, err := net.ResolveTCPAddr("tcp", peer)
 	if err != nil {
 		return err
@@ -137,11 +133,10 @@ func copyFile(src, dst string) (int64, error) {
 	return io.Copy(out, in)
 }
 
-// indexer answers like nyaa (listing and feed) with every release for any query, and counts the searches.
 type indexer struct {
 	listing []seeded
 	mu      sync.Mutex
-	queries []string // searches, by text; the feed polls (what is new, not a search) are counted apart
+	queries []string
 	feeds   int
 }
 

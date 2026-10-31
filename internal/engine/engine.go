@@ -1,4 +1,3 @@
-// Package engine runs Yoru's BitTorrent engine (internal/bt) behind a loopback API shaped like rqbit's.
 package engine
 
 import (
@@ -23,20 +22,18 @@ import (
 )
 
 type Options struct {
-	// CacheDir holds downloads: CacheDir/<name>, or CacheDir/<name>/<path> for a pack.
 	CacheDir string
-	// SessionDir keeps the torrent list, their metainfo and piece completion.
+
 	SessionDir string
 
 	ListenPort  int
 	PeerLimit   int
 	UploadLimit int
 	DisableUPnP bool
-	// AwaitLimits: no start before SetLimits, whose network choice the client must be made with.
+
 	AwaitLimits bool
 }
 
-// Engine implements torrent.Engine; the client it hands out talks to it over loopback.
 type Engine struct {
 	opts Options
 	log  *slog.Logger
@@ -45,7 +42,6 @@ type Engine struct {
 	server   *http.Server
 	client   *torrent.Client
 
-	// saveMu: callers on several goroutines would share session.json.tmp.
 	saveMu  sync.Mutex
 	startMu sync.Mutex
 	running bool
@@ -57,38 +53,36 @@ type Engine struct {
 	byHash    map[metainfo.Hash]*entry
 	nextID    int
 	inspected map[metainfo.Hash]*inspection
-	// Peers each torrent has known, to try again after an outage took them all.
+
 	known map[metainfo.Hash]map[string]remembered
-	// peers: each connection's requests and deliveries, for dropping silent peers and rescuing reads.
+
 	peers *ledger
-	// busy: something downloads, so complete torrents keep off the client's connection budget.
+
 	busy  bool
 	names *layout
-	// doomed: files a delete left because something still had them open (Windows keeps those), tried again.
+
 	doomed map[string]doomedFile
-	// secret is what Yoru's own client sends and a web page cannot.
+
 	secret string
 	closed bool
-	// limits: Settings' speed, upload and network choices; downLimit is always set, as a nil one can't change.
+
 	limits    torrent.Limits
 	limitsSet bool
 	downLimit *rate.Limiter
-	// bound is the adapter address the client uses (see network.go); offline, that the client is down for the
-	// network and session.json must stay as it was. keepIDs carries torrents' ids into the client that follows.
+
 	bound   bindAddrs
 	offline bool
 	keepIDs map[metainfo.Hash]int
-	// carry is the session a rebind hands the next client, taken from memory before the old one closed.
+
 	carry       *sessionDoc
 	resolve     func(adapter string) (bindAddrs, error)
 	janitorOnce sync.Once
-	// unclean: the last run didn't stop cleanly, so unfinished downloads' completion may claim lost data.
+
 	unclean     bool
 	uncleanOnce sync.Once
-	// crashChecked: torrents rechecked for the unclean stop already; a rebind's restore must not again.
+
 	crashChecked map[metainfo.Hash]bool
 
-	// Test hooks: adjust the client config; see each torrent as it is added.
 	configure func(*bt.ClientConfig)
 	onNew     func(*bt.Torrent)
 }
@@ -97,34 +91,31 @@ type entry struct {
 	id       int
 	t        *bt.Torrent
 	trackers []string
-	// selected files by index; applied once the info is known.
+
 	selected map[int]bool
 	paused   bool
-	// verifying: checking data already on disk; reported as "initializing".
+
 	verifying bool
 	err       string
-	// writeErr: the last chunk write failed (disk full, file locked); downloading resumes after writeRetry.
+
 	writeErr   string
 	writeErrAt time.Time
 
-	// Speed, sampled on each stats read.
 	lastBytes int64
 	lastAt    time.Time
 	mibps     float64
 
-	// waits: stream reads in progress, by reader, so the janitor can rescue one that waits too long.
 	waits map[*watched]readWait
-	// quiet: kept off the network (paused, or complete while another downloads).
+
 	quiet bool
-	// For regroup: alone since when, the wait before the next try, and tries so far.
+
 	aloneSince  time.Time
 	regroupWait time.Duration
 	regroups    int
-	// For census: who it was connected to, for the log.
+
 	heads headcount
 }
 
-// inspection is a torrent added to read its files, kept connected a while so the add that follows has peers.
 type inspection struct {
 	t       *bt.Torrent
 	expires time.Time
@@ -149,7 +140,6 @@ func New(opts Options, log *slog.Logger) (*Engine, error) {
 		peers:     newLedger(),
 		names:     newLayout(opts.CacheDir),
 		limits:    torrent.Limits{Upload: torrent.UploadWhileDownloading},
-		// Reads are cut to the burst, so it only bounds how far a capped download can run ahead.
 		downLimit: rate.NewLimiter(rate.Inf, 256<<10),
 		resolve:   resolveAdapter,
 	}
@@ -161,12 +151,10 @@ func New(opts Options, log *slog.Logger) (*Engine, error) {
 	return e, nil
 }
 
-// Client is what the rest of Yoru uses.
 func (e *Engine) Client() *torrent.Client { return e.client }
 
 func (e *Engine) Addr() string { return e.listener.Addr().String() }
 
-// Ensure starts the engine on first use; a failed start is retried next call.
 func (e *Engine) Ensure(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -193,7 +181,6 @@ func (e *Engine) start() error {
 	if waiting {
 		return errors.New("waiting for settings to be read")
 	}
-	// First: a chosen network that's down keeps the client from starting, with nothing opened.
 	bind, err := e.binding()
 	if err != nil {
 		return err
@@ -231,7 +218,6 @@ func (e *Engine) start() error {
 	}
 	cl, err := newClient(port)
 	if err != nil {
-		// Another client holds the port; a random one works, minus the forwarded port's peers.
 		e.log.Warn("peer port unavailable; using a random one", "port", port, "err", err)
 		for range 5 {
 			if cl, err = newClient(freePort()); err == nil {
@@ -245,12 +231,10 @@ func (e *Engine) start() error {
 	}
 
 	e.mu.Lock()
-	// A rebind brings torrents back from the carried session, each under the id the rest of Yoru knows.
 	e.keepIDs = make(map[metainfo.Hash]int, len(e.byHash))
 	for hash, en := range e.byHash {
 		e.keepIDs[hash] = en.id
 	}
-	// Inspections end with the old client; their names and peers go too, as the janitor's expiry does.
 	for hash := range e.inspected {
 		if _, managed := e.byHash[hash]; !managed {
 			e.names.forget(hash)
@@ -263,7 +247,6 @@ func (e *Engine) start() error {
 	e.cl, e.pieces, e.bound, e.offline = cl, pieces, bind, false
 	limits := e.limits
 	e.mu.Unlock()
-	// Settings may have changed while the client was being made.
 	cl.SetUploads(limits.Upload != torrent.UploadNever, true)
 
 	if err := e.restore(); err != nil {
@@ -277,15 +260,20 @@ func (e *Engine) start() error {
 	return nil
 }
 
-// freePort finds a port free for TCP and UDP both; on Windows port 0's UDP twin can sit in a reserved range.
+var listenHost func(network string) string
+
 func freePort() int {
+	host := ""
+	if listenHost != nil {
+		host = listenHost("udp4")
+	}
 	for range 20 {
-		pc, err := net.ListenPacket("udp", ":0")
+		pc, err := net.ListenPacket("udp", net.JoinHostPort(host, "0"))
 		if err != nil {
 			continue
 		}
 		port := pc.LocalAddr().(*net.UDPAddr).Port
-		l, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		l, err := net.Listen("tcp", net.JoinHostPort(host, fmt.Sprint(port)))
 		pc.Close()
 		if err == nil {
 			l.Close()
@@ -295,9 +283,11 @@ func freePort() int {
 	return 0
 }
 
-// clientConfig is built per attempt: NewClient takes ownership of it.
 func (e *Engine) clientConfig(pieces storage.PieceCompletion, port int) *bt.ClientConfig {
 	cfg := bt.NewDefaultClientConfig()
+	if listenHost != nil {
+		cfg.ListenHost = listenHost
+	}
 	cfg.DataDir = e.opts.CacheDir
 	cfg.DefaultStorage = files{base: e.opts.CacheDir, pieces: pieces, names: e.names, vanished: e.vanished}
 	cfg.ListenPort = port
@@ -308,7 +298,6 @@ func (e *Engine) clientConfig(pieces storage.PieceCompletion, port int) *bt.Clie
 		cfg.UploadRateLimiter = rate.NewLimiter(rate.Limit(e.opts.UploadLimit), 256<<10)
 	}
 	cfg.NoDefaultPortForwarding = e.opts.DisableUPnP
-	// Said either way: whether peers can reach Yoru decides how a slow swarm goes.
 	cfg.UpnpDiscovered = func(routers int) {
 		if routers == 0 {
 			e.log.Info("no router answered for port forwarding; peers reach Yoru only if the peer port is forwarded", "port", port)
@@ -325,10 +314,8 @@ func (e *Engine) clientConfig(pieces storage.PieceCompletion, port int) *bt.Clie
 	e.mu.Lock()
 	cfg.NoUpload = e.limits.Upload == torrent.UploadNever
 	e.mu.Unlock()
-	// Shares while it downloads, which keeps peers giving; a finished episode seeds nobody.
 	cfg.StopSeedingWhenComplete = true
 	cfg.DownloadRateLimiter = e.downLimit
-	// Slogger alone: bt then routes its older logger here too, rather than to stderr.
 	cfg.Slogger = slog.New(warnOnly{e.log.Handler()})
 	e.peers.hook(cfg)
 	if e.configure != nil {
@@ -337,7 +324,6 @@ func (e *Engine) clientConfig(pieces storage.PieceCompletion, port int) *bt.Clie
 	return cfg
 }
 
-// SetLimits applies Settings' download cap and upload choice now, and to any client started later.
 func (e *Engine) SetLimits(l torrent.Limits) {
 	if l.DownloadBytes > 0 {
 		e.downLimit.SetLimit(rate.Limit(l.DownloadBytes))
@@ -353,15 +339,12 @@ func (e *Engine) SetLimits(l torrent.Limits) {
 	if cl != nil {
 		cl.SetUploads(l.Upload != torrent.UploadNever, true)
 	}
-	// Sockets are bound when the client is made: another network takes another client, waiting or not.
 	if moved && (cl != nil || offline) {
 		go e.rebind("the network for torrents changed")
 	}
 }
 
-// Stop saves the session and closes everything; data stays on disk.
 func (e *Engine) Stop() {
-	// Waits out a start in progress, so its client is closed too.
 	e.startMu.Lock()
 	defer e.startMu.Unlock()
 	e.mu.Lock()
@@ -386,10 +369,8 @@ func (e *Engine) Stop() {
 	os.Remove(filepath.Join(e.opts.SessionDir, runningMarker))
 }
 
-// runningMarker exists while the engine runs; finding it at start means the last run crashed.
 const runningMarker = "engine.running"
 
-// Var so tests need not wait.
 var janitorEvery = 5 * time.Second
 
 func (e *Engine) janitor() {
@@ -402,7 +383,6 @@ func (e *Engine) janitor() {
 			e.mu.Unlock()
 			return
 		}
-		// Down for the network: the torrents here belong to a closed client until the next one is up.
 		if e.offline {
 			e.mu.Unlock()
 			continue
@@ -426,7 +406,6 @@ func (e *Engine) janitor() {
 			entries = append(entries, en)
 		}
 		e.mu.Unlock()
-		// A torrent only being looked at meets its peers before it is added; they count from then.
 		for _, t := range looking {
 			peers := connected(t)
 			e.mu.Lock()
@@ -444,9 +423,7 @@ func (e *Engine) janitor() {
 	}
 }
 
-// shed drops peers holding requests that stopped sending: bt never times a request out, only steals it.
 func (e *Engine) shed(en *entry, now time.Time) {
-	// Only with another peer to take the requests: a lone seeder may just be pausing.
 	if en.t.Info() == nil || en.t.Stats().ActivePeers < 2 {
 		return
 	}
@@ -456,7 +433,6 @@ func (e *Engine) shed(en *entry, now time.Time) {
 	}
 }
 
-// rescue drops quiet peers holding a long-waiting read's piece, or has all re-plan when none was asked for it.
 func (e *Engine) rescue(en *entry, now time.Time) {
 	t := en.t
 	if t.Info() == nil {
@@ -479,7 +455,6 @@ func (e *Engine) rescue(en *entry, now time.Time) {
 			continue
 		}
 		stale, holders := e.peers.holding(t.PeerConns(), s.wait.piece, rescueAfter, now)
-		// Only with another seeder there: the holder may be the one peer with the piece.
 		if t.Stats().ConnectedSeeders < 2 {
 			stale = nil
 		}
@@ -491,7 +466,6 @@ func (e *Engine) rescue(en *entry, now time.Time) {
 		if holders > 0 {
 			continue
 		}
-		// Peers plan requests only on their own events; with none coming the piece would never be asked for.
 		t.UpdateRequests()
 		if s.wait.reported {
 			continue
@@ -508,12 +482,10 @@ func (e *Engine) rescue(en *entry, now time.Time) {
 	}
 }
 
-// focus: all torrents dial from one pool, so complete ones stop seeding while anything downloads.
 func (e *Engine) focus(entries []*entry, inspecting int) {
 	busy := inspecting > 0
 	e.mu.Lock()
 	for _, en := range entries {
-		// Fetching its file list is downloading too, the stretch where peers matter most.
 		if !en.paused && (en.t.Info() == nil || wantsData(en)) {
 			busy = true
 		}
@@ -525,7 +497,6 @@ func (e *Engine) focus(entries []*entry, inspecting int) {
 	}
 }
 
-// refocus applies focus at once: a new download is most at stake in its first seconds.
 func (e *Engine) refocus() {
 	e.mu.Lock()
 	entries := make([]*entry, 0, len(e.byID))
@@ -537,7 +508,6 @@ func (e *Engine) refocus() {
 	e.focus(entries, looking)
 }
 
-// quieten keeps a torrent off the network while paused, or while complete and another downloads.
 func (e *Engine) quieten(en *entry) {
 	if en.t.Info() == nil {
 		return
@@ -564,7 +534,6 @@ func addrOf(pc *bt.PeerConn) string {
 	return pc.RemoteAddr.String()
 }
 
-// wantsData reports a selected file not yet complete. Callers hold e.mu.
 func wantsData(en *entry) bool {
 	for i, f := range en.t.Files() {
 		if en.selected[i] && f.BytesCompleted() < f.Length() {
@@ -574,7 +543,6 @@ func wantsData(en *entry) bool {
 	return false
 }
 
-// warnOnly passes bt's warnings and errors to Yoru's log; below that it logs a line per peer event.
 type warnOnly struct{ slog.Handler }
 
 func (w warnOnly) Enabled(ctx context.Context, l slog.Level) bool {

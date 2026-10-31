@@ -27,7 +27,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// pack is three episodes off piece boundaries, so episode 2 starts mid-piece as in a real pack.
 func makePack(t *testing.T, dir string) (metainfo.MetaInfo, map[string][]byte) {
 	t.Helper()
 	root := filepath.Join(dir, "Show Pack")
@@ -58,10 +57,12 @@ func makePack(t *testing.T, dir string) (metainfo.MetaInfo, map[string][]byte) {
 
 func TestMain(m *testing.M) {
 	janitorEvery, regroupAfter = 500*time.Millisecond, 1500*time.Millisecond
+	listenHost = bt.LoopbackListenHost
 	os.Exit(m.Run())
 }
 
 func quietConfig(cfg *bt.ClientConfig) {
+	cfg.ListenHost = bt.LoopbackListenHost
 	cfg.ListenPort = freePort()
 	cfg.NoDHT = true
 	cfg.DisableTrackers = true
@@ -70,12 +71,10 @@ func quietConfig(cfg *bt.ClientConfig) {
 	cfg.NoDefaultPortForwarding = true
 }
 
-// seeder serves the pack from dir.
 func seeder(t *testing.T, dir string, mi metainfo.MetaInfo, tweaks ...func(*bt.ClientConfig)) *bt.Client {
 	t.Helper()
 	var cl *bt.Client
 	var err error
-	// Retried: a random port can land in a range Windows reserves.
 	for range 5 {
 		cfg := bt.NewDefaultClientConfig()
 		quietConfig(cfg)
@@ -169,7 +168,6 @@ func readRange(t *testing.T, url string, from, to int64) []byte {
 	return b
 }
 
-// The calls playback makes, in its order: inspect, pick, add one file, stream.
 func TestPlaybackPathOverTheEngine(t *testing.T) {
 	f := newFixture(t)
 	c := ctx(t)
@@ -197,7 +195,6 @@ func TestPlaybackPathOverTheEngine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Episode 2 starts mid-piece; its head and a seek must read exactly.
 	want := f.content["Show - 02.mkv"]
 	url := f.client.StreamURL(added.ID, idx)
 	if got := readRange(t, url, 0, 9_999); !bytes.Equal(got, want[:10_000]) {
@@ -217,7 +214,6 @@ func TestPlaybackPathOverTheEngine(t *testing.T) {
 	if !stats.Finished || stats.TotalBytes != int64(len(want)) {
 		t.Fatalf("stats = %+v", stats)
 	}
-	// Only the piece it shares with episode 2, not the episode.
 	if stats.FileProgress[0] >= 64<<10 || stats.FileProgress[2] >= 64<<10 {
 		t.Errorf("an unselected episode was downloaded: %v", stats.FileProgress)
 	}
@@ -231,7 +227,6 @@ func TestPlaybackPathOverTheEngine(t *testing.T) {
 	}
 }
 
-// The next episode of a held pack joins its selection; the first stays.
 func TestNextEpisodeOfHeldPack(t *testing.T) {
 	f := newFixture(t)
 	c := ctx(t)
@@ -262,7 +257,6 @@ func TestNextEpisodeOfHeldPack(t *testing.T) {
 	}
 }
 
-// slowSeed serves about 64 KiB/s: a local seeder otherwise finishes the episode before the pause lands.
 func slowSeed(cfg *bt.ClientConfig) { cfg.UploadRateLimiter = rate.NewLimiter(64<<10, 16<<10) }
 
 func TestPauseStartAndRemove(t *testing.T) {
@@ -313,7 +307,6 @@ func TestPauseStartAndRemove(t *testing.T) {
 	}
 }
 
-// A file a stream still reads cannot be deleted on Windows: the delete goes through, and the file once let go.
 func TestDeleteRemovesAnOpenFileOnceReleased(t *testing.T) {
 	f := newFixture(t)
 	c := ctx(t)
@@ -358,7 +351,6 @@ func TestDeleteRemovesAnOpenFileOnceReleased(t *testing.T) {
 	}
 }
 
-// A file added back before it could be removed belongs to that download, and stays.
 func TestDoomedFileAddedBackStays(t *testing.T) {
 	f := newFixture(t)
 	c := ctx(t)
@@ -381,7 +373,6 @@ func TestDoomedFileAddedBackStays(t *testing.T) {
 	}
 }
 
-// A restart keeps the torrent, its selection and what was downloaded.
 func TestRestartKeepsTheSession(t *testing.T) {
 	f := newFixture(t)
 	c := ctx(t)
@@ -395,7 +386,6 @@ func TestRestartKeepsTheSession(t *testing.T) {
 	}
 	f.engine.Stop()
 
-	// No peer this time: everything must come from disk.
 	f.peer = &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}
 	f.start(t)
 	live, err := f.client.Live(c)
@@ -417,7 +407,6 @@ func TestRestartKeepsTheSession(t *testing.T) {
 	}
 }
 
-// A read waiting on data must outlive the rescue, which says once that no peer was asked for its piece.
 func TestRescueDoesNotEndAStreamWaitingForData(t *testing.T) {
 	was := rescueAfter
 	rescueAfter = 200 * time.Millisecond
@@ -435,7 +424,6 @@ func TestRescueDoesNotEndAStreamWaitingForData(t *testing.T) {
 	f.engine.log = slog.New(lines)
 	c := ctx(t)
 
-	// The file list is known, then the only peer goes: nothing can arrive.
 	in, err := f.client.Inspect(c, f.magnet)
 	if err != nil {
 		t.Fatal(err)
@@ -464,8 +452,6 @@ func TestRescueDoesNotEndAStreamWaitingForData(t *testing.T) {
 		read <- err
 	}()
 
-	// Waiting, as a player on a slow swarm does, until the rescue has seen it (later under load), then
-	// several more janitor rounds, through which it must say so only once and leave the stream be.
 	const line = "a stream waits on a piece no peer was asked for"
 	seen := time.After(20 * time.Second)
 	for lines.count(line) == 0 {
@@ -487,7 +473,6 @@ func TestRescueDoesNotEndAStreamWaitingForData(t *testing.T) {
 	}
 }
 
-// lineLog keeps log messages for a test to count.
 type lineLog struct {
 	mu   sync.Mutex
 	msgs []string
@@ -514,7 +499,6 @@ func (l *lineLog) count(msg string) (n int) {
 	return n
 }
 
-// seederOn serves the pack from dir on a given port, so a peer can come back where it was.
 func seederOn(t *testing.T, dir string, mi metainfo.MetaInfo, port int) *bt.Client {
 	t.Helper()
 	cfg := bt.NewDefaultClientConfig()
@@ -525,7 +509,6 @@ func seederOn(t *testing.T, dir string, mi metainfo.MetaInfo, port int) *bt.Clie
 	cfg.Seed = true
 	var cl *bt.Client
 	var err error
-	// The port is being let go by the seeder that just closed.
 	for range 40 {
 		if cl, err = bt.NewClient(cfg); err == nil {
 			break
@@ -546,8 +529,6 @@ func seederOn(t *testing.T, dir string, mi metainfo.MetaInfo, port int) *bt.Clie
 	return cl
 }
 
-// Losing the network drops every peer. When it is back the peers are where they were, and the download
-// must find them again by itself: restarting the app was the only thing that did.
 func TestDownloadResumesWhenItsPeersComeBack(t *testing.T) {
 	seedDir := t.TempDir()
 	mi, content := makePack(t, seedDir)
@@ -565,7 +546,6 @@ func TestDownloadResumesWhenItsPeersComeBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Known for a moment, as a real swarm is, then the network goes: the peer is unreachable.
 	time.Sleep(1200 * time.Millisecond)
 	s.Close()
 	added, err := f.client.Add(c, f.magnet, in.Details.Files[2])
@@ -577,7 +557,6 @@ func TestDownloadResumesWhenItsPeersComeBack(t *testing.T) {
 		t.Fatal("the download finished with no peer; the test proves nothing")
 	}
 
-	// And comes back: the same peer, at the same address.
 	seederOn(t, seedDir, mi, port)
 	if err := f.client.Await(c, added.ID, 20*time.Second); err != nil {
 		st, _ := f.client.Stats(c, added.ID)
@@ -585,7 +564,6 @@ func TestDownloadResumesWhenItsPeersComeBack(t *testing.T) {
 	}
 }
 
-// magnetOf is a torrent's magnet link, through MagnetV2 (Magnet is deprecated).
 func magnetOf(t *testing.T, mi *metainfo.MetaInfo) string {
 	t.Helper()
 	m, err := mi.MagnetV2()
