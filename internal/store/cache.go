@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// Brings a download the engine holds under the cache budget.
 func (s *Store) TrackTorrent(ctx context.Context, infoHash string, engineID int, name string) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -26,7 +25,6 @@ func (s *Store) TrackTorrent(ctx context.Context, infoHash string, engineID int,
 		return err
 	}
 
-	// cache_entry has a foreign key onto torrent_file.
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO torrent_file (info_hash, file_index, path, size_bytes, selected)
 		VALUES (?,?,?,0,1)
@@ -45,7 +43,6 @@ func (s *Store) TrackTorrent(ctx context.Context, infoHash string, engineID int,
 	return tx.Commit()
 }
 
-// File index for a download nobody has played, where no single file applies.
 const WholeTorrent = -1
 
 func (s *Store) HasTorrent(ctx context.Context, infoHash string) bool {
@@ -55,8 +52,6 @@ func (s *Store) HasTorrent(ctx context.Context, infoHash string) bool {
 	return err == nil && n > 0
 }
 
-// TorrentClaimed reports a download someone recorded, not one the sweep only adopted (no episode tied to
-// it). A failed read counts as claimed, as callers delete what is unclaimed.
 func (s *Store) TorrentClaimed(ctx context.Context, infoHash string) bool {
 	var n int
 	err := s.r.QueryRowContext(ctx, `
@@ -66,7 +61,6 @@ func (s *Store) TorrentClaimed(ctx context.Context, infoHash string) bool {
 	return err != nil || n > 0
 }
 
-// TorrentFinishedOrKept: a download complete or kept on any row; a failed read counts as yes.
 func (s *Store) TorrentFinishedOrKept(ctx context.Context, infoHash string) bool {
 	var n int
 	err := s.r.QueryRowContext(ctx, `
@@ -75,12 +69,10 @@ func (s *Store) TorrentFinishedOrKept(ctx context.Context, infoHash string) bool
 	return err != nil || n > 0
 }
 
-// TorrentName is a download's top-level name as its torrent gives it; on disk it may be made safe or tagged.
 type TorrentName struct {
 	Name, InfoHash string
 }
 
-// TorrentNames lists the top-level names of every download on record.
 func (s *Store) TorrentNames(ctx context.Context) ([]TorrentName, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT name, info_hash FROM torrent WHERE name <> ''
@@ -128,18 +120,17 @@ type CacheEntry struct {
 	Bytes     int64  `json:"bytes"`
 	Complete  bool   `json:"complete"`
 	Pinned    bool   `json:"pinned"`
-	// Kept is a download someone asked for: outside the budget, never evicted.
+
 	Kept       bool   `json:"kept"`
 	Protected  bool   `json:"protected"`
 	AnimeID    *int   `json:"animeId,omitempty"`
 	EpKey      string `json:"epKey,omitempty"`
 	Title      string `json:"title,omitempty"`
 	LastPlayed int64  `json:"lastPlayed"`
-	// Name is the torrent's, which is what it is called on disk.
+
 	Name string `json:"-"`
 }
 
-// Bytes is what the budget sees; kept downloads are reported beside it.
 type CacheUsage struct {
 	Bytes      int64        `json:"bytes"`
 	Budget     int64        `json:"budget"`
@@ -153,7 +144,6 @@ type CacheUsage struct {
 	Drive      string       `json:"drive,omitempty"`
 }
 
-// torrent_file is joined loosely: only played downloads have one.
 const cacheListQuery = `
 SELECT c.info_hash, c.file_index, t.engine_id, c.bytes_on_disk, c.complete, c.pinned, c.kept,
        CASE WHEN e.status IN ('CURRENT','REPEATING') THEN 1 ELSE 0 END,
@@ -217,7 +207,6 @@ func (s *Store) CacheUsage(ctx context.Context) (CacheUsage, error) {
 	return usage, nil
 }
 
-// KeepFile moves one file of a pack between the tiers; the pack row keeps whatever any of its files is.
 func (s *Store) KeepFile(ctx context.Context, infoHash string, fileIndex int, kept bool) (bool, error) {
 	res, err := s.w.ExecContext(ctx,
 		`UPDATE cache_entry SET kept = ? WHERE info_hash = ? AND file_index = ?`,
@@ -236,7 +225,6 @@ type DownloadFile struct {
 	Complete  bool   `json:"complete"`
 }
 
-// DownloadFiles lists a torrent's episodes, for the pack row on Downloads.
 func (s *Store) DownloadFiles(ctx context.Context, infoHash string) ([]DownloadFile, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT f.file_index, coalesce(f.ep_key, ''), coalesce(c.kept, 0), coalesce(c.complete, 0)
@@ -262,7 +250,6 @@ func (s *Store) DownloadFiles(ctx context.Context, infoHash string) ([]DownloadF
 	return out, rows.Err()
 }
 
-// KeepDownload moves a whole torrent between the cache and kept tiers, as eviction is per torrent.
 func (s *Store) KeepDownload(ctx context.Context, infoHash string, kept bool) (bool, error) {
 	res, err := s.w.ExecContext(ctx,
 		`UPDATE cache_entry SET kept = ? WHERE info_hash = ?`, boolInt(kept), infoHash)
@@ -273,7 +260,6 @@ func (s *Store) KeepDownload(ctx context.Context, infoHash string, kept bool) (b
 	return n > 0, nil
 }
 
-// Superseded lists an episode's replaced releases, whose files are all deselected.
 func (s *Store) Superseded(ctx context.Context, animeID int, epKey string) ([]string, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT DISTINCT f.info_hash FROM torrent_file f
@@ -297,8 +283,6 @@ func (s *Store) Superseded(ctx context.Context, animeID int, epKey string) ([]st
 	return out, rows.Err()
 }
 
-// SupersededReady: a replaced release may go now. Playing never; a finished one, or a kept one with data, only
-// once the episode's new release is complete, so a dead swarm can't cost the copy the user had.
 func (s *Store) SupersededReady(ctx context.Context, animeID int, epKey, infoHash string) (bool, error) {
 	var pinned, held, replaced int
 	err := s.r.QueryRowContext(ctx, `
@@ -315,13 +299,11 @@ func (s *Store) SupersededReady(ctx context.Context, animeID int, epKey, infoHas
 	return pinned == 0 && (held == 0 || replaced == 1), nil
 }
 
-// EpisodeRef names one episode of a show.
 type EpisodeRef struct {
 	AnimeID int
 	EpKey   string
 }
 
-// SupersededEpisodes lists episodes with a replaced release still held, for the sweep to finish dropping.
 func (s *Store) SupersededEpisodes(ctx context.Context) ([]EpisodeRef, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT DISTINCT f.anime_id, f.ep_key FROM torrent_file f
@@ -343,8 +325,6 @@ func (s *Store) SupersededEpisodes(ctx context.Context) ([]EpisodeRef, error) {
 	return out, rows.Err()
 }
 
-// WatchedEpisodes: finished in the player, or below the list's progress and
-// never played here. One gone back to and left unfinished is not seen.
 func (s *Store) WatchedEpisodes(ctx context.Context, animeID int) (map[int]bool, error) {
 	out := map[int]bool{}
 	played := map[int]bool{}
@@ -371,7 +351,6 @@ func (s *Store) WatchedEpisodes(ctx context.Context, animeID int) (map[int]bool,
 		return nil, err
 	}
 
-	// A finished show played again is a rewatch: its count covers every episode, not what was seen this time.
 	var progress int
 	var status sql.NullString
 	err = s.r.QueryRowContext(ctx,
@@ -390,6 +369,28 @@ func (s *Store) WatchedEpisodes(ctx context.Context, animeID int) (map[int]bool,
 	return out, nil
 }
 
+func (s *Store) WatchedAfter(ctx context.Context, animeID int) (map[int]int, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT p.ep_key, (SELECT count(*) FROM playback q WHERE q.watched = 1 AND q.last_played_at > p.last_played_at)
+		FROM playback p WHERE p.anime_id = ? AND p.watched = 1`, animeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int]int{}
+	for rows.Next() {
+		var key string
+		var later int
+		if err := rows.Scan(&key, &later); err != nil {
+			return nil, err
+		}
+		if n, err := strconv.Atoi(key); err == nil {
+			out[n] = later
+		}
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) SetCacheBytes(ctx context.Context, infoHash string, fileIndex int, bytes int64, complete bool) error {
 	_, err := s.w.ExecContext(ctx, `
 		UPDATE cache_entry SET bytes_on_disk = ?, complete = ?
@@ -406,14 +407,11 @@ func (s *Store) PinCache(ctx context.Context, infoHash string, fileIndex int, pi
 	return err
 }
 
-// UnpinAll runs at startup, or a crash's leftover pin makes files unevictable for good.
 func (s *Store) UnpinAll(ctx context.Context) error {
 	_, err := s.w.ExecContext(ctx, `UPDATE cache_entry SET pinned = 0`)
 	return err
 }
 
-// PinPlaying pins the file being watched and unpins its episode's other releases, which a mid-episode swap
-// leaves with no session to unpin them. Other episodes' pins stay: another device may be playing them.
 func (s *Store) PinPlaying(ctx context.Context, animeID int, epKey, infoHash string, fileIndex int) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -439,7 +437,6 @@ func (s *Store) PinPlaying(ctx context.Context, animeID int, epKey, infoHash str
 	return tx.Commit()
 }
 
-// CachedFile finds an episode's file, so playback can unpin it without tracking the hash.
 func (s *Store) CachedFile(ctx context.Context, animeID int, epKey string) (string, int, error) {
 	var hash string
 	var index int
@@ -453,7 +450,6 @@ func (s *Store) CachedFile(ctx context.Context, animeID int, epKey string) (stri
 	return hash, index, nil
 }
 
-// FileComplete answers from the sweeper's record, which outlives engine sessions.
 func (s *Store) FileComplete(ctx context.Context, infoHash string, fileIndex int) bool {
 	var complete int
 	err := s.r.QueryRowContext(ctx,

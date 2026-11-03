@@ -318,7 +318,7 @@ export function Player({
   onPickRelease,
   overlay,
   castBurn = false,
-  mini,
+  mini: docked,
 }: PlayerProps) {
   const [video, setVideo] = useState<HTMLVideoElement | null>(null)
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null)
@@ -541,6 +541,7 @@ export function Player({
   useSlowLink(video, onSlowLink)
   const fonts = useEmbeddedFonts(stream?.fontsUrl, epoch)
   const pip = useDocumentPiP(host)
+  const mini = pip.active ? undefined : docked
   const [extras, setExtras] = useState<{ stream?: string; tracks: SubtitleTrack[] }>({ tracks: [] })
   const extraTracks = extras.stream === stream?.id ? extras.tracks : NO_TRACKS
   const subtitleStream = useMemo(

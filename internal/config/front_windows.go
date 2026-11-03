@@ -16,14 +16,15 @@ var (
 	showWindowProc      = user32.NewProc("ShowWindow")
 	setForegroundWindow = user32.NewProc("SetForegroundWindow")
 	allowSetForeground  = user32.NewProc("AllowSetForegroundWindow")
+	postMessage         = user32.NewProc("PostMessageW")
 )
 
 const (
 	swRestore = 9
 	asfwAny   = 0xFFFFFFFF
+	wmClose   = 0x0010
 )
 
-// One callback for every search: Go never frees one, and after a couple of thousand it panics.
 var (
 	frontMu    sync.Mutex
 	frontPID   uint32
@@ -42,13 +43,16 @@ var (
 	})
 )
 
-// toFront raises pid's visible window, restoring it if minimised; false when it has none.
-func toFront(pid int) bool {
+func windowOf(pid int) uintptr {
 	frontMu.Lock()
+	defer frontMu.Unlock()
 	frontPID, frontFound = uint32(pid), 0
 	enumWindows.Call(frontEnum, 0)
-	found := frontFound
-	frontMu.Unlock()
+	return frontFound
+}
+
+func toFront(pid int) bool {
+	found := windowOf(pid)
 	if found == 0 {
 		return false
 	}
@@ -59,8 +63,15 @@ func toFront(pid int) bool {
 	return true
 }
 
-// AllowForeground lets another process raise its window: a second launch has the user's click, while the
-// running Yoru, in the background, would only flash its taskbar button.
+func askClose(pid int) bool {
+	found := windowOf(pid)
+	if found == 0 {
+		return false
+	}
+	sent, _, _ := postMessage.Call(found, wmClose, 0, 0)
+	return sent != 0
+}
+
 func AllowForeground() {
 	allowSetForeground.Call(asfwAny)
 }

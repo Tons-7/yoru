@@ -64,6 +64,10 @@ func (w *Window) Open(ctx context.Context, url string) {
 	case <-time.After(250 * time.Millisecond):
 	}
 
+	if !w.handoff {
+		repairStorage(w.profile(), w.log)
+	}
+
 	for attempt := range 2 {
 		if attempt > 0 {
 			select {
@@ -134,6 +138,13 @@ func (w *Window) Close() {
 	if l == nil || l.cmd == nil || l.cmd.Process == nil {
 		return
 	}
+	if askClose(l.cmd.Process.Pid) {
+		select {
+		case <-l.exited:
+			return
+		case <-time.After(closeGently):
+		}
+	}
 	l.cmd.Process.Kill()
 	select {
 	case <-l.exited:
@@ -142,6 +153,8 @@ func (w *Window) Close() {
 }
 
 const retryWindowAfter = 1500 * time.Millisecond
+
+var closeGently = 3 * time.Second
 
 var (
 	showWindow = appWindow

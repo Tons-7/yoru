@@ -2,8 +2,16 @@
 
 package config
 
-// toFront has no portable way to raise another program's window; Show opens one instead.
+import (
+	"os"
+	"syscall"
+)
+
 func toFront(int) bool { return false }
 
-// AllowForeground is for Windows, which keeps a background process from raising a window.
+func askClose(pid int) bool {
+	p, err := os.FindProcess(pid)
+	return err == nil && p.Signal(syscall.SIGTERM) == nil
+}
+
 func AllowForeground() {}

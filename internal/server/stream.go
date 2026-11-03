@@ -28,9 +28,6 @@ import (
 	"yoru/internal/transcode"
 )
 
-// The browser cannot play Matroska, so everything here rewrites the container
-// on the fly. Subtitles and fonts are drawn client-side rather than burned in.
-
 func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 	if s.streams == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "transcoder unavailable"})
@@ -52,8 +49,6 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A library file is addressed by its stream route, which only the browser can
-	// open. Swap in the path so ffmpeg reads the file rather than a URL it cannot.
 	if path, ok := s.localSource(r.Context(), source); ok {
 		source = path
 	} else if !s.engineSource(source) {
@@ -70,7 +65,6 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := sessionID(animeID, episode)
-	// Reading a file's start out of a slow swarm can take minutes; the player says that is the wait.
 	if s.playback != nil && s.engineSource(source) {
 		s.playback.SetStage(animeID, episode, library.Stage{Step: "start"})
 		defer s.playback.ClearStage(animeID, episode)
@@ -80,17 +74,13 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 	session, err := s.streams.OpenFor(r.Context(), id, source,
 		s.readablePath(r.Context(), animeID, episode, source), transcode.ParseCaps(r.URL.Query().Get("caps")), want)
 	if err != nil {
-		// Nothing plays, so the downloads Start paused for it go on; no close will come to resume them.
 		if s.playback != nil {
 			s.playback.ResumeYielded(context.WithoutCancel(r.Context()))
 		}
 		s.fail(w, "open stream", err)
 		return
 	}
-	// This device's plan may be a variant of the episode's session.
 	id = session.ID
-	// The player gave up on this open (another episode or track replaced it): no pin, no hold on the queue
-	// and no encoder for it. The session stays for a reopen of the same episode, or the reaper.
 	if r.Context().Err() != nil {
 		if s.playback != nil {
 			s.playback.ResumeYielded(context.WithoutCancel(r.Context()))
@@ -98,21 +88,16 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// This is the episode being watched, so it is the one the cache must not evict. Pinned beside any other
-	// device's: each session's close unpins its own.
 	if rec, found, err := s.store.TorrentForEpisode(r.Context(), animeID, strconv.Itoa(episode)); err == nil && found {
 		if err := s.store.PinPlaying(r.Context(), animeID, strconv.Itoa(episode), rec.InfoHash, rec.FileIndex); err != nil {
 			s.log.Warn("pin playing episode", "anime", animeID, "episode", episode, "err", err)
 		}
 	}
 
-	// Queued downloads share this connection. Whatever is on screen comes first, unless it is already
-	// on disk (nothing to give back) or the line is fast enough for both.
 	if s.holdWhileWatching(r.Context(), session) {
 		s.downloader.Hold(id)
 	}
 
-	// The sub/dub choice sets the track when new or changed; settled before encoding, and ?track= wins.
 	if want := r.URL.Query().Get("audio"); session.ApplyAudioPreference(want) {
 		session.SetAudioTrack(transcode.ChooseAudio(session.Info, want))
 	}
@@ -123,9 +108,6 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		session.SetSound(o)
 	}
 
-	// Start the encoder now, at the resume point, rather than waiting to be asked:
-	// the client reads the playlist first, and starting at zero would be restarted.
-	// A copy to keep reads from the start, not the resume point.
 	if !want.Keep {
 		go s.prestart(session, animeID, episode)
 	}
@@ -143,23 +125,18 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 		"complete":   s.sourceComplete(r.Context(), session),
 	}
 
-	// AirPlay's address for this session (an Apple TV can't carry the page's cookie), when a TV can reach it.
 	if s.rebind == nil || s.bound() {
 		airplay := grant{Source: castPrefix + id, Expires: time.Now().Add(externalFor).Unix()}
 		body["airplay"] = s.tvBase(r) + "/c/" + s.signGrant(airplay) + "/master.m3u8"
 	}
 
-	// Fonts start extracting now but do not hold up the reply; the client
-	// picks them up from the fonts endpoint and re-renders the subtitles.
 	tracks := s.subtitleTracks(session, base)
 	body["subtitles"] = tracks
 	body["fonts"] = []any{}
-	// Fonts are for text tracks; picture ones (PGS) come drawn.
 	if slices.ContainsFunc(tracks, func(t transcode.Track) bool { return !t.Pictures }) {
 		body["fontsUrl"] = base + "/fonts"
 		s.extractFontsAsync(session, base)
 	}
-	// Subtitles only as pictures the browser can't draw (VobSub, DVB): the player says so, not nothing.
 	if len(tracks) == 0 && len(session.Info.Subtitles) > 0 {
 		body["imageSubtitles"] = true
 	}
@@ -167,7 +144,6 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, body)
 }
 
-// streamWant: what the viewer asks of the picture: this device's step (?quality=720), softened flashing.
 func (s *Server) streamWant(ctx context.Context, animeID int, quality string) transcode.Want {
 	var want transcode.Want
 	if step, ok := transcode.Steps[quality]; ok {
@@ -180,7 +156,6 @@ func (s *Server) streamWant(ctx context.Context, animeID int, quality string) tr
 }
 
 func (s *Server) prestart(session *transcode.Session, animeID, episode int) {
-	// A head start only: Prestart never displaces an open session's pass or the player's next segment.
 	ctx, cancel := detached(30 * time.Second)
 	defer cancel()
 
@@ -190,8 +165,6 @@ func (s *Server) prestart(session *transcode.Session, animeID, episode int) {
 	}
 }
 
-// resumeSegment is the segment the resume position falls in, the first one the
-// client asks for. Encoder and init both aim here so a resume needs one pass.
 func (s *Server) resumeSegment(ctx context.Context, session *transcode.Session, animeID, episode int) int {
 	if at, err := s.store.ResumeAt(ctx, animeID, strconv.Itoa(episode)); err == nil && at > 0 {
 		return session.SegmentAt(at)
@@ -233,16 +206,12 @@ func (s *Server) subtitleTracks(session *transcode.Session, base string) []trans
 	return tracks
 }
 
-// sidecarOffset numbers the subtitle files beside a video after any track the file itself can hold.
 const sidecarOffset = 1000
 
-// sidecar is a subtitle file named after the video beside it ("Show - 01.en.ass"), as fansubs and BD batches
-// ship them; mpv and VLC pick them up, so the browser player does too.
 type sidecar struct{ path, language, title, codec string }
 
 var sidecarCodecs = map[string]string{".ass": "ass", ".ssa": "ssa", ".srt": "subrip", ".vtt": "webvtt"}
 
-// sidecars lists them in name order, for a file on disk only: a torrent's stream has nothing beside it.
 func sidecars(video string) []sidecar {
 	if video == "" || strings.Contains(video, "://") {
 		return nil
@@ -263,7 +232,6 @@ func sidecars(video string) []sidecar {
 		if !ok || (rest != "" && rest[0] != '.') {
 			continue
 		}
-		// "en", "eng" or "english" is a language; anything else ("en.forced", "signs") names the track.
 		side := sidecar{path: filepath.Join(dir, e.Name()), codec: codec}
 		label := strings.TrimPrefix(rest, ".")
 		if lang, _, _ := strings.Cut(label, "."); len(lang) >= 2 && len(lang) <= 3 || lang == "english" {
@@ -277,8 +245,6 @@ func sidecars(video string) []sidecar {
 	return out
 }
 
-// Extracting fonts blocked playback, so it runs in the background; the client
-// collects the result and styled signs arrive a moment after the episode starts.
 func (s *Server) extractFontsAsync(session *transcode.Session, base string) {
 	if s.subtitles == nil {
 		return
@@ -301,10 +267,8 @@ func (s *Server) extractFontsAsync(session *transcode.Session, base string) {
 		ctx, cancel := detached(5 * time.Minute)
 		defer cancel()
 
-		// As with subtitles: demuxing attachments over the stream endpoint downloads the whole file.
 		found, err := s.subtitles.ExtractFonts(ctx, s.readable(ctx, session), session.Dir(), session.Info.Attachments)
 		if err != nil {
-			// Not recorded: the next poll tries again, once more of the file has arrived.
 			s.log.Info("fonts not ready", "session", id, "err", err)
 			s.fontsMu.Lock()
 			delete(s.fontJobs, key)
@@ -319,7 +283,6 @@ func (s *Server) extractFontsAsync(session *transcode.Session, base string) {
 		}
 
 		s.fontsMu.Lock()
-		// The session closed meanwhile, taking these files; recording them would serve 404s.
 		if _, live := s.fontJobs[key]; live {
 			s.fonts[key] = fonts
 			delete(s.fontJobs, key)
@@ -330,10 +293,8 @@ func (s *Server) extractFontsAsync(session *transcode.Session, base string) {
 	}()
 }
 
-// Still extracting is a normal answer, not an error: the episode is playing.
 func (s *Server) streamFonts(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	// By the session's folder: another release reopening this episode gets a folder, and fonts, of its own.
 	session, ok := s.streams.Get(id)
 	if !ok {
 		send(w, http.StatusOK, map[string]any{"ready": false, "extracting": false, "fonts": []any{}})
@@ -345,7 +306,6 @@ func (s *Server) streamFonts(w http.ResponseWriter, r *http.Request) {
 	_, running := s.fontJobs[session.Dir()]
 	s.fontsMu.Unlock()
 
-	// A try that came out partial left no result: this poll starts the next one.
 	if !done && !running {
 		s.extractFontsAsync(session, "/api/stream/"+id)
 		running = true
@@ -359,8 +319,6 @@ func (s *Server) streamFonts(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"ready": true, "fonts": fonts})
 }
 
-// engineSource accepts only a file on the torrent engine. The source reaches
-// ffmpeg as -i, so without this a caller picks any URL or path it likes.
 func (s *Server) engineSource(source string) bool {
 	u, err := url.Parse(source)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
@@ -371,7 +329,6 @@ func (s *Server) engineSource(source string) bool {
 
 var localRoute = regexp.MustCompile(`^/api/local/(\d+)/stream$`)
 
-// localSource turns a library file's stream route back into its path.
 func (s *Server) localSource(ctx context.Context, source string) (string, bool) {
 	m := localRoute.FindStringSubmatch(source)
 	if m == nil {
@@ -385,8 +342,6 @@ func (s *Server) localSource(ctx context.Context, source string) (string, bool) 
 	return f.Path, true
 }
 
-// readable prefers the on-disk file the engine is writing to over its HTTP
-// stream, so reading a whole-file subtitle track needn't refetch every byte.
 func (s *Server) readable(ctx context.Context, session *transcode.Session) string {
 	animeID, episode, ok := parseSessionID(session.ID)
 	if !ok {
@@ -396,8 +351,6 @@ func (s *Server) readable(ctx context.Context, session *transcode.Session) strin
 }
 
 func (s *Server) readablePath(ctx context.Context, animeID, episode int, fallback string) string {
-	// Only a torrent stream has a holey cache file worth swapping in; a library
-	// file is already whole, and its stale torrent record would mislead ffmpeg.
 	if !isTorrentSource(fallback) {
 		return fallback
 	}
@@ -406,20 +359,16 @@ func (s *Server) readablePath(ctx context.Context, animeID, episode int, fallbac
 		return fallback
 	}
 	path := s.cachePath(rec)
-	// Only fetched bytes make the file worth reading; the rest reads as zeroes.
 	if path == "" || s.cache != nil && s.cache.Downloaded(ctx, rec.InfoHash) == 0 {
 		return fallback
 	}
 	return path
 }
 
-// cachePath is where the engine writes a torrent's episode file, "" when it isn't there.
 func (s *Server) cachePath(rec store.TorrentRecord) string {
 	if rec.FilePath == "" {
 		return ""
 	}
-	// A pack's files sit in a folder named after it, a single file in the cache, under the engine's names
-	// (see DiskNames). The folder first: a lone release may share a pack file's name.
 	var inPack []string
 	for part := range strings.SplitSeq(rec.FilePath, "/") {
 		inPack = append(inPack, torrent.SafeName(part))
@@ -458,7 +407,6 @@ func (s *Server) streamInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// See WaitInit: starts a pass at the resume point only if none runs.
 	from := 0
 	if !session.Kept() {
 		animeID, episode, _ := parseSessionID(session.ID)
@@ -474,7 +422,6 @@ func (s *Server) streamInit(w http.ResponseWriter, r *http.Request) {
 	serveFile(w, r, path, "video/mp4")
 }
 
-// unconvertible: an encoder failing every pass gets 422, which hls.js doesn't retry, so the player says so.
 func unconvertible(w http.ResponseWriter, err error) bool {
 	u, ok := errors.AsType[*transcode.Unconvertible](err)
 	if ok {
@@ -494,7 +441,6 @@ func (s *Server) streamSegment(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "invalid segment"})
 		return
 	}
-	// Past the end would start an encoder at an offset with nothing to encode.
 	if session.Segments > 0 && n >= session.Segments {
 		send(w, http.StatusNotFound, map[string]any{"error": "no such segment"})
 		return
@@ -507,10 +453,8 @@ func (s *Server) streamSegment(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// One read even over a sliced segment's several parts; opened shareably, it can be replaced mid-send.
 	seg, err := session.OpenSegment(n)
 	if err != nil {
-		// Dropped between the wait and here, by a sound or track switch: the player asks again.
 		s.log.Warn("segment", "session", session.ID, "n", n, "err", err)
 		http.Error(w, "segment unavailable", http.StatusGatewayTimeout)
 		return
@@ -536,7 +480,6 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "invalid track"})
 		return
 	}
-	// A file beside the video: whole already, converted once into a folder of its own.
 	if index >= sidecarOffset {
 		sides := sidecars(session.Source)
 		if index-sidecarOffset >= len(sides) {
@@ -579,7 +522,6 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 
 	at, _ := strconv.ParseFloat(r.URL.Query().Get("at"), 64)
 
-	// While downloading the encoder writes the lines beside the picture; the slow reads below fill the rest.
 	liveStart, live := session.LiveSubtitles()
 	live = live && !complete
 	var path string
@@ -587,7 +529,6 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 	if live {
 		path, err = s.subtitles.MergeLive(dir, index, codec)
 		have = err == nil && s.subtitles.Cues(dir, index, codec) > 0
-		// No line yet, but they're being written: served empty now; the player asks again as video arrives.
 		if !have {
 			if p, ok := s.subtitles.AwaitLive(r.Context(), dir, index, codec); ok {
 				path, err, have = p, nil, true
@@ -598,15 +539,12 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 	if !have {
 		path, err = s.subtitles.Extract(r.Context(), local, dir, index, codec, complete)
 
-		// The on-disk file is holey while downloading; the engine read from byte 0 outranks the encoder's own
-		// window, so only when no live process writes the lines beside the pass.
 		if (err != nil || s.subtitles.Cues(dir, index, codec) == 0) && local != session.Source && !live {
 			if p, retry := s.subtitles.Extract(r.Context(), session.Source, dir, index, codec, false); retry == nil {
 				path, err = p, nil
 			}
 		}
 	}
-	// A pass begun mid-episode lacks the line already on screen there; what is playing is read directly.
 	if at > 0 && !complete && !(live && transcode.LiveCovers(liveStart, at)) {
 		if p, aroundErr := s.subtitles.ExtractAround(r.Context(), local, dir, index, codec, at); aroundErr == nil {
 			path, err = p, nil
@@ -624,21 +562,17 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read whole rather than by path: the extractor replaces the file as the track
-	// fills, and Windows won't rename over an open one. A missing file is a bug.
 	track, readErr := os.ReadFile(path)
 	if readErr != nil {
 		s.fail(w, "extract subtitle", fmt.Errorf("track %d: %w", index, readErr))
 		return
 	}
-	// The player keeps asking while the track can still grow; this is how it knows when to stop.
 	w.Header().Set("X-Yoru-Complete", strconv.FormatBool(complete))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(track)
 }
 
-// streamPictureSubtitle serves a PGS track as a .sup file for libpgs, copied out of the whole file once.
 func (s *Server) streamPictureSubtitle(w http.ResponseWriter, r *http.Request) {
 	session, ok := s.stream(w, r)
 	if !ok {
@@ -649,7 +583,6 @@ func (s *Server) streamPictureSubtitle(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// Its pictures are spread through the file: read before it is whole, the rest would be missing for good.
 	if !s.sourceComplete(r.Context(), session) {
 		send(w, http.StatusConflict, map[string]any{"error": "These subtitles are pictures; they show once the episode has downloaded."})
 		return
@@ -671,8 +604,6 @@ func (s *Server) streamPictureSubtitle(w http.ResponseWriter, r *http.Request) {
 	serveFile(w, r, path, "application/octet-stream")
 }
 
-// holdWhileWatching says whether the queue stands down for this session: only while the episode is
-// still arriving, and only under the default policy.
 func (s *Server) holdWhileWatching(ctx context.Context, session *transcode.Session) bool {
 	if s.sourceComplete(ctx, session) {
 		return false
@@ -681,11 +612,7 @@ func (s *Server) holdWhileWatching(ctx context.Context, session *transcode.Sessi
 	return err != nil || prefs.String("downloads.while_watching") != "continue"
 }
 
-// sourceComplete reports whether the bytes behind a session can still grow. A
-// torrent is complete when the engine says so; anything else was already whole.
 func (s *Server) sourceComplete(ctx context.Context, session *transcode.Session) bool {
-	// A library file cannot grow, so its subtitles are complete at once. Judging a
-	// now-local episode by its torrent record would poll for ever.
 	if !isTorrentSource(session.Source) {
 		return true
 	}
@@ -704,8 +631,6 @@ func (s *Server) torrentWhole(ctx context.Context, rec store.TorrentRecord) bool
 	return s.store.FileComplete(ctx, rec.InfoHash, rec.FileIndex) || s.cache != nil && s.cache.Finished(ctx, rec.InfoHash)
 }
 
-// streamThumbnails describes the scrub preview sheet, building it if not there
-// yet. A missing sheet is the normal answer until ffmpeg has walked the episode.
 func (s *Server) streamThumbnails(w http.ResponseWriter, r *http.Request) {
 	session, ok := s.stream(w, r)
 	if !ok {
@@ -720,14 +645,12 @@ func (s *Server) streamThumbnails(w http.ResponseWriter, r *http.Request) {
 	dir := s.thumbDir(ctx, session)
 	duration, aspect := session.Info.Duration, aspectOf(session.Info)
 	sheet, ready := s.thumbs.Read(dir, duration, aspect)
-	// Only from the file on disk: through the engine it would fetch, and holes read as black.
 	local := s.readable(ctx, session)
 	switch {
 	case ready || isTorrentSource(local):
 	case s.sourceComplete(ctx, session):
 		s.thumbs.Generate(local, dir, duration, aspect)
 	case !s.streams.Converting():
-		// Still downloading: tiles from the parts on disk, unless a CPU conversion needs every core.
 		if loaded, ok := s.loadedBytes(ctx, session); ok {
 			have := make([]transcode.Span, len(loaded.Ranges))
 			for i, r := range loaded.Ranges {
@@ -739,7 +662,6 @@ func (s *Server) streamThumbnails(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, sheet)
 }
 
-// loadedBytes is what of a torrent stream's file the engine has verified on disk.
 func (s *Server) loadedBytes(ctx context.Context, session *transcode.Session) (torrent.FileRanges, bool) {
 	animeID, episode, ok := parseSessionID(session.ID)
 	if !ok || s.cache == nil {
@@ -765,22 +687,18 @@ func (s *Server) streamThumbSheet(w http.ResponseWriter, r *http.Request) {
 	serveFile(w, r, path, "image/jpeg")
 }
 
-// StreamHealth is whether the swarm keeps up with the picture.
 type StreamHealth struct {
-	// Mbps arriving from peers, and what sustained playback needs.
 	Mbps   float64 `json:"mbps"`
 	Needed float64 `json:"needed"`
 	Peers  int     `json:"peers"`
-	// Complete files and library files stream regardless.
+
 	Complete bool `json:"complete"`
 	Slow     bool `json:"slow"`
-	// For Playback info: the converter's pace against real time, and how much of the file is on disk.
+
 	Speed   float64 `json:"speed,omitempty"`
 	Percent float64 `json:"percent,omitempty"`
 }
 
-// streamHealth answers the player's "is it buffering or is it dead" question
-// with numbers, so a slow swarm can be turned into a download instead.
 func (s *Server) streamHealth(w http.ResponseWriter, r *http.Request) {
 	session, ok := s.stream(w, r)
 	if !ok {
@@ -808,7 +726,6 @@ func (s *Server) streamHealth(w http.ResponseWriter, r *http.Request) {
 		health.Needed = float64(rec.TotalSize) * 8 / session.Info.Duration / 1e6
 	}
 	health.Mbps, health.Peers = s.cache.Swarm(ctx, rec.InfoHash)
-	// This episode's file, not the torrent: a season pack holds others, some perhaps whole.
 	if loaded, ok := s.cache.Loaded(ctx, rec.InfoHash, rec.FileIndex); ok && loaded.Length > 0 {
 		var have int64
 		for _, r := range loaded.Ranges {
@@ -816,19 +733,15 @@ func (s *Server) streamHealth(w http.ResponseWriter, r *http.Request) {
 		}
 		health.Percent = min(100, 100*float64(have)/float64(loaded.Length))
 	}
-	// Some headroom: a swarm exactly at the bitrate stalls on every burst.
 	health.Slow = health.Needed > 0 && health.Mbps < health.Needed*1.2
 	send(w, http.StatusOK, health)
 }
 
-// streamLoaded is what will play without waiting on the network, as stretches of the episode in
-// seconds: the lighter part of the seek bar. A library file or a finished download is all of it.
 func (s *Server) streamLoaded(w http.ResponseWriter, r *http.Request) {
 	if s.streams == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "transcoder unavailable"})
 		return
 	}
-	// Peeked, not used: the bar is asked while paused too, which must not keep an idle session alive.
 	session, ok := s.streams.Peek(r.PathValue("id"))
 	if !ok {
 		send(w, http.StatusNotFound, map[string]any{"error": "no such stream session"})
@@ -850,8 +763,6 @@ func (s *Server) streamLoaded(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"complete": false, "ranges": ranges})
 }
 
-// loadedSeconds maps a file's downloaded stretches onto the episode's time, as if its bytes were spread
-// evenly: near enough for a bar, and the only mapping there is without reading the file.
 func loadedSeconds(loaded torrent.FileRanges, duration float64) [][2]float64 {
 	out := [][2]float64{}
 	if loaded.Length <= 0 || duration <= 0 {
@@ -867,8 +778,6 @@ func loadedSeconds(loaded torrent.FileRanges, duration float64) [][2]float64 {
 	return out
 }
 
-// thumbDir outlives the session directory, which every launch purges: a sheet
-// costs an ffmpeg pass over the whole episode, so it is keyed by the file.
 func (s *Server) thumbDir(ctx context.Context, session *transcode.Session) string {
 	key := ""
 	if animeID, episode, ok := parseSessionID(session.ID); ok && isTorrentSource(session.Source) {
@@ -885,8 +794,6 @@ func (s *Server) thumbDir(ctx context.Context, session *transcode.Session) strin
 	return dir
 }
 
-// aspectOf is the video's shape, so preview tiles are not stretched. Anamorphic
-// releases exist, but the stored dimensions are what the encoder scales to.
 func aspectOf(info *transcode.MediaInfo) float64 {
 	if info == nil || info.Video == nil || info.Video.Height == 0 {
 		return 0
@@ -900,7 +807,6 @@ func (s *Server) streamFont(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A bare filename only, so no request walks out of the font directory.
 	name := r.PathValue("font")
 	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
 		http.NotFound(w, r)
@@ -909,7 +815,6 @@ func (s *Server) streamFont(w http.ResponseWriter, r *http.Request) {
 	serveFile(w, r, filepath.Join(session.Dir(), "fonts", name), "font/ttf")
 }
 
-// SessionIdle releases a session the reaper took, suspending the episode only if nothing else needs it.
 func (s *Server) SessionIdle(id string) {
 	s.downloader.Release(id)
 	s.SessionGone(id)
@@ -919,17 +824,30 @@ func (s *Server) SessionIdle(id string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if !s.stillReading(ctx, animeID, episode) && !s.downloader.Downloading(id) {
+	s.leftEpisode(ctx, id, animeID, episode)
+}
+
+func (s *Server) leftEpisode(ctx context.Context, id string, animeID, episode int) {
+	if s.stillReading(ctx, animeID, episode) {
+		return
+	}
+	if !s.downloader.Downloading(id) {
 		s.playback.Suspend(ctx, animeID, episode)
+		return
+	}
+	hash, index, err := s.store.CachedFile(ctx, animeID, strconv.Itoa(episode))
+	if err != nil || hash == "" {
+		return
+	}
+	if err := s.store.PinCache(ctx, hash, index, false); err != nil {
+		s.log.Warn("unpin left episode", "anime", animeID, "episode", episode, "err", err)
 	}
 }
 
-// SessionGone forgets a removed session's extractions, so a rebuild extracts again instead of serving 404s.
 func (s *Server) SessionGone(id string) {
 	if s.streams == nil {
 		return
 	}
-	// Its own folders only: another device's variant of the episode (<id>-dev…) still plays.
 	own := func(path string) bool { return s.streams.Owns(id, path) }
 	s.fontsMu.Lock()
 	maps.DeleteFunc(s.fontJobs, func(dir string, _ struct{}) bool { return own(dir) })
@@ -938,7 +856,6 @@ func (s *Server) SessionGone(id string) {
 	if s.subtitles != nil {
 		s.subtitles.ForgetOwned(own)
 	}
-	// A lock a build still holds stays, or the next ask would build the same file beside it.
 	s.building.Range(func(path, mu any) bool {
 		if own(path.(string)) && mu.(*sync.Mutex).TryLock() {
 			s.building.Delete(path)
@@ -951,25 +868,18 @@ func (s *Server) SessionGone(id string) {
 func (s *Server) streamClose(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	// Only the last holder stops anything: reopening returns the running session,
-	// so a page that reopens then tears down its old effect must not kill playback.
 	closed := s.streams != nil && s.streams.Close(id)
 
 	if closed {
 		s.downloader.Release(id)
-		// Closing removes the directory and its fonts; dropping the marker stops a running extractor too.
 		s.SessionGone(id)
 	}
-	// Not if the queue fetches this episode: closing the player doesn't stop a separate download.
-	if animeID, episode, ok := parseSessionID(id); closed && ok && s.playback != nil &&
-		!s.stillReading(r.Context(), animeID, episode) && !s.downloader.Downloading(id) {
-		s.playback.Suspend(r.Context(), animeID, episode)
+	if animeID, episode, ok := parseSessionID(id); closed && ok && s.playback != nil {
+		s.leftEpisode(r.Context(), id, animeID, episode)
 	}
 	send(w, http.StatusOK, map[string]any{"closed": closed})
 }
 
-// stillReading reports that another open session is served by the same torrent,
-// so closing one tab of a season pack must not stop a download others read from.
 func (s *Server) stillReading(ctx context.Context, animeID, episode int) bool {
 	if s.streams == nil {
 		return false
@@ -989,7 +899,6 @@ func (s *Server) stillReading(ctx context.Context, animeID, episode int) bool {
 	return false
 }
 
-// streamAudio switches a running session's track; segments written with the old one are dropped.
 func (s *Server) streamAudio(w http.ResponseWriter, r *http.Request) {
 	if s.streams == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "transcoder unavailable"})
@@ -1009,8 +918,6 @@ func (s *Server) streamAudio(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"audioTrack": session.AudioTrack(), "changed": changed})
 }
 
-// soundFromQuery applies the sound parameters present (voice, night, headphones, mono) over the
-// current options; the second result says whether any were given.
 func soundFromQuery(r *http.Request, current sound.Options) (sound.Options, bool) {
 	q := r.URL.Query()
 	any := false
@@ -1028,7 +935,6 @@ func soundFromQuery(r *http.Request, current sound.Options) (sound.Options, bool
 	return current, any
 }
 
-// streamSound switches what is done to the audio mid-stream; the pass restarts where the viewer is.
 func (s *Server) streamSound(w http.ResponseWriter, r *http.Request) {
 	session, ok := s.stream(w, r)
 	if !ok {
@@ -1043,18 +949,15 @@ func (s *Server) streamSound(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"sound": session.Sound(), "changed": changed})
 }
 
-// Session ids are "<anime>-<episode>"; parseSessionID reads them back.
 func sessionID(animeID, episode int) string {
 	return fmt.Sprintf("%d-%d", animeID, episode)
 }
 
-// isTorrentSource tells a torrent's engine stream URL from a library file path.
 func isTorrentSource(src string) bool {
 	return strings.Contains(src, "/torrents/") && strings.Contains(src, "/stream/")
 }
 
 func parseSessionID(id string) (animeID, episode int, ok bool) {
-	// A device's own plan ("-dev…") or a cast's drawn-in copy ("-burn<track>-<delay>") is the same episode.
 	id = transcode.BaseID(id)
 	dash := strings.LastIndexByte(id, '-')
 	if dash <= 0 {

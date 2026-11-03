@@ -222,6 +222,40 @@ export function EpisodeList({
     setPage(0)
   }
 
+  const top = useRef<HTMLElement>(null)
+  const list = useRef<HTMLUListElement>(null)
+  const turn = (n: number, below: boolean) => {
+    setPage(n)
+    if (compact) list.current?.scrollTo({ top: 0 })
+    if (below) top.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }
+  const pager = (below: boolean) => (
+    <nav
+      ref={below ? undefined : top}
+      className="flex scroll-mt-24 items-center justify-center gap-1.5"
+      aria-label={below ? 'Episode pages, below the list' : 'Episode pages'}
+    >
+      <Button size="sm" disabled={at === 0} onClick={() => turn(at - 1, below)}>
+        Previous
+      </Button>
+      <RangeMenu
+        page={at}
+        pages={pages}
+        total={filtered.length}
+        rangeFor={(n) => {
+          const slice = filtered.slice(n * PAGE_SIZE, (n + 1) * PAGE_SIZE)
+          const first = slice[0]
+          const last = slice[slice.length - 1]
+          return first && last ? `${first.display} to ${last.display}` : ''
+        }}
+        onPick={(n) => turn(n, below)}
+      />
+      <Button size="sm" disabled={at >= pages - 1} onClick={() => turn(at + 1, below)}>
+        Next
+      </Button>
+    </nav>
+  )
+
   const searchable = episodes.length > 12
   const total = episodes.length
   const done = released.length > 0 && watchedCount === released.length
@@ -434,30 +468,10 @@ export function EpisodeList({
         </div>
       )}
 
-      {pages > 1 && (
-        <div className="flex items-center justify-center gap-1.5">
-          <Button size="sm" disabled={at === 0} onClick={() => setPage(at - 1)}>
-            Previous
-          </Button>
-          <RangeMenu
-            page={at}
-            pages={pages}
-            total={filtered.length}
-            rangeFor={(n) => {
-              const slice = filtered.slice(n * PAGE_SIZE, (n + 1) * PAGE_SIZE)
-              const first = slice[0]
-              const last = slice[slice.length - 1]
-              return first && last ? `${first.display} to ${last.display}` : ''
-            }}
-            onPick={setPage}
-          />
-          <Button size="sm" disabled={at >= pages - 1} onClick={() => setPage(at + 1)}>
-            Next
-          </Button>
-        </div>
-      )}
+      {pages > 1 && pager(false)}
 
       <ul
+        ref={list}
         className={cx(
           'surface',
           compact ? 'max-h-[70vh] overflow-y-auto overscroll-contain scrollbar-thin' : 'overflow-hidden',
@@ -508,6 +522,8 @@ export function EpisodeList({
           </li>
         )}
       </ul>
+
+      {pages > 1 && pager(true)}
     </div>
   )
 }
@@ -842,7 +858,7 @@ function EpisodeRow({
         ? { node: `Resume ${clockTime(resumeAt)}`, className: 'font-medium text-accent-300' }
         : upNext && !listed
           ? { node: 'Next', className: 'font-medium text-accent-300' }
-          : watched && !listed
+          : watched && !listed && !compact
             ? { node: 'Watched', className: cx('font-medium text-emerald-300', pill && 'sm:hidden') }
             : null
 
@@ -874,7 +890,7 @@ function EpisodeRow({
       <span
         className={cx(
           'text-sm font-medium',
-          art === 'still' && !compact ? 'line-clamp-2' : 'line-clamp-1',
+          art === 'still' ? 'line-clamp-2' : 'line-clamp-1',
           unaired || hidden ? 'text-base-400' : watched && !active ? 'text-base-100/70' : 'text-base-100',
         )}
       >
@@ -882,7 +898,7 @@ function EpisodeRow({
         {title}
       </span>
       {facts.length > 0 && (
-        <span className="mt-0.5 block truncate text-[13px] text-base-500">
+        <span className={cx('mt-0.5 block text-[13px] text-base-500', compact ? 'line-clamp-2' : 'truncate')}>
           {facts.map((fact, i) => (
             <span key={i} className={fact.className}>
               {fact.node}

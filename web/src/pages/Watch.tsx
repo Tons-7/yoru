@@ -5,6 +5,7 @@ import {
   api,
   ApiError,
   beacon,
+  fetchAuthed,
   query,
   type Episode,
   type FollowState,
@@ -71,6 +72,7 @@ import {
   unminimize,
   useCurrentVideo,
   useDockDrag,
+  useFloating,
   usePlayingNow,
   type Corner,
 } from '../lib/miniplayer'
@@ -105,6 +107,7 @@ export function Watch({
     [mini, onGo, routerNavigate],
   )
   const dock = useDockDrag(mini)
+  const floating = useFloating()
   const wide = useMediaQuery('(min-width: 40rem)')
   const side = useMediaQuery('(min-width: 80rem)')
   const playerControls = useRef<PlayerControls>(null)
@@ -667,8 +670,12 @@ export function Watch({
 
   useEffect(() => {
     const streamId = stream.data?.id
+    if (!streamId) return
+    const leave = () => void fetchAuthed(`/api/stream/${streamId}`, { method: 'DELETE', keepalive: true }).catch(() => {})
+    window.addEventListener('pagehide', leave)
     return () => {
-      if (streamId) void api.del(`/api/stream/${streamId}`).catch(() => {})
+      window.removeEventListener('pagehide', leave)
+      void api.del(`/api/stream/${streamId}`).catch(() => {})
     }
   }, [stream.data?.id])
 
@@ -894,6 +901,7 @@ export function Watch({
         mini &&
           'fixed z-40 w-[22rem] cursor-grab touch-none rounded-xl shadow-2xl ring-1 shadow-black/60 ring-white/10 select-none active:cursor-grabbing max-sm:inset-x-2 max-sm:w-auto',
         mini && DOCK[dock.corner],
+        mini && floating && 'hidden',
       )}
     >
       <div
@@ -902,7 +910,7 @@ export function Watch({
           focus && 'flex min-h-full flex-col justify-center',
         )}
       >
-        <div className={cx(!mini && !focus && 'grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]')}>
+        <div className={cx(!mini && !focus && 'grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_25rem] 2xl:grid-cols-[minmax(0,1fr)_28rem]')}>
           <div className={cx('min-w-0', mini && 'max-sm:flex max-sm:items-center')}>
             <div
               className={cx(

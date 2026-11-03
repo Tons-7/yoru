@@ -125,7 +125,7 @@ export function Rail({
       <div
         ref={track}
         data-rail-track
-        className={cx('no-scrollbar -mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth px-1 pb-1', folded && 'hidden')}
+        className={cx('no-scrollbar -mx-1 flex snap-x snap-mandatory scroll-px-1 gap-3 overflow-x-auto scroll-smooth px-1 pb-1', folded && 'hidden')}
       >
         {children}
       </div>

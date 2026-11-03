@@ -1,8 +1,6 @@
 import { useLayoutEffect, useRef, useState, useSyncExternalStore, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { readKey, writeKey } from './storage'
 
-// The browser player's video: for the docked player's Play, and whether leaving the watch page docks it.
-
 let video: HTMLVideoElement | null = null
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((l) => l())
@@ -33,7 +31,24 @@ export function unminimize() {
   minimized = false
 }
 
-export const playingNow = () => playing() || minimized
+let floating = false
+
+export function setFloating(on: boolean) {
+  floating = on
+  emit()
+}
+
+export function useFloating(): boolean {
+  return useSyncExternalStore(
+    (l) => {
+      listeners.add(l)
+      return () => listeners.delete(l)
+    },
+    () => floating,
+  )
+}
+
+export const playingNow = () => playing() || minimized || floating
 
 export const currentVideo = () => video
 
@@ -71,7 +86,6 @@ function savedCorner(): Corner {
   return c === 'tl' || c === 'tr' || c === 'bl' ? c : 'br'
 }
 
-/** The docked player held and moved; let go, it glides to the nearest corner, kept per device. */
 export function useDockDrag(on: boolean) {
   const [corner, setCorner] = useState<Corner>(savedCorner)
   const [drops, setDrops] = useState(0)
@@ -88,7 +102,6 @@ export function useDockDrag(on: boolean) {
       el.style.transform = el.style.transition = el.style.willChange = ''
       return
     }
-    // Measured without the drag's offset, then started from where it was let go.
     el.style.transition = 'none'
     el.style.transform = ''
     const now = el.getBoundingClientRect()
@@ -103,10 +116,9 @@ export function useDockDrag(on: boolean) {
 
   const onPointerDownCapture = (e: ReactPointerEvent<HTMLDivElement>) => {
     const el = ref.current
-    if (!on || !el || e.button !== 0) return
+    if (!on || !el || e.button !== 0 || !el.contains(e.target as Node)) return
     const sx = e.clientX
     const sy = e.clientY
-    // Caught mid-glide, it carries on from where it is.
     const now = getComputedStyle(el).transform
     const at = new DOMMatrix(now === 'none' ? undefined : now)
     moved.current = false
@@ -138,7 +150,6 @@ export function useDockDrag(on: boolean) {
     window.addEventListener('pointercancel', up)
   }
 
-  // A drag isn't a press: the click that ends one goes nowhere.
   const onClickCapture = (e: MouseEvent) => {
     if (!moved.current) return
     moved.current = false

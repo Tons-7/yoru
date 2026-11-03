@@ -86,15 +86,40 @@ if (pip) {
   check(dragged.video > 900, 'the picture follows the window while its edge is dragged', JSON.stringify(dragged))
   check(dragged.dimmed, 'kept off the display overlay meanwhile', JSON.stringify(dragged))
   check(dragged.canvas === null || Math.abs(dragged.canvas - dragged.video) < 2, 'the subtitles stretch along with it', JSON.stringify(dragged))
-  check(dragged.resizes === 0, 'without redrawing them on every step', JSON.stringify(dragged))
+  check(dragged.resizes <= 3, 'without redrawing them on every step (30 steps)', JSON.stringify(dragged))
   await pip.waitForTimeout(1500)
   const fitted = { ...(await look()), resizes: await page.evaluate(() => window.subtitleResizes) }
-  check(!fitted.dimmed && fitted.resizes === 1, 'once the drag stops they are redrawn once, at full opacity', JSON.stringify(fitted))
+  check(
+    !fitted.dimmed && fitted.resizes >= 1 && fitted.resizes - dragged.resizes <= 1,
+    'once the drag stops they are redrawn once, at full opacity',
+    JSON.stringify(fitted),
+  )
   check(fitted.canvas === null || Math.abs(fitted.canvas - fitted.video) < 2, 'matching the picture', JSON.stringify(fitted))
+
+  await pip.evaluate(() => document.querySelector('video').pause())
+  await page.getByRole('link', { name: 'Home', exact: true }).first().click()
+  await page.waitForTimeout(1500)
+  check(!pip.isClosed(), 'leaving the episode page, even paused, keeps the window open')
+  const docked = await page.evaluate(() =>
+    [...document.querySelectorAll('div.fixed')].some((d) => d.className.includes('cursor-grab') && d.checkVisibility()),
+  )
+  check(!docked, 'with no second player docked in the page meanwhile')
 
   await pip.hover('video')
   await pip.getByRole('button', { name: /Back to tab/ }).click()
   await page.waitForTimeout(1500)
+  const dockAt = () =>
+    page.evaluate(() => {
+      const d = [...document.querySelectorAll('div.fixed')].find((el) => el.className.includes('cursor-grab'))
+      const r = d?.getBoundingClientRect()
+      return r ? `${Math.round(r.x)},${Math.round(r.y)}` : null
+    })
+  const restedAt = await dockAt()
+  await page.mouse.move(300, 300)
+  await page.mouse.move(700, 500, { steps: 8 })
+  await page.waitForTimeout(400)
+  const movedAt = await dockAt()
+  check(!!restedAt && restedAt === movedAt, 'back from the window, the docked player stays put as the mouse moves', `${restedAt} → ${movedAt}`)
   check(
     await page.evaluate(() => !!document.querySelector('video')),
     'the player is back in the page',

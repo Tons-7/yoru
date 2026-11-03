@@ -1567,7 +1567,7 @@ function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
 
   const sent = useRef(saved)
   const save = () => {
-    if (text === saved || text === sent.current) return
+    if (text === saved || text === sent.current || (!text.trim() && !saved)) return
     sent.current = text
     set.mutate({ note: text })
   }
@@ -1577,6 +1577,11 @@ function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
   })
   useEffect(() => () => latest.current(), [])
   const id = `note-${animeId}`
+  const empty = !text.trim() && !saved
+  const close = () => {
+    setText(saved)
+    if (!saved) setOpen(false)
+  }
 
   if (!open) {
     return (
@@ -1588,14 +1593,38 @@ function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
   }
   return (
     <div className="mt-3 space-y-1">
-      <label htmlFor={id} className="block text-[13px] font-semibold text-base-400">
-        Your note
-      </label>
+      <div className="flex items-center justify-between gap-2">
+        <label htmlFor={id} className="block text-[13px] font-semibold text-base-400">
+          Your note
+        </label>
+        {empty && (
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={close}
+            aria-label="Close the note"
+            className="tap relative grid size-6 place-items-center rounded-full text-base-400 transition-colors hover:bg-base-800 hover:text-base-100"
+          >
+            <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
+              <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
+      </div>
       <textarea
         id={id}
+        autoFocus={!saved}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        onBlur={save}
+        onBlur={() => {
+          save()
+          if (!text.trim() && !saved) setOpen(false)
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return
+          e.stopPropagation()
+          close()
+        }}
         placeholder="Your note (only you see it)"
         rows={2}
         className={cx(inputClass, 'block h-auto w-full py-2 pointer-coarse:h-auto')}

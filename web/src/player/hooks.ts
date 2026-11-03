@@ -9,6 +9,7 @@ import pgsWorkerUrl from 'libpgs/dist/libpgs.worker.js?url'
 import type { SkipRange, StreamInfo, SubtitleTrack } from '../lib/api'
 import { restyle as restyleASS, type SubLook } from './subLook'
 import { airplayHere } from './airplay'
+import { setFloating } from '../lib/miniplayer'
 
 const REFUSED_CODEC = new Set<string>(['bufferAddCodecError', 'bufferIncompatibleCodecsError', 'manifestIncompatibleCodecsError'])
 
@@ -904,7 +905,7 @@ export function useDocumentPiP(container: HTMLElement | null) {
     const dpip = (window as unknown as {
       documentPictureInPicture: {
         window: Window | null
-        requestWindow: (o: { width: number; height: number; preferInitialWindowPlacement?: boolean }) => Promise<Window>
+        requestWindow: (o: { width: number; height: number }) => Promise<Window>
       }
     }).documentPictureInPicture
 
@@ -915,7 +916,7 @@ export function useDocumentPiP(container: HTMLElement | null) {
     }
 
     const rect = container.getBoundingClientRect()
-    const pip = await dpip.requestWindow({ ...pipSize(container), preferInitialWindowPlacement: true })
+    const pip = await dpip.requestWindow(pipSize(container))
 
     for (const sheet of Array.from(document.styleSheets)) {
       if (sheet.href) {
@@ -957,6 +958,7 @@ export function useDocumentPiP(container: HTMLElement | null) {
     pip.document.body.append(container)
     setActive(true)
     setWin(pip)
+    setFloating(true)
 
     let settle = 0
     pip.addEventListener('resize', () => {
@@ -972,6 +974,7 @@ export function useDocumentPiP(container: HTMLElement | null) {
       placeholder.replaceWith(container)
       setActive(false)
       setWin(null)
+      setFloating(false)
     })
   }
 
