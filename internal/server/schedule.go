@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"maps"
 	"net/http"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	"yoru/internal/anilist"
@@ -120,6 +122,32 @@ func groupByDay(items []scheduleItem, offsetMinutes int, start int64, count int)
 	return days
 }
 
+const scheduleDayFetches = 4
+
+func (s *Server) scheduleDays(ctx context.Context, start, end int64) ([]anilist.ScheduleEntry, error) {
+	const day = 24 * 3600
+	var spans [][2]int64
+	for from := start; from < end; from += day {
+		spans = append(spans, [2]int64{from, min(from+day, end)})
+	}
+	parts := make([][]anilist.ScheduleEntry, len(spans))
+	errs := make([]error, len(spans))
+	slots := make(chan struct{}, scheduleDayFetches)
+	var wg sync.WaitGroup
+	for i, span := range spans {
+		wg.Go(func() {
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			parts[i], errs[i] = s.anilist.Schedule(ctx, span[0]-1, span[1])
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	return slices.Concat(parts...), nil
+}
+
 func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
@@ -146,7 +174,7 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 	}
 	end := start + int64(days)*24*3600
 
-	entries, err := s.anilist.Schedule(r.Context(), start, end)
+	entries, err := s.scheduleDays(r.Context(), start, end)
 	if err != nil {
 		s.fail(w, "schedule", err)
 		return

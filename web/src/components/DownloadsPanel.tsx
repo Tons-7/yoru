@@ -12,6 +12,7 @@ import { ActivityMark } from './ActivityRing'
 import { SavingJob } from './SavingJob'
 import { ProgressBar } from './ui'
 import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
+import { useHiddenKeys } from '../lib/undo'
 import { plainKey, usePortalHome } from './keys'
 
 export function DownloadsPanel() {
@@ -36,7 +37,11 @@ export function DownloadsPanel() {
   const downloads = useDownloads()
   const queue = useDownloadQueue()
   const unit = useSpeedUnit()
-  const sections = sortDownloads(downloads.data?.items ?? [], queue.data?.items ?? [])
+  const hidden = useHiddenKeys()
+  const sections = sortDownloads(
+    (downloads.data?.items ?? []).filter((d) => !hidden.has(`pc:${d.infoHash}`)),
+    queue.data?.items ?? [],
+  )
   const { active, held, finished, searching, waitingQueue, failed } = sections
   const busy = active.length + searching.length
   const access = useAccess()
@@ -151,7 +156,7 @@ export function DownloadsPanel() {
             {jobs.length > 0 && (
               <div className="border-b border-base-700 px-3 pt-2">
                 <p className="text-xs font-medium text-base-200">Saving to this device</p>
-                <ul className="divide-y divide-white/[0.06]">
+                <ul className="divide-y divide-line">
                   {jobs.map((j, i) => {
                     const key = savedKey(j.animeId, j.episode)
                     return <SavingJob key={key} job={j} status={device.status.get(key)} place={i + 1} compact />
@@ -192,10 +197,8 @@ export function DownloadsPanel() {
   )
 }
 
-// One card per show, as on the Downloads page.
 const row = 'rounded-lg bg-base-800 px-3 py-2.5'
 
-/** A torrent or a queue entry, with the note a queue entry carries (why it waits, why it failed). */
 interface Entry {
   d?: Download
   q?: Queued
@@ -210,7 +213,6 @@ interface ShowGroup {
   entries: Entry[]
 }
 
-// The show is the card, its episodes the lines (one name, not eight); a release under no show is its own card.
 function byShow(entries: Entry[]): ShowGroup[] {
   const groups: ShowGroup[] = []
   const index = new Map<string, ShowGroup>()
@@ -230,12 +232,10 @@ function byShow(entries: Entry[]): ShowGroup[] {
   return groups
 }
 
-// Nothing to say but its turn: such episodes share one line, or a season buries what is downloading.
 const justWaiting = (e: Entry) => !!e.q && e.note === 'waiting' && !e.q.torrent && !e.q.error
 
 function ShowCard({ group }: { group: ShowGroup }) {
   const waiting = group.entries.filter(justWaiting).map((e) => e.q!.episode)
-  // The shared line stands where the first of them was, so the order still reads as the queue's.
   const first = group.entries.findIndex(justWaiting)
   return (
     <li className={row}>
@@ -263,7 +263,6 @@ function ShowCard({ group }: { group: ShowGroup }) {
   )
 }
 
-// The episode and how it is doing; a release under no show has only the progress, its name being the card.
 function EpisodeLine({ d }: { d: Download }) {
   const label = d.title && d.episodes.length > 0 ? `Episode${d.episodes.length > 1 ? 's' : ''} ${d.episode}` : ''
   const retry = retryNote(d.queued)
@@ -281,7 +280,6 @@ function EpisodeLine({ d }: { d: Download }) {
   )
 }
 
-// A failed entry carries what its torrent got before giving up.
 function QueuedLine({ q, note, failed }: Entry) {
   const got = q!.torrent
   return (

@@ -6,11 +6,11 @@ import { toCard } from '../lib/cards'
 import { cx } from '../lib/format'
 import { useDebounced, useMediaQuery } from '../lib/hooks'
 import { useAlertsOff, useFilters } from '../lib/queries'
-import { forgetSearch, rememberSearch, useRecentSearches } from '../lib/recentSearches'
+import { forgetAllSearches, forgetSearch, rememberSearch, useRecentSearches } from '../lib/recentSearches'
 import { openableLink, openLinkPath, openLinkWords } from '../lib/showLink'
-import { csv, FILTER_KEYS, PER_PAGE, useBrowse } from '../components/browseQuery'
+import { csv, FILTER_KEYS, PER_PAGE, tagChoices, useBrowse, type FilterVocabulary } from '../components/browseQuery'
 import { FilterMenu } from '../components/FilterMenu'
-import { FilterSheet, SortSheet, type FilterVocabulary } from '../components/FilterSheet'
+import { FilterSheet, SortSheet } from '../components/FilterSheet'
 import { PosterCard, PosterGrid } from '../components/PosterCard'
 import { SearchResults } from '../components/SearchResults'
 import { GenreTiles, RecentSearches } from '../components/SearchStart'
@@ -54,6 +54,7 @@ export function Browse() {
 
   const filters = useFilters()
   const vocab = filters.data as unknown as FilterVocabulary | undefined
+  const tags = tagChoices(vocab)
   const catalogue = useQuery({
     queryKey: ['corpus'],
     queryFn: ({ signal }) => api.get<{ anime: number }>('/api/corpus', signal),
@@ -180,6 +181,7 @@ export function Browse() {
     set(key, csv(active[key]).filter((x) => x !== value).join(','))
   const chips: Array<{ key: string; value: string; label: string; remove: () => void }> = [
     ...csv(active.genres).map((g) => ({ key: 'genres', value: g, label: g, remove: without('genres', g) })),
+    ...csv(active.tags).map((t) => ({ key: 'tags', value: t, label: t, remove: without('tags', t) })),
     ...csv(active.formats).map((f) => ({ key: 'formats', value: f, label: f.replace('_', ' '), remove: without('formats', f) })),
     ...csv(active.statuses).map((s) => ({ key: 'statuses', value: s, label: pretty(s), remove: without('statuses', s) })),
     ...(active.studio
@@ -271,6 +273,7 @@ export function Browse() {
             <path d="m16 16 4.5 4.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
           <input
+            id="yoru-page-search"
             type="search"
             value={text}
             onChange={(e) => {
@@ -339,8 +342,10 @@ export function Browse() {
         </p>
       )}
 
-      {!searching && recent.length > 0 && <RecentSearches searches={recent} onPick={pickRecent} onForget={forgetSearch} />}
-      {!searching && <GenreTiles chosen={csv(active.genres)} onToggle={toggleGenre} />}
+      {!searching && recent.length > 0 && (
+        <RecentSearches searches={recent} onPick={pickRecent} onForget={forgetSearch} onForgetAll={forgetAllSearches} />
+      )}
+      {!searching && !filtered && <GenreTiles chosen={csv(active.genres)} onToggle={toggleGenre} />}
 
       {wide ? (
         <div className="space-y-3">
@@ -350,6 +355,14 @@ export function Browse() {
               values={csv(active.genres)}
               options={vocab?.genres ?? []}
               onChange={(v) => set('genres', v.join(','))}
+            />
+            <FilterMenu
+              label="Tags"
+              values={csv(active.tags)}
+              options={tags.all}
+              featured={tags.popular}
+              labels={tags.labels}
+              onChange={(v) => set('tags', v.join(','))}
             />
             <FilterMenu
               label="Format"
@@ -395,7 +408,12 @@ export function Browse() {
           </div>
           {chips.length > 0
             ? chipRow(searching ? null : countText)
-            : !searching && countText && <p className="text-[13px] text-base-500 tabular-nums">{countText}</p>}
+            : !searching && (
+                <h2 className="text-[15px] font-semibold text-white">
+                  {SORT_LABELS[active.sort ?? 'popular'] ?? pretty(active.sort ?? '')}
+                  {countText && <span className="font-normal text-base-500 tabular-nums"> · {countText}</span>}
+                </h2>
+              )}
         </div>
       ) : (
         <>

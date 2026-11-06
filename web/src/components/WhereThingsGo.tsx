@@ -6,14 +6,12 @@ import { TextInput } from './ui'
 import { buttonClass } from '../lib/ui'
 import type { SetupState } from '../lib/queries'
 
-/** Every folder Yoru uses and its config.toml key. */
 export function WhereThingsGo({ setup }: { setup: SetupState }) {
   const [picking, setPicking] = useState(false)
   const libraryPaths = setup.libraryPaths ?? []
   return (
     <>
-      {/* The path is what you read: its own line, full width. */}
-      <dl className="divide-y divide-white/5">
+      <dl className="divide-y divide-line">
         <Folder
           label="History and settings"
           path={setup.dataDir}
@@ -84,8 +82,6 @@ function Folder({
   )
 }
 
-// Where history and settings live. Written to config.toml and the database
-// copied over, so it takes effect on the next start with nothing lost.
 function DataDirPicker({ fallback }: { fallback: string }) {
   const [path, setPath] = useState('')
   const move = useMutation({
@@ -93,7 +89,6 @@ function DataDirPicker({ fallback }: { fallback: string }) {
     mutationFn: (v: { path: string; useExisting?: boolean }) =>
       api.post<{ dataDir: string; copied: boolean; restart: boolean }>('/api/setup/data-dir', v),
   })
-  // The folder has a database already, whose history would open instead, so it asks, with its age.
   const existing =
     move.error instanceof ApiError && move.error.status === 409
       ? ((move.error.body as { modified?: number }) ?? {})
@@ -124,7 +119,6 @@ function DataDirPicker({ fallback }: { fallback: string }) {
           value={path}
           onChange={(e) => {
             setPath(e.target.value)
-            // The warning was about the folder asked for, not the one typed since.
             if (existing) move.reset()
           }}
           placeholder="D:\Yoru\data"

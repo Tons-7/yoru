@@ -161,7 +161,7 @@ function FeedSection({
   return (
     <section>
       <h2 className="mb-2 text-sm font-semibold text-base-300">{title}</h2>
-      <ul className="surface divide-y divide-white/[0.05] overflow-hidden">
+      <ul className="surface divide-y divide-line overflow-hidden">
         {rows.map((row) => (
           <FeedRowItem key={row.key} row={row} now={now} onRead={onRead} onRemove={onRemove} />
         ))}
@@ -399,7 +399,7 @@ function AlertShows({ result, now }: { result: ReturnType<typeof useAlertShows>;
       ) : shows.length === 0 ? (
         <p className="surface p-4 text-sm text-base-400">None yet. Tap Alert on a show to hear when new episodes are out.</p>
       ) : (
-        <ul className="surface divide-y divide-white/[0.05] overflow-hidden">
+        <ul className="surface divide-y divide-line overflow-hidden">
           {shows.map((show) => (
             <AlertShowRow key={show.animeId} show={show} now={now} />
           ))}

@@ -229,10 +229,10 @@ export function EpisodeList({
     if (compact) list.current?.scrollTo({ top: 0 })
     if (below) top.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
   }
-  const pager = (below: boolean) => (
+  const pager = (below: boolean, inline = false) => (
     <nav
       ref={below ? undefined : top}
-      className="flex scroll-mt-24 items-center justify-center gap-1.5"
+      className={cx('flex scroll-mt-24 items-center gap-1.5', !inline && 'justify-center')}
       aria-label={below ? 'Episode pages, below the list' : 'Episode pages'}
     >
       <Button size="sm" disabled={at === 0} onClick={() => turn(at - 1, below)}>
@@ -266,7 +266,7 @@ export function EpisodeList({
   ]
   const filterCount = filterOptions.filter((o) => !o.hidden).length
   const spoilerSwitch = anyHidden || showsAll
-  const tools = filterCount > 1 || spoilerSwitch || (canMarkAll && !selecting) || searchable
+  const tools = filterCount > 1 || spoilerSwitch || (canMarkAll && !selecting) || searchable || pages > 1
 
   const progress = (
     <p className="min-w-0 text-sm text-base-400">
@@ -397,14 +397,19 @@ export function EpisodeList({
                   Mark all watched
                 </Button>
               )}
-              {searchable && (
-                <SearchInput
-                  value={term}
-                  onChange={(e) => search(e.target.value)}
-                  placeholder="Find an episode"
-                  aria-label="Search episodes"
-                  className="w-full sm:ml-auto sm:w-56"
-                />
+              {(searchable || pages > 1) && (
+                <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
+                  {searchable && (
+                    <SearchInput
+                      value={term}
+                      onChange={(e) => search(e.target.value)}
+                      placeholder="Find an episode"
+                      aria-label="Search episodes"
+                      className="w-full sm:w-56"
+                    />
+                  )}
+                  {pages > 1 && pager(false, true)}
+                </div>
               )}
             </div>
           )}
@@ -468,14 +473,11 @@ export function EpisodeList({
         </div>
       )}
 
-      {pages > 1 && pager(false)}
+      {pages > 1 && compact && pager(false)}
 
       <ul
         ref={list}
-        className={cx(
-          'surface',
-          compact ? 'max-h-[70vh] overflow-y-auto overscroll-contain scrollbar-thin' : 'overflow-hidden',
-        )}
+        className={cx('space-y-1.5', compact && 'max-h-[70vh] overflow-y-auto overscroll-contain scrollbar-thin')}
       >
         {paged.map((episode) => (
           <EpisodeRow
@@ -517,7 +519,7 @@ export function EpisodeList({
           />
         ))}
         {paged.length === 0 && (
-          <li className="p-6 text-center text-sm text-base-500">
+          <li className="surface p-6 text-center text-sm text-base-500">
             {show === 'unwatched' ? 'All caught up.' : show === 'downloaded' ? 'Nothing downloaded yet.' : 'No episode matches that.'}
           </li>
         )}
@@ -1047,13 +1049,6 @@ function EpisodeRow({
 
   const pad = art === 'tile' ? (compact ? 'py-1.5' : 'py-2.5 sm:py-1.5') : 'py-2'
   const lead = 'flex min-w-0 flex-1 items-center gap-3 pr-2 pl-3'
-  const inset = onToggle
-    ? 'not-first:before:left-3'
-    : art === 'tile'
-      ? 'not-first:before:left-[4.25rem]'
-      : compact
-        ? 'not-first:before:left-[7.5rem]'
-        : 'not-first:before:left-[8.5rem] sm:not-first:before:left-[11.5rem]'
 
   const failures = !onToggle && (confirming || mark.isError || fetch.isError) && (
     <div className="space-y-2 px-3 pb-2.5">
@@ -1097,15 +1092,16 @@ function EpisodeRow({
     <li
       ref={row}
       className={cx(
-        'relative not-first:before:absolute not-first:before:top-0 not-first:before:right-0 not-first:before:h-px not-first:before:bg-base-800',
-        inset,
+        'relative overflow-hidden rounded-card transition-colors',
         active
-          ? 'bg-accent-500/10 shadow-[inset_3px_0_0_var(--color-accent-500)]'
+          ? 'bg-base-900 bg-[linear-gradient(rgb(106_85_245/0.1),rgb(106_85_245/0.1))] shadow-[inset_3px_0_0_var(--color-accent-500)]'
           : onToggle && selected
-            ? 'bg-accent-500/10'
+            ? 'bg-base-900 bg-[linear-gradient(rgb(106_85_245/0.1),rgb(106_85_245/0.1))]'
             : upNext && !unaired
               ? 'bg-base-850'
-              : !unaired && 'hover:bg-base-850',
+              : unaired
+                ? 'bg-base-900/60'
+                : 'bg-base-900 hover:bg-base-850',
       )}
     >
       {unaired ? (

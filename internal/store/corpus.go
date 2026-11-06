@@ -22,6 +22,7 @@ type CorpusEntry struct {
 	Episodes  int
 	Year      int
 	Season    string
+	Picture   string
 	Titles    []CorpusTitle
 }
 
@@ -38,8 +39,8 @@ type CorpusStats struct {
 }
 
 const upsertCorpusAnime = `
-INSERT INTO corpus_anime (anime_id, mal_id, anidb_id, kind, episodes, year, season, titles_at)
-VALUES (?,?,?,?,?,?,?,?)
+INSERT INTO corpus_anime (anime_id, mal_id, anidb_id, kind, episodes, year, season, picture, titles_at)
+VALUES (?,?,?,?,?,?,?,?,?)
 ON CONFLICT(anime_id) DO UPDATE SET
     mal_id=coalesce(excluded.mal_id, corpus_anime.mal_id),
     anidb_id=coalesce(excluded.anidb_id, corpus_anime.anidb_id),
@@ -47,13 +48,18 @@ ON CONFLICT(anime_id) DO UPDATE SET
     episodes=coalesce(excluded.episodes, corpus_anime.episodes),
     year=coalesce(excluded.year, corpus_anime.year),
     season=coalesce(excluded.season, corpus_anime.season),
+    picture=coalesce(excluded.picture, corpus_anime.picture),
     titles_at=excluded.titles_at`
+
+const coverFromCorpus = `
+UPDATE anime SET cover_url = (SELECT picture FROM corpus_anime c WHERE c.anime_id = anime.id)
+WHERE id < 0 AND coalesce(cover_url, '') = ''
+  AND EXISTS (SELECT 1 FROM corpus_anime c WHERE c.anime_id = anime.id AND coalesce(c.picture, '') <> '')`
 
 const insertTitle = `
 INSERT INTO title (anime_id, text, norm, kind, lang) VALUES (?,?,?,?,?)
 ON CONFLICT(anime_id, text) DO NOTHING`
 
-// SaveCorpus writes in one transaction: 200,000 rows take seconds batched, minutes not.
 func (s *Store) SaveCorpus(ctx context.Context, entries []CorpusEntry) (int, error) {
 	if len(entries) == 0 {
 		return 0, nil
@@ -86,7 +92,7 @@ func (s *Store) SaveCorpus(ctx context.Context, entries []CorpusEntry) (int, err
 		}
 		if _, err := animeStmt.ExecContext(ctx, e.AniListID,
 			zeroToNull(e.MalID), zeroToNull(e.AniDBID), nullable(e.Kind),
-			zeroToNull(e.Episodes), zeroToNull(e.Year), nullable(e.Season), now); err != nil {
+			zeroToNull(e.Episodes), zeroToNull(e.Year), nullable(e.Season), nullable(e.Picture), now); err != nil {
 			return 0, err
 		}
 
@@ -104,6 +110,9 @@ func (s *Store) SaveCorpus(ctx context.Context, entries []CorpusEntry) (int, err
 			}
 			written++
 		}
+	}
+	if _, err := tx.ExecContext(ctx, coverFromCorpus); err != nil {
+		return 0, err
 	}
 
 	return written, tx.Commit()
@@ -127,7 +136,6 @@ func (s *Store) SourceRefreshedAt(ctx context.Context, name string) (time.Time, 
 	return time.Unix(at, 0), err
 }
 
-// RandomIDs draws uniformly from the corpus, several so the caller can skip ids AniList no longer serves.
 func (s *Store) RandomIDs(ctx context.Context, kind string, year, n int) ([]int, error) {
 	if n <= 0 || n > 25 {
 		n = 5
@@ -155,7 +163,6 @@ func (s *Store) RandomIDs(ctx context.Context, kind string, year, n int) ([]int,
 	return out, rows.Err()
 }
 
-// CorpusRecord is the minimal record held for every anime, what remains when upstream can't be reached.
 type CorpusRecord struct {
 	AnimeID  int      `json:"id"`
 	MalID    int      `json:"malId,omitempty"`
@@ -228,7 +235,6 @@ func (s *Store) CorpusStats(ctx context.Context) (CorpusStats, error) {
 	return out, err
 }
 
-// KnownIDs diffs a fresh id list, so only new anime cost an AniList request.
 func (s *Store) KnownIDs(ctx context.Context) (map[int]struct{}, error) {
 	rows, err := s.r.QueryContext(ctx,
 		`SELECT anime_id FROM corpus_anime UNION SELECT anime_id FROM dead_anime`)
@@ -267,7 +273,6 @@ func (s *Store) MarkDead(ctx context.Context, ids []int) error {
 	return tx.Commit()
 }
 
-// NotInCorpus returns the ids the corpus has no row for.
 func (s *Store) NotInCorpus(ctx context.Context, ids []int) ([]int, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -300,8 +305,6 @@ func (s *Store) NotInCorpus(ctx context.Context, ids []int) ([]int, error) {
 	return missing, rows.Err()
 }
 
-// Revive clears ids AniList has just answered for: an entry it once dropped
-// can come back, and a dead mark would keep it from ever being fetched again.
 func (s *Store) Revive(ctx context.Context, ids []int) error {
 	if len(ids) == 0 {
 		return nil
@@ -315,9 +318,7 @@ func (s *Store) Revive(ctx context.Context, ids []int) error {
 	return err
 }
 
-// BuildIndex loads the corpus into the matcher, primary titles first as it rewards them.
 func (s *Store) BuildIndex(ctx context.Context) (*match.Index, error) {
-	// Coalesced, or one unknown year fails the whole index build.
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT c.anime_id, coalesce(c.kind, ''), coalesce(c.episodes, 0), coalesce(c.year, 0),
 		       t.text, t.kind
@@ -360,7 +361,6 @@ func (s *Store) BuildIndex(ctx context.Context) (*match.Index, error) {
 	return ix, rows.Err()
 }
 
-// withSeason reads the season off the titles, so "Show S2 - 05" finds season two's entry.
 func withSeason(m match.Media) match.Media {
 	for _, t := range m.Titles {
 		if n := parse.SeasonOf(t); n > 0 {
@@ -377,8 +377,6 @@ func withSeason(m match.Media) match.Media {
 	return m
 }
 
-// MatchBoosts weights anime the user has a relationship with, so a release of
-// a franchise they are midway through resolves to the season they are on.
 func (s *Store) MatchBoosts(ctx context.Context) (map[int]float64, error) {
 	rows, err := s.r.QueryContext(ctx, `SELECT anime_id, coalesce(status, '') FROM list_entry`)
 	if err != nil {
@@ -405,12 +403,11 @@ func (s *Store) MatchBoosts(ctx context.Context) (map[int]float64, error) {
 	return out, rows.Err()
 }
 
-// SeaDexInfo is a release's curation signal, by infohash or, when redacted, release group.
 type SeaDexInfo struct {
 	IsBest    bool
 	DualAudio bool
 	Group     string
-	// The entry's: the curator's notes, comparison pages, and whether the curation is still in progress.
+
 	Notes      string
 	Comparison []string
 	Incomplete bool
@@ -427,7 +424,6 @@ func (s *Store) SaveSeaDex(ctx context.Context, releases []metadata.SeaDexReleas
 	}
 	defer tx.Rollback()
 
-	// A full replace: an entry removed upstream should stop being trusted.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM seadex`); err != nil {
 		return 0, err
 	}
@@ -464,7 +460,6 @@ func (s *Store) SaveSeaDex(ctx context.Context, releases []metadata.SeaDexReleas
 	return written, tx.Commit()
 }
 
-// SaveGroupTiers replaces TRaSH's group grades whole: a group dropped upstream stops counting.
 func (s *Store) SaveGroupTiers(ctx context.Context, tiers []metadata.GroupTier) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -504,13 +499,11 @@ func (s *Store) GroupTiers(ctx context.Context) ([]metadata.GroupTier, error) {
 	return out, rows.Err()
 }
 
-// SeaDexPick is one of SeaDex's best releases for a show, with its files.
 type SeaDexPick struct {
 	InfoHash, Group, Tracker, URL string
 	Files                         []metadata.SeaDexFile
 }
 
-// SeaDexBests lists a show's best releases a public tracker carries, so a hash is all it takes to fetch one.
 func (s *Store) SeaDexBests(ctx context.Context, animeID int) ([]SeaDexPick, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT info_hash, coalesce(release_group, ''), coalesce(tracker, ''), coalesce(url, ''), files
@@ -532,7 +525,6 @@ func (s *Store) SeaDexBests(ctx context.Context, animeID int) ([]SeaDexPick, err
 	return out, rows.Err()
 }
 
-// KeptCopy is one kept episode's release, with its show.
 type KeptCopy struct {
 	AnimeID         int
 	EpKey, InfoHash string
@@ -540,7 +532,6 @@ type KeptCopy struct {
 	Cover           *string
 }
 
-// KeptCopies lists every kept episode's release, show by show.
 func (s *Store) KeptCopies(ctx context.Context) ([]KeptCopy, error) {
 	mode := s.TitleMode(ctx, 0)
 	rows, err := s.r.QueryContext(ctx, `
@@ -570,7 +561,6 @@ func (s *Store) KeptCopies(ctx context.Context) ([]KeptCopy, error) {
 	return out, rows.Err()
 }
 
-// BestGroups returns SeaDex's best groups for an anime, searched for directly rather than hoped for.
 func (s *Store) BestGroups(ctx context.Context, animeID int) ([]string, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT DISTINCT release_group FROM seadex
@@ -592,8 +582,6 @@ func (s *Store) BestGroups(ctx context.Context, animeID int) ([]string, error) {
 	return out, rows.Err()
 }
 
-// SeaDexFor returns the curation for one anime, indexed both ways: by hash for
-// an exact match, and lowercased by group for entries whose hash is redacted.
 func (s *Store) SeaDexFor(ctx context.Context, animeID int) (byHash, byGroup map[string]SeaDexInfo, err error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT info_hash, coalesce(release_group, ''), is_best, dual_audio, coalesce(notes, ''), comparison, incomplete
@@ -618,7 +606,6 @@ func (s *Store) SeaDexFor(ctx context.Context, animeID int) (byHash, byGroup map
 			byHash[strings.ToLower(hash)] = info
 		}
 		if group != "" {
-			// A group listed as best anywhere counts as endorsed.
 			existing, seen := byGroup[strings.ToLower(group)]
 			if !seen || (!existing.IsBest && info.IsBest) {
 				byGroup[strings.ToLower(group)] = info

@@ -2266,7 +2266,7 @@ function AudioSubtitlesPanel({
           aria-label="Audio & subtitles"
           style={narrow ? undefined : { maxHeight: room }}
           className={cx(
-            'z-50 flex animate-rise flex-col overflow-hidden bg-base-750 text-left shadow-xl shadow-black/60 ring-1 ring-white/[0.06]',
+            'z-50 flex animate-rise flex-col overflow-hidden bg-base-750 text-left shadow-xl shadow-black/60 ring-1 ring-line',
             narrow
               ? 'fixed inset-x-0 bottom-0 max-h-[60dvh] rounded-t-sheet pb-[max(0.5rem,env(safe-area-inset-bottom))]'
               : cx(
@@ -2302,7 +2302,7 @@ function AudioSubtitlesPanel({
           </div>
           <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overscroll-contain scrollbar-thin">
             {view === 'main' && (
-              <div className={cx(columns && 'grid grid-cols-2 divide-x divide-white/[0.06] [&>section]:border-t-0')}>
+              <div className={cx(columns && 'grid grid-cols-2 divide-x divide-line [&>section]:border-t-0')}>
                 {(audioChoice || audio) && (
                   <PanelGroup title="Audio" note={audioChoice ? 'This show' : undefined}>
                     {audioChoice}
@@ -2402,13 +2402,13 @@ function AudioSubtitlesPanel({
               </div>
             )}
             {view === 'main' && (
-              <div className="border-t border-white/[0.06]">
+              <div className="border-t border-line">
                 <ActionRow label="Size, look and timing" value={styleValue} onClick={() => go('style')} />
               </div>
             )}
 
             {view === 'style' && (
-              <div className={cx(columns && look && 'grid grid-cols-2 divide-x divide-white/[0.06] [&>section]:border-t-0')}>
+              <div className={cx(columns && look && 'grid grid-cols-2 divide-x divide-line [&>section]:border-t-0')}>
                 {look && (
                   <PanelGroup title="Look" note="All devices">
                     {active?.pictures ? (
@@ -2463,7 +2463,7 @@ function AudioSubtitlesPanel({
                     <button
                       type="button"
                       onClick={() => onKeepDelay(delay)}
-                      className="flex min-h-11 w-full items-center px-4 text-left text-xs font-medium text-accent-300 transition-colors hover:bg-white/[0.06]"
+                      className="flex min-h-11 w-full items-center px-4 text-left text-xs font-medium text-accent-300 transition-colors hover:bg-line"
                     >
                       {delay === 0 ? 'Stop keeping a delay for this show' : 'Keep this delay for this show'}
                     </button>
@@ -2587,7 +2587,7 @@ function SoundPicker({
           aria-label="Sound"
           onKeyDown={walkMenu}
           style={{ maxHeight: room }}
-          className="absolute right-0 bottom-full z-50 mb-2 w-80 max-w-[calc(100vw-1rem)] origin-bottom-right animate-rise overflow-y-auto rounded-xl bg-base-750 py-1 shadow-xl shadow-black/60 ring-1 ring-white/[0.06] scrollbar-thin"
+          className="absolute right-0 bottom-full z-50 mb-2 w-80 max-w-[calc(100vw-1rem)] origin-bottom-right animate-rise overflow-y-auto rounded-xl bg-base-750 py-1 shadow-xl shadow-black/60 ring-1 ring-line scrollbar-thin"
         >
           <p className="px-3.5 pt-2 pb-1 text-sm font-semibold text-white">Sound</p>
           <SoundRows value={value} onChange={onChange} />
@@ -2602,7 +2602,7 @@ function SoundRows({ value, onChange }: { value: SoundOptions; onChange: (patch:
     <>
       <LevelRow label="Voice boost" caption="Clearer dialogue" options={LEVEL_OPTIONS} value={value.voice} onChange={(voice) => onChange({ voice })} />
       <LevelRow label="Volume boost" caption="Louder overall" options={LEVEL_OPTIONS} value={value.boost} onChange={(boost) => onChange({ boost })} />
-      <div className="my-1 border-t border-white/[0.06]" />
+      <div className="my-1 border-t border-line" />
       <MenuToggle label="Night mode" caption="Evens out loud and quiet" on={value.night} onChange={(night) => onChange({ night })} />
       <MenuToggle
         label="Headphones"
@@ -2798,7 +2798,7 @@ function PlayerMenu({
                   next
                 />
               )}
-              <div aria-hidden className="my-1 border-t border-white/[0.06]" />
+              <div aria-hidden className="my-1 border-t border-line" />
               {playback && <MenuItem label="Skipping" value={skipSummary(playback)} onClick={() => setView('skipping')} next />}
               {playback && (
                 <MenuToggle
@@ -2825,7 +2825,7 @@ function PlayerMenu({
                   next
                 />
               )}
-              <div aria-hidden className="my-1 border-t border-white/[0.06]" />
+              <div aria-hidden className="my-1 border-t border-line" />
               <MenuItem label="Playback info" value={coarse ? '' : keyHint('info')} onClick={() => (onInfo(), close())} />
               <div className="pointer-coarse:hidden">
                 <MenuItem label="Keyboard shortcuts" value="?" onClick={() => (window.dispatchEvent(new Event(SHOW_SHORTCUTS)), close())} />
@@ -2901,7 +2901,7 @@ function PlayerMenu({
                 onChange={playback.endings.onChange}
               />
               <p className="px-3.5 pt-0.5 pb-2 text-xs text-base-500">Button shows Skip while it plays. Auto skips by itself, with Undo.</p>
-              <div className="mt-1 border-t border-white/[0.06] pt-1">
+              <div className="mt-1 border-t border-line pt-1">
                 <MenuToggle label="Skip filler episodes" caption="This show" on={playback.filler.on} onChange={playback.filler.onChange} />
                 {marking && (
                   <MenuItem
@@ -3071,7 +3071,7 @@ function PlaybackInfo({
 }
 
 const menuRow =
-  'mx-1 flex w-[calc(100%-0.5rem)] items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-white/[0.06] pointer-coarse:min-h-11'
+  'mx-1 flex w-[calc(100%-0.5rem)] items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-line pointer-coarse:min-h-11'
 
 function MenuItem({ label, value, onClick, next = false }: { label: string; value: string; onClick: () => void; next?: boolean }) {
   return (
@@ -3120,7 +3120,7 @@ function MenuBack({ label, onClick }: { label: string; onClick: () => void }) {
         </span>
         {label}
       </button>
-      <div aria-hidden className="my-1 border-t border-white/[0.06]" />
+      <div aria-hidden className="my-1 border-t border-line" />
     </>
   )
 }
@@ -3170,7 +3170,7 @@ function SkipTimesPanel({ skips, video, marking }: { skips: SkipRange[]; video: 
           {r.source && <span className="text-xs text-base-500">{SKIP_SOURCES[r.source] ?? r.source}</span>}
         </div>
       ))}
-      <div className="mt-1 border-t border-white/[0.06] pt-1">
+      <div className="mt-1 border-t border-line pt-1">
         {from ? (
           <>
             <p className="px-3 py-1.5 text-xs text-base-400">
@@ -3597,7 +3597,7 @@ function usePopSheet(anchor: RefObject<HTMLElement | null>, open: boolean, close
     style: { maxHeight: wide ? room : '70vh' },
     className: (width: string, pad: string) =>
       cx(
-        'z-50 animate-rise overflow-y-auto bg-base-750 shadow-xl shadow-black/60 ring-1 ring-white/[0.06] scrollbar-thin',
+        'z-50 animate-rise overflow-y-auto bg-base-750 shadow-xl shadow-black/60 ring-1 ring-line scrollbar-thin',
         pad,
         wide
           ? cx('absolute right-0 bottom-full mb-2 origin-bottom-right rounded-lg', width)

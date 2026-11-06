@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import type { ScheduleItem } from '../lib/api'
+import { toCard } from '../lib/cards'
 import { airTime, cx } from '../lib/format'
 import { useNow, useSchedule } from '../lib/queries'
 import { releaseState, TONE_TEXT } from '../lib/aired'
+import { HoverInfo } from './HoverInfo'
 import { Rail, RailFailed, RailItem, RailSkeleton } from './Rail'
 import { Badge } from './ui'
 
@@ -11,7 +13,7 @@ const TITLE = 'Airing today'
 const TO = '/schedule?view=coming'
 
 export function AiringToday({ folded, onUnfold }: { folded: boolean; onUnfold: () => void }) {
-  const schedule = useSchedule(7)
+  const schedule = useSchedule(1)
   const now = useNow() / 1000
   const today = schedule.data?.days.find((d) => d.today)
   const items = today?.items ?? []
@@ -53,30 +55,47 @@ function AiringCard({ item, next, aired, now }: { item: ScheduleItem; next: bool
   const art = item.show?.banner ?? item.coverLarge ?? item.cover
   const state = releaseState(item, now)
   return (
-    <Link to={`/anime/${item.animeId}`} className="press group/airing block rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
-      <div className="relative aspect-video overflow-hidden rounded-card bg-base-850">
-        {art && (
-          <img
-            src={art}
-            alt=""
-            loading="lazy"
-            className={cx(
-              'size-full object-cover transition-transform duration-300 group-hover/airing:scale-105',
-              aired && 'brightness-75',
-            )}
-          />
-        )}
-      </div>
-      <p className="mt-2 line-clamp-2 text-sm leading-snug font-semibold text-base-100 transition-colors group-hover/airing:text-white">
-        {item.title}
-      </p>
-      <p className="mt-0.5 flex items-center gap-1.5 text-[13px] whitespace-nowrap text-base-400 tabular-nums">
-        <span className={cx('min-w-0 truncate', aired && 'text-base-500')}>
-          {airTime(item.airingAt)} · Ep {item.episode}
-        </span>
-        {next && <Badge tone="sky">Next</Badge>}
-      </p>
-      {state && <p className={cx('text-[13px]', TONE_TEXT[state.tone])}>{state.word}</p>}
-    </Link>
+    <HoverInfo
+      anime={{
+        ...(item.show ? toCard(item.show) : {}),
+        status: item.show?.status ?? null,
+        listStatus: item.show?.listStatus ?? null,
+        id: item.animeId,
+        title: item.title,
+        romaji: item.romaji,
+        english: item.english,
+        format: item.format,
+        color: item.colour,
+        cover: item.cover,
+        progress: item.progress,
+        play: aired ? { to: `/watch/${item.animeId}/${item.episode}`, label: `Play ep ${item.episode}` } : undefined,
+      }}
+    >
+      <Link to={`/anime/${item.animeId}`} className="press group/airing block rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+        <div className="relative aspect-video overflow-hidden rounded-card bg-base-850">
+          {art && (
+            <img
+              src={art}
+              alt=""
+              loading="lazy"
+              className={cx(
+                'size-full object-cover transition-transform duration-300 group-hover/airing:scale-105',
+                aired && 'brightness-75',
+              )}
+            />
+          )}
+        </div>
+        <p className="mt-2 line-clamp-2 text-sm leading-snug font-semibold text-base-100 transition-colors group-hover/airing:text-white">
+          {item.title}
+        </p>
+        <p className="mt-0.5 flex items-center gap-1.5 text-[13px] whitespace-nowrap text-base-400 tabular-nums">
+          <span className={cx('min-w-0 truncate', aired && 'text-base-500')}>
+            {airTime(item.airingAt)} · Ep {item.episode}
+          </span>
+          {next && <Badge tone="sky">Next</Badge>}
+        </p>
+        {state && <p className={cx('text-[13px]', TONE_TEXT[state.tone])}>{state.word}</p>}
+      </Link>
+    </HoverInfo>
   )
 }

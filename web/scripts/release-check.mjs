@@ -1,5 +1,3 @@
-// Pre-release run: the Go suite, then each browser check on its own instance; logs in %TEMP%/yoru-release-check
-//   node scripts/release-check.mjs [only.mjs …]    env: LANES=4, SKIP_BUILD=1, SKIP_GO=1
 import { spawn } from 'node:child_process'
 import { createWriteStream, mkdirSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -11,14 +9,10 @@ const webDir = resolve(scriptDir, '..')
 const repo = resolve(webDir, '..')
 const logs = join(tmpdir(), 'yoru-release-check')
 
-// ALONE checks run one at a time: AniList throttles parallel catalogue loads, or they need the foreground.
 const ALONE = true
 
-// [check, extra env, alone]. Missing ones are tools or need real sites (subs-lag-probe, sources-,
-// access-approval-check); subs-sync-check never starts under Playwright, which draws hidden tabs.
 const CHECKS = [
   ['player-check.mjs'],
-  // Its search lists the library show from AniList's data, which four lanes at once left unloaded.
   ['features-check.mjs', {}, ALONE],
   ['recovery-check.mjs'],
   ['thumbs-check.mjs'],
@@ -27,7 +21,6 @@ const CHECKS = [
   ['about-folders-check.mjs'],
   ['alerts-check.mjs'],
   ['anime4k-tiers-check.mjs', {}, ALONE],
-  // On the local swarm, as prefetch-check: real sites would compete with it.
   ['autodelete-check.mjs', { YORU_EXTRA_CONFIG: '' }, ALONE],
   ['autonext-seek-check.mjs'],
   ['backup-check.mjs'],
@@ -45,6 +38,7 @@ const CHECKS = [
   ['host-check.mjs', {}, ALONE],
   ['hover-panel-check.mjs', {}, ALONE],
   ['keys-a11y-check.mjs'],
+  ['layout-bits-check.mjs', {}, ALONE],
   ['phone-check.mjs'],
   ['subtitles-check.mjs'],
   ['subs-start-check.mjs', { YORU_FONTS: '1' }],
@@ -63,7 +57,6 @@ const CHECKS = [
   ['offline-check.mjs'],
   ['over-budget-note-check.mjs'],
   ['pip-check.mjs'],
-  // Real sites would compete with the local swarm's.
   ['prefetch-check.mjs', { YORU_EXTRA_CONFIG: '' }, ALONE],
   ['related-check.mjs', {}, ALONE],
   ['releases-check.mjs', {}, ALONE],
@@ -96,7 +89,6 @@ const checks = only.length ? only.map((name) => CHECKS.find(([c]) => c === name)
 const LANES = Number(process.env.LANES ?? 4)
 const failed = []
 
-// A step shows as it runs and is kept in the logs too: a flaky Go test scrolled away before anyone read it.
 const step = (name, cmd, cwd) =>
   new Promise((done) => {
     console.log(`\n▶ ${name}`)
@@ -145,19 +137,16 @@ if (!only.length) await step('release notes', 'node scripts/notes-check.mjs', we
 let built = process.env.SKIP_BUILD === '1'
 if (!built) {
   const exe = join(tmpdir(), 'yoru-e2e-bin', process.platform === 'win32' ? 'yoru.exe' : 'yoru')
-  // As released: on Windows a windowed app with no console.
   const gui = process.platform === 'win32' ? '-ldflags "-H windowsgui" ' : ''
   built = (await step('web build', 'npm run build', webDir)) && (await step('server build', `go build ${gui}-o "${exe}" ./cmd/yoru`, repo))
 }
 
-// The updater end to end on two real builds; its own ports, so it never meets a lane.
 if (built && !only.length) await step('self-update', 'node scripts/update-check.mjs', webDir)
 
 if (built) {
   console.log(`\n▶ ${checks.length} checks (logs: ${logs})`)
   const alone = checks.filter(([, , a]) => a)
   const rest = checks.filter(([, , a]) => !a)
-  // Each lane keeps one port, so its scratch dir and peer port never overlap another's.
   const lane = async (queue, port) => {
     for (let next = queue.shift(); next; next = queue.shift()) await runCheck(next, port)
   }

@@ -239,12 +239,12 @@ func ensureAnime(ctx context.Context, db execer, animeID int) error {
 		return nil
 	}
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO anime (id, mal_id, title_romaji, format, episode_count, season_year, synced_at)
+		INSERT INTO anime (id, mal_id, title_romaji, format, episode_count, season_year, cover_url, synced_at)
 		SELECT c.anime_id, c.mal_id,
 		       coalesce((SELECT text FROM title
 		                 WHERE anime_id = c.anime_id
 		                 ORDER BY (kind != 'primary'), id LIMIT 1), 'Unknown'),
-		       c.kind, c.episodes, c.year, 0
+		       c.kind, c.episodes, c.year, CASE WHEN c.anime_id < 0 THEN c.picture END, 0
 		FROM corpus_anime c
 		WHERE c.anime_id = ?
 		ON CONFLICT(id) DO NOTHING`, animeID)

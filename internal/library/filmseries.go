@@ -13,13 +13,11 @@ import (
 	"yoru/internal/torrent"
 )
 
-// filmSeries is one film's place in its series: the key telling it apart, and the names the series goes by.
 type filmSeries struct {
 	key   film.Key
 	names []string
 }
 
-// queries are the series names to search; none outside a film series.
 func (s *filmSeries) queries() []string {
 	if s == nil {
 		return nil
@@ -27,7 +25,6 @@ func (s *filmSeries) queries() []string {
 	return s.names
 }
 
-// single reports an entry catalogued as one film: a feature, or a one-part OVA or special.
 func single(format *string, episodes *int) bool {
 	if format == nil || (episodes != nil && *episodes > 1) {
 		return false
@@ -39,7 +36,6 @@ func single(format *string, episodes *int) bool {
 	return false
 }
 
-// filmSeries reports the series this entry is one film of; nil otherwise, as for a film attached to a TV show.
 func (f *Finder) filmSeries(ctx context.Context, animeID int) *filmSeries {
 	members := f.seriesMembers(ctx, animeID)
 
@@ -62,7 +58,6 @@ func (f *Finder) filmSeries(ctx context.Context, animeID int) *filmSeries {
 		return titles
 	}
 
-	// A show under the same base name means packs of episodes, which a chapter number must not be read against.
 	base := seriesBase(own.Romaji)
 	if base == "" {
 		return nil
@@ -98,7 +93,6 @@ func (f *Finder) filmSeries(ctx context.Context, animeID int) *filmSeries {
 	return out
 }
 
-// seriesMembers is every entry of the franchise; a side story is off the chain, so it borrows its parent's.
 func (f *Finder) seriesMembers(ctx context.Context, animeID int) []store.Season {
 	collect := func(id int) (chain int, out []store.Season) {
 		franchise, err := f.store.Franchise(ctx, id)
@@ -135,14 +129,12 @@ func (f *Finder) seriesMembers(ctx context.Context, animeID int) []store.Season 
 	})
 }
 
-// seriesBase is a film's title before its subtitle: "Kara no Kyoukai" of "Kara no Kyoukai: Fukan Fuukei".
 func seriesBase(title string) string {
 	return strings.ToLower(strings.TrimSpace(baseOf(title)))
 }
 
 var trailingMarker = regexp.MustCompile(`(?i)[\s:,-]+(?:chapter|movie|film|part|vol(?:ume)?|the)?\s*\d*\s*$`)
 
-// commonPrefix is the words every title starts with, without a dangling "Chapter".
 func commonPrefix(titles []string) string {
 	if len(titles) < 2 {
 		return ""
@@ -166,17 +158,38 @@ func commonPrefix(titles []string) string {
 	}
 }
 
-// A name saying it holds every film: there the one asked for is as good as stated.
+var specialFile = regexp.MustCompile(`(?i)\bS\d{1,2}SP\d{1,3}\b|\bSP\s?\d{1,3}\b|\bspecials?\b|\bOVA\b|\bOAD\b`)
+
+func pickSpecial(files []torrent.File) (torrent.File, int, bool) {
+	found := -1
+	for i, f := range files {
+		if !parse.IsVideo(f.Name) || !specialFile.MatchString(parse.BaseName(f.Name)) {
+			continue
+		}
+		if found >= 0 {
+			return torrent.File{}, -1, false
+		}
+		found = i
+	}
+	if found < 0 {
+		return torrent.File{}, -1, false
+	}
+	return files[found], found, true
+}
+
 var wholeSeries = regexp.MustCompile(
 	`(?i)\ball[\s._-]*movies?\b|\bfull[\s._-]*series\b|\bcomplete\b|\bcollection\b|\btrilogy\b|\bbox\b|\bmovies?\s*\d+\s*[-~]\s*\d+|\[\d{1,2}\s*[-~]\s*\d{1,2}\]|全集`)
 
-// pickFile finds what a release holds for the request: an episode by its number, a film by its name.
 func pickFile(files []torrent.File, r score.Result) (torrent.File, int, bool) {
 	if r.Film == nil {
+		if r.TotalEpisodes == 1 && r.Release.Batch {
+			if f, i, ok := pickSpecial(files); ok {
+				return f, i, true
+			}
+		}
 		if f, i, ok := torrent.PickNumbered(files, r.Episode, r.Numbers); ok {
 			return f, i, true
 		}
-		// A film on its own, shipped with unnamed extras: the film is the big one.
 		if r.TotalEpisodes == 1 && !r.Release.Batch {
 			return torrent.PickVideo(files)
 		}
@@ -195,8 +208,6 @@ func pickFile(files []torrent.File, r score.Result) (torrent.File, int, bool) {
 			videos++
 		}
 	}
-	// A release naming this film may ship unnamed extras beside it; the film is the big one.
-	// A lone file gets no such benefit: Pick refused it for naming another film.
 	if !r.Release.Batch && videos > 1 {
 		return torrent.PickVideo(files)
 	}

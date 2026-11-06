@@ -1,5 +1,3 @@
-// The Browse filter pills: each choice lands in the URL and the request, genres stack, single choices
-// (year, season, sort) replace each other, chips remove one, and the counts answer to the narrowing.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -23,7 +21,6 @@ const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
-// Every browse request the page makes, newest last, as its query string.
 const asked = []
 page.on('request', (r) => {
   const m = r.url().match(/\/api\/browse\?(.*)$/)
@@ -32,15 +29,11 @@ page.on('request', (r) => {
 const lastAsk = () => asked.at(-1) ?? ''
 const pageParam = (key) => new URL(page.url()).searchParams.get(key)
 const cards = page.locator('a[href^="/anime/"]')
-// A card is two links (poster and title), so the shows listed are the distinct targets.
 const shown = async () => new Set(await cards.evaluateAll((els) => els.map((e) => e.getAttribute('href')))).size
 const results = () => page.locator('body').innerText().then((t) => t.match(/([\d,]+) results?\b/)?.[1]?.replace(',', '') ?? '')
-// The server's count for a filter set, the page's yardstick: 503 while the budget is spent or AniList is slow;
-// a broad count on a cold cache can take minutes.
 const count = async (qs) => {
   const until = Date.now() + 8 * 60_000
   while (Date.now() < until) {
-    // A request that times out is not an answer: the measurement goes on server-side, so ask again.
     const r = await page.request.get(`${BASE}/api/browse/count${qs ? `?${qs}` : ''}`, { timeout: 120_000 }).catch(() => null)
     if (r?.ok()) return (await r.json()).count
     await new Promise((res) => setTimeout(res, 1500))
@@ -55,13 +48,40 @@ const choose = async (label, option) => {
   await page.getByRole('option', { name: option, exact: true }).click()
 }
 
+await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+await page.evaluate(() => localStorage.setItem('yoru.search.recent', JSON.stringify(['detective', 'kaisen', 'death', 'jujutsu', 'this monster'])))
 await page.goto(`${BASE}/browse`, { waitUntil: 'domcontentloaded' })
 check(await until(() => cards.count().then((n) => n > 5), 60_000), 'Browse lists anime before any filter')
 check((await page.getByRole('button', { name: /^Remove / }).count()) === 0, 'and nothing narrows it')
 
-// Two genres at once: both sent, and the count shrinks.
+const recents = page.getByRole('region', { name: 'Recent searches' })
+const chipTops = await recents.getByRole('button', { name: /^Forget / }).evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)))
+check(chipTops.length === 5 && new Set(chipTops).size === 1, 'recent searches sit on one line as chips', chipTops.join(' '))
+check(await page.locator('form[role="search"][aria-hidden="true"]').count() === 1, "the header's search steps aside on the Search page")
+await page.locator('body').click({ position: { x: 5, y: 300 } })
+await page.keyboard.press('/')
+check(await until(() => page.evaluate(() => document.activeElement?.id === 'yoru-page-search')), "/ focuses the page's own search")
+await page.keyboard.press('Escape')
+const heading = page.getByRole('heading', { name: /^Most popular/ })
+check(await until(() => heading.isVisible()), 'the grid says what it lists', await heading.textContent().catch(() => ''))
+const tiles = page.getByRole('region', { name: 'Genres' })
+check(await tiles.isVisible(), 'genre tiles start the page')
+await page.screenshot({ path: `${SHOTS}/browse-start.png` })
+const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+await phone.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+await phone.evaluate(() => localStorage.setItem('yoru.search.recent', JSON.stringify(['detective', 'kaisen', 'death', 'jujutsu', 'this monster'])))
+await phone.goto(`${BASE}/browse`, { waitUntil: 'domcontentloaded' })
+await phone.locator('a[href^="/anime/"]').first().waitFor({ timeout: 60_000 }).catch(() => {})
+await phone.screenshot({ path: `${SHOTS}/browse-start-phone.png` })
+await phone.close()
+await recents.getByRole('button', { name: 'Forget kaisen' }).click()
+check(await until(() => recents.getByRole('button', { name: /^Forget / }).count().then((n) => n === 4)), 'a chip forgets its search')
+await recents.getByRole('button', { name: 'Clear', exact: true }).click()
+check(await until(() => recents.count().then((n) => n === 0)), 'Clear forgets them all')
+
 await choose('Genre', 'romance')
 check(await until(() => pageParam('genres') === 'Romance'), 'a genre lands in the URL', page.url())
+check(await until(() => tiles.count().then((n) => n === 0)), 'and the genre tiles give way to the chips')
 await choose('Genre', 'comedy')
 check(await until(() => pageParam('genres') === 'Romance,Comedy'), 'a second genre joins it', pageParam('genres'))
 check(await until(() => /genres=Romance,Comedy/.test(lastAsk())), 'both genres are sent to the server', lastAsk())
@@ -73,7 +93,6 @@ check(await until(async () => (await results()) === String(two), 60_000), 'the p
 const chip = (label) => page.getByRole('button', { name: `Remove ${label}` })
 check((await chip('Romance').count()) === 1 && (await chip('Comedy').count()) === 1, 'both genres show as chips')
 
-// Format and status stack on top.
 await choose('Format', 'movie')
 check(await until(() => pageParam('formats') === 'MOVIE'), 'a format lands in the URL', pageParam('formats'))
 await page.keyboard.press('Escape')
@@ -84,7 +103,6 @@ check(await until(() => /formats=MOVIE/.test(lastAsk()) && /statuses=FINISHED/.t
 const four = await count('genres=Romance,Comedy&formats=MOVIE&statuses=FINISHED')
 check(four > 0 && four < two, 'format and status narrow it further', `${two} → ${four}`)
 
-// Year and season are single choices: a second pick replaces the first.
 await choose('Year', '2023')
 check(await until(() => pageParam('year') === '2023'), 'a year lands in the URL')
 await page.keyboard.press('Escape')
@@ -92,26 +110,22 @@ await choose('2023', '2022')
 check(await until(() => pageParam('year') === '2022'), 'picking another year replaces it', pageParam('year'))
 await page.keyboard.press('Escape')
 await choose('Season', 'spring')
-check(await until(() => pageParam('season') === 'SPRING'), 'a season lands in the URL', pageParam('season'))
+check(await until(() => pageParam('season') === 'SPRING'), 'a season lands in the URL')
 await page.keyboard.press('Escape')
 check(await until(() => /year=2022/.test(lastAsk()) && /season=SPRING/.test(lastAsk())), 'year and season are sent', lastAsk())
 await page.screenshot({ path: `${SHOTS}/browse-filters.png` })
 
-// A chip removes one value and leaves the rest.
 await chip('Romance').click()
 check(await until(() => pageParam('genres') === 'Comedy'), 'removing a chip drops that genre alone', pageParam('genres'))
 
-// Sort changes the order asked for.
 await choose('Most popular', 'Highest rated')
 check(await until(() => /sort=/.test(lastAsk()) && pageParam('sort') !== null), 'a sort is sent', `${pageParam('sort')} · ${lastAsk()}`)
 await page.keyboard.press('Escape')
 
-// Text search joins the filters. Exact: the header's "Search anime" box is another thing.
 await page.getByLabel('Search', { exact: true }).fill('love')
 check(await until(() => pageParam('q') === 'love' && /q=love/.test(lastAsk())), 'a search joins the filters', lastAsk())
 check(await until(() => /genres=Comedy/.test(lastAsk()) && /sort=score/.test(lastAsk())), 'without dropping the filters', lastAsk())
 
-// Studio: the whole list is held, so every filter narrows it, the count is exact, and its chip goes alone.
 const api = async (qs) => (await fetch(`${BASE}/api/browse?${qs}`)).json()
 await page.goto(`${BASE}/browse`, { waitUntil: 'domcontentloaded' })
 await page.getByRole('button', { name: 'Studio', exact: true }).click()

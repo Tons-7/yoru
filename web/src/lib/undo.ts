@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { unloadingPage } from './api'
 import { dismissToast, toast, TOAST_MS } from './toast'
 
 let hidden: ReadonlySet<string> = new Set()
@@ -33,6 +34,7 @@ export interface Removal {
 
 const pending = new Map<number, { removal: Removal; toastId: number }>()
 window.addEventListener('pagehide', () => {
+  if (pending.size > 0) unloadingPage()
   for (const [timer, { removal, toastId }] of [...pending]) {
     window.clearTimeout(timer)
     pending.delete(timer)

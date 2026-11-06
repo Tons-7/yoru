@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { api, query, statusLabel, type DiscoverItem, type LibraryItem } from '../lib/api'
 import { cx, tint } from '../lib/format'
@@ -16,12 +16,13 @@ const ALL_ROWS = 5
 export function SearchBox() {
   const navigate = useNavigate()
   const [value, setValue] = useState('')
+  const onSearchPage = useLocation().pathname.startsWith('/browse')
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (plainKey(e) !== '/') return
       e.preventDefault()
-      const field = document.getElementById('yoru-search')
+      const field = document.getElementById('yoru-page-search') ?? document.getElementById('yoru-search')
       if (field?.offsetParent) field.focus()
       else navigate('/browse')
     }
@@ -140,7 +141,8 @@ export function SearchBox() {
     <form
       ref={box}
       role="search"
-      className="relative ml-auto flex min-w-0 flex-1 justify-end max-lg:hidden sm:max-w-xs"
+      aria-hidden={onSearchPage || undefined}
+      className={cx('relative ml-auto flex min-w-0 flex-1 justify-end max-lg:hidden sm:max-w-xs', onSearchPage && 'invisible')}
       onSubmit={(e) => {
         e.preventDefault()
         if (active >= 0 && hits[active]) pick(hits[active].id)

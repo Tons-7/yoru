@@ -112,12 +112,10 @@ export function Rail({
         ) : (
           <div className="flex shrink-0 items-center gap-2">
             {action}
-            {scrollable && (
-              <div className="hidden gap-1.5 md:flex">
-                <ArrowButton direction={-1} disabled={atStart} onClick={() => scrollBy(-1)} />
-                <ArrowButton direction={1} disabled={atEnd} onClick={() => scrollBy(1)} />
-              </div>
-            )}
+            <div aria-hidden={!scrollable || undefined} inert={!scrollable} className={cx('hidden gap-1.5 md:flex', !scrollable && 'invisible')}>
+              <ArrowButton direction={-1} disabled={atStart} onClick={() => scrollBy(-1)} />
+              <ArrowButton direction={1} disabled={atEnd} onClick={() => scrollBy(1)} />
+            </div>
           </div>
         )}
       </div>
@@ -130,8 +128,8 @@ export function Rail({
         {children}
       </div>
 
-      {scrollable && !folded && (
-        <div className="mt-1.5 h-0.5 overflow-hidden rounded-full bg-base-850 pointer-coarse:hidden" aria-hidden>
+      {!folded && (
+        <div className={cx('mt-1.5 h-0.5 overflow-hidden rounded-full bg-base-850 pointer-coarse:hidden', !scrollable && 'invisible')} aria-hidden>
           <div
             className="h-full rounded-full bg-base-700"
             style={{

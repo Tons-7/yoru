@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -17,19 +18,17 @@ type DirtyEntry struct {
 	Episodes    int
 	StartedAt   string
 	CompletedAt string
-	// Repeat is how many full rewatches are finished: AniList's repeat, MAL's num_times_rewatched.
+
 	Repeat int
-	// Score on Yoru's 0-100 scale; 0 is unrated.
+
 	Score int
-	// ScoreCleared: set to unrated on purpose, so the push clears the site's.
+
 	ScoreCleared bool
 	Dirty        bool
-	// Changed is local_updated_at when read; an edit since keeps it dirty.
+
 	Changed int64
 }
 
-// MarkWatched records local progress and flags the row for push. Progress only
-// ever moves forward, so rewatching an episode can't reset the count.
 func (s *Store) MarkWatched(ctx context.Context, animeID, episode int) (bool, error) {
 	if animeID == 0 || episode <= 0 {
 		return false, nil
@@ -41,7 +40,6 @@ func (s *Store) MarkWatched(ctx context.Context, animeID, episode int) (bool, er
 	now := time.Now().Unix()
 	today := time.Now().Format("2006-01-02")
 
-	// One write: a push reading between the progress and the completion would push CURRENT, then clear dirty.
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
@@ -67,8 +65,6 @@ func (s *Store) MarkWatched(ctx context.Context, animeID, episode int) (bool, er
 		return false, err
 	}
 
-	// Finishing the last episode completes the entry (AniList won't) and counts a rewatch. A local change
-	// like any other: stamped, or a pull from MAL older than it could still overwrite it.
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE list_entry SET
 		    repeat_count = repeat_count + CASE WHEN status = 'REPEATING' THEN 1 ELSE 0 END,
@@ -82,9 +78,13 @@ func (s *Store) MarkWatched(ctx context.Context, animeID, episode int) (bool, er
 		return false, err
 	}
 
-	// Progress may not rise (a rewatch, a finished show), and a ticked episode still leaves Up next.
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM up_next WHERE anime_id = ? AND episode = ?`, animeID, episode); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE playback SET watched = 1, dismissed = 1 WHERE anime_id = ? AND ep_key = ?`,
+		animeID, strconv.Itoa(episode)); err != nil {
 		return false, err
 	}
 
@@ -92,8 +92,6 @@ func (s *Store) MarkWatched(ctx context.Context, animeID, episode int) (bool, er
 	return n > 0, tx.Commit()
 }
 
-// ListStatuses is AniList's vocabulary, stored verbatim so a sync never has to
-// translate and lose a distinction (MAL has no separate rewatching status).
 var ListStatuses = []string{"CURRENT", "COMPLETED", "PAUSED", "DROPPED", "PLANNING", "REPEATING"}
 
 const (
@@ -105,7 +103,6 @@ func ValidStatus(status string) bool {
 	return slices.Contains(ListStatuses, status)
 }
 
-// DismissResume sets its own flag (dismissing is not watching); a new row's zero time keeps it out of history.
 func (s *Store) DismissResume(ctx context.Context, animeID int, epKey string) error {
 	if err := ensureAnime(ctx, s.w, animeID); err != nil {
 		return err
@@ -117,8 +114,6 @@ func (s *Store) DismissResume(ctx context.Context, animeID int, epKey string) er
 	return err
 }
 
-// Unwatch rewinds progress to the episode before: progress is a count on both
-// trackers, so later episodes unmark too. A finished entry becomes current.
 func (s *Store) Unwatch(ctx context.Context, animeID, episode int) error {
 	if animeID == 0 || episode <= 0 {
 		return nil
@@ -148,7 +143,6 @@ func (s *Store) Unwatch(ctx context.Context, animeID, episode int) error {
 	return tx.Commit()
 }
 
-// SetScore rates a show 0-100 (0 clears); an unlisted anime joins as PLANNING.
 func (s *Store) SetScore(ctx context.Context, animeID, score int) error {
 	if animeID == 0 || score < 0 || score > 100 {
 		return nil
@@ -168,18 +162,16 @@ func (s *Store) SetScore(ctx context.Context, animeID, score int) error {
 	return err
 }
 
-// RemoteEntry is what a tracker holds for one anime, in Yoru's vocabulary.
 type RemoteEntry struct {
 	AnimeID  int
 	Status   string
 	Progress int
 	Score    int
 	Repeat   int
-	// Since is the row's local_updated_at when the caller read it: an edit made after that wins.
+
 	Since int64
 }
 
-// ApplyRemote records a tracker-side change as a local edit for the other tracker; a newer local edit wins.
 func (s *Store) ApplyRemote(ctx context.Context, r RemoteEntry) (bool, error) {
 	if r.AnimeID == 0 {
 		return false, nil
@@ -213,8 +205,6 @@ func (s *Store) ApplyRemote(ctx context.Context, r RemoteEntry) (bool, error) {
 	return n > 0, nil
 }
 
-// SetListStatus records a status change and an optional score. A score of -1
-// leaves whatever is there, since zero is a real score meaning "unrated".
 func (s *Store) SetListStatus(ctx context.Context, animeID int, status string, score int) error {
 	if animeID == 0 || status == "" {
 		return nil
@@ -226,13 +216,11 @@ func (s *Store) SetListStatus(ctx context.Context, animeID int, status string, s
 	now := time.Now().Unix()
 	today := time.Now().Format("2006-01-02")
 
-	// Marking something completed without a date leaves a gap the trackers display as an empty finish date.
 	var completed any
 	if status == "COMPLETED" {
 		completed = today
 	}
 
-	// Entering a rewatch resets progress to zero but keeps the first finish date; re-choosing it is a no-op.
 	var previous sql.NullString
 	if err := s.r.QueryRowContext(ctx,
 		`SELECT status FROM list_entry WHERE anime_id = ?`, animeID).Scan(&previous); err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -258,11 +246,12 @@ func (s *Store) SetListStatus(ctx context.Context, animeID int, status string, s
 		return err
 	}
 
-	// Ticks and positions follow this pass: an episode left part way on the
-	// first watch must not become the "continue" point of the rewatch.
 	if starting {
 		_, err = s.w.ExecContext(ctx,
 			`UPDATE playback SET watched = 0, position_s = 0, played_s = 0, dismissed = 0 WHERE anime_id = ?`, animeID)
+	}
+	if status == "COMPLETED" && previous.String != "COMPLETED" {
+		_, err = s.w.ExecContext(ctx, `UPDATE playback SET dismissed = 1 WHERE anime_id = ?`, animeID)
 	}
 	return err
 }
@@ -296,13 +285,10 @@ func (s *Store) DirtyEntries(ctx context.Context, limit int) ([]DirtyEntry, erro
 	return out, rows.Err()
 }
 
-// ClearDirty stores the id and timestamp the server returned. Writing back the
-// server's own updatedAt stops the next pull seeing our write as a remote change.
 func (s *Store) ClearDirty(ctx context.Context, animeID, remoteID, remoteUpdatedAt int) error {
 	return s.ClearDirtyAt(ctx, animeID, remoteID, remoteUpdatedAt, math.MaxInt64)
 }
 
-// ClearDirtyAt clears dirty only if the row has not changed since changed.
 func (s *Store) ClearDirtyAt(ctx context.Context, animeID, remoteID, remoteUpdatedAt int, changed int64) error {
 	_, err := s.w.ExecContext(ctx, `
 		UPDATE list_entry
@@ -314,7 +300,6 @@ func (s *Store) ClearDirtyAt(ctx context.Context, animeID, remoteID, remoteUpdat
 	return err
 }
 
-// PushFailed sends the entry to the back of tracker's push line ("anilist" or "mal") until a push succeeds.
 func (s *Store) PushFailed(ctx context.Context, tracker string, animeID int) error {
 	column := "anilist_failed_at"
 	if tracker == "mal" {
@@ -324,7 +309,6 @@ func (s *Store) PushFailed(ctx context.Context, tracker string, animeID int) err
 	return err
 }
 
-// ListProgress maps each listed anime to its watched count, so a schedule marks what's seen.
 func (s *Store) ListProgress(ctx context.Context) (map[int]int, error) {
 	entries, err := s.ListEntries(ctx)
 	if err != nil {
@@ -337,7 +321,6 @@ func (s *Store) ListProgress(ctx context.Context) (map[int]int, error) {
 	return out, nil
 }
 
-// ListedEntry is what a card needs to show the list tag it already carries.
 type ListedEntry struct {
 	Status   string
 	Progress int
@@ -380,7 +363,6 @@ func (s *Store) ListEntry(ctx context.Context, animeID int) (DirtyEntry, error) 
 	return d, err
 }
 
-// RemoveListEntry takes a show off the list: its entry, what each tracker was last told, and its follow.
 func (s *Store) RemoveListEntry(ctx context.Context, animeID int) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {

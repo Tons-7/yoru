@@ -4,18 +4,10 @@ import { api, query } from '../lib/api'
 import { cx } from '../lib/format'
 import { useDebounced } from '../lib/hooks'
 import { buttonClass } from '../lib/ui'
-import { csv, FILTER_KEYS, useBrowse } from './browseQuery'
+import { csv, FILTER_KEYS, tagChoices, useBrowse, type FilterVocabulary } from './browseQuery'
 import { Sheet } from './Sheet'
 import { Select, TextInput } from './ui'
 
-export interface FilterVocabulary {
-  genres: string[]
-  formats: string[]
-  statuses: string[]
-  seasons: string[]
-  sorts: string[]
-  years: number[]
-}
 
 const FORMAT_LABELS: Record<string, string> = {
   TV: 'TV',
@@ -129,6 +121,13 @@ export function FilterSheet({
     >
       <div className="space-y-6 pt-1">
         <Group title="Genre">{chips('genres', vocab?.genres ?? [], true)}</Group>
+        <Group title="Tags">
+          <TagSearch
+            chosen={csv(draft.tags)}
+            choices={tagChoices(vocab)}
+            chips={(options) => chips('tags', options, true, tagChoices(vocab).labels)}
+          />
+        </Group>
         <Group title="Format">{chips('formats', vocab?.formats ?? [], true, FORMAT_LABELS)}</Group>
         <Group title="Status">{chips('statuses', vocab?.statuses ?? [], true, STATUS_LABELS)}</Group>
         <Group title="Season">{chips('season', vocab?.seasons ?? [], false)}</Group>
@@ -157,6 +156,33 @@ export function FilterSheet({
         </Group>
       </div>
     </Sheet>
+  )
+}
+
+function TagSearch({
+  chosen,
+  choices,
+  chips,
+}: {
+  chosen: string[]
+  choices: ReturnType<typeof tagChoices>
+  chips: (options: string[]) => ReactNode
+}) {
+  const [term, setTerm] = useState('')
+  const wanted = term.trim().toLowerCase()
+  const found = wanted ? choices.all.filter((t) => t.toLowerCase().includes(wanted)).slice(0, 24) : []
+  const shown = wanted ? found : [...chosen.filter((t) => !choices.popular.includes(t)), ...choices.popular]
+  return (
+    <div className="space-y-2.5">
+      <TextInput
+        value={term}
+        onChange={(e) => setTerm(e.target.value)}
+        placeholder={`Search ${choices.all.length} tags…`}
+        aria-label="Search tags"
+        className="w-full"
+      />
+      {wanted && found.length === 0 ? <p className="text-[13px] text-base-400">No tag by that name.</p> : chips(shown)}
+    </div>
   )
 }
 

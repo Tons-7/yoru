@@ -642,6 +642,8 @@ export function Anime() {
             </Rail>
           )}
 
+          <RelatedRails entries={franchise.data?.related ?? []} />
+
           <section>
             <h2 className="mb-3 section-title">Episodes</h2>
 
@@ -667,7 +669,6 @@ export function Anime() {
           </section>
 
           <CharacterRail animeId={id} />
-          <RelatedRails entries={franchise.data?.related ?? []} />
           <ShowCredits animeId={id} />
 
           {(recommended.data?.items?.length ?? 0) > 0 && (
@@ -1293,7 +1294,7 @@ function ShowSettings({
   const prefs = usePrefs(animeId)
   return (
     <>
-      <div className="divide-y divide-white/[0.06]">
+      <div className="divide-y divide-line">
         {notify && <NotifyMe animeId={animeId} state={notify} />}
         <AutoDownload animeId={animeId} />
         <ShowGroups animeId={animeId} />
@@ -1661,47 +1662,58 @@ function rank(kind: string): number {
 }
 
 function RelatedRails({ entries }: { entries: RelatedEntry[] }) {
+  const [only, setOnly] = useState<string | null>(null)
+  const box = useRef<HTMLDivElement>(null)
   if (entries.length === 0) return null
+  const pick = (kind: string | null) => {
+    setOnly(kind)
+    box.current?.querySelector('[data-rail-track]')?.scrollTo({ left: 0 })
+  }
 
-  const groups = new Map<string, RelatedEntry[]>()
-  for (const e of entries) {
-    const key = label(e)
-    groups.set(key, [...(groups.get(key) ?? []), e])
-  }
-  if (groups.size < 2 || entries.length <= 6) {
-    return <RelatedRail title="Related" entries={entries} />
-  }
+  const sorted = entries
+    .map((e, i) => ({ e, i, kind: label(e) }))
+    .sort((a, b) => rank(a.kind) - rank(b.kind) || a.i - b.i)
+  const kinds = [...new Set(sorted.map((s) => s.kind))]
+  const chosen = only && kinds.includes(only) ? only : null
+  const shown = chosen ? sorted.filter((s) => s.kind === chosen) : sorted
+  const count = (kind: string) => sorted.filter((s) => s.kind === kind).length
+
+  const filters = kinds.length > 1 && (
+    <span role="group" aria-label="Show only" className="flex flex-wrap gap-1.5">
+      {[null, ...kinds].map((kind) => {
+        const on = kind === chosen
+        const n = kind ? count(kind) : sorted.length
+        return (
+          <button
+            key={kind ?? 'all'}
+            type="button"
+            aria-pressed={on}
+            onClick={() => pick(kind)}
+            className={cx(
+              'tap relative h-7 rounded-full px-2.5 text-xs font-medium whitespace-nowrap transition-colors',
+              on ? 'bg-accent-500/20 text-accent-300' : 'bg-base-850 text-base-300 hover:bg-base-800 hover:text-white',
+            )}
+          >
+            {kind ? (n > 1 ? plural(kind) : kind) : 'All'} <span className="tabular-nums opacity-70">{n}</span>
+          </button>
+        )
+      })}
+    </span>
+  )
 
   return (
-    <>
-      {[...groups.keys()].sort((a, b) => rank(a) - rank(b)).map((kind) => (
-        <RelatedRail
-          key={kind}
-          title={groups.get(kind)!.length > 1 ? plural(kind) : kind}
-          entries={groups.get(kind)!}
-          kind={kind}
-        />
-      ))}
-    </>
+    <div ref={box}>
+      <Rail title={kinds.length > 1 ? 'Related' : n1(kinds[0], sorted.length)} meta={filters || undefined}>
+        {shown.map(({ e, kind }) => (
+          <SeasonChip key={e.id} season={e} current={false} kind={kinds.length > 1 ? kind : undefined} />
+        ))}
+      </Rail>
+    </div>
   )
 }
 
-function RelatedRail({
-  title,
-  entries,
-  kind,
-}: {
-  title: string
-  entries: RelatedEntry[]
-  kind?: string
-}) {
-  return (
-    <Rail title={entries.length > 1 ? `${title} · ${entries.length}` : title}>
-      {entries.map((e) => (
-        <SeasonChip key={e.id} season={e} current={false} kind={kind ? undefined : label(e)} />
-      ))}
-    </Rail>
-  )
+function n1(kind: string, n: number): string {
+  return n > 1 ? `${plural(kind)} · ${n}` : kind
 }
 
 function plural(kind: string): string {

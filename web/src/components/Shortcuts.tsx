@@ -56,7 +56,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="mb-3">
       <h3 className="mb-1 px-2 text-[11px] font-semibold tracking-wider text-base-400 uppercase">{title}</h3>
-      <dl className="divide-y divide-white/[0.05]">{children}</dl>
+      <dl className="divide-y divide-line">{children}</dl>
     </section>
   )
 }
@@ -227,7 +227,7 @@ export function Shortcuts() {
             </div>
           </div>
 
-          <div className="shrink-0 border-t border-white/[0.06] px-5 py-3">
+          <div className="shrink-0 border-t border-line px-5 py-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div role="radiogroup" aria-label="Single keys work" className="flex items-center gap-1 rounded-lg bg-base-900 p-0.5 text-xs">
                 <span className="mr-1 pl-2 text-base-400">Keys work</span>

@@ -33,6 +33,10 @@ export function forgetSearch(text: string) {
   write(recent.filter((s) => s !== text))
 }
 
+export function forgetAllSearches() {
+  write([])
+}
+
 function subscribe(changed: () => void) {
   listeners.add(changed)
   const onStorage = (e: StorageEvent) => {

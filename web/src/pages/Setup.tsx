@@ -8,11 +8,9 @@ import { SitesEditor } from '../components/SitesEditor'
 import { WhereThingsGo } from '../components/WhereThingsGo'
 import { Badge, Button, ErrorState, LinkButton, PageHeader, Skeleton } from '../components/ui'
 
-/** What Yoru needs before it can play anything, and what each piece is for. */
 export function SetupPage() {
   const qc = useQueryClient()
   const { data, isPending, isError, error, refetch } = useSetup({
-    // While anything is downloading, often enough for the bar to move.
     refetchInterval: (q) => {
       const setup = q.state.data
       if (!setup) return 5000
@@ -32,10 +30,8 @@ export function SetupPage() {
   if (isError && !data) return <ErrorState error={error} retry={() => refetch()} />
   if (isPending) return <Skeleton className="h-96 w-full" />
 
-  // Defended, not trusted: a first run lands here, and a null list blanked the app.
   const components = data.components ?? []
   const missing = components.filter((c) => !c.present)
-  // Only downloadable ones drive the bulk button; a manual one shows its command on its row.
   const fetchable = missing.filter((c) => !c.manual)
   const progressFor = (name: string) => (data.progress ?? []).find((p) => p.component === name)
 
@@ -47,7 +43,7 @@ export function SetupPage() {
       />
 
       <section className="surface overflow-hidden">
-        <ul className="divide-y divide-white/[0.05]">
+        <ul className="divide-y divide-line">
           {components.map((c) => (
             <li key={c.name} className="flex items-start gap-3 p-4">
               <span
@@ -143,7 +139,6 @@ export function SetupPage() {
             >
               Install {fetchable.length === 1 ? fetchable[0].label.toLowerCase() : 'everything missing'}
             </Button>
-            {/* Always a way out: most are optional, and installs can fail. */}
             <Link to="/" className="text-sm text-base-400 transition-colors hover:text-base-100">
               Skip for now
             </Link>

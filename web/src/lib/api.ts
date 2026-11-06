@@ -91,6 +91,14 @@ export const api = {
 let keptAlive = 0
 const KEEPALIVE_BUDGET = 48_000
 
+let unloading = false
+export function unloadingPage() {
+  unloading = true
+}
+window.addEventListener('pageshow', () => {
+  unloading = false
+})
+
 export async function fetchAuthed(path: string, init?: RequestInit): Promise<Response> {
   const token = readToken()
   const headers = new Headers(init?.headers)
@@ -99,7 +107,7 @@ export async function fetchAuthed(path: string, init?: RequestInit): Promise<Res
   const size = typeof body === 'string' ? new Blob([body]).size : 0
   const leaving =
     init?.keepalive === undefined &&
-    document.visibilityState === 'hidden' &&
+    (unloading || document.visibilityState === 'hidden') &&
     !!init?.method &&
     init.method !== 'GET' &&
     (body == null || typeof body === 'string') &&

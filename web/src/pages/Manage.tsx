@@ -1222,7 +1222,7 @@ function DownloadRow({
   const roomy = unfinished || d.pinned || onPhone
 
   return (
-    <li className={cx('p-3', nested ? 'border-t border-white/[0.06] bg-base-950/30' : card)}>
+    <li className={cx('p-3', nested ? 'border-t border-line bg-base-950/30' : card)}>
       <div className={cx('flex items-start gap-3', roomy && 'max-sm:flex-wrap')}>
         {actions.selecting && !unfinished ? (
           <span className="self-center">
@@ -1552,7 +1552,7 @@ function PcFreeUpList({ onDone }: { onDone?: () => void }) {
   }
 
   return (
-    <ul className="divide-y divide-white/[0.06] px-3">
+    <ul className="divide-y divide-line px-3">
       <FreeRow
         title="Not kept"
         detail={passing.length > 0 ? `${episodeCount(episodesIn(passing))} · ${bytes(sizeOf(passing))}` : 'Nothing to clear: the rest are kept'}
@@ -1869,7 +1869,7 @@ export function LocalFiles() {
         />
       ) : (
         <>
-          <ul className="surface divide-y divide-white/[0.05] overflow-hidden">
+          <ul className="surface divide-y divide-line overflow-hidden">
             {data.items.map((f) => (
               <li key={f.id} className="p-2.5">
                 <div className="flex items-center gap-3">

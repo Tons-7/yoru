@@ -10,11 +10,9 @@ import { ConfirmInline } from './ui'
 import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 import { desktopNotifyWanted, notificationTarget } from '../lib/notifications'
 
-/** Notifications at a glance, handled in place, linking out only when there is more. */
 export function NotificationPanel() {
   const [open, setOpen] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
-  // In a portal at the end of the page; keyboard focus goes in and comes back.
   const panelRef = useRef<HTMLDivElement>(null)
   useModalFocus(panelRef, open)
   const close = useCallback(() => setOpen(false), [])
@@ -26,7 +24,6 @@ export function NotificationPanel() {
   const unread = data?.unread ?? 0
   const items = (data?.items ?? []).slice(0, 8)
   useDesktopNotifications(data?.items)
-  // The installed app's icon shows the unread count an alert set, and clears when they're read here.
   useEffect(() => {
     if (!data || !('setAppBadge' in navigator)) return
     void (unread > 0 ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {})
@@ -101,7 +98,6 @@ export function NotificationPanel() {
                     Mark all read
                   </button>
                 )}
-                {/* Every notification at once: asked, not done on one click. */}
                 {items.length > 0 &&
                   (confirmClear ? (
                     <ConfirmInline
@@ -203,12 +199,10 @@ function Row({
 
 const SEEN_KEY = 'yoru.notify.seen'
 
-// Raises a system notification per new unread item; the first poll only marks the spot, replaying nothing.
 function useDesktopNotifications(items?: Notification[]) {
   useEffect(() => {
     if (!items || typeof Notification === 'undefined') return
     const newest = items.reduce((m, n) => Math.max(m, n.id), 0)
-    // No key yet is the first sight; a stored 0 is a list that was empty, so anything newer is news.
     let seen = 0
     let first = true
     try {
@@ -218,15 +212,12 @@ function useDesktopNotifications(items?: Notification[]) {
         first = false
       }
     } catch {
-      // Unreadable storage: treat as first sight.
+      first = true
     }
     if (!first && desktopNotifyWanted() && Notification.permission === 'granted') {
       for (const n of items.filter((n) => n.id > seen && !n.read).reverse()) {
-        // The tag and link a pushed alert for it carries, so one shown both ways collapses into one.
         const target = new URL(notificationTarget(n), window.location.href).href
         const options = { body: n.body, tag: `yoru-${n.id}`, data: { url: target } }
-        // Through the alerts worker where there is one: Android has no page notifications ("Illegal
-        // constructor"), and that throw would blank the app.
         void (navigator.serviceWorker?.getRegistration() ?? Promise.resolve(undefined))
           .catch(() => undefined)
           .then((reg) => {
@@ -238,7 +229,7 @@ function useDesktopNotifications(items?: Notification[]) {
                 window.location.assign(target)
               }
             } catch {
-              // Nowhere to show it.
+              return
             }
           })
           .catch(() => {})
@@ -248,7 +239,7 @@ function useDesktopNotifications(items?: Notification[]) {
       try {
         localStorage.setItem(SEEN_KEY, String(newest))
       } catch {
-        // Nothing to do; the next poll announces again at worst.
+        return
       }
     }
   }, [items])

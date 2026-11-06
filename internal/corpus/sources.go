@@ -1,4 +1,3 @@
-// Package corpus indexes every anime's names for offline matching: manami seed, animeApi ids, AniList titles.
 package corpus
 
 import (
@@ -32,6 +31,7 @@ type Entry struct {
 	Episodes  int
 	Year      int
 	Season    string
+	Picture   string
 	Titles    []Title
 }
 
@@ -47,8 +47,6 @@ type Fetcher struct {
 }
 
 func NewFetcher() *Fetcher {
-	// No client Timeout: it would span the streamed manami body and the database
-	// writes made while reading it. Callers bound each download instead.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = time.Minute
 	return &Fetcher{
@@ -90,13 +88,13 @@ type manamiRecord struct {
 	Type     string   `json:"type"`
 	Episodes int      `json:"episodes"`
 	Synonyms []string `json:"synonyms"`
+	Picture  string   `json:"picture"`
 	Season   struct {
 		Season string `json:"season"`
 		Year   int    `json:"year"`
 	} `json:"animeSeason"`
 }
 
-// Manami streams the seed database, skipping records without an AniList id.
 func (f *Fetcher) Manami(ctx context.Context, yield func(Entry) error) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
@@ -129,8 +127,6 @@ func (f *Fetcher) Manami(ctx context.Context, yield func(Entry) error) (int, err
 
 		malID := firstID(malSource, rec.Sources)
 
-		// MAL-only titles (no AniList id) are keyed on the negated MAL id, which
-		// cannot collide with an AniList id and marks them MAL-sourced.
 		id := firstID(aniListSource, rec.Sources)
 		if id == 0 {
 			if malID == 0 {
@@ -147,6 +143,7 @@ func (f *Fetcher) Manami(ctx context.Context, yield func(Entry) error) (int, err
 			Episodes:  rec.Episodes,
 			Year:      rec.Season.Year,
 			Season:    rec.Season.Season,
+			Picture:   rec.Picture,
 			Titles:    []Title{{Text: rec.Title, Kind: "primary"}},
 		}
 		for _, syn := range rec.Synonyms {
@@ -171,8 +168,6 @@ func firstID(re *regexp.Regexp, sources []string) int {
 	return 0
 }
 
-// AnimeAPI returns the AniList ids that exist today. It carries no titles, so
-// its only job is telling us which anime we have never heard of.
 func (f *Fetcher) AnimeAPI(ctx context.Context) (map[int]Entry, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()

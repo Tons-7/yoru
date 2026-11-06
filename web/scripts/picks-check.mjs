@@ -1,5 +1,3 @@
-// AniList and discovery: Home's "Sequels you missed" and "For you", AniList and MyAnimeList links opening
-// their show, episode scores on watched rows, and connecting AniList by pasting the code its page shows.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -34,7 +32,6 @@ const fresh = async () => {
 const path = (page) => new URL(page.url()).pathname + new URL(page.url()).search
 
 try {
-  // Home: both rails answer on a fresh install, then show what they're given; empty, they aren't there.
   for (const kind of ['sequels', 'for-you']) {
     const res = await fetch(`${BASE}/api/home/${kind}`)
     const body = await res.json().catch(() => ({}))
@@ -45,7 +42,6 @@ try {
 
   let page = await fresh()
   let forYouFails = true
-  // The list tags a card shows, as the server would after a status is set.
   const listed = {}
   await page.route('**/api/status', (route) => {
     const { animeId, status } = route.request().postDataJSON()
@@ -79,14 +75,12 @@ try {
   check(await until(() => unfold.isVisible()), 'and stays folded on this device')
   await unfold.click()
   check(await until(() => cards('Sequels you missed').first().isVisible()), 'Show opens it again')
-  // A card's bookmark: the tag picked shows at once, as anywhere else.
   await rail('Sequels you missed').getByRole('button', { name: 'Add to list' }).first().click()
   await page.getByRole('menuitem', { name: 'Plan to watch' }).click()
   check(await until(() => rail('Sequels you missed').getByRole('button', { name: 'Listed as Plan to watch' }).first().isVisible()),
     "a sequel's bookmark fills once it's on the list")
   await page.close()
 
-  // Settings, Home: a row switched off leaves Home, asking AniList nothing; adult titles stay off by default.
   page = await fresh()
   let forYouAsked = 0
   await page.route('**/api/home/for-you', (route) => {
@@ -115,7 +109,6 @@ try {
   check((await page.getByRole('heading', { name: /^(Sequels you missed|For you)$/ }).count()) === 0, 'with nothing to show, neither rail is there')
   await page.close()
 
-  // Links: an AniList one opens its show straight away, a MyAnimeList one by asking which show it is.
   page = await fresh()
   const asked = []
   await page.route('**/api/anime/from-mal*', (route) => {
@@ -136,14 +129,16 @@ try {
   await page.goto(`${BASE}/open?text=frieren`)
   check(await until(async () => path(page) === '/browse?q=frieren'), 'words without a link are searched for', path(page))
 
-  const search = page.getByRole('combobox', { name: 'Search anime' })
+  const search = page.getByLabel('Search', { exact: true })
   await search.fill(`https://anilist.co/anime/${ANIME}`)
-  check(await until(() => page.getByRole('option', { name: 'Open this AniList link' }).isVisible()), 'a link typed in the search box offers to open it')
+  check(await until(async () => path(page) === `/anime/${ANIME}`), 'a link pasted in the search box opens its show', path(page))
+  await page.goto(`${BASE}/browse`)
+  await search.pressSequentially(`https://anilist.co/anime/${ANIME}`, { delay: 5 })
+  check(await until(() => page.getByRole('button', { name: /Open this AniList link/ }).isVisible()), 'one typed out offers to open it')
   await search.press('Enter')
   check(await until(async () => path(page) === `/anime/${ANIME}`), 'and Enter opens the show', path(page))
   await page.close()
 
-  // Episode scores: the server sends them only for watched episodes; such a row shows its score and thread.
   page = await fresh()
   const forum = 'https://myanimelist.net/forum/?topicid=1'
   await page.route('**/api/episodes?*', async (route) => {
@@ -170,7 +165,6 @@ try {
   await page.keyboard.press('Escape')
   await page.close()
 
-  // AniList by pasting a code: Connect opens AniList's page, the code goes back, and a wrong one says why.
   page = await fresh()
   let connected = false
   const tokenUrl = `${BASE}/anilist-authorize-stand-in`

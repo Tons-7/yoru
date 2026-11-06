@@ -24,7 +24,6 @@ let items = [
   download('b2', 2, 'Show One Season 2', ['2', '3'], { kept: true }),
   download('d5', 4, 'Still Coming', ['5'], { percent: 40, bytesOnDisk: GB * 0.4, state: 'live' }),
   download('d6', 4, 'Still Coming', ['6'], { percent: 10, bytesOnDisk: GB * 0.1, state: 'live' }),
-  // Stopped by the queue: one gave up (its entry failed), one waits for a later try (its entry pending).
   download('e7', 5, 'Dead Swarm', ['7'], { percent: 87, bytesOnDisk: GB * 0.87, paused: true }),
   download('e8', 5, 'Dead Swarm', ['8'], { percent: 30, bytesOnDisk: GB * 0.3, paused: true }),
 ]
@@ -35,7 +34,6 @@ const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 
 const calls = []
-// One episode waiting its turn, and a queue that can be paused as a whole.
 let paused = false
 const queued = [
   { animeId: 9, epKey: '2', episode: 2, state: 'pending', title: 'Queued Show' },
@@ -101,7 +99,6 @@ check(/3 episodes/.test(await rowOf('Show One Season 2').innerText()), 'a pack c
 check((await rowOf('Show One Season 2').getByRole('button', { name: 'Keep all' }).getAttribute('aria-pressed')) === 'true', 'a kept group shows its Keep all pressed')
 check(!/Downloaded|Cached/.test(await list.innerText()), 'no Downloaded or Cached words: the sections say it')
 
-// Collapsed until asked; opened, the episodes are in order whatever order they finished in.
 check((await page.getByText(/^Episode \d/).count()) === 0, 'groups start collapsed')
 await toggle('Show One').click()
 const listed = await page.getByText(/^Episode \d/).allInnerTexts()
@@ -149,8 +146,6 @@ await bar.getByRole('button', { name: 'Keep' }).click()
 await bar.getByRole('button', { name: 'Cancel' }).click()
 check((await page.getByRole('checkbox').count()) === 0, 'Cancel leaves select mode')
 
-// Pausing one download lets the next in line start, so stopping everything is its own control.
-// In the page itself: the layout's own status region (what a screen reader hears of a new page) is always there.
 const notice = page.locator('main').getByRole('status')
 check((await notice.count()) === 0, 'no paused notice while the queue runs')
 await page.getByRole('button', { name: 'Pause all' }).click()
@@ -162,12 +157,10 @@ await notice.getByRole('button', { name: 'Resume' }).click()
 await notice.waitFor({ state: 'detached', timeout: 8000 }).catch(() => {})
 check(queueCalls.join(' | ') === 'pause | resume' && (await notice.count()) === 0, 'resume starts it again', queueCalls.join(' | '))
 
-// A waiting episode can be started at once.
 queueCalls.length = 0
 await page.locator('li', { hasText: 'Queued Show' }).getByRole('button', { name: 'Download now' }).click()
 await page.waitForTimeout(500)
 check(queueCalls.length === 1 && /^now .*"animeId":9.*"epKey":"2"/.test(queueCalls[0]), 'download now asks for that episode', queueCalls.join(' | '))
-// A failed one says why and can be asked for again.
 queueCalls.length = 0
 const failed = page.locator('li', { hasText: 'no release found' })
 check((await failed.count()) === 1, 'a failed episode shows its error')
@@ -175,8 +168,6 @@ await failed.getByRole('button', { name: 'Try again' }).click()
 await page.waitForTimeout(500)
 check(queueCalls.length === 1 && /^retry .*"animeId":9.*"episode":3/.test(queueCalls[0]), 'try again queues that episode again', queueCalls.join(' | '))
 
-// A download the queue gave up on is one row, under Failed, with what it got; not that and a paused
-// torrent under Waiting. Removing it takes the bytes too, so it asks first.
 const dead7 = page.locator('li', { hasText: /Dead Swarm\s*episode 7/ })
 check((await dead7.count()) === 1, 'a failed download is one row', `${await dead7.count()} rows`)
 const dead7Text = (await dead7.first().innerText()).replace(/\n/g, ' | ')
@@ -191,7 +182,6 @@ await dead7.getByRole('button', { name: /^Delete / }).click()
 await page.waitForTimeout(500)
 check(queueCalls.join(' | ') === 'cancel 5 7' && calls.join(' | ') === 'DELETE e7', 'then takes the entry and the bytes', `${queueCalls.join(' | ')} / ${calls.join(' | ')}`)
 
-// One waiting for a later try says when, and is not called paused.
 const dead8 = page.locator('li', { hasText: /Dead Swarm\s*episode 8/ })
 const dead8Text = (await dead8.first().innerText()).replace(/\n/g, ' | ')
 check((await dead8.count()) === 1 && /tries again at \d/.test(dead8Text) && /the seeders never answered/.test(dead8Text) && !/Paused/.test(dead8Text),
@@ -205,7 +195,6 @@ const cards = await page.locator('ul.space-y-2 > li').evaluateAll((rows) =>
 const gaps = cards.slice(1).map((c, i) => Math.round(c.top - cards[i].bottom))
 check(cards.length >= 4 && gaps.every((g) => g >= 6), 'downloads are separate cards with space between', `${cards.length} cards, gaps ${gaps.join(',')}`)
 
-// The row controls are an icon rail: one state word per row, no action repeated as text, every icon named.
 await toggle('Show One Season 2').click()
 const words = await page.locator('ul.space-y-2 button').evaluateAll((buttons) =>
   buttons.map((b) => b.textContent?.trim()).filter((t) => /^(✓ Kept|Keep|Keep all|Change release|Download now|Try again)$/.test(t ?? '')),
@@ -219,7 +208,6 @@ const rail = await page.locator('ul.space-y-2 button[aria-label="Keep"], ul.spac
   buttons.map((b) => b.getBoundingClientRect()).map((r) => `${Math.round(r.width)}x${Math.round(r.height)}`),
 )
 check(rail.length >= 4 && rail.every((s) => s === '28x28'), 'icons are 28 px squares, the same on every row', [...new Set(rail)].join(','))
-// Visible without hover, at phone width, and the page never scrolls sideways.
 await page.setViewportSize({ width: 390, height: 800 })
 await page.waitForTimeout(300)
 const phone = await page.evaluate(() => ({
@@ -232,6 +220,29 @@ const phone = await page.evaluate(() => ({
 check(phone.overflow <= 0, 'no horizontal scroll at phone width', `${phone.overflow}px over`)
 check(phone.keep.length > 0 && phone.keep.every(Boolean), 'the rail is on screen at phone width, without hover')
 await page.screenshot({ path: `${SHOTS}/downloads-phone.png` })
+
+await page.setViewportSize({ width: 1400, height: 900 })
+await page.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
+const lone = page.getByRole('button', { name: 'More for Lone Film episode 1' })
+await lone.waitFor({ timeout: 15000 })
+await page.evaluate(() => {
+  const real = window.fetch
+  window.fetch = (input, init) => {
+    if (init?.method === 'DELETE') {
+      sessionStorage.setItem('yoru.test.sent', JSON.stringify({ url: String(input), keepalive: !!init.keepalive }))
+    }
+    return real(input, init)
+  }
+})
+await lone.click()
+await page.getByRole('menuitem', { name: 'Remove', exact: true }).click()
+await page.reload({ waitUntil: 'domcontentloaded' })
+const sent = JSON.parse((await page.evaluate(() => sessionStorage.getItem('yoru.test.sent'))) ?? 'null')
+check(
+  !!sent && sent.url.endsWith('/api/downloads/c1') && sent.keepalive,
+  'a removal still waiting on Undo is sent, as a request that outlives the page, when it reloads',
+  JSON.stringify(sent),
+)
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 await browser.close()

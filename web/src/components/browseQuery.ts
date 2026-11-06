@@ -4,7 +4,52 @@ import { useDebounced } from '../lib/hooks'
 
 export const PER_PAGE = 42
 
-export const FILTER_KEYS = ['genres', 'formats', 'statuses', 'studio', 'studioName', 'year', 'season']
+export const FILTER_KEYS = ['genres', 'tags', 'formats', 'statuses', 'studio', 'studioName', 'year', 'season']
+
+export interface FilterVocabulary {
+  genres: string[]
+  tags?: { name: string; category: string; isAdult: boolean }[]
+  formats: string[]
+  statuses: string[]
+  seasons: string[]
+  sorts: string[]
+  years: number[]
+}
+
+const POPULAR_TAGS = [
+  'Isekai',
+  'Yuri',
+  "Boys' Love",
+  'Iyashikei',
+  'Shounen',
+  'Seinen',
+  'Shoujo',
+  'Josei',
+  'School',
+  'Reincarnation',
+  'Super Power',
+  'Time Manipulation',
+  'Military',
+  'Historical',
+  'Female Protagonist',
+  'Female Harem',
+  'Male Harem',
+  'Cute Girls Doing Cute Things',
+  'Tragedy',
+  'Survival',
+  'Revenge',
+  'Detective',
+  'Martial Arts',
+  'Video Games',
+]
+
+export function tagChoices(vocab?: FilterVocabulary) {
+  const all = (vocab?.tags ?? [])
+    .filter((t) => !t.isAdult)
+    .map((t) => t.name)
+    .sort((a, b) => a.localeCompare(b))
+  return { all, popular: POPULAR_TAGS.filter((t) => all.includes(t)), labels: Object.fromEntries(all.map((t) => [t, t])) }
+}
 
 export function csv(value?: string): string[] {
   return value ? value.split(',').filter(Boolean) : []

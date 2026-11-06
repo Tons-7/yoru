@@ -1,11 +1,8 @@
-// The series page: seasons in their own rail, films and spin-offs grouped into
-// theirs, and a cast rail of single portraits. Detective Conan is the hard case.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const SHOTS = process.env.SHOTS ?? '.'
 const ANIME = Number(process.env.YORU_RELATED ?? 235)
-const RAIL = /^(Related|Movies?|Specials?|OVAs?|ONAs?|Spin-offs?|Alternatives?|Recaps?)(\s·\s\d+)?$/
 
 let failures = 0
 const check = (ok, label, detail = '') => {
@@ -15,7 +12,7 @@ const check = (ok, label, detail = '') => {
 const until = async (fn, ms = 30000) => {
   const end = Date.now() + ms
   while (Date.now() < end) {
-    if (await fn().catch(() => false)) return true
+    if (await Promise.resolve().then(fn).catch(() => false)) return true
     await new Promise((r) => setTimeout(r, 500))
   }
   return false
@@ -31,48 +28,40 @@ check(await until(() => page.getByRole('heading', { level: 1 }).isVisible()), 't
 
 const api = await (await fetch(`${BASE}/api/franchise?id=${ANIME}`)).json()
 const total = (api.related ?? []).length
-check(total > 10, 'the API returns the franchise films', `${total} related`)
+const movies = (api.related ?? []).filter((e) => e.format === 'MOVIE').length
+check(total > 10 && movies > 1, 'the API returns the franchise films', `${total} related, ${movies} movies`)
 
-const rails = page.locator('section').filter({ has: page.getByRole('heading', { name: RAIL }) })
-check(await until(async () => (await rails.count()) > 0), 'the related material has a rail')
-const titles = await rails.locator('h2').allInnerTexts()
-check(titles.length > 1, 'a big franchise is grouped by kind, not one strip of sixty', titles.join(' | '))
+const related = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Related', exact: true }) })
+check(await until(() => related.isVisible()), 'the related material has one rail')
+const episodes = page.locator('section', { has: page.getByRole('heading', { name: 'Episodes' }) })
+const [relBox, epBox] = [await related.boundingBox(), await episodes.boundingBox().catch(() => null)]
+check(!!relBox && (!epBox || relBox.y < epBox.y), 'it sits above the episodes, where it is seen', `${relBox?.y} vs ${epBox?.y}`)
 
-const chips = rails.locator('a[href^="/anime/"]')
-check(await until(async () => (await chips.count()) === total), 'every entry is in a rail, none hidden behind a button', `${await chips.count()} of ${total}`)
-check(
-  (await rails.getByRole('button', { name: /Show all/ }).count()) === 0,
-  'no Show all: the rails scroll instead',
-)
-
-// Nothing renders as a bare title: a dash means hydration did not fill it.
+const chips = related.locator('a[href^="/anime/"]')
+check(await until(async () => (await chips.count()) === total), 'All lists every entry, none hidden behind a button', `${await chips.count()} of ${total}`)
 const texts = await chips.allInnerTexts()
 const undated = texts.filter((t) => !/\b(19|20)\d{2}\b/.test(t))
 check(undated.length === 0, 'every entry shows its year', undated.slice(0, 3).map((t) => t.replace(/\s+/g, ' ')).join(' | '))
 const noEpisodes = texts.filter((t) => !/\d+ eps?\b/.test(t))
 check(noEpisodes.length === 0, 'every entry shows its episode count', noEpisodes.slice(0, 3).map((t) => t.replace(/\s+/g, ' ')).join(' | '))
 
-// Arrows and the progress line belong to rails that actually overflow.
-const overflowing = await rails.evaluateAll((sections) =>
-  sections.map((s) => {
-    const track = s.querySelector('div.overflow-x-auto')
-    const heading = s.querySelector('h2')?.textContent ?? ''
-    return {
-      heading,
-      scrollable: !!track && track.scrollWidth - track.clientWidth > 1,
-      arrows: s.querySelectorAll('button[aria-label^="Scroll"]').length,
-      bar: !!s.querySelector('[aria-hidden][class*="rounded-full"]'),
-    }
-  }),
-)
-for (const r of overflowing) {
-  check(
-    r.scrollable ? r.arrows === 2 : r.arrows === 0,
-    `${r.heading.trim()}: arrows only when it scrolls`,
-    `${r.arrows} arrows, scrollable=${r.scrollable}`,
-  )
+const filters = related.getByRole('group', { name: 'Show only' })
+check(await filters.isVisible(), 'its kinds are buttons in the heading')
+await filters.getByRole('button', { name: /^Movies/ }).click()
+check(await until(async () => (await chips.count()) === movies), 'Movies narrows it to the films', `${await chips.count()} of ${movies}`)
+await page.screenshot({ path: `${SHOTS}/series-related-movies.png` })
+await filters.getByRole('button', { name: /^All/ }).click()
+check(await until(async () => (await chips.count()) === total), 'All brings everything back')
+
+const pager = page.getByRole('navigation', { name: 'Episode pages', exact: true })
+const find = page.getByRole('searchbox', { name: 'Search episodes' }).or(page.getByRole('textbox', { name: 'Search episodes' })).first()
+if (await until(() => pager.isVisible(), 20000)) {
+  const [p, f, first] = [await pager.boundingBox(), await find.boundingBox().catch(() => null), await episodes.locator('li').first().boundingBox()]
+  check(!!p && !!f && Math.abs(p.y + p.height / 2 - (f.y + f.height / 2)) < 8, 'the page buttons share a row with Find an episode', `${p?.y} vs ${f?.y}`)
+  check(!!p && !!first && p.y < first.y, 'above the list')
+  await pager.scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `${SHOTS}/series-episode-toolbar.png` })
 }
-check(overflowing.some((r) => !r.scrollable), 'a short rail is among them', overflowing.map((r) => r.heading.trim()).join(' | '))
 
 const seasons = page.locator('section', { has: page.getByRole('heading', { name: /^Seasons/ }) })
 if (await seasons.isVisible().catch(() => false)) {
@@ -87,23 +76,16 @@ if (await until(() => cast.isVisible(), 25000)) {
     await toggle.click()
     const less = cast.getByRole('button', { name: 'Show less' })
     check(await until(() => less.isVisible()), 'the cast toggle becomes Show less')
-    check(
-      (await cast.getByRole('button', { name: /Show (all|more)/ }).count()) === 0,
-      'and does not sit beside its own opposite',
-    )
+    check((await cast.getByRole('button', { name: /Show (all|more)/ }).count()) === 0, 'and does not sit beside its own opposite')
   }
-  // The cast rail is below the episode list, where browsing belongs.
-  const episodes = page.locator('section', { has: page.getByRole('heading', { name: 'Episodes' }) })
-  const [castBox, epBox] = [await cast.boundingBox(), await episodes.boundingBox()]
-  if (castBox && epBox) check(castBox.y > epBox.y, 'the cast sits below the episodes')
+  const [castBox, eps] = [await cast.boundingBox(), await episodes.boundingBox()]
+  if (castBox && eps) check(castBox.y > eps.y, 'the cast sits below the episodes')
 }
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 
-if ((await rails.count()) > 0) {
-  await rails.first().scrollIntoViewIfNeeded()
-  await page.screenshot({ path: `${SHOTS}/series-rails.png` })
-}
+await related.scrollIntoViewIfNeeded()
+await page.screenshot({ path: `${SHOTS}/series-rails.png` })
 
 await browser.close()
 console.log(failures === 0 ? '\nall checks passed' : `\n${failures} check(s) failed`)

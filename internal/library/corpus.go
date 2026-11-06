@@ -16,7 +16,6 @@ import (
 )
 
 const (
-	// AniList accepts 50 ids per request.
 	batchSize = 50
 
 	seedInterval     = 30 * 24 * time.Hour
@@ -29,7 +28,6 @@ type Ingester struct {
 	al      *anilist.Client
 	log     *slog.Logger
 
-	// Relations, when set, links a just-discovered anime to the saved shows it continues.
 	Relations *Relations
 }
 
@@ -50,7 +48,6 @@ func (i *Ingester) Run(ctx context.Context, force bool) (Report, error) {
 	var rep Report
 	var seedErr error
 
-	// A failed seed must not also cost the day's new-season discovery.
 	if due, _ := i.due(ctx, "manami", seedInterval, force); due {
 		n, err := i.seed(ctx)
 		rep.Seeded = n
@@ -60,7 +57,6 @@ func (i *Ingester) Run(ctx context.Context, force bool) (Report, error) {
 	}
 
 	if due, _ := i.due(ctx, "animeapi", discoverInterval, force); due {
-		// The first discovery finds every sequel ever made, not news: nothing is announced from it.
 		before, _ := i.store.SourceRefreshedAt(ctx, "animeapi")
 		missing, upstream, err := i.discover(ctx)
 		if err != nil {
@@ -74,7 +70,6 @@ func (i *Ingester) Run(ctx context.Context, force bool) (Report, error) {
 			return rep, errors.Join(seedErr, fmt.Errorf("fetch titles: %w", err))
 		}
 		rep.Linked = i.linkNew(anilist.Background(ctx), recent, !before.IsZero())
-		// Marked only once fetched, so a retry picks up the rest.
 		if err := i.store.MarkSource(ctx, "animeapi", upstream); err != nil {
 			return rep, errors.Join(seedErr, err)
 		}
@@ -93,7 +88,6 @@ func (i *Ingester) due(ctx context.Context, name string, every time.Duration, fo
 	return at.IsZero() || time.Since(at) > every, nil
 }
 
-// seed loads the frozen manami database; it never changes, so this runs once.
 func (i *Ingester) seed(ctx context.Context) (int, error) {
 	i.log.Info("seeding title corpus")
 
@@ -132,7 +126,6 @@ func (i *Ingester) seed(ctx context.Context) (int, error) {
 	return total, i.store.MarkSource(ctx, "manami", count)
 }
 
-// discover diffs a daily-rebuilt id list against stored ids to notice new seasons.
 func (i *Ingester) discover(ctx context.Context) ([]int, int, error) {
 	live, err := i.fetcher.AnimeAPI(ctx)
 	if err != nil {
@@ -154,8 +147,6 @@ func (i *Ingester) discover(ctx context.Context) ([]int, int, error) {
 	return missing, len(live), nil
 }
 
-// Ids that return nothing are recorded so they are never requested again. recent: the new ones airing,
-// announced or from the last two years, which may continue a show already saved.
 func (i *Ingester) fetchTitles(ctx context.Context, ids []int) (fetched, titles, dead int, recent []int, err error) {
 	thisYear := time.Now().Year()
 	for start := 0; start < len(ids); start += batchSize {
@@ -199,16 +190,11 @@ func (i *Ingester) fetchTitles(ctx context.Context, ids []int) (fetched, titles,
 	return fetched, titles, dead, recent, nil
 }
 
-// linkNew walks the franchise of each new anime that relates to a saved show, so a just-announced season,
-// film or OVA joins that show's Seasons or Related the day it is found, not at the show's weekly walk.
 func (i *Ingester) linkNew(ctx context.Context, ids []int, announce bool) int {
-	// A first discovery can be thousands; past these, the weekly walk on opening catches up. Announcing reads
-	// every new one (a day's few; a first discovery announces nothing): a sequel missed here is never told.
 	const maxIDs, maxWalks, maxAnnounce = 100, 20, 1000
 	if i.Relations == nil || len(ids) == 0 {
 		return 0
 	}
-	// Newest first: ids grow, so a cut keeps this week's announcements over older finds.
 	ids = slices.Clone(ids)
 	slices.SortFunc(ids, func(a, b int) int { return b - a })
 	limit := maxIDs
@@ -222,7 +208,6 @@ func (i *Ingester) linkNew(ctx context.Context, ids []int, announce bool) int {
 		media, err := i.al.Relations(ctx, ids[start:min(start+25, len(ids))])
 		if err != nil {
 			i.log.Warn("relations of new anime", "err", err)
-			// One failure may pass, so the next batch is tried; two in a row is AniList down or limiting.
 			if failed++; failed >= 2 {
 				return walked
 			}
@@ -236,7 +221,6 @@ func (i *Ingester) linkNew(ctx context.Context, ids []int, announce bool) int {
 			if walked >= maxWalks || start >= maxIDs || !i.continuesSaved(ctx, m) {
 				continue
 			}
-			// Reached by an earlier walk this run (a sequel's film or OVA): its franchise is already current.
 			if known, _ := i.store.HasRelations(ctx, m.ID); known && !i.store.RelationsStale(ctx, m.ID, relationsMaxAge) {
 				continue
 			}
@@ -256,10 +240,8 @@ func (i *Ingester) linkNew(ctx context.Context, ids []int, announce bool) int {
 	return walked
 }
 
-// Statuses whose shows' sequels are news: anything on the list but dropped.
 var seasonNews = map[string]bool{"CURRENT": true, "REPEATING": true, "COMPLETED": true, "PAUSED": true, "PLANNING": true}
 
-// announceSeason tells of a new anime continuing a show on the list (its PREQUEL edge), a single time.
 func (i *Ingester) announceSeason(ctx context.Context, m anilist.RelatedMedia) {
 	for _, e := range m.Relations.Edges {
 		if e.Type != "PREQUEL" || e.Node.Type != "ANIME" {
@@ -269,7 +251,6 @@ func (i *Ingester) announceSeason(ctx context.Context, m anilist.RelatedMedia) {
 		if err != nil || !seasonNews[entry.Status] || i.store.Notified(ctx, store.NotifySeason, m.ID) {
 			continue
 		}
-		// Alerts off, for that show or everywhere: no bell either, as for a delay.
 		if p, err := i.store.Prefs(ctx, e.Node.ID); err == nil && !p.Bool("notify.enabled") {
 			continue
 		}
@@ -293,7 +274,6 @@ func (i *Ingester) announceSeason(ctx context.Context, m anilist.RelatedMedia) {
 	}
 }
 
-// monthYear is "Jan 2027", "2027", or "" for an undated announcement.
 func monthYear(d anilist.FuzzyDate) string {
 	switch {
 	case d.Year == nil:
@@ -304,7 +284,6 @@ func monthYear(d anilist.FuzzyDate) string {
 	return time.Month(*d.Month).String()[:3] + " " + strconv.Itoa(*d.Year)
 }
 
-// continuesSaved: one of the new anime's season or related edges reaches a show Yoru keeps.
 func (i *Ingester) continuesSaved(ctx context.Context, m anilist.RelatedMedia) bool {
 	for _, e := range m.Relations.Edges {
 		if e.Node.Type == "ANIME" && relatedEdges[e.Type] && i.store.IsSaved(ctx, e.Node.ID) {
@@ -317,7 +296,7 @@ func (i *Ingester) continuesSaved(ctx context.Context, m anilist.RelatedMedia) b
 func toStoreEntry(e corpus.Entry) store.CorpusEntry {
 	out := store.CorpusEntry{
 		AniListID: e.AniListID, MalID: e.MalID, AniDBID: e.AniDBID,
-		Kind: e.Kind, Episodes: e.Episodes, Year: e.Year, Season: e.Season,
+		Kind: e.Kind, Episodes: e.Episodes, Year: e.Year, Season: e.Season, Picture: e.Picture,
 	}
 	for _, t := range e.Titles {
 		out.Titles = append(out.Titles, store.CorpusTitle{Text: t.Text, Kind: t.Kind, Lang: t.Lang})

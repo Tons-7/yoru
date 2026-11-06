@@ -314,7 +314,7 @@ const libraryColumns = `
 a.id, a.title_romaji, a.title_english, a.cover_url, a.cover_color, a.episode_count,
 e.status, e.progress, e.score, a.next_episode, a.next_airing_at, a.status, a.format,
 coalesce((SELECT ua.favourite FROM user_anime ua WHERE ua.anime_id = a.id AND ua.hidden = 0), 0),
-p.ep_key, ep.number, p.position_s, p.duration_s, p.watched, p.last_played_at`
+p.ep_key, coalesce(ep.number, CASE WHEN p.ep_key GLOB '[1-9]*' AND p.ep_key NOT GLOB '*[^0-9]*' THEN CAST(p.ep_key AS INTEGER) END), p.position_s, p.duration_s, p.watched, p.last_played_at`
 
 var LibrarySorts = []string{"updated", "title", "score", "airing", "progress", "watched", "new", "added", "status"}
 

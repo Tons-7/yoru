@@ -1,5 +1,3 @@
-// The hover panel: an airing show reads "10/13 eps" with its next episode, a
-// finished one "13 eps"; both offer details, the trackers and play.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -15,23 +13,10 @@ const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1500, height: 950 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
+const panel = page.locator('div.fixed.z-50.rounded-sheet')
 
-async function hoverFirst(statuses, shot) {
-  // An airing show with a total announced, so "10/13" is what should show.
-  const api = await (await fetch(`${BASE}/api/browse?statuses=${statuses}&formats=TV&sort=popular&perPage=42`)).json()
-  const pick = (api.items ?? []).find((i) =>
-    statuses === 'RELEASING' ? i.episodes && i.nextEpisode && i.nextAiringAt * 1000 > Date.now() + 60_000 : true)
-  await page.goto(`${BASE}/browse?statuses=${statuses}&formats=TV&sort=popular`, { waitUntil: 'domcontentloaded' })
-  const card = pick
-    ? page.locator(`a[href="/anime/${pick.id}"]`).filter({ has: page.locator('img') }).first()
-    : page.locator('a[href^="/anime/"]').filter({ has: page.locator('img') }).first()
-  await card.waitFor({ timeout: 30000 })
-  await page.mouse.move(0, 0)
-  // Off-centre: the middle is the card's play button.
-  await card.hover({ position: { x: 12, y: 60 } })
-  const panel = page.locator('div.fixed.z-50.rounded-sheet')
+async function readPanel(shot) {
   await panel.waitFor({ timeout: 5000 }).catch(() => {})
-  // The art arrives a moment after the panel.
   await panel
     .locator('img')
     .evaluate((img) => img.complete || new Promise((r) => img.addEventListener('load', r, { once: true })))
@@ -41,6 +26,20 @@ async function hoverFirst(statuses, shot) {
   const box = await panel.boundingBox().catch(() => null)
   if (box) await page.screenshot({ path: `${SHOTS}/${shot}-panel.png`, clip: box })
   return { text, panel }
+}
+
+async function hoverFirst(statuses, shot) {
+  const api = await (await fetch(`${BASE}/api/browse?statuses=${statuses}&formats=TV&sort=popular&perPage=42`)).json()
+  const pick = (api.items ?? []).find((i) =>
+    statuses === 'RELEASING' ? i.episodes && i.nextEpisode && i.nextAiringAt * 1000 > Date.now() + 60_000 : true)
+  await page.goto(`${BASE}/browse?statuses=${statuses}&formats=TV&sort=popular`, { waitUntil: 'domcontentloaded' })
+  const card = pick
+    ? page.locator(`a[href="/anime/${pick.id}"]`).filter({ has: page.locator('img') }).first()
+    : page.locator('a[href^="/anime/"]').filter({ has: page.locator('img') }).first()
+  await card.waitFor({ timeout: 30000 })
+  await page.mouse.move(0, 0)
+  await card.hover({ position: { x: 12, y: 60 } })
+  return readPanel(shot)
 }
 
 const airing = await hoverFirst('RELEASING', 'hover-airing')
@@ -59,6 +58,21 @@ check(/AIRED/i.test(finished.text), 'the air date is listed')
 check(/\d{4} – \w{3} \d/.test(finished.text), 'a finished show gives its whole run, start to end', finished.text.match(/AIRED \| ([^|]+)/i)?.[1] ?? '')
 check(/ – now/.test(airing.text), 'an airing show runs to now')
 check((await finished.panel.locator('a[href*="myanimelist.net/anime/"]').count()) === 1, 'a MyAnimeList link')
+
+await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+const today = page.locator('section').filter({ has: page.getByRole('heading', { name: /^Airing today/ }) }).first()
+await today.waitFor({ timeout: 60_000 }).catch(() => {})
+const todayCard = today.locator('a[href^="/anime/"]').first()
+await todayCard.waitFor({ timeout: 30_000 }).catch(() => {})
+if ((await todayCard.count()) === 0) {
+  console.log('skip Airing today hover: nothing airs today')
+} else {
+  await todayCard.scrollIntoViewIfNeeded()
+  await page.mouse.move(0, 0)
+  await todayCard.hover({ position: { x: 20, y: 20 } })
+  const hovered = await readPanel('hover-airing-today')
+  check(hovered.text.length > 0, 'Airing today cards open the hover panel too', hovered.text.slice(0, 120))
+}
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 await browser.close()

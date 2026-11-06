@@ -4,7 +4,7 @@ import { Switch } from '../components/ui'
 
 export function PanelGroup({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
-    <section aria-label={title} className="border-t border-white/[0.06] pb-2 first:border-t-0">
+    <section aria-label={title} className="border-t border-line pb-2 first:border-t-0">
       <h3 className="flex items-baseline justify-between gap-2 px-4 pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-base-400 uppercase">
         {title}
         {note && <span className="font-medium tracking-normal text-base-500 normal-case">{note}</span>}

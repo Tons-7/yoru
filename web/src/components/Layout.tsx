@@ -12,6 +12,7 @@ import { LIST_STATUSES } from '../lib/api'
 import { cx } from '../lib/format'
 import { useAccess, useLibraryCounts, useSetup } from '../lib/queries'
 import { BottomTabs } from './BottomTabs'
+import { ScrollButtons } from './ScrollButtons'
 import { install, useInstall } from '../lib/install'
 import { ErrorBoundary } from './ErrorBoundary'
 import { Unpaired } from './Unpaired'
@@ -141,6 +142,7 @@ export function Layout() {
         </ErrorBoundary>
       </main>
       {!wide && !focus && !fullBleed && <BottomTabs />}
+      {!focus && <ScrollButtons />}
     </div>
   )
 }

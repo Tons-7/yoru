@@ -176,7 +176,7 @@ export function DeviceList({ offline = false }: { offline?: boolean }) {
         <section aria-label="Saving" className="surface px-4 pt-3 pb-1">
           <h2 className="text-sm font-semibold text-base-100">Saving</h2>
           <p className="text-[13px] text-base-400">Keep Yoru open while it saves. It carries on where it stopped.</p>
-          <ul className="divide-y divide-white/[0.06]">
+          <ul className="divide-y divide-line">
             {jobs.map((j) => {
               const key = savedKey(j.animeId, j.episode)
               return <SavingJob key={key} job={j} status={status.get(key)} place={places.get(key) ?? 0} />
@@ -386,7 +386,7 @@ function SavedRow({
     .filter(Boolean)
     .join(' · ')
   return (
-    <div className={cx('flex items-center gap-2', nested ? 'border-t border-white/[0.06] py-2 pr-3 pl-4' : 'p-3')}>
+    <div className={cx('flex items-center gap-2', nested ? 'border-t border-line py-2 pr-3 pl-4' : 'p-3')}>
       {select && <CheckBox checked={select.checked} onChange={select.toggle} label={`Select ${e.title} ${e.label}`} />}
       <Link to={to} className="flex min-w-0 flex-1 items-center gap-3 py-1">
         {!nested && <Poster src={e.cover} />}
@@ -458,7 +458,7 @@ function ReadyToSave({ why, word }: { why: string | null; word: string }) {
   return (
     <section aria-label="Ready to save" className="space-y-2">
       <h2 className="px-1 text-[13px] font-semibold text-base-300">Ready to save</h2>
-      <ul className="surface divide-y divide-white/[0.06] px-3">
+      <ul className="surface divide-y divide-line px-3">
         {ready.map(({ item, episode }) => (
           <li key={item.id} className="flex min-h-16 items-center gap-3 py-2">
             <Poster src={item.cover} small />
@@ -544,7 +544,7 @@ function FreeUpList({ word, onDone }: { word: string; onDone?: () => void }) {
   const seen = saved.filter((e) => watchedThrough(e, watched) >= 0.9)
   const shows = shelves(saved, watched).sort((a, b) => b.bytes - a.bytes)
   return (
-    <ul className="divide-y divide-white/[0.06] px-3">
+    <ul className="divide-y divide-line px-3">
       <FreeRow
         title="Remove watched episodes"
         detail={seen.length > 0 ? `${episodeCount(seen.length)} · ${bytes(seen.reduce((n, e) => n + e.bytes, 0))}` : 'Nothing watched yet'}

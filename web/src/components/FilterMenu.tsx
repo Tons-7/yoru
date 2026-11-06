@@ -9,6 +9,7 @@ export function FilterMenu({
   values,
   options,
   labels,
+  featured,
   multiple = true,
   onChange,
 }: {
@@ -16,6 +17,7 @@ export function FilterMenu({
   values: string[]
   options: string[]
   labels?: Record<string, string>
+  featured?: string[]
   multiple?: boolean
   onChange: (values: string[]) => void
 }) {
@@ -43,6 +45,42 @@ export function FilterMenu({
     }
     onChange(
       values.includes(option) ? values.filter((v) => v !== option) : [...values, option],
+    )
+  }
+
+  const top = !term && featured ? featured.filter((o) => options.includes(o)) : []
+  const listed = top.length > 0 ? shown.filter((o) => !top.includes(o)) : shown
+
+  const item = (option: string) => {
+    const on = values.includes(option)
+    return (
+      <button
+        key={option}
+        type="button"
+        role="option"
+        aria-selected={on}
+        onClick={() => toggle(option)}
+        className={cx(
+          'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors pointer-coarse:min-h-11',
+          on ? 'bg-accent-500/20 text-accent-300' : 'text-base-200 hover:bg-base-700',
+        )}
+      >
+        {multiple && (
+          <span
+            className={cx(
+              'grid size-4 shrink-0 place-items-center rounded border transition-colors',
+              on ? 'border-accent-400 bg-accent-500 text-white' : 'border-base-500',
+            )}
+          >
+            {on && (
+              <svg viewBox="0 0 24 24" className="size-3" aria-hidden>
+                <path d="m5 13 4 4L19 7" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
+          </span>
+        )}
+        <span className="first-letter:uppercase">{pretty(option)}</span>
+      </button>
     )
   }
 
@@ -121,46 +159,11 @@ export function FilterMenu({
                 wide && 'grid grid-cols-2 gap-x-1',
               )}
             >
-            {shown.map((option) => {
-              const on = values.includes(option)
-              return (
-                <button
-                  key={option}
-                  type="button"
-                  role="option"
-                  aria-selected={on}
-                  onClick={() => toggle(option)}
-                  className={cx(
-                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors pointer-coarse:min-h-11',
-                    on ? 'bg-accent-500/20 text-accent-300' : 'text-base-200 hover:bg-base-700',
-                  )}
-                >
-                  {multiple && (
-                    <span
-                      className={cx(
-                        'grid size-4 shrink-0 place-items-center rounded border transition-colors',
-                        on ? 'border-accent-400 bg-accent-500 text-white' : 'border-base-500',
-                      )}
-                    >
-                      {on && (
-                        <svg viewBox="0 0 24 24" className="size-3" aria-hidden>
-                          <path
-                            d="m5 13 4 4L19 7"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="3"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      )}
-                    </span>
-                  )}
-                  <span className="first-letter:uppercase">{pretty(option)}</span>
-                </button>
-              )
-            })}
-            {shown.length === 0 && (
+            {top.length > 0 && <GroupHeading>Popular</GroupHeading>}
+            {top.map(item)}
+            {top.length > 0 && <GroupHeading>{`All ${label.toLowerCase()}`}</GroupHeading>}
+            {listed.map(item)}
+            {top.length + listed.length === 0 && (
               <p className="col-span-2 px-2.5 py-3 text-center text-[13px] text-base-400">
                 Nothing matches “{term}”.
               </p>
@@ -170,5 +173,13 @@ export function FilterMenu({
           document.body,
         )}
     </div>
+  )
+}
+
+function GroupHeading({ children }: { children: string }) {
+  return (
+    <p role="presentation" className="col-span-2 px-2.5 pt-2 pb-1 text-xs font-semibold text-base-400 first:pt-0.5">
+      {children}
+    </p>
   )
 }

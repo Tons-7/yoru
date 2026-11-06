@@ -146,7 +146,7 @@ function Airing({ switcher, onOut }: { switcher: ReactNode; onOut: () => void })
               {!active || active.items.length === 0 ? (
                 <Empty title="Nothing airing this day" hint={mine ? 'Nothing from your list, at least.' : undefined} />
               ) : (
-                <ul className="surface divide-y divide-white/[0.05] overflow-hidden">
+                <ul className="surface divide-y divide-line overflow-hidden">
                   {earlier.length > 0 && (
                     <li>
                       <button
@@ -504,42 +504,52 @@ function AirsNext({ item, now, alertsOff }: { item: ScheduleItem; now: number; a
 function WeekView({ days, now, nextUp }: { days: ScheduleDay[]; now: number; nextUp?: ScheduleItem }) {
   const today = days.find((d) => d.today)?.date
   return (
-    <div className="grid grid-cols-7 gap-2">
-      {days.map((day) => {
-        const name = dayName(day.date, day.weekday, today, true)
-        const nowAt = day.today ? day.items.findIndex((item) => item.airingAt > now) : -1
-        return (
-          <section
-            key={day.date}
-            aria-label={`${dayName(day.date, day.weekday, today)}, ${dayDate(day.date)}`}
-            className={cx('min-w-0 rounded-card', day.today ? 'bg-accent-500/[0.07] ring-1 ring-accent-500/30' : 'bg-base-900/40')}
-          >
+    <div>
+      <div className="sticky top-[var(--bar,4rem)] z-20 -mx-1 grid grid-cols-7 gap-2 bg-base-950 px-1 pb-2 transition-[top] duration-200">
+        {days.map((day) => {
+          const name = dayName(day.date, day.weekday, today, true)
+          return (
             <h2
+              key={day.date}
               className={cx(
-                'sticky top-[var(--bar,4rem)] z-20 rounded-t-card px-2.5 py-2 transition-[top] duration-200',
-                day.today ? 'bg-base-950 bg-[linear-gradient(rgb(106_85_245/0.16),rgb(106_85_245/0.16))]' : 'bg-base-950',
+                'min-w-0 rounded-card px-2.5 py-2',
+                day.today ? 'bg-accent-500/15 ring-1 ring-accent-500/30' : 'bg-base-900',
               )}
             >
-              <span className={cx('block text-sm font-semibold', day.today ? 'text-accent-300' : 'text-base-100')}>
+              <span className={cx('block truncate text-sm font-semibold', day.today ? 'text-accent-300' : 'text-base-100')}>
                 {day.today ? `${day.weekday.slice(0, 3)} ${Number(day.date.slice(8))} · Today` : `${name} ${Number(day.date.slice(8))}`}
               </span>
               <span className="block text-xs text-base-500 tabular-nums">
                 {day.items.length} {day.items.length === 1 ? 'episode' : 'episodes'}
               </span>
             </h2>
-            {day.items.length === 0 ? (
-              <p className="px-2.5 pb-3 text-xs text-base-500">Nothing airs.</p>
-            ) : (
-              <ul className="space-y-1.5 p-1.5">
-                {day.items.map((item, i) => (
-                  <WeekCard key={`${item.animeId}-${item.episode}`} item={item} now={now} isNext={item === nextUp} nowLine={i === nowAt} />
-                ))}
-                {day.today && nowAt === -1 && <NowLine now={now} />}
-              </ul>
-            )}
-          </section>
-        )
-      })}
+          )
+        })}
+      </div>
+      <div className="grid grid-cols-7 items-start gap-2">
+        {days.map((day) => {
+          const nowAt = day.today ? day.items.findIndex((item) => item.airingAt > now) : -1
+          return (
+            <section
+              key={day.date}
+              data-week-day
+              aria-label={`${dayName(day.date, day.weekday, today)}, ${dayDate(day.date)}`}
+              className={cx('min-w-0 rounded-card', day.today ? 'bg-accent-500/[0.07] ring-1 ring-accent-500/30' : 'bg-base-900/40')}
+            >
+              {day.items.length === 0 ? (
+                <p className="px-2.5 py-3 text-xs text-base-500">Nothing airs.</p>
+              ) : (
+                <ul className="space-y-1.5 p-1.5">
+                  {day.items.map((item, i) => (
+                    <WeekCard key={`${item.animeId}-${item.episode}`} item={item} now={now} isNext={item === nextUp} nowLine={i === nowAt} />
+                  ))}
+                  {day.today && nowAt === -1 && <NowLine now={now} />}
+                </ul>
+              )}
+            </section>
+          )
+        })}
+      </div>
     </div>
   )
 }

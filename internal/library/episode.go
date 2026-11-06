@@ -24,41 +24,33 @@ import (
 	"yoru/internal/store"
 )
 
-// Finder locates releases for an anime already chosen, so parsing verifies a
-// result rather than identifying it: a wrong season is rejected outright.
 type Finder struct {
 	store   *store.Store
 	indexer indexer.Source
-	// adult is searched only for titles the catalogue marks as such: the main
-	// trackers carry none, and searching it always would leak into results.
+
 	adult indexer.Source
 	log   *slog.Logger
-	// Whether this machine transcodes in real time; atomic, as ffmpeg can arrive mid-session.
+
 	hwTranscode atomic.Bool
-	// hydrate fetches a show the catalogue lacks (a fresh install has none yet); nil skips it.
+
 	hydrate func(ctx context.Context, ids []int) (int, error)
-	// franchise learns the show's relations: cours and films are told apart by their siblings. Nil skips it.
+
 	franchise func(ctx context.Context, animeID int) error
 
 	askedMu sync.Mutex
 	asked   map[[2]int]asked
 }
 
-// asked is what a person searched or pasted for an episode in the release picker. The play or download that
-// follows looks the chosen release up again by hash, so each Find of that episode includes it for a while.
 type asked struct {
 	words  string
 	pasted *indexer.Torrent
 	until  time.Time
 }
 
-// askedFor long enough to choose, then play or download.
 const askedFor = 10 * time.Minute
 
-// Pasted is the indexer name of a release given by its magnet rather than found.
 const Pasted = "pasted"
 
-// Ask adds words to search with, or a pasted release, to the episode's next searches.
 func (f *Finder) Ask(animeID, episode int, words string, pasted *indexer.Torrent) {
 	f.askedMu.Lock()
 	defer f.askedMu.Unlock()
@@ -90,28 +82,22 @@ func (f *Finder) askedOf(animeID, episode int) asked {
 	return a
 }
 
-// WithFranchise has every search learn the show's relations first, not only the ones playback starts.
 func (f *Finder) WithFranchise(ensure func(ctx context.Context, animeID int) error) *Finder {
 	f.franchise = ensure
 	return f
 }
 
-// WithHydrator lets Find fetch a show it has no titles for, instead of failing.
 func (f *Finder) WithHydrator(h func(ctx context.Context, ids []int) (int, error)) *Finder {
 	f.hydrate = h
 	return f
 }
 
-// NewFinder searches idx, which is nil when no site is configured.
 func NewFinder(s *store.Store, idx indexer.Source, log *slog.Logger) *Finder {
 	return &Finder{store: s, indexer: idx, log: log}
 }
 
-// ErrNoIndexers is the answer to any search while no site is configured.
 var ErrNoIndexers = errors.New("no release sites yet: add one under Settings › Downloads › Release sites")
 
-// WithHardwareTranscode tells the finder whether playback can hardware-transcode,
-// which decides whether HEVC/Hi10P releases are ranked down as stall-prone.
 func (f *Finder) WithHardwareTranscode(ok bool) *Finder {
 	f.hwTranscode.Store(ok)
 	return f
@@ -127,23 +113,18 @@ type Request struct {
 	Episode int
 	Season  int
 
-	// Alias is the same episode under the numberings a release may use instead:
-	// counted through TheTVDB's long season, or absolute over the whole show.
 	Alias store.EpisodeAlias
 
-	// Part is this entry's cour, from its title; other cours reuse the same episode numbers.
 	Part int
 
-	// Numerals are the numbers this entry's own titles end in ("Kaiju No. 8"): part of the name, not a season.
 	Numerals []int
 
-	// Counted is the franchise's season for an entry whose titles state none; a release saying so is not wrong.
 	Counted int
 
-	// Apart: a film, OVA or special, not counted on from its series; Film: one part alone, no season's episode.
 	Apart, Film bool
 
-	// Shows: a film's franchise series by name (as releaseName spells them), which a numbered release may be.
+	Subtitle [][]string
+
 	Shows []string
 
 	Cour Cour
@@ -151,18 +132,12 @@ type Request struct {
 	Prefs score.Preferences
 }
 
-// Cour tells a split-cour entry from its siblings, which restart numbering under one base title.
 type Cour struct {
-	// Own are words only this entry's titles carry ("kashin", "calamity");
-	// Siblings are words only one other cour's carry ("soukoku", "conflict").
 	Own      []string
 	Siblings []string
 
-	// Later marks an entry that is not the first cour. A release naming no
-	// cour counts from the first, so its bare number is some other episode.
 	Later bool
 
-	// Bases: the titles' words minus the cour subtitle, as releases counting across cours name it.
 	Bases [][]string
 }
 
@@ -170,10 +145,9 @@ type Candidates struct {
 	Queries []string       `json:"queries"`
 	Results []score.Result `json:"results"`
 	Best    *score.Result  `json:"best,omitempty"`
-	req     Request        // as numbered, for reading the results' numbers
+	req     Request
 }
 
-// learnRelations is bounded: a throttled AniList must not hold up every search.
 func (f *Finder) learnRelations(ctx context.Context, animeID int) {
 	if f.franchise == nil {
 		return
@@ -185,7 +159,6 @@ func (f *Finder) learnRelations(ctx context.Context, animeID int) {
 	}
 }
 
-// Find searches the show's titles, keeping releases that verify as the requested episode and season.
 func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	f.learnRelations(ctx, req.AnimeID)
 
@@ -205,32 +178,26 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	runtime := f.store.EpisodeRuntime(ctx, req.AnimeID)
 	bestByHash, bestByGroup, _ := f.store.SeaDexFor(ctx, req.AnimeID)
 
-	// The curated release is rarely the most seeded, so it is asked for by name.
 	groups, _ := f.store.BestGroups(ctx, req.AnimeID)
 	english, _ := f.store.EnglishTitle(ctx, req.AnimeID)
 	req = f.numbering(ctx, req, titles, english)
 	req.Prefs.HardwareTranscode = f.hwTranscode.Load()
 
-	// One film of a film series: its well-kept copies are batches named after the series.
 	var series *filmSeries
 	if req.Episode <= 1 {
 		series = f.filmSeries(ctx, req.AnimeID)
 	}
-	// A lower TheTVDB number alone finds the show's own early episode of that number.
 	tvdb := req.Alias.Tvdb
 	if tvdb < req.Episode {
 		tvdb = 0
 	}
 	queries := searchTerms(titles, english, req.Episode, tvdb, req.Alias.Absolute, groups,
 		req.Prefs.Audio == "dub", series.queries()...)
-	// What a person typed in the picker goes first, in their own words.
 	ask := f.askedOf(req.AnimeID, req.Episode)
 	if ask.words != "" {
 		queries = append([]string{ask.words}, queries...)
 	}
 
-	// Several seconds per request, and the variants are independent: run
-	// sequentially they put half a minute between pressing play and anything.
 	source := f.indexer
 	adult, adultErr := f.store.IsAdult(ctx, req.AnimeID)
 	if adult && indexer.Configured(f.adult) {
@@ -243,15 +210,12 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	switch {
 	case indexer.Configured(source):
 		batches = f.searchAll(ctx, source, queries)
-		// Every site failing is an outage, not "nobody released it"; a pasted magnet still stands then.
 		if err := allFailed(batches); err != nil {
 			if ask.pasted == nil {
 				return Candidates{}, err
 			}
 			break
 		}
-		// Trackers match every token, so one romanisation spelled differently
-		// ("Semi" for "Zemi") matches nothing. Only paid for when nothing was found.
 		if countResults(batches) == 0 {
 			if short := shortTerms(titles, english); len(short) > 0 {
 				batches = append(batches, f.searchAll(ctx, source, short)...)
@@ -260,8 +224,6 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	case ask.pasted == nil:
 		return Candidates{}, ErrNoIndexers
 	}
-	// A magnet pasted in the picker is a release like the rest, but the person's choice: not checked below.
-	// Added after the searches, or its one result would stop the short-terms fallback.
 	if ask.pasted != nil {
 		batches = append(batches, searchBatch{query: "pasted magnet", results: []indexer.Torrent{*ask.pasted}})
 	}
@@ -290,12 +252,10 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 			pasted := t.Indexer == Pasted
 			c := score.Candidate{
 				Torrent: t, Release: rel, TotalEpisodes: total, RuntimeMinutes: runtime,
-				// Kept, not dropped: the picker shows what was found and why not.
 				WrongShow: !pasted && !identity.matches(rel, t.Title),
 				ByHand:    pasted,
 			}
 			if series != nil {
-				// Every film is "episode 1", so the number verifies nothing; the name does.
 				c.Film = &series.key
 				switch series.key.Match(t.Title) {
 				case film.Ours:
@@ -303,7 +263,6 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 				case film.Other:
 					c.WrongFilm = true
 				default:
-					// The series by name only: a batch, whose file list says whether the film is in it.
 					c.Release.Batch = true
 					c.Confirmed = wholeSeries.MatchString(t.Title)
 				}
@@ -317,7 +276,6 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 				c.SeaDexBest, c.SeaDexGroup, c.SeaDexListed = info.IsBest, true, true
 				c.SeaDexNotes, c.SeaDexCompare, c.SeaDexIncomplete = info.Notes, info.Comparison, info.Incomplete
 			} else if info, ok := bestByGroup[strings.ToLower(rel.Group)]; ok {
-				// Private trackers redact the hash; the group is all that survives.
 				c.SeaDexGroup = true
 				c.SeaDexNotes, c.SeaDexCompare, c.SeaDexIncomplete = info.Notes, info.Comparison, info.Incomplete
 			}
@@ -329,6 +287,10 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	if len(out.Results) > 0 && out.Results[0].AutoPick {
 		best := out.Results[0]
 		out.Best = &best
+	}
+	if i := slices.IndexFunc(out.Results, func(r score.Result) bool { return r.Torrent.Indexer == Pasted }); i > 0 {
+		pasted := out.Results[i]
+		out.Results = append([]score.Result{pasted}, slices.Delete(out.Results, i, i+1)...)
 	}
 	return out, nil
 }
@@ -347,7 +309,6 @@ func allFailed(batches []searchBatch) error {
 	return searchFailed{errs}
 }
 
-// searchFailed reads as one line per site, the raw errors attached for the log and errors.Is.
 type searchFailed struct{ errs []error }
 
 func (e searchFailed) Unwrap() []error { return e.errs }
@@ -374,7 +335,6 @@ func flatten(errs []error) []error {
 	return out
 }
 
-// siteProblem names the site and the cause in a few words; indexer errors start "site: ".
 func siteProblem(err error) string {
 	site, rest, ok := strings.Cut(err.Error(), ": ")
 	if !ok {
@@ -407,9 +367,7 @@ func countResults(batches []searchBatch) int {
 	return n
 }
 
-// EpisodeNumbers reports which episodes have releases, the only evidence for an uncatalogued show.
 func (f *Finder) EpisodeNumbers(ctx context.Context, animeID int) ([]int, error) {
-	// One film of a series is one part; the numbers in its releases count films, as "Movies 1 - 8" does.
 	f.learnRelations(ctx, animeID)
 	if f.filmSeries(ctx, animeID) != nil {
 		return nil, nil
@@ -421,17 +379,14 @@ func (f *Finder) EpisodeNumbers(ctx context.Context, animeID int) ([]int, error)
 
 	seen := map[int]struct{}{}
 	for _, r := range found.Results {
-		// Kept for the picker, but its numbers are another show's, and a derived row is never removed.
 		if r.WrongShow {
 			continue
 		}
 		rel := r.Release
-		// A later cour's release naming no cour counts from the first ("Show - 30"), not this entry.
 		if bare(rel, found.req) {
 			continue
 		}
 		switch {
-		// A batch states the range it holds, which is the whole list at once.
 		case rel.EpisodeEnd > rel.Episode && rel.Episode > 0:
 			for n := rel.Episode; n <= rel.EpisodeEnd && n-rel.Episode < 2000; n++ {
 				seen[n] = struct{}{}
@@ -449,14 +404,10 @@ func (f *Finder) EpisodeNumbers(ctx context.Context, animeID int) ([]int, error)
 	return out, nil
 }
 
-// shortTerms are last-resort queries: the title's most distinctive words. A
-// proper noun survives romanisation differences a full title does not.
 func shortTerms(titles []string, english string) []string {
 	var out []string
 	seen := map[string]struct{}{}
 
-	// Latin-only and cleaned like any query: only three are kept, so a native-script
-	// word would crowd out the fallbacks this exists to provide.
 	add := func(s string) {
 		s = cleanQuery(s)
 		if utf8.RuneCountInString(s) < 4 || len(out) >= 3 || !mostlyLatin(s) {
@@ -475,7 +426,6 @@ func shortTerms(titles []string, english string) []string {
 		if len(words) == 0 {
 			continue
 		}
-		// The longest word is usually the name the show is known by.
 		longest := words[0]
 		for _, w := range words {
 			if len(w) > len(longest) {
@@ -492,7 +442,6 @@ func shortTerms(titles []string, english string) []string {
 
 var wordSplit = regexp.MustCompile(`[^\p{L}\p{N}]+`)
 
-// Particles and articles match everything and narrow nothing.
 var stopWords = map[string]bool{
 	"the": true, "a": true, "an": true, "of": true, "and": true, "to": true,
 	"no": true, "ga": true, "wa": true, "ni": true, "de": true, "wo": true,
@@ -502,7 +451,6 @@ var stopWords = map[string]bool{
 func significantWords(title string) []string {
 	var out []string
 	for _, w := range wordSplit.Split(title, -1) {
-		// In characters, not bytes: a two-character Japanese word is six bytes.
 		if utf8.RuneCountInString(w) < 4 || stopWords[strings.ToLower(w)] {
 			continue
 		}
@@ -514,7 +462,6 @@ func significantWords(title string) []string {
 	return out
 }
 
-// numbering fills in the cour and alternate number: catalogues count on, groups restart at one.
 func (f *Finder) numbering(ctx context.Context, req Request, titles []string, english string) Request {
 	for _, t := range append([]string{english}, titles...) {
 		if n := parse.PartOf(t); n > 0 {
@@ -523,7 +470,6 @@ func (f *Finder) numbering(ctx context.Context, req Request, titles []string, en
 		}
 	}
 	for _, t := range append([]string{english}, titles...) {
-		// "Kaiju No. 8 Season 2" ends in 2, its name in 8.
 		for _, name := range []string{t, baseTitle(t)} {
 			if n, _ := parse.NumeralSeason(name); n > 0 && !slices.Contains(req.Numerals, n) {
 				req.Numerals = append(req.Numerals, n)
@@ -531,11 +477,8 @@ func (f *Finder) numbering(ctx context.Context, req Request, titles []string, en
 		}
 	}
 
-	// A caller that named no season gets the one the title states, or the first.
-	// Otherwise episode 1 would accept an "S02E01" release, a different episode.
 	if req.Season == 0 {
 		req.Season = f.defaultSeason(ctx, req.AnimeID, append([]string{english}, titles...))
-		// "Dr. Stone: New World" states nothing, but it is the third series of its franchise.
 		if req.Season == 1 {
 			req.Counted = f.franchiseSeason(ctx, req.AnimeID)
 		}
@@ -544,16 +487,17 @@ func (f *Finder) numbering(ctx context.Context, req Request, titles []string, en
 	format := f.store.Format(ctx, req.AnimeID)
 	req.Apart = !series(format)
 	if req.Apart {
-		// An OVA of unknown length may be a run that scene groups number S01E03.
 		total, _ := f.store.EpisodeCount(ctx, req.AnimeID)
 		req.Film = total == 1 || (total == 0 && strings.EqualFold(*format, "MOVIE"))
+		if req.Film && !strings.EqualFold(*format, "MOVIE") {
+			req.Subtitle = subtitleWords(append([]string{english}, titles...))
+		}
 	}
 	if req.Film {
 		req.Shows = f.showNames(ctx, req.AnimeID, append([]string{english}, titles...))
 	}
 
 	req.Alias, _ = f.store.EpisodeAlias(ctx, req.AnimeID, req.Episode)
-	// Not for a film or OVA: counted on from its series, it would take the next season's first episode.
 	if !req.Apart && (!req.Alias.StatedTvdb || !req.Alias.StatedAbsolute) {
 		derived := f.derivedAlias(ctx, req, titles, english)
 		if !req.Alias.StatedTvdb {
@@ -567,7 +511,6 @@ func (f *Finder) numbering(ctx context.Context, req Request, titles []string, en
 	return req
 }
 
-// defaultSeason is the title's season, else a sequel numeral: a digit only past the first entry (Kaiju No. 8).
 func (f *Finder) defaultSeason(ctx context.Context, animeID int, titles []string) int {
 	for _, t := range titles {
 		if n := parse.SeasonOf(t); n > 0 {
@@ -586,7 +529,6 @@ func (f *Finder) defaultSeason(ctx context.Context, animeID int, titles []string
 	return 1
 }
 
-// franchiseSeason counts the series up to this entry (a later cour part continues its season); 0 if unplaced.
 func (f *Finder) franchiseSeason(ctx context.Context, animeID int) int {
 	franchise, err := f.store.Franchise(ctx, animeID)
 	if err != nil {
@@ -627,7 +569,6 @@ func (f *Finder) laterSeason(ctx context.Context, animeID int) bool {
 	return false
 }
 
-// derivedAlias counts through the franchise: earlier cours give the season's number, all entries the absolute.
 func (f *Finder) derivedAlias(ctx context.Context, req Request, titles []string, english string) store.EpisodeAlias {
 	if req.Episode <= 0 {
 		return store.EpisodeAlias{}
@@ -658,14 +599,12 @@ func (f *Finder) derivedAlias(ctx context.Context, req Request, titles []string,
 		}
 		absolute += *s.Episodes
 
-		// An earlier series under another name restarts the count.
 		names, _ := f.store.SearchTitles(ctx, s.ID)
 		run += *s.Episodes
 		if namedBy(bases, append(names, s.Romaji)) {
 			counted = true
 			continue
 		}
-		// A run broken by another entry restarts somewhere unknown; a guessed number is some other episode.
 		split = split || counted
 		run = 0
 	}
@@ -680,7 +619,6 @@ func (f *Finder) derivedAlias(ctx context.Context, req Request, titles []string,
 	return alias
 }
 
-// namedBy reports that one of the names is this entry's title without its cour.
 func namedBy(bases map[string]bool, names []string) bool {
 	for _, n := range names {
 		if n == "" {
@@ -696,13 +634,11 @@ func namedBy(bases map[string]bool, names []string) bool {
 	return false
 }
 
-// cour works out, from the franchise, what separates this entry's releases from a sibling cour's.
 func (f *Finder) cour(ctx context.Context, req Request, titles []string, english string) Cour {
 	all := append([]string{english}, titles...)
 	mine := wordSet(all...)
 	own := wordSet(all...)
 	c := Cour{
-		// A cour TVDB counts past one follows another under the same season.
 		Later: req.Season > 1 || req.Part > 1 || req.Alias.Tvdb > req.Episode,
 	}
 	for _, t := range all {
@@ -726,7 +662,6 @@ func (f *Finder) cour(ctx context.Context, req Request, titles []string, english
 		}
 	}
 
-	// A word in one sibling only names that cour; one several share ("TYBW") names the show.
 	count := map[string]int{}
 	for _, s := range franchise.Seasons {
 		if s.ID == req.AnimeID {
@@ -739,7 +674,6 @@ func (f *Finder) cour(ctx context.Context, req Request, titles []string, english
 				count[w]++
 			}
 		}
-		// An earlier series named by this entry's base title is the cour the bare name belongs to.
 		if s.Ordinal < ordinal && series(s.Format) {
 			for _, name := range names {
 				for _, t := range all {
@@ -766,7 +700,6 @@ func (f *Finder) cour(ctx context.Context, req Request, titles []string, english
 	return c
 }
 
-// showNames are the franchise's series titles, with and without season markers, minus the film's own.
 func (f *Finder) showNames(ctx context.Context, animeID int, own []string) []string {
 	mine := map[string]bool{}
 	for _, t := range own {
@@ -793,7 +726,6 @@ func (f *Finder) showNames(ctx context.Context, animeID int, own []string) []str
 	return out
 }
 
-// releaseName is a title as a release's is compared with it: lower case, no punctuation, no season-one marker.
 func releaseName(title string) string {
 	return strings.ToLower(strings.Join(strings.Fields(cleanQuery(title)), " "))
 }
@@ -807,6 +739,53 @@ func series(format *string) bool {
 		return false
 	}
 	return true
+}
+
+func subtitleWords(titles []string) [][]string {
+	var heads, tails []string
+	for _, t := range titles {
+		cut := false
+		for _, sep := range []string{" - ", " – ", ": "} {
+			if i := strings.LastIndex(t, sep); i > 8 {
+				heads = append(heads, t[:i])
+				tails = append(tails, t[i+len(sep):])
+				cut = true
+				break
+			}
+		}
+		if !cut {
+			heads = append(heads, t)
+		}
+	}
+	shared := wordSet(heads...)
+	var out [][]string
+	for _, tail := range tails {
+		var own []string
+		for w := range wordSet(tail) {
+			if !shared[w] {
+				own = append(own, w)
+			}
+		}
+		if len(own) > 0 {
+			slices.Sort(own)
+			out = append(out, own)
+		}
+	}
+	return out
+}
+
+func namesAny(title string, subtitles [][]string) bool {
+	have := wordSet(title)
+	for _, words := range subtitles {
+		all := true
+		for _, w := range words {
+			all = all && have[w]
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 func wordSet(titles ...string) map[string]bool {
@@ -833,10 +812,8 @@ type searchBatch struct {
 	err     error
 }
 
-// Enough to collapse the wait, few enough not to burst a public tracker.
 const searchConcurrency = 4
 
-// searchAll runs the variants together, keeping request order, which ranks the likeliest title.
 func (f *Finder) searchAll(ctx context.Context, source indexer.Source, queries []string) []searchBatch {
 	out := make([]searchBatch, len(queries))
 	slots := make(chan struct{}, searchConcurrency)
@@ -847,7 +824,6 @@ func (f *Finder) searchAll(ctx context.Context, source indexer.Source, queries [
 			slots <- struct{}{}
 			defer func() { <-slots }()
 
-			// No category: each source knows its own (nyaa's numbers differ on sukebei).
 			results, err := source.Search(ctx, indexer.Query{Text: q})
 			out[i] = searchBatch{query: q, results: results, err: err}
 		})
@@ -856,8 +832,6 @@ func (f *Finder) searchAll(ctx context.Context, source indexer.Source, queries [
 	return out
 }
 
-// marked reports whether the release names this cour, or a sibling cour, by a
-// word only that cour's titles carry or by an agreeing season or part marker.
 func marked(rel parse.Release, req Request) (own, sibling bool) {
 	words := wordSet(rel.Title)
 	for _, w := range req.Cour.Siblings {
@@ -871,10 +845,9 @@ func marked(rel parse.Release, req Request) (own, sibling bool) {
 	return own, sibling
 }
 
-// numeralSeason: "Overlord IV - 05" is season 4; a digit the show's own name ends in is not a season.
 func numeralSeason(rel parse.Release, req Request) int {
 	if rel.Season > 0 || rel.Part > 0 {
-		return 0 // "Part 2" is the numeral it ends in
+		return 0
 	}
 	n, roman := parse.NumeralSeason(rel.Title)
 	if n < 2 || (!roman && slices.Contains(req.Numerals, n) && req.Season != n) {
@@ -883,14 +856,11 @@ func numeralSeason(rel parse.Release, req Request) int {
 	return n
 }
 
-// bare: a later cour's release naming no cour counts from the first, so its number isn't this entry's.
 func bare(rel parse.Release, req Request) bool {
 	own, _ := marked(rel, req)
 	return req.Cour.Later && !own
 }
 
-// numbersFor lists the numbers a file for the episode may carry in this
-// release, the one asked for first so the pack picker knows which is primary.
 func numbersFor(rel parse.Release, req Request) []int {
 	var out []int
 	if !bare(rel, req) {
@@ -905,17 +875,14 @@ func numbersFor(rel parse.Release, req Request) []int {
 	return out
 }
 
-// TheTVDB's number counts through cours when higher; lower, it needs its season stated (Conan 1218 = S34E32).
 func tvdbCounts(rel parse.Release, req Request) bool {
 	return req.Alias.Tvdb > req.Episode || (req.Alias.TvdbSeason > 0 && rel.Season == req.Alias.TvdbSeason)
 }
 
-// covers reports that a batch's stated range holds the number; a batch stating no range may hold anything.
 func covers(rel parse.Release, n int) bool {
 	return rel.Batch && rel.Episode <= n && (rel.EpisodeEnd == 0 || n <= rel.EpisodeEnd)
 }
 
-// namesShow: the release names this entry without its cour ("Bleach - 45" is the original series').
 func namesShow(rel parse.Release, req Request) bool {
 	words := wordSet(rel.Title)
 	for _, base := range req.Cour.Bases {
@@ -932,7 +899,6 @@ func namesShow(rel parse.Release, req Request) bool {
 	return len(req.Cour.Bases) == 0
 }
 
-// names: the release names enough of a base title, or shortens one ("Bleach" for Bleach TYBW).
 func names(rel parse.Release, req Request) bool {
 	if namesShow(rel, req) {
 		return true
@@ -953,24 +919,19 @@ func names(rel parse.Release, req Request) bool {
 	return false
 }
 
-// broadcast reports a later cour's release stating the season TheTVDB files it under, in this show's name.
 func broadcast(rel parse.Release, req Request) bool {
 	return rel.Season > 1 && req.Cour.Later && names(rel, req)
 }
 
-// numbered: the stated episode or batch range is this episode under a numbering the release may use.
 func numbered(rel parse.Release, req Request) (stated, inBatch bool) {
 	if !bare(rel, req) {
 		stated = rel.Episode == req.Episode
 		inBatch = covers(rel, req.Episode)
 	}
-	// Counting across cours needs this show's name: a bare "Bleach - 42" is the
-	// original series'. A stated season makes the count TheTVDB's: S17E42 is ours.
 	if tvdb := req.Alias.Tvdb; tvdb > 0 && tvdbCounts(rel, req) && (namesShow(rel, req) || broadcast(rel, req)) {
 		stated = stated || rel.Episode == tvdb
 		inBatch = inBatch || covers(rel, tvdb)
 	}
-	// An absolute number is unique across the franchise, so naming it is enough.
 	if abs := req.Alias.Absolute; abs > 0 && names(rel, req) {
 		stated = stated || rel.Episode == abs
 		inBatch = inBatch || covers(rel, abs)
@@ -978,34 +939,36 @@ func numbered(rel parse.Release, req Request) (stated, inBatch bool) {
 	return stated, inBatch
 }
 
-// confirms reports that the release names the episode asked for, not merely that nothing contradicts it.
 func confirms(rel parse.Release, req Request) bool {
 	if req.Episode <= 0 {
 		return false
 	}
+	if !rel.Batch && namesAny(rel.Raw, req.Subtitle) {
+		return true
+	}
 	stated, inBatch := numbered(rel, req)
-	// A pack stating no range confirms nothing...
 	if stated || (inBatch && rel.Episode > 0) {
 		return true
 	}
-	// ...unless it is this whole season ("Monster.2004.S01"); its file list is
-	// checked before download. Not for a later cour, numbered differently.
 	return rel.Batch && rel.Episode == 0 && rel.Season > 0 && rel.Season == req.Season && !req.Cour.Later
 }
 
-// verifies rejects the demonstrably wrong episode, cour or season. A release
-// that omits the season is allowed: most single-season shows never mention one.
 func verifies(rel parse.Release, req Request) bool {
-	// Named for another cour of the same show: a different episode, whatever its number.
 	own, sibling := marked(rel, req)
 	if sibling && !own {
 		return false
 	}
-	// Cours reuse numbers, so a disagreeing stated part is another cour's same-numbered episode.
 	if req.Part > 0 && rel.Part > 0 && rel.Part != req.Part {
 		return false
 	}
-	// A film is no season's episode: "S01E01", or its show's bare name with a number, is the show's.
+	if len(req.Subtitle) > 0 && !rel.Batch {
+		if namesAny(rel.Raw, req.Subtitle) {
+			return true
+		}
+		if rel.Episode > 0 {
+			return false
+		}
+	}
 	if req.Film && rel.Episode > 0 && !rel.Batch &&
 		(rel.Season > 0 || slices.Contains(req.Shows, releaseName(rel.Title))) {
 		return false
@@ -1014,7 +977,6 @@ func verifies(rel parse.Release, req Request) bool {
 	if req.Episode > 0 {
 		stated, inBatch := numbered(rel, req)
 
-		// A pack stating no episode or "batch" is settled by its file list, under this cour's name only.
 		unknownScope := rel.Episode == 0 && !rel.Batch &&
 			len(numbersFor(rel, req)) > 0 && (own || namesShow(rel, req))
 
@@ -1022,36 +984,29 @@ func verifies(rel parse.Release, req Request) bool {
 			return false
 		}
 	}
-	// Its stated season is TheTVDB's: The Calamity's episode 2 ships as S17E42.
 	if req.Alias.Tvdb > req.Episode && rel.Episode == req.Alias.Tvdb && broadcast(rel, req) {
 		return true
 	}
 	if req.Season > 1 && rel.Season > 0 && rel.Season != req.Season {
 		return false
 	}
-	// "Overlord IV - 05" is season four's, whichever season asks.
 	if n := numeralSeason(rel, req); n > 0 && n != max(req.Season, 1) {
 		return false
 	}
-	// Season 1 releases usually carry no marker, so only an explicit higher season contradicts the request.
 	if req.Season == 1 && rel.Season > 1 && rel.Season != req.Counted {
 		return false
 	}
 	return true
 }
 
-// Latin filenames only (CJK/Cyrillic synonyms burn requests); generous, as queries run concurrently.
 const maxSearchTerms = 8
 
 var (
-	// Trackers match tokens and filenames lack a title's punctuation, as Prowlarr's Nyaa strips it.
 	queryPunct  = regexp.MustCompile(`[?!:;,"'’“”~*<>|/\\()\[\]{}]+`)
 	querySeason = regexp.MustCompile(`(?i)\s*\b(?:S0*1|Season\s*1|1st\s+Season)\b`)
 	querySpace  = regexp.MustCompile(`\s{2,}`)
 )
 
-// cleanQuery turns a catalogue title into something a tracker can match. The
-// season-one marker and stray punctuation are dropped; they match nothing.
 func cleanQuery(title string) string {
 	out := queryPunct.ReplaceAllString(title, " ")
 	out = querySeason.ReplaceAllString(out, "")
@@ -1092,8 +1047,6 @@ func searchTerms(
 		}
 	}
 
-	// Curated group first, paired with the shortest title: a curated release may be
-	// English while the primary title is romaji, and a wrong pairing matches nothing.
 	for _, g := range bestGroups {
 		if g = strings.TrimSpace(g); g != "" && mostlyLatin(g) {
 			push(fmt.Sprintf("%s %s", g, shortest(spelledOut(latin))))
@@ -1101,11 +1054,8 @@ func searchTerms(
 		}
 	}
 
-	// The episode number pairs with both naming conventions: release groups
-	// split between romaji and English, and searching one misses the other.
 	if episode > 0 {
 		push(fmt.Sprintf("%s %02d", latin[0], episode))
-		// Dubs are rare among subs and seldom on a bare query's first page, so asked for by name.
 		if dub {
 			push(fmt.Sprintf("%s %02d dub", latin[0], episode))
 			push(fmt.Sprintf("%s %02d dual audio", latin[0], episode))
@@ -1118,7 +1068,6 @@ func searchTerms(
 			}
 		}
 
-		// Groups dropping the cour name count through the cours, so the base name goes with that number.
 		for _, t := range append([]string{english}, latin...) {
 			base := cleanQuery(baseTitle(strings.TrimSpace(t)))
 			if base == "" || !mostlyLatin(base) {
@@ -1132,14 +1081,12 @@ func searchTerms(
 			if tvdb > 0 && tvdb != episode {
 				push(fmt.Sprintf("%s %02d", base, tvdb))
 			}
-			// Some groups number across the whole franchise ("The Final Season - 80").
 			if absolute > 0 && absolute != episode && absolute != tvdb {
 				push(fmt.Sprintf("%s %02d", base, absolute))
 			}
 			push(fmt.Sprintf("%s %02d", base, episode))
 		}
 	}
-	// Before the film's own titles, which are many: the series name is what its batches are filed under.
 	for _, name := range series {
 		key := strings.ToLower(name)
 		if _, dup := seen[key]; dup || key == "" {
@@ -1157,8 +1104,6 @@ func searchTerms(
 var courSuffix = regexp.MustCompile(
 	`(?i)\s+(part|season|cour|final season)\s*\d*$|(?i)\s+\d(nd|rd|th|st)\s+season$`)
 
-// baseTitle drops a trailing cour or season marker. Split on the last separator:
-// the first would reduce "BLEACH: ... - The Calamity" to just "BLEACH".
 func baseTitle(title string) string {
 	if trimmed := courSuffix.ReplaceAllString(title, ""); trimmed != title {
 		return strings.TrimSpace(trimmed)
@@ -1171,7 +1116,6 @@ func baseTitle(title string) string {
 	return ""
 }
 
-// spelledOut drops initials-style synonyms: a one-word title under six letters, unless nothing else is left.
 func spelledOut(titles []string) []string {
 	var out []string
 	for _, t := range titles {
@@ -1185,7 +1129,6 @@ func spelledOut(titles []string) []string {
 	return out
 }
 
-// The shortest title is the most likely substring of any release name.
 func shortest(titles []string) string {
 	best := titles[0]
 	for _, t := range titles[1:] {
