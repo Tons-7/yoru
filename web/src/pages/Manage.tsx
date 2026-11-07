@@ -1,8 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError, fetchAuthed, type DownloadFile, type Page } from '../lib/api'
-import { downloadLabel, retryNote, sortDownloads } from '../lib/downloads'
+import { downloadLabel, retryNote, rowKey, sortDownloads, type DownloadPart, type EpisodeRow } from '../lib/downloads'
 import { bytes, cx, relativeTime, speed } from '../lib/format'
 import {
   refreshDownloads,
@@ -123,6 +126,48 @@ function SwapGlyph() {
   )
 }
 
+function GripGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-3.5" aria-hidden fill="currentColor">
+      {[6, 12, 18].flatMap((y) => [9, 15].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r={1.6} />))}
+    </svg>
+  )
+}
+
+interface Sortable {
+  ref: (el: HTMLElement | null) => void
+  style: CSSProperties
+  handle: HTMLAttributes<HTMLElement>
+  dragging: boolean
+}
+
+const lineId = (q: Pick<Queued, 'animeId' | 'epKey'>) => `q-${q.animeId}-${q.epKey}`
+
+function LineSlot({ id, children }: { id: string; children: (s: Sortable) => ReactNode }) {
+  const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({ id })
+  return children({
+    ref: setNodeRef,
+    style: { transform: CSS.Transform.toString(transform), transition, position: 'relative', zIndex: isDragging ? 10 : undefined },
+    handle: { ...attributes, ...listeners },
+    dragging: isDragging,
+  })
+}
+
+function Handle({ sortable, position }: { sortable: Sortable; position?: number }) {
+  return (
+    <button
+      type="button"
+      {...sortable.handle}
+      aria-label={`Drag to reorder${position ? `, ${ordinal(position)} in line` : ''}`}
+      title="Drag to change its place in line"
+      className="tap relative flex h-7 min-w-7 shrink-0 cursor-grab touch-none items-center justify-center gap-0.5 self-center rounded-md bg-white/[0.05] px-1 text-xs tabular-nums text-base-400 hover:text-base-200 active:cursor-grabbing"
+    >
+      <GripGlyph />
+      {position}
+    </button>
+  )
+}
+
 function PackEpisodes({ hash }: { hash: string }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -195,10 +240,18 @@ interface CacheRoom extends DriveRoom {
   totalBytes?: number
 }
 
-function setKept(qc: ReturnType<typeof useQueryClient>, infoHash: string, kept: boolean) {
-  qc.setQueryData<{ items: Download[]; count: number }>(['downloads'], (old) =>
+function setKept(qc: ReturnType<typeof useQueryClient>, infoHash: string, kept: boolean, fileIndex?: number) {
+  qc.setQueryData<{ items: (Download & { parts?: DownloadPart[] })[]; count: number }>(['downloads'], (old) =>
     old
-      ? { ...old, items: old.items.map((d) => (d.infoHash === infoHash ? { ...d, kept } : d)) }
+      ? {
+          ...old,
+          items: old.items.map((d) => {
+            if (d.infoHash !== infoHash) return d
+            if (fileIndex == null) return { ...d, kept, parts: d.parts?.map((p) => ({ ...p, kept })) }
+            const parts = d.parts?.map((p) => (p.fileIndex === fileIndex ? { ...p, kept } : p))
+            return { ...d, parts, kept: !!parts?.some((p) => p.kept) }
+          }),
+        }
       : old,
   )
 }
@@ -208,15 +261,18 @@ function useVisibleDownloads() {
   const queue = useDownloadQueue()
   const hidden = useHiddenKeys()
   const items = (downloads.data?.items ?? []).filter((d) => !hidden.has(pcKey(d.infoHash)))
-  return { downloads, queue, items, sections: sortDownloads(items, queue.data?.items ?? []) }
+  return { downloads, queue, items, sections: sortDownloads(items, queue.data?.items ?? [], hidden) }
 }
 
 const removedWords = (ds: Download[]) =>
   ds.length === 1 ? `Removed ${downloadLabel(ds[0])}` : `Removed ${episodeCount(episodesIn(ds))}`
 
+const removeOne = (d: EpisodeRow) =>
+  api.del(d.part ? `/api/downloads/${d.infoHash}/files/${d.part.fileIndex}` : `/api/downloads/${d.infoHash}`)
+
 function useRemoveLater() {
   const qc = useQueryClient()
-  return (ds: Download[]) => {
+  return (ds: EpisodeRow[]) => {
     let left = ds.filter((d) => !d.pinned)
     if (left.length === 0) {
       if (ds.length > 0) {
@@ -225,20 +281,22 @@ function useRemoveLater() {
       return
     }
     const removal: Removal = {
-      keys: left.map((d) => pcKey(d.infoHash)),
+      keys: left.map(rowKey),
       message: removedWords(left),
       failed: "Couldn't delete",
       run: async () => {
         try {
-          const sent = await Promise.allSettled(left.map((d) => api.del(`/api/downloads/${d.infoHash}`)))
-          const failures = sent.flatMap((r, i) =>
-            r.status === 'rejected' && !(r.reason instanceof ApiError && r.reason.status === 404)
-              ? [{ d: left[i], err: r.reason as unknown }]
-              : [],
-          )
+          const failures: { d: EpisodeRow; err: unknown }[] = []
+          for (const d of left) {
+            try {
+              await removeOne(d)
+            } catch (err) {
+              if (!(err instanceof ApiError && err.status === 404)) failures.push({ d, err })
+            }
+          }
           if (failures.length === 0) return
           left = failures.map((f) => f.d)
-          removal.keys = left.map((d) => pcKey(d.infoHash))
+          removal.keys = left.map(rowKey)
           removal.message = removedWords(left)
           throw failures[0].err
         } finally {
@@ -558,10 +616,19 @@ function PcList({ host }: { host: boolean }) {
   })
 
   const now = useMutation({
-    mutationFn: (q: Queued) =>
+    mutationFn: (q: Pick<Queued, 'animeId' | 'epKey'>) =>
       api.post('/api/download/queue/now', { animeId: q.animeId, epKey: q.epKey }),
     onSuccess: done,
   })
+  const arrange = useMutation({
+    mutationFn: (v: { animeId: number; epKey: string; action: string; target?: { animeId: number; epKey: string } }) =>
+      api.post('/api/download/queue/arrange', v),
+    onSettled: done,
+  })
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
 
   const queuePaused = queue.data?.paused ?? false
   const pauseAll = useMutation({
@@ -575,21 +642,23 @@ function PcList({ host }: { host: boolean }) {
 
   const remove = useMutation({
     meta: { inline: true },
-    mutationFn: async (hashes: string[]) => {
-      const sent = await Promise.allSettled(hashes.map((h) => api.del(`/api/downloads/${h}`)))
-      const failed = sent.flatMap((r, i) =>
-        r.status === 'rejected' && !(r.reason instanceof ApiError && r.reason.status === 404)
-          ? [{ hash: hashes[i], err: r.reason as unknown }]
-          : [],
-      )
+    mutationFn: async (rows: EpisodeRow[]) => {
+      const failed: { row: EpisodeRow; err: unknown }[] = []
+      for (const row of rows) {
+        try {
+          await removeOne(row)
+        } catch (err) {
+          if (!(err instanceof ApiError && err.status === 404)) failed.push({ row, err })
+        }
+      }
       if (failed.length === 0) return
       const first = failed[0].err
       throw Object.assign(new Error(first instanceof Error ? first.message : String(first)), {
-        hashes: failed.map((f) => f.hash),
+        rows: failed.map((f) => f.row),
       })
     },
-    onError: (err, hashes) => {
-      const left = (err as { hashes?: string[] }).hashes ?? hashes
+    onError: (err, rows) => {
+      const left = (err as { rows?: EpisodeRow[] }).rows ?? rows
       toast(`Couldn't delete: ${(err as Error).message}`, 'error', {
         label: 'Try again',
         run: () => remove.mutate(left),
@@ -602,27 +671,39 @@ function PcList({ host }: { host: boolean }) {
   })
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
 
-  const pause = useMutation({
-    mutationFn: (hash: string) => api.post(`/api/downloads/${hash}/pause`),
-    onSuccess: done,
-  })
-
-  const resume = useMutation({
-    mutationFn: (hash: string) => api.post(`/api/downloads/${hash}/resume`),
-    onSuccess: done,
+  const pauseResume = useMutation({
+    mutationFn: async ({ d, paused }: { d: EpisodeRow; paused: boolean }) => {
+      const verb = paused ? 'pause' : 'resume'
+      if (!d.part || !d.whole) return api.post(`/api/downloads/${d.infoHash}/${verb}`)
+      await api.post(`/api/downloads/${d.infoHash}/files/${d.part.fileIndex}/${verb}`)
+      if (!paused && d.whole.paused) {
+        const parts = (d.whole as Download & { parts?: DownloadPart[] }).parts ?? []
+        for (const p of parts) {
+          if (p.fileIndex !== d.part.fileIndex && !p.complete && !p.paused) {
+            await api.post(`/api/downloads/${d.infoHash}/files/${p.fileIndex}/pause`)
+          }
+        }
+        await api.post(`/api/downloads/${d.infoHash}/resume`)
+      }
+    },
+    onSettled: done,
   })
   const keep = useMutation({
     meta: { inline: true },
-    mutationFn: (ds: Download[]) =>
+    mutationFn: (ds: EpisodeRow[]) =>
       Promise.all(
         ds.map((d) =>
-          api.post<{ infoHash: string; kept: boolean }>(`/api/downloads/${d.infoHash}/${d.kept ? 'unkeep' : 'keep'}`),
+          api.post<{ infoHash: string; kept: boolean; fileIndex?: number }>(
+            d.part
+              ? `/api/downloads/${d.infoHash}/files/${d.part.fileIndex}/${d.kept ? 'unkeep' : 'keep'}`
+              : `/api/downloads/${d.infoHash}/${d.kept ? 'unkeep' : 'keep'}`,
+          ),
         ),
       ),
-    onMutate: async (ds: Download[]) => {
+    onMutate: async (ds: EpisodeRow[]) => {
       await qc.cancelQueries({ queryKey: ['downloads'] })
       const previous = qc.getQueryData<{ items: Download[]; count: number }>(['downloads'])
-      for (const d of ds) setKept(qc, d.infoHash, !d.kept)
+      for (const d of ds) setKept(qc, d.infoHash, !d.kept, d.part?.fileIndex)
       return { previous }
     },
     onError: (err, ds, context) => {
@@ -632,10 +713,10 @@ function PcList({ host }: { host: boolean }) {
         run: () => keep.mutate(ds),
       })
     },
-    onSuccess: (res) => res.forEach((r) => setKept(qc, r.infoHash, r.kept)),
+    onSuccess: (res) => res.forEach((r) => setKept(qc, r.infoHash, r.kept, r.fileIndex)),
     onSettled: done,
   })
-  const keepNow = (ds: Download[]) => {
+  const keepNow = (ds: EpisodeRow[]) => {
     if (ds.length === 0) return
     keep.mutate(ds)
     const one = ds.length === 1 ? ds[0] : null
@@ -660,12 +741,35 @@ function PcList({ host }: { host: boolean }) {
   const holdItems = holds.data?.items ?? []
   const offers = better.data?.items ?? []
 
-  const { active, held, finished, searching, waitingQueue, failed } = sections
-  const waiting = held.length + waitingQueue.length
+  const { active, finished, searching, failed, line } = sections
+  const waiting = line.length
+  const lineIds = line.flatMap((x) => (x.q ? [lineId(x.q)] : []))
+  const onDragEnd = ({ active: dragged, over }: DragEndEvent) => {
+    if (!over || dragged.id === over.id) return
+    const from = line.find((x) => x.q && lineId(x.q) === dragged.id)?.q
+    const to = line.find((x) => x.q && lineId(x.q) === over.id)?.q
+    if (!from || !to) return
+    const after = lineIds.indexOf(String(over.id)) > lineIds.indexOf(String(dragged.id))
+    void qc.cancelQueries({ queryKey: ['download-queue'] })
+    qc.setQueryData<{ items: Queued[] }>(['download-queue'], (old) => {
+      if (!old) return old
+      const items = old.items.filter((q) => lineId(q) !== dragged.id)
+      const at = items.findIndex((q) => lineId(q) === over.id)
+      if (at < 0) return old
+      items.splice(after ? at + 1 : at, 0, from)
+      return { ...old, items }
+    })
+    arrange.mutate({
+      animeId: from.animeId,
+      epKey: from.epKey,
+      action: after ? 'after' : 'before',
+      target: { animeId: to.animeId, epKey: to.epKey },
+    })
+  }
   const kept = finished.filter((d) => d.kept)
   const passing = finished.filter((d) => !d.kept)
   const order = new Map(visible.map((d, i) => [d.infoHash, i]))
-  const shelf = (list: Download[], section: string): Row[] =>
+  const shelf = (list: EpisodeRow[], section: string): Row[] =>
     sortShelf(byShow(list), sort, (x) => {
       const ds = 'items' in x ? x.items : [x]
       return {
@@ -680,8 +784,7 @@ function PcList({ host }: { host: boolean }) {
     ...searching.map((q) => ({ q })),
     ...active.map((d) => ({ d })),
     ...(waiting > 0 ? [{ group: 'Waiting', meta: String(waiting) }] : []),
-    ...held.map((d, i) => ({ d, position: i + 1 })),
-    ...waitingQueue.map((q, i) => ({ q, position: held.length + i + 1 })),
+    ...line.map((x, i): Row => (x.d ? { d: x.d, position: i + 1 } : { q: x.q, position: i + 1 })),
     ...(holdItems.length > 0 ? [{ group: 'Held for a better release', meta: String(holdItems.length) }] : []),
     ...holdItems.map((hold) => ({ hold })),
     ...(failed.length > 0 ? [{ group: 'Failed' }] : []),
@@ -713,13 +816,13 @@ function PcList({ host }: { host: boolean }) {
   ]
 
   const choosable = finished.filter((d) => !d.pinned)
-  const chosen = choosable.filter((d) => picked.has(d.infoHash))
-  const toggle = (ds: Download[], on: boolean) =>
+  const chosen = choosable.filter((d) => picked.has(d.key))
+  const toggle = (ds: EpisodeRow[], on: boolean) =>
     setPicked((was) => {
       const next = new Set(was)
       for (const d of ds) {
-        if (on) next.add(d.infoHash)
-        else next.delete(d.infoHash)
+        if (on) next.add(d.key)
+        else next.delete(d.key)
       }
       return next
     })
@@ -730,7 +833,7 @@ function PcList({ host }: { host: boolean }) {
   }
   const removeChosen = () => {
     const shows = byShow(finished).filter((x): x is Show => 'items' in x)
-    const wholeShow = shows.some((s) => s.items.every((d) => d.pinned || picked.has(d.infoHash)))
+    const wholeShow = shows.some((s) => s.items.every((d) => d.pinned || picked.has(d.key)))
     if (!confirmPicked && (episodesIn(chosen) > 5 || wholeShow)) return setConfirmPicked(true)
     removeLater(chosen)
     stopSelecting()
@@ -739,18 +842,28 @@ function PcList({ host }: { host: boolean }) {
   const actions: RowActions = {
     host,
     word,
+    arrange: (animeId, epKey, action) =>
+      action === 'now' ? now.mutate({ animeId, epKey }) : arrange.mutate({ animeId, epKey, action }),
+    lineLength: line.length,
     selecting: selecting ? { picked, toggle } : undefined,
     queueHeld: (d) => d.episodes.some((e) => waitingKeys.has(`${d.animeId}-${e}`)),
     changeRelease: (animeId, episode, current) => setPicking({ animeId, episode, current }),
-    chosenFor: (d) => queued.find((q) => q.animeId === d.animeId && d.episodes.includes(q.epKey) && !!q.release),
+    chosenFor: (d) =>
+      queued.find(
+        (q) =>
+          q.animeId === d.animeId &&
+          d.episodes.includes(q.epKey) &&
+          !!q.release &&
+          q.infoHash?.toLowerCase() !== d.infoHash.toLowerCase(),
+      ),
     confirming: confirmRemove,
     confirm: setConfirmRemove,
     removing: remove.isPending,
-    toggling: pause.isPending || resume.isPending,
+    toggling: pauseResume.isPending,
     keep: keepNow,
-    remove: (hashes) => remove.mutate(hashes),
+    remove: (rows) => remove.mutate(rows),
     removeLater,
-    pauseResume: (d) => (d.paused ? resume : pause).mutate(d.infoHash),
+    pauseResume: (d) => pauseResume.mutate({ d, paused: !d.paused }),
     toDevice: elsewhere
       ? {
           state: (d) => {
@@ -790,7 +903,7 @@ function PcList({ host }: { host: boolean }) {
           </Button>
         </p>
       )}
-      {!queuePaused && queue.data?.watching && waitingQueue.length > 0 && (
+      {!queuePaused && queue.data?.watching && sections.waitingQueue.length > 0 && (
         <p role="status" className={notice}>
           Waiting until the episode you're watching has downloaded, so it gets the whole connection.
           <span className="flex shrink-0 items-center gap-1">
@@ -825,6 +938,13 @@ function PcList({ host }: { host: boolean }) {
           </Link>
         </section>
       ) : (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={onDragEnd}
+          accessibility={{ container: document.body }}
+        >
+        <SortableContext items={lineIds} strategy={verticalListSortingStrategy}>
         <ul className="space-y-2">
           {rows.map((r) => {
             if ('tools' in r)
@@ -856,19 +976,28 @@ function PcList({ host }: { host: boolean }) {
                   onNow={() => takeNow.mutate(r.hold)}
                 />
               )
-            if ('q' in r)
-              return (
+            if ('q' in r) {
+              const q = r.q
+              const row = (sortable?: Sortable) => (
                 <QueueRow
-                  key={`q-${r.q.animeId}-${r.q.epKey}`}
-                  q={r.q}
+                  q={q}
                   position={r.position}
                   actions={actions}
-                  onNow={() => now.mutate(r.q)}
-                  onRetry={() => requeue.mutate(r.q)}
-                  onRemove={() => dequeue.mutate(r.q)}
-                  onChangeRelease={() => actions.changeRelease(r.q.animeId, r.q.episode, r.q.infoHash)}
+                  onNow={() => now.mutate(q)}
+                  onRetry={() => requeue.mutate(q)}
+                  onRemove={() => dequeue.mutate(q)}
+                  onChangeRelease={() => actions.changeRelease(q.animeId, q.episode, q.infoHash)}
+                  sortable={sortable}
                 />
               )
+              return r.position != null && lineIds.includes(lineId(q)) ? (
+                <LineSlot key={lineId(q)} id={lineId(q)}>
+                  {row}
+                </LineSlot>
+              ) : (
+                <Fragment key={lineId(q)}>{row()}</Fragment>
+              )
+            }
             if ('show' in r) {
               const key = `${r.section}-${r.show.animeId}`
               return (
@@ -882,9 +1011,18 @@ function PcList({ host }: { host: boolean }) {
                 />
               )
             }
-            return <DownloadRow key={r.d.infoHash} d={r.d} position={r.position} actions={actions} />
+            const d = r.d
+            return d.queued && r.position != null && lineIds.includes(lineId(d.queued)) ? (
+              <LineSlot key={d.key} id={lineId(d.queued)}>
+                {(sortable) => <DownloadRow d={d} position={r.position} actions={actions} sortable={sortable} />}
+              </LineSlot>
+            ) : (
+              <DownloadRow key={d.key} d={d} position={r.position} actions={actions} />
+            )
           })}
         </ul>
+        </SortableContext>
+        </DndContext>
       )}
       {changeRelease.isError && <p className="text-[13px] text-red-300">{(changeRelease.error as Error).message}</p>}
 
@@ -923,7 +1061,7 @@ function PcList({ host }: { host: boolean }) {
 type Row =
   | { tools: true }
   | { group: string; meta?: string; note?: string; change?: string }
-  | { d: Download; position?: number }
+  | { d: EpisodeRow; position?: number }
   | { q: Queued; position?: number }
   | { show: Show; section: string }
   | { hold: ReleaseHold }
@@ -966,21 +1104,21 @@ interface Show {
   animeId: number
   title?: string
   cover?: string
-  items: Download[]
+  items: EpisodeRow[]
 }
 
-function byShow(finished: Download[]): (Download | Show)[] {
-  const shows = new Map<number, Download[]>()
+function byShow(finished: EpisodeRow[]): (EpisodeRow | Show)[] {
+  const shows = new Map<number, EpisodeRow[]>()
   for (const d of finished) {
     if (d.animeId) shows.set(d.animeId, [...(shows.get(d.animeId) ?? []), d])
   }
   const placed = new Set<number>()
-  return finished.flatMap((d): (Download | Show)[] => {
+  return finished.flatMap((d): (EpisodeRow | Show)[] => {
     const items = d.animeId ? shows.get(d.animeId)! : [d]
     if (!d.animeId || items.length < 2) return [d]
     if (placed.has(d.animeId)) return []
     placed.add(d.animeId)
-    const first = (x: Download) => Number(x.episodes[0]) || 0
+    const first = (x: EpisodeRow) => Number(x.episodes[0]) || 0
     return [{ animeId: d.animeId, title: d.title, cover: d.cover, items: [...items].sort((a, b) => first(a) - first(b)) }]
   })
 }
@@ -988,7 +1126,7 @@ function byShow(finished: Download[]): (Download | Show)[] {
 interface RowActions {
   host: boolean
   word: 'phone' | 'device'
-  selecting?: { picked: ReadonlySet<string>; toggle: (ds: Download[], on: boolean) => void }
+  selecting?: { picked: ReadonlySet<string>; toggle: (ds: EpisodeRow[], on: boolean) => void }
   queueHeld: (d: Download) => boolean
   changeRelease: (animeId: number, episode: number, current?: string) => void
   chosenFor: (d: Download) => Queued | undefined
@@ -996,11 +1134,24 @@ interface RowActions {
   confirm: (key: string | null) => void
   removing: boolean
   toggling: boolean
-  keep: (ds: Download[]) => void
-  remove: (hashes: string[]) => void
-  removeLater: (ds: Download[]) => void
-  pauseResume: (d: Download) => void
+  keep: (ds: EpisodeRow[]) => void
+  remove: (rows: EpisodeRow[]) => void
+  removeLater: (ds: EpisodeRow[]) => void
+  pauseResume: (d: EpisodeRow) => void
+  arrange: (animeId: number, epKey: string, action: 'now' | 'up' | 'down' | 'bottom' | 'pause' | 'resume') => void
+  lineLength: number
   toDevice?: { state: (d: Download) => 'none' | 'saving' | 'saved'; save: (ds: Download[]) => void }
+}
+
+function lineItems(animeId: number, epKey: string, position: number | undefined, actions: RowActions, withNow = false): MoreItem[] {
+  if (position == null) return []
+  const last = position >= actions.lineLength
+  return [
+    ...(withNow ? [{ label: 'Download now', divider: true, run: () => actions.arrange(animeId, epKey, 'now') }] : []),
+    { label: 'Move up', disabled: position <= 1, divider: !withNow, run: () => actions.arrange(animeId, epKey, 'up') },
+    { label: 'Move down', disabled: last, run: () => actions.arrange(animeId, epKey, 'down') },
+    { label: 'Move to bottom', disabled: last, run: () => actions.arrange(animeId, epKey, 'bottom') },
+  ]
 }
 
 function ConfirmDelete({ label, actions, onDelete }: { label: string; actions: RowActions; onDelete: () => void }) {
@@ -1084,7 +1235,7 @@ function ShowRows({
       <div className={cx('flex items-center gap-3 p-3', roomy && 'max-sm:flex-wrap')}>
         {select ? (
           <CheckBox
-            checked={removable.length > 0 && removable.every((d) => select.picked.has(d.infoHash))}
+            checked={removable.length > 0 && removable.every((d) => select.picked.has(d.key))}
             onChange={(on) => select.toggle(removable, on)}
             disabled={removable.length === 0}
             label={`Select every download of ${name}`}
@@ -1126,7 +1277,7 @@ function ShowRows({
               <ConfirmDelete
                 label={`Remove ${episodeCount(episodesIn(removable))} · ${bytes(sizeOf(removable))}`}
                 actions={actions}
-                onDelete={() => actions.remove(removable.map((d) => d.infoHash))}
+                onDelete={() => actions.remove(removable)}
               />
             ) : (
               <MoreMenu label={`More for ${name}`} title={name} detail={`${episodeCount(episodes)} · ${bytes(size)}`} className={menuClass} items={items} />
@@ -1137,7 +1288,7 @@ function ShowRows({
       {open && (
         <ul>
           {show.items.map((d) => (
-            <DownloadRow key={d.infoHash} d={d} actions={actions} nested groupKept={allKept} />
+            <DownloadRow key={d.key} d={d} actions={actions} nested groupKept={allKept} />
           ))}
         </ul>
       )}
@@ -1185,12 +1336,14 @@ function DownloadRow({
   actions,
   nested = false,
   groupKept = false,
+  sortable,
 }: {
-  d: Download
+  d: EpisodeRow
   position?: number
   actions: RowActions
   nested?: boolean
   groupKept?: boolean
+  sortable?: Sortable
 }) {
   const facts = releaseFacts(d)
   const unfinished = d.percent < 100
@@ -1210,7 +1363,8 @@ function DownloadRow({
       run: () => actions.changeRelease(d.animeId!, first, d.infoHash),
     },
     deviceItem([d], actions),
-    { label: d.kept ? 'Stop keeping' : 'Keep', run: () => actions.keep([d]) },
+    ...(d.queued && d.animeId ? lineItems(d.animeId, d.queued.epKey, position, actions, true) : []),
+    { label: d.kept ? 'Stop keeping' : 'Keep', run: () => actions.keep([d]), divider: !!d.queued && position != null },
     !d.pinned && {
       label: unfinished ? 'Stop and remove' : 'Remove',
       danger: true,
@@ -1222,17 +1376,23 @@ function DownloadRow({
   const roomy = unfinished || d.pinned || onPhone
 
   return (
-    <li className={cx('p-3', nested ? 'border-t border-line bg-base-950/30' : card)}>
+    <li
+      ref={sortable?.ref}
+      style={sortable?.style}
+      className={cx('p-3', nested ? 'border-t border-line bg-base-950/30' : card, sortable?.dragging && 'shadow-panel')}
+    >
       <div className={cx('flex items-start gap-3', roomy && 'max-sm:flex-wrap')}>
         {actions.selecting && !unfinished ? (
           <span className="self-center">
             <CheckBox
-              checked={!!select && select.picked.has(d.infoHash)}
+              checked={!!select && select.picked.has(d.key)}
               onChange={(on) => select?.toggle([d], on)}
               disabled={!select}
               label={d.pinned ? `${name} is playing` : `Select ${name}`}
             />
           </span>
+        ) : sortable ? (
+          <Handle sortable={sortable} position={position} />
         ) : (
           <Gutter>{position}</Gutter>
         )}
@@ -1373,6 +1533,7 @@ function QueueRow({
   onRetry,
   onRemove,
   onChangeRelease,
+  sortable,
 }: {
   q: Queued
   position?: number
@@ -1381,13 +1542,14 @@ function QueueRow({
   onRetry: () => void
   onRemove: () => void
   onChangeRelease: () => void
+  sortable?: Sortable
 }) {
   const key = `q-${q.animeId}-${q.epKey}`
   const got = q.torrent
   return (
-    <li className={cx(card, 'group p-3')}>
+    <li ref={sortable?.ref} style={sortable?.style} className={cx(card, 'group p-3', sortable?.dragging && 'shadow-panel')}>
       <div className="flex items-center gap-3 max-sm:flex-wrap">
-        <Gutter>{position}</Gutter>
+        {sortable ? <Handle sortable={sortable} position={position} /> : <Gutter>{position}</Gutter>}
         <Poster src={q.cover} />
 
         <div className="min-w-0 flex-1">
@@ -1411,6 +1573,8 @@ function QueueRow({
             </p>
           ) : q.state === 'active' ? (
             <p className="text-[13px] text-base-400">Finding a release…</p>
+          ) : q.state === 'paused' && position != null ? (
+            <p className="text-[13px] text-base-400">Paused · {ordinal(position)} in line</p>
           ) : (
             q.state === 'pending' &&
             !q.retryAt &&
@@ -1455,7 +1619,7 @@ function QueueRow({
               actions={actions}
               onDelete={() => {
                 onRemove()
-                actions.remove([got.infoHash])
+                actions.remove([got as EpisodeRow])
               }}
             />
           ) : (
@@ -1467,6 +1631,20 @@ function QueueRow({
             >
               ✕
             </button>
+          )}
+          {position != null && (q.state === 'pending' || q.state === 'paused') && (
+            <MoreMenu
+              label={`More for ${q.title ?? `Anime ${q.animeId}`} episode ${q.episode}`}
+              title={`${q.title ?? `Anime ${q.animeId}`} · Episode ${q.episode}`}
+              className={menuClass}
+              items={[
+                {
+                  label: q.state === 'paused' ? 'Resume' : 'Pause',
+                  run: () => actions.arrange(q.animeId, q.epKey, q.state === 'paused' ? 'resume' : 'pause'),
+                },
+                ...lineItems(q.animeId, q.epKey, position, actions),
+              ]}
+            />
           )}
         </div>
       </div>
@@ -1537,7 +1715,7 @@ function PcFreeUpList({ onDone }: { onDone?: () => void }) {
   })
   const passing = sections.finished.filter((d) => !d.kept && !d.pinned)
   const unfinished = [...sections.active, ...sections.held].filter((d) => !d.kept && !d.pinned)
-  const shows = new Map<string, { title: string; items: Download[] }>()
+  const shows = new Map<string, { title: string; items: EpisodeRow[] }>()
   for (const d of sections.finished) {
     const key = d.animeId ? `a${d.animeId}` : d.infoHash
     const show = shows.get(key) ?? { title: d.title ?? d.name, items: [] }

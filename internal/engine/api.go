@@ -14,11 +14,8 @@ import (
 	"yoru/internal/torrent"
 )
 
-// How far a stream reads ahead of the player: a few seconds of a 1080p
-// episode, enough to ride out a slow block without starving other files.
 const streamReadahead = 16 << 20
 
-// guard keeps the API to Yoru, ffmpeg and mpv: no browser headers or rebound names, the secret off streams.
 func (e *Engine) guard(addr string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Origin") != "" || r.Header.Get("Sec-Fetch-Site") != "" || r.Header.Get("Sec-Fetch-Mode") != "" || r.Host != addr {
@@ -55,8 +52,28 @@ func (e *Engine) routes() http.Handler {
 		}
 		reply(w, fileRanges(en.t.Files()[i]))
 	})))
+	for verb, run := range map[string]func(*entry, int) error{
+		"include": func(en *entry, i int) error { return e.setFileIncluded(en, i, true) },
+		"exclude": func(en *entry, i int) error { return e.setFileIncluded(en, i, false) },
+		"delete":  e.deleteFile,
+	} {
+		mux.HandleFunc("POST /torrents/{id}/files/{file}/"+verb, e.started(e.withEntry(func(w http.ResponseWriter, r *http.Request, en *entry) {
+			i, err := strconv.Atoi(r.PathValue("file"))
+			if err == nil {
+				err = run(en, i)
+			}
+			switch {
+			case errors.Is(err, errNoFile):
+				fail(w, http.StatusNotFound, err)
+			case err != nil:
+				fail(w, http.StatusInternalServerError, err)
+			default:
+				e.log.Info("torrent file "+verb+"d", "id", en.id, "file", i, "name", en.t.Name())
+				reply(w, struct{}{})
+			}
+		})))
+	}
 	mux.HandleFunc("POST /torrents/{id}/pause", e.started(e.withEntry(func(w http.ResponseWriter, r *http.Request, en *entry) {
-		// Always logged: a pause ends any stream reading the torrent, and a silent one can't be traced later.
 		e.log.Info("torrent paused", "id", en.id, "name", en.t.Name())
 		e.setPaused(en, true)
 		reply(w, struct{}{})
@@ -79,7 +96,6 @@ func (e *Engine) routes() http.Handler {
 	return mux
 }
 
-// started brings the engine up on the first request.
 func (e *Engine) started(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := e.Ensure(r.Context()); err != nil {
@@ -147,7 +163,6 @@ func (e *Engine) handleAdd(w http.ResponseWriter, r *http.Request) {
 	reply(w, torrent.Torrent{ID: en.id, Details: e.detail(en)})
 }
 
-// addStatus: a client down for the network is unavailable, like one not started; anything else is the swarm's.
 func addStatus(err error) int {
 	if errors.Is(err, torrent.ErrUnavailable) {
 		return http.StatusServiceUnavailable
@@ -155,8 +170,6 @@ func addStatus(err error) int {
 	return http.StatusBadGateway
 }
 
-// handleStream serves a file with Range support. The reader's position is
-// what the engine fetches first, so a seek moves the download with it.
 func (e *Engine) handleStream(w http.ResponseWriter, r *http.Request, en *entry) {
 	if en.t.Info() == nil {
 		fail(w, http.StatusConflict, errors.New("invalid state: initializing"))
@@ -178,7 +191,6 @@ func (e *Engine) handleStream(w http.ResponseWriter, r *http.Request, en *entry)
 	defer reader.done()
 
 	name := filepath.Base(fileName(en.t, f))
-	// Set, so ServeContent doesn't read the head to sniff it on every seek.
 	kind := mime.TypeByExtension(filepath.Ext(name))
 	if kind == "" {
 		kind = "application/octet-stream"

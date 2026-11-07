@@ -31,6 +31,8 @@ const CHECKS = [
   ['continue-next-check.mjs'],
   ['downloads-fresh-check.mjs'],
   ['downloads-groups-check.mjs'],
+  ['downloads-pack-check.mjs'],
+  ['downloads-order-check.mjs'],
   ['episode-download-check.mjs'],
   ['fs-autonext-check.mjs'],
   ['fullscreen-check.mjs'],

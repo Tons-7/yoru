@@ -1438,7 +1438,7 @@ function SequelLater({ sequel }: { sequel: Season }) {
 }
 
 interface PlayStage {
-  step?: 'search' | 'files' | 'data' | 'start'
+  step?: 'search' | 'files' | 'data' | 'slow' | 'start'
   release?: string
   peers?: number
   bytes?: number
@@ -1480,6 +1480,12 @@ function useStartingNote(animeId: number, episode: number, display: number, wait
               stage.bytes ? `, ${bytes(stage.bytes)} so far` : ''
             }. This usually takes a few seconds.`
           : 'Looking for people sharing this release. No one has answered yet.',
+      }
+    case 'slow':
+      return {
+        step: 1,
+        seconds,
+        status: 'This release downloads slower than the episode plays. Checking whether another one is faster.',
       }
     case 'start':
       return {

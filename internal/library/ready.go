@@ -8,11 +8,8 @@ import (
 	"yoru/internal/store"
 )
 
-// errNotReadied: nothing plays next, or nothing is held to ready it from; the switch goes as it always did.
 var errNotReadied = errors.New("next episode not readied")
 
-// ReadyNext gets the next episode's start and seek index on disk, so the switch skips the swarm's wait. A
-// library file needs nothing; with no torrent held, one is fetched only when Auto next will play on.
 func (p *Playback) ReadyNext(ctx context.Context, animeID, episode int) (store.Pick, error) {
 	if p == nil || p.torrent == nil || p.prefetch == nil {
 		return store.Pick{}, errNotReadied
@@ -44,6 +41,9 @@ func (p *Playback) ReadyNext(ctx context.Context, animeID, episode int) (store.P
 			}
 		}
 	}
+	if p.prefetch.pausedByUser(rec.InfoHash) || p.prefetch.pausedByUser(FileKey(rec.InfoHash, rec.FileIndex)) {
+		return next, errNotReadied
+	}
 
 	live, err := p.torrent.Live(ctx)
 	if err != nil {
@@ -56,6 +56,5 @@ func (p *Playback) ReadyNext(ctx context.Context, animeID, episode int) (store.P
 	if err := p.torrent.Start(ctx, id); err != nil {
 		p.log.Debug("ready next: start", "torrent", id, "err", err)
 	}
-	// Both ends: the head is what the probe reads, the tail holds the seek index the segments are cut by.
 	return next, p.torrent.Prewarm(ctx, id, rec.FileIndex, 0)
 }

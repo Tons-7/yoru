@@ -4,7 +4,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { activityWords, deviceActivity, joinActivity, pcActivity, useDoneFlash } from '../lib/activity'
 import { api } from '../lib/api'
-import { copyText, downloadProgress, downloadsReport, retryNote, sortDownloads } from '../lib/downloads'
+import { copyText, downloadProgress, downloadsReport, retryNote, sortDownloads, type EpisodeRow } from '../lib/downloads'
 import { cx, episodeSpan } from '../lib/format'
 import { savedKey, useSaved } from '../lib/offline'
 import { refreshDownloads, useAccess, useDownloadQueue, useDownloads, useSpeedUnit, type Download, type Queued } from '../lib/queries'
@@ -38,10 +38,7 @@ export function DownloadsPanel() {
   const queue = useDownloadQueue()
   const unit = useSpeedUnit()
   const hidden = useHiddenKeys()
-  const sections = sortDownloads(
-    (downloads.data?.items ?? []).filter((d) => !hidden.has(`pc:${d.infoHash}`)),
-    queue.data?.items ?? [],
-  )
+  const sections = sortDownloads(downloads.data?.items ?? [], queue.data?.items ?? [], hidden)
   const { active, held, finished, searching, waitingQueue, failed } = sections
   const busy = active.length + searching.length
   const access = useAccess()
@@ -200,7 +197,7 @@ export function DownloadsPanel() {
 const row = 'rounded-lg bg-base-800 px-3 py-2.5'
 
 interface Entry {
-  d?: Download
+  d?: EpisodeRow
   q?: Queued
   note?: string
   failed?: boolean
@@ -253,7 +250,7 @@ function ShowCard({ group }: { group: ShowGroup }) {
               </p>
             </li>
           ) : justWaiting(e) ? null : e.d ? (
-            <EpisodeLine key={e.d.infoHash} d={e.d} />
+            <EpisodeLine key={e.d.key} d={e.d} />
           ) : (
             <QueuedLine key={`${e.q!.animeId}-${e.q!.epKey}`} {...e} />
           ),

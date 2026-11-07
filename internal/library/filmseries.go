@@ -187,7 +187,7 @@ func pickFile(files []torrent.File, r score.Result) (torrent.File, int, bool) {
 				return f, i, true
 			}
 		}
-		if f, i, ok := torrent.PickNumbered(files, r.Episode, r.Numbers); ok {
+		if f, i, ok := torrent.PickInPack(files, r.Episode, r.Numbers, torrent.Scope{Season: r.Season, Counted: r.Counted, Others: r.Others}); ok {
 			return f, i, true
 		}
 		if r.TotalEpisodes == 1 && !r.Release.Batch {

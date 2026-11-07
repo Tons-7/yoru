@@ -80,6 +80,7 @@ var Defaults = map[string]string{
 
 	"quality.ladder": `["1080p:BD:HEVC:10","1080p:BD","1080p:WEB","720p"]`,
 
+	"quality.codec":          "hevc",
 	"quality.prefer":         "best",
 	"quality.max_auto_bytes": "3221225472",
 	"quality.allow_hi10p":    "false",

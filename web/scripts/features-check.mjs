@@ -1,5 +1,3 @@
-// The hand controls: ticks, score, favourites, notes, release picker, random, orphans, pack rows.
-// Run through run-player-check.mjs with CHECK=features-check.mjs.
 import { spawnSync } from 'node:child_process'
 import { copyFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -40,7 +38,6 @@ const until = async (fn, ms = 8000) => {
   return false
 }
 
-// ---------------------------------------------------------------- setup
 for (let i = 0; i < 60; i++) {
   try {
     if ((await api('/api/setup')).ok) break
@@ -58,7 +55,6 @@ for (let i = 0; i < 30 && !file; i++) {
 check(!!file, 'test file listed')
 if (!file) process.exit(1)
 await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: 1 })
-// Episode 3 is where auto-next lands; a local copy keeps the run off the swarm.
 copyFileSync(join(LIB, 'Yoru Test Show - 01.mkv'), join(LIB, 'third.mkv'))
 await post('/api/local/scan', {})
 let third
@@ -70,8 +66,6 @@ for (let i = 0; i < 30 && !third; i++) {
 check(!!third, 'second local file scanned')
 await post('/api/local/assign', { id: third.id, animeId: ANIME, episode: 3 })
 
-// Several sections plant rows straight into the database; without it the
-// run cannot mean anything, so it stops rather than failing them one by one.
 if (!process.env.YORU_DB || !process.env.YORU_REPO) {
   console.error('YORU_DB and YORU_REPO are required (run through run-player-check.mjs)')
   process.exit(2)
@@ -88,28 +82,31 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(`uncaught: ${e.message.slice(0, 200)}`))
 
-// ---------------------------------------------------------------- downloads: pack row
 await page.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
-// A show with several downloads is one closed card; its rows are inside.
-const group = page.getByRole('button', { name: /^Show downloads of / }).first()
-if (await until(() => group.isVisible(), 5000)) await group.click()
-const packRow = page.locator('li:not(:has(li))', { hasText: /episodes 4, 5/i })
-check(await until(() => packRow.count().then((n) => n === 1)), 'a season pack is one row')
+const showGroups = page.getByRole('button', { name: /^Show downloads of / })
+await until(() => showGroups.first().isVisible(), 5000)
+for (let left = 10; left > 0 && (await showGroups.count()) > 0; left--) {
+  await showGroups.first().click()
+}
+const rowTitle = (re) => page.locator('li p').filter({ hasText: re })
+const episodeRow = (n) => rowTitle(new RegExp(`^\\s*episode ${n}\\s*$`, 'i')).locator('xpath=ancestor::li[1]')
 check(
-  // A finished row states its size once; "of" belongs to what is still arriving.
-  await until(() => packRow.innerText().then((t) => /episodes 4, 5/i.test(t) && /1\.4 GB/.test(t))),
-  'the pack row names every episode and sums their size',
-  (await packRow.innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 120),
+  await until(() => Promise.all([episodeRow(4).count(), episodeRow(5).count()]).then(([a, b]) => a === 1 && b === 1)),
+  'a season pack lists each of its episodes on its own row',
 )
+check(
+  await until(() => episodeRow(4).innerText().then((t) => /\d (GB|MB)/.test(t))),
+  'each episode of the pack gives its own size',
+  (await episodeRow(4).innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 120),
+)
+check((await rowTitle(/episodes 4, 5/i).count()) === 0, 'and never one row of several episodes')
 await page.screenshot({ path: `${shots}/features-downloads.png` })
 
-// ---------------------------------------------------------------- series page
 await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
 const episodeRows = page.locator('ul li', { has: page.locator('a[href*="/watch/"]') })
 const listed = await until(() => episodeRows.count().then((n) => n > 3), 45_000)
 check(listed, 'episode list rendered (needs AniList reachable)')
 
-// The tick names what it does: "Mark 1 to 3 watched", "Mark 2 to 3 not watched", or the episode alone.
 const tickFor = (n) =>
   page
     .locator('li', { has: page.locator(`a[href$="/watch/${ANIME}/${n}"]`) })
@@ -118,7 +115,6 @@ const tickFor = (n) =>
 const ticked = async (n) => /not watched$/.test((await tickFor(n).getAttribute('aria-label')) ?? '')
 
 if (listed) {
-  // Mark episode 3 by hand: 1-3 tick, 4 does not; marking past unwatched ones asks first.
   check((await tickFor(3).getAttribute('aria-label')) === 'Mark 1 to 3 watched', 'the tick says it marks 1 to 3')
   await tickFor(3).click()
   const confirmRange = page.getByRole('button', { name: 'Mark 1–3' })
@@ -130,7 +126,6 @@ if (listed) {
   let entry = await api(`/api/anime/${ANIME}`)
   check(entry.body?.progress === 3, 'tracker progress is 3', String(entry.body?.progress))
 
-  // Unmark 2: it asks, as 3 goes too; then 2 and 3 untick and 1 stays.
   check((await tickFor(2).getAttribute('aria-label')) === 'Mark 2 to 3 not watched', 'the tick says it unmarks 2 to 3')
   await tickFor(2).click()
   const confirmUnmark = page.getByRole('button', { name: 'Unmark 2–3' })
@@ -141,12 +136,10 @@ if (listed) {
   entry = await api(`/api/anime/${ANIME}`)
   check(entry.body?.progress === 1, 'tracker progress rewound to 1', String(entry.body?.progress))
 
-  // Marking again after an unmark works (the round-trip that used to hang).
   await tickFor(3).click()
   await page.getByRole('button', { name: 'Mark 2–3' }).click()
   check(await until(() => ticked(3)), 'episode 3 ticks again after an unmark')
 
-  // Score menu: readable, picks, persists.
   const scoreButton = page.getByRole('button', { name: 'Your score' })
   await scoreButton.click()
   const eight = page.getByRole('menuitemradio', { name: '8', exact: true })
@@ -164,7 +157,6 @@ if (listed) {
   await page.getByRole('menuitemradio', { name: 'Unrated' }).click()
   check(await until(() => scoreButton.innerText().then((t) => t.includes('Rate'))), 'score can be cleared')
 
-  // Favourite and note.
   const fav = page.getByRole('button', { name: /favourite/i })
   await fav.click()
   check(await until(() => fav.getAttribute('aria-pressed').then((v) => v === 'true')), 'favourite toggles on')
@@ -181,7 +173,6 @@ if (listed) {
   check(favs.body?.items?.length === 1, 'bookmarks endpoint has one favourite')
 }
 
-// ---------------------------------------------------------------- watch page: picker
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 const choose = page.getByRole('button', { name: 'Choose release' })
 check(await until(() => choose.isVisible(), 30_000), 'watch page offers Choose release')
@@ -199,7 +190,6 @@ await page.screenshot({ path: `${shots}/features-picker.png` })
 await page.keyboard.press('Escape')
 check(await until(() => dialog.isVisible().then((v) => !v)), 'picker closes on Escape')
 
-// ---------------------------------------------------------------- browse: random
 await page.goto(`${BASE}/browse`, { waitUntil: 'domcontentloaded' })
 const random = page.getByRole('button', { name: /Surprise me/ })
 await random.click()
@@ -213,10 +203,8 @@ await page.getByRole('button', { name: /Surprise me/ }).click()
 check(await until(() => !!randomRequest), 'filtered random asks the server')
 check(/genres=Romance%2CComedy/.test(randomRequest ?? '') && /format=TV/.test(randomRequest ?? ''), 'random carries the genre and format filters', randomRequest)
 
-// ---------------------------------------------------------------- settings: orphans
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
 await page.getByRole('tab', { name: 'Storage' }).click()
-// Two steps: Find lists what would go, then Delete N.
 const find = page.getByRole('button', { name: 'Find', exact: true })
 check(await until(() => find.isVisible()), 'orphan clean-up is offered')
 await find.click()
@@ -229,7 +217,6 @@ check(
   'clean-up says what it found',
 )
 
-// ---------------------------------------------------------------- settings: preferred groups
 await page.getByRole('tab', { name: 'Downloads' }).click()
 const groups = page.getByLabel('Preferred release groups')
 await groups.fill('SubsPlease, Erai-raws')
@@ -241,7 +228,6 @@ check(
 await page.reload({ waitUntil: 'domcontentloaded' })
 check(await until(() => page.getByLabel('Preferred release groups').inputValue().then((v) => v === 'SubsPlease, Erai-raws')), 'preferred groups survive a reload')
 
-// ---------------------------------------------------------------- settings: speed limit and sharing
 const effective = async () => (await api('/api/prefs')).body?.effective ?? {}
 const pick = async (box, name) => {
   await box.click()
@@ -251,7 +237,6 @@ const speedLimit = page.getByRole('combobox', { name: 'Download speed limit' })
 await pick(speedLimit, '5 Mbps')
 check(await until(async () => (await effective())['downloads.limit_bytes'] === '625000'), 'speed limit saved in bytes a second')
 check(await until(() => page.getByText(/plays faster than it downloads/).isVisible()), 'a cap under a 1080p stream says playback waits')
-// Megabytes instead: the limits read in them, and one picked in megabits stays chosen.
 const unit = page.getByRole('combobox', { name: 'Show speeds in' })
 await pick(unit, 'MB/s')
 check(await until(async () => (await effective())['display.speed'] === 'mbs'), 'speeds set to MB/s')
@@ -267,7 +252,6 @@ const sharing = page.getByRole('combobox', { name: 'Sharing', exact: true })
 await pick(sharing, 'Never')
 check(await until(async () => (await effective())['downloads.upload'] === 'never'), 'sharing set to never')
 check(await until(() => page.getByText(/Downloads get slower/).isVisible()), 'never sharing says downloads get slower')
-// This machine's adapters, VPN or not, with Any network as the default.
 const torrentNet = page.getByRole('combobox', { name: 'Network for torrents' })
 check(await until(() => torrentNet.isVisible()), 'the network for torrents is offered here, on the host')
 check((await torrentNet.innerText()) === 'Any network', 'torrents use any network by default')
@@ -275,7 +259,6 @@ await torrentNet.click()
 const adapters = page.getByRole('listbox', { name: 'Network for torrents' }).getByRole('option')
 check(await until(async () => (await adapters.count()) >= 2), 'this machine\'s adapters are listed', String(await adapters.count()))
 await page.keyboard.press('Escape')
-// Back to the defaults, so the checks after this download at full speed.
 await pick(speedLimit, 'No limit')
 await pick(sharing, 'While downloading')
 check(
@@ -286,7 +269,6 @@ check(
   'back to no limit, sharing while downloading',
 )
 
-// ---------------------------------------------------------------- local files: assign by hand
 copyFileSync(join(LIB, 'Yoru Test Show - 01.mkv'), join(LIB, 'mystery clip.mkv'))
 await post('/api/local/scan', {})
 let mystery
@@ -301,8 +283,6 @@ const row = page.locator('li', { hasText: 'mystery clip' })
 await row.getByRole('button', { name: 'Assign' }).click()
 await page.getByLabel('Search for the show').fill('Chainsaw Man')
 const hit = page.locator('li button', { hasText: /Chainsaw Man/ }).first()
-// Guarded: without a hit the clicks below throw and take the rest of the run
-// with them, hiding every later check behind one unreachable search.
 const offered = await until(() => hit.isVisible(), 30_000)
 check(offered, 'search offers a show to pick (AniList reachable)')
 if (offered) {
@@ -319,14 +299,12 @@ if (offered) {
   )
   check(await until(() => row.getByRole('link', { name: 'Play ep 9' }).isVisible()), 'row now offers to play it')
 }
-// The rescan above must not have undone the episode-1 assignment from setup.
 const ep1 = (await api('/api/local/files')).body?.items?.find((f) => String(f.path ?? '').includes('Yoru Test Show - 01'))
 check(ep1?.animeId === ANIME && ep1?.episode === 1, 'hand assignment survives a rescan', JSON.stringify(ep1 ?? {}).slice(0, 120))
 const localPlay = await post('/api/play', { animeId: ANIME, episode: 1 })
 check(localPlay.body?.source === 'local', 'episode 1 still plays from the local file', localPlay.body?.source)
 await page.screenshot({ path: `${shots}/features-local.png` })
 
-// ---------------------------------------------------------------- player: speed and volume carry over
 await post('/api/prefs', { key: 'playback.autoplay', value: 'true' })
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 const video = page.locator('video')
@@ -340,14 +318,11 @@ await video.evaluate((v) => {
   v.volume = 0.3
 })
 check(await until(() => video.evaluate((v) => Math.abs(v.volume - 0.3) < 0.01)), 'volume set to 30%')
-// The change is persisted from the volumechange event, which lands a tick later.
 check(await until(() => page.evaluate(() => /"volume":0\.3/.test(localStorage.getItem('yoru.player') ?? ''))), 'volume remembered')
 await page.goto(`${BASE}/watch/${ANIME}/9`, { waitUntil: 'domcontentloaded' })
 check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'next episode loads')
 check(await until(() => video.evaluate((v) => Math.abs(v.volume - 0.3) < 0.01 && v.playbackRate === 1.5)), 'volume and speed carried to the next episode', await video.evaluate((v) => `vol=${v.volume} rate=${v.playbackRate}`))
 
-// ------------------------------------------------------------ player: controls hide after a keyboard resume
-// The pointer never moves after the first nudge, so only the resume can re-arm the hide timer.
 const cursorHidden = () =>
   page.evaluate(() => !!document.querySelector('.group\\/player')?.classList.contains('cursor-none'))
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
@@ -363,15 +338,12 @@ await page.keyboard.press('Space')
 check(await until(() => video.evaluate((v) => !v.paused)), 'space resumes')
 check(await until(cursorHidden, 8000), 'controls fade again after a keyboard resume')
 
-// ---------------------------------------------------------------- history stats
-// The speed check above played for a few seconds; that is watch time.
 await sleep(11_000)
 const stats = await api('/api/history/stats')
 check((stats.body?.totalSeconds ?? 0) > 0, 'played time is counted', String(stats.body?.totalSeconds))
 await page.goto(`${BASE}/history`, { waitUntil: 'domcontentloaded' })
 check(await until(() => page.getByLabel('Watch stats').isVisible()), 'history page shows watch stats')
 
-// ---------------------------------------------------------------- search dropdown
 await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
 const search = page.getByRole('combobox', { name: 'Search anime' })
 await search.fill('Chainsaw')
@@ -386,8 +358,6 @@ check(await until(() => page.getByText(/^Nothing matches/).isVisible(), 30_000),
 check(await page.getByRole('option', { name: /See all results for/ }).isVisible(), 'all results offered as the last row')
 await search.press('Escape')
 
-// ---------------------------------------------------------------- external links + trailer
-// The show's own links: watched episodes' Discussion buttons name MyAnimeList too.
 const aniLink = page.getByRole('link', { name: /^AniList/ })
 check(await until(() => aniLink.isVisible()), 'AniList link on the series page')
 check((await aniLink.getAttribute('href')) === `https://anilist.co/anime/${ANIME}`, 'AniList link targets the show')
@@ -406,7 +376,6 @@ if (await trailerBtn.isVisible()) {
   console.log('skip trailer: none listed for this show')
 }
 
-// ---------------------------------------------------------------- library sort, filter, own score
 await post('/api/score', { animeId: ANIME, score: 80 })
 await page.goto(`${BASE}/library?sort=score`, { waitUntil: 'domcontentloaded' })
 check(await until(() => page.locator(`a[href="/anime/${ANIME}"]`).first().isVisible()), 'library lists the show')
@@ -420,7 +389,6 @@ const sortSelect = page.getByLabel('Sort library')
 await sortSelect.selectOption('title')
 check(await until(() => page.url().includes('sort=title')), 'sort lives in the URL')
 
-// ---------------------------------------------------------------- filler skip + up next
 check(seed('-extras'), 'filler and notification rows seeded')
 await post('/api/prefs', { key: 'playback.skip_filler', value: 'true', animeId: ANIME })
 const nextApi = await api(`/api/episodes/next?id=${ANIME}&after=1`)
@@ -433,7 +401,6 @@ await video.evaluate((v) => {
 })
 const upNext = page.getByRole('dialog', { name: 'Up next' })
 check(await until(() => upNext.isVisible(), 20_000), 'up-next card appears at the end')
-// Fullscreen paints only the player's subtree, so a card outside it counts down unseen.
 check(
   await page.evaluate(() => {
     const card = document.querySelector('[role="dialog"][aria-label="Up next"]')
@@ -457,14 +424,11 @@ check(await until(() => upNext.getByRole('timer', { name: /Plays in [1-5] second
 await upNext.getByRole('button', { name: 'Cancel' }).click()
 await sleep(6500)
 check(page.url().endsWith(`/watch/${ANIME}/1`), 'cancel stops the countdown', page.url())
-// The ended video sits paused; watching the last half-second again ends it again.
 await video.evaluate((v) => {
   v.currentTime = v.duration - 0.5
   void v.play()
 })
 check(await until(() => page.url().endsWith(`/watch/${ANIME}/3`), 20_000), 'auto-next lands on episode 3 after five seconds', page.url())
-// ---------------------------------------------------------------- fullscreen survives the next episode
-// Fullscreen belongs to the player element; remounting it between episodes drops out of fullscreen.
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'episode 1 loads for the fullscreen check')
 await page.evaluate(() => {
@@ -489,8 +453,6 @@ if (wentFullscreen) {
 }
 check(await until(() => video.evaluate((v) => !v.paused), 20_000), 'the next episode plays rather than sitting paused')
 
-// ---------------------------------------------------------------- opening and ending markers
-// The release's own chapters name the opening and ending, with no AniSkip lookup needed.
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'episode 1 loads for the skip check')
 const dur = Math.round(await video.evaluate((v) => v.duration))
@@ -501,19 +463,15 @@ const kinds = (marks.body?.ranges ?? []).map((r) => r.kind).join(',')
 check(kinds === 'op,ed', 'both an opening and an ending were found', kinds)
 const op = (marks.body?.ranges ?? []).find((r) => r.kind === 'op')
 check(op && Math.round(op.start) === 10 && Math.round(op.end) === 40, 'the opening carries the chapter times', JSON.stringify(op))
-// Chapters are read off the file, so they need no episode length at all.
 const guessed = await api(`/api/episode/skips?anime=${ANIME}&episode=1`)
 check((guessed.body?.ranges ?? []).some((r) => r.source === 'chapters'), 'chapters resolve without a duration',
   JSON.stringify(guessed.body?.ranges))
-// The marker is titled "Opening · m:ss–m:ss"; that tooltip is what a viewer sees.
 await page.mouse.move(400, 300)
 const marker = page.locator('div.group\\/scrub div[title^="Opening"]')
 check(await until(() => marker.first().isVisible(), 20_000), 'the opening is marked on the scrub bar',
   await marker.first().getAttribute('title').catch(() => 'absent'))
 check(await until(() => page.locator('div.group\\/scrub div[title^="Ending"]').first().isVisible()), 'the ending is marked too')
 
-// ---------------------------------------------------------------- resume survives an in-app switch
-// The reused player attaches the new source at its saved position, not the last episode's.
 await post('/api/progress', { animeId: ANIME, episode: 3, position: 40, duration: 180, played: 40 })
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'episode 1 loads before the switch')
@@ -528,7 +486,6 @@ check(
 const thirdPlay = await post('/api/play', { animeId: ANIME, episode: 3 })
 check(thirdPlay.body?.source === 'local', 'episode 3 plays from the local copy, not a torrent', thirdPlay.body?.source)
 
-// ---------------------------------------------------------------- desktop notifications
 const notifyContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
 await notifyContext.grantPermissions(['notifications'], { origin: BASE })
 const notifyPage = await notifyContext.newPage()
@@ -544,7 +501,6 @@ await notifyPage.addInitScript(() => {
     }
   }
   window.Notification = FakeNotification
-  // With the alerts worker registered, the tab shows them through it.
   ServiceWorkerRegistration.prototype.showNotification = function (title, opts) {
     window.__notes.push({ title, body: opts?.body })
     return Promise.resolve()
@@ -554,9 +510,7 @@ await notifyPage.goto(`${BASE}/settings?tab=Notifications`, { waitUntil: 'domcon
 const desktopSwitch = notifyPage.getByRole('switch', { name: 'Alerts on this device' })
 check(await until(() => desktopSwitch.isVisible()), 'alerts switch offered')
 await desktopSwitch.click()
-// The headless browser has no push service: alerts in an open tab still turn on.
 check(await until(() => notifyPage.evaluate(() => localStorage.getItem('yoru.notify.desktop') === '1')), 'alerts switch turns on')
-// First sight only records the backlog; a newer item after that is announced.
 await notifyPage.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
 await sleep(1500)
 check(await notifyPage.evaluate(() => window.__notes.length === 0), 'existing notifications are not replayed')
@@ -570,7 +524,6 @@ check(
 )
 await notifyContext.close()
 
-// ---------------------------------------------------------------- mobile double-tap seek
 const phone = await browser.newContext({ viewport: { width: 420, height: 800 }, hasTouch: true, isMobile: true })
 const phonePage = await phone.newPage()
 await phonePage.goto(`${BASE}/watch/${ANIME}/9`, { waitUntil: 'domcontentloaded' })
@@ -597,14 +550,12 @@ await tapAt(0.15)
 await sleep(80)
 await tapAt(0.15)
 check(await until(() => pv.evaluate((v) => v.currentTime >= 29 && v.currentTime <= 31.5)), 'double tap on the left seeks back ten seconds', String(await pv.evaluate((v) => v.currentTime)))
-// A lone tap in the middle still toggles play.
 await pv.evaluate((v) => v.pause())
 await sleep(400)
 await tapAt(0.5)
 check(await until(() => pv.evaluate((v) => !v.paused)), 'single tap plays')
 await phone.close()
 
-// ---------------------------------------------------------------- open in another app
 const android = await browser.newContext({
   viewport: { width: 420, height: 800 },
   hasTouch: true,
@@ -633,8 +584,6 @@ check(/^attachment; filename=/.test(saved.headers.get('content-disposition') ?? 
   `${saved.status} ${saved.headers.get('content-disposition')}`)
 await android.close()
 
-// ---------------------------------------------------------------- up next list
-// One list, played top to bottom: + on a row adds, Home edits it, the player follows it.
 const FRIEREN = 154587
 const upNextKeys = async () =>
   ((await api('/api/upnext')).body?.items ?? []).map((it) => `${it.animeId}:${it.episode}`).join(' ')
@@ -663,11 +612,9 @@ check(await upNextRail.getByText(/^2 episodes/).isVisible(), 'the row says how m
 await upNextRail.getByRole('button', { name: 'Edit list' }).click()
 const sheet = page.getByRole('dialog', { name: 'Edit Up next' })
 check(await until(() => sheet.isVisible()), 'Edit list opens the sheet')
-// The menu moves a show for remotes, keyboards and anyone who can't drag.
 await sheet.getByRole('button', { name: /^More for / }).last().click()
 await page.getByRole('menuitem', { name: 'Move to top' }).click()
 check(await until(async () => (await upNextKeys()).startsWith(`${FRIEREN}:`)), 'Move to top puts that show first', await upNextKeys())
-// Measured once the rows stand in the new order, by show, or the drag aims at a row mid-render.
 const rowOrder = () => sheet.locator('[data-show]').evaluateAll((els) => els.map((e) => e.dataset.show).join(' '))
 await until(async () => (await rowOrder()) === `${FRIEREN} ${ANIME}`)
 await sleep(300)
@@ -679,7 +626,6 @@ await page.mouse.down()
 await page.mouse.move(gripTo.x + gripTo.width / 2, gripTo.y + gripTo.height / 2 + 20, { steps: 8 })
 await page.mouse.up()
 check(await until(async () => (await upNextKeys()).startsWith(`${ANIME}:`)), 'dragging the grip reorders the shows', await upNextKeys())
-// Arrow keys on the grip move a show too, and the grip keeps the focus for the next press.
 await until(async () => (await rowOrder()) === `${ANIME} ${FRIEREN}`)
 await grips.first().focus()
 await page.keyboard.press('ArrowDown')
@@ -694,7 +640,6 @@ check(await until(async () => (await upNextKeys()).startsWith(`${ANIME}:`)), 'ar
 await page.keyboard.press('Escape')
 check(await until(() => sheet.isVisible().then((v) => !v)), 'Escape closes the sheet')
 
-// A phone gets the same sheet from the bottom, full width.
 const upNextPhone = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
 const upp = await upNextPhone.newPage()
 await upp.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
@@ -710,7 +655,6 @@ const atBottom = async () => {
 check(await until(atBottom), 'on a phone it is a bottom sheet', JSON.stringify(await phoneSheet.boundingBox()))
 await upNextPhone.close()
 
-// The end of an episode offers the list's next, not the show's, and says what follows.
 await post('/api/prefs', { key: 'playback.autonext', value: 'false' })
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'episode 1 loads for the Up next list check')
@@ -729,11 +673,9 @@ check(/Then .+ · Ep 1/.test(await cardText()), 'and says what plays after it', 
 await upNext.getByRole('button', { name: 'Play now' }).click()
 check(await until(() => page.url().endsWith(`/watch/${ANIME}/9`)), 'Play now goes to the list\'s episode', page.url())
 
-// Watched episodes leave by themselves.
 await post('/api/progress', { animeId: ANIME, episode: 9, position: 175, duration: 180, played: 100, final: true })
 check(await until(async () => (await upNextKeys()) === `${FRIEREN}:1`), 'a watched episode leaves the list', await upNextKeys())
 
-// Add next episodes: one per show being watched, and a second press adds nothing.
 await post('/api/status', { animeId: ANIME, status: 'CURRENT' })
 await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
 await page.getByRole('button', { name: 'Edit list' }).click()
@@ -754,7 +696,6 @@ check(
 )
 await post('/api/prefs', { key: 'playback.autonext', value: 'true' })
 
-// ---------------------------------------------------------------- hentai filter
 const hentai = await api('/api/filters')
 check((hentai.body?.genres ?? []).includes('Hentai'), 'Hentai is in the genre vocabulary (AniList reachable)')
 

@@ -501,13 +501,15 @@ func (s *Store) GroupTiers(ctx context.Context) ([]metadata.GroupTier, error) {
 
 type SeaDexPick struct {
 	InfoHash, Group, Tracker, URL string
+	DualAudio                     bool
 	Files                         []metadata.SeaDexFile
 }
 
 func (s *Store) SeaDexBests(ctx context.Context, animeID int) ([]SeaDexPick, error) {
 	rows, err := s.r.QueryContext(ctx, `
-		SELECT info_hash, coalesce(release_group, ''), coalesce(tracker, ''), coalesce(url, ''), files
-		FROM seadex WHERE anime_id = ? AND is_best = 1 AND info_hash <> ''`, animeID)
+		SELECT info_hash, coalesce(release_group, ''), coalesce(tracker, ''), coalesce(url, ''), dual_audio, files
+		FROM seadex WHERE anime_id = ? AND is_best = 1 AND info_hash <> ''
+		ORDER BY lower(info_hash)`, animeID)
 	if err != nil {
 		return nil, err
 	}
@@ -516,7 +518,7 @@ func (s *Store) SeaDexBests(ctx context.Context, animeID int) ([]SeaDexPick, err
 	for rows.Next() {
 		var p SeaDexPick
 		var files string
-		if err := rows.Scan(&p.InfoHash, &p.Group, &p.Tracker, &p.URL, &files); err != nil {
+		if err := rows.Scan(&p.InfoHash, &p.Group, &p.Tracker, &p.URL, &p.DualAudio, &files); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(files), &p.Files)
@@ -528,14 +530,15 @@ func (s *Store) SeaDexBests(ctx context.Context, animeID int) ([]SeaDexPick, err
 type KeptCopy struct {
 	AnimeID         int
 	EpKey, InfoHash string
-	Name, Title     string
+	Name, Path      string
+	Title           string
 	Cover           *string
 }
 
 func (s *Store) KeptCopies(ctx context.Context) ([]KeptCopy, error) {
 	mode := s.TitleMode(ctx, 0)
 	rows, err := s.r.QueryContext(ctx, `
-		SELECT DISTINCT f.anime_id, f.ep_key, f.info_hash, coalesce(t.name, ''),
+		SELECT DISTINCT f.anime_id, f.ep_key, f.info_hash, coalesce(t.name, ''), coalesce(f.path, ''),
 		       coalesce(a.title_romaji, ''), a.title_english, a.cover_url
 		FROM cache_entry c
 		JOIN torrent_file f ON f.info_hash = c.info_hash AND f.selected = 1 AND (c.file_index = f.file_index OR c.file_index = ?)
@@ -552,11 +555,30 @@ func (s *Store) KeptCopies(ctx context.Context) ([]KeptCopy, error) {
 		var k KeptCopy
 		var romaji string
 		var english *string
-		if err := rows.Scan(&k.AnimeID, &k.EpKey, &k.InfoHash, &k.Name, &romaji, &english, &k.Cover); err != nil {
+		if err := rows.Scan(&k.AnimeID, &k.EpKey, &k.InfoHash, &k.Name, &k.Path, &romaji, &english, &k.Cover); err != nil {
 			return nil, err
 		}
 		k.Title = PickTitle(mode, romaji, english)
 		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) QueuedPins(ctx context.Context, animeID int) (map[string]string, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT ep_key, lower(info_hash) FROM download_queue
+		WHERE anime_id = ? AND state IN ('pending', 'active') AND info_hash IS NOT NULL AND info_hash <> ''`, animeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var ep, hash string
+		if err := rows.Scan(&ep, &hash); err != nil {
+			return nil, err
+		}
+		out[ep] = hash
 	}
 	return out, rows.Err()
 }

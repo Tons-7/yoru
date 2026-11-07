@@ -537,6 +537,9 @@ type Progress struct {
 	Peers int     `json:"peers"`
 
 	Warning string `json:"warning,omitempty"`
+
+	Files    []int64 `json:"-"`
+	Included []bool  `json:"-"`
 }
 
 func (c *Cache) Pause(ctx context.Context, infoHash string) error {
@@ -650,11 +653,13 @@ func (c *Cache) Progress(ctx context.Context) (map[string]Progress, error) {
 
 			Paused:  stats.Live == nil && !stats.Finished && !stats.Checking(),
 			Warning: stats.Warning,
+			Files:   stats.FileProgress,
 		}
 		if stats.Live != nil {
 			p.Mbps = megabits(stats.Live.DownloadSpeed.Mbps)
 			p.Peers = stats.Live.Snapshot.PeerStats.Live
 		}
+		p.Included = stats.FileIncluded
 		out[strings.ToLower(t.InfoHash)] = p
 	}
 	return out, nil
@@ -904,7 +909,7 @@ func onDisk(f torrent.File) string {
 func heldBytes(detail torrent.Detail, fileIndex int) int64 {
 	var total int64
 	for i, f := range detail.Files {
-		if !f.Included {
+		if fileIndex == store.WholeTorrent && !f.Included {
 			continue
 		}
 		if fileIndex != store.WholeTorrent && i != fileIndex {

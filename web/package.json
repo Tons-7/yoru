@@ -18,6 +18,9 @@
     "release-check": "node scripts/release-check.mjs"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/outfit": "^5.3.0",
     "@tanstack/react-query": "^5.105.0",

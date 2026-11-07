@@ -1,5 +1,5 @@
 import { deviceActivity, IDLE, pcActivity, useDoneFlash, type Activity } from '../lib/activity'
-import { sortDownloads } from '../lib/downloads'
+import { sortDownloads, totalSpeed } from '../lib/downloads'
 import { speed } from '../lib/format'
 import { savedKey, useSaved } from '../lib/offline'
 import { useDownloadQueue, useDownloads, usePrefs, useSetPref, useSpeedUnit, useTrackers } from '../lib/queries'
@@ -52,7 +52,7 @@ export function usePcLine(): DownloadsLine {
   const s = sortDownloads(downloads.data?.items ?? [], queue.data?.items ?? [])
   const activity = pcActivity(s)
   const done = useDoneFlash(activity)
-  const mbps = s.active.reduce((n, d) => n + (d.mbps ?? 0), 0)
+  const mbps = totalSpeed(s.active)
   const moving = s.active.length + s.searching.length
   const waiting = s.held.length + s.waitingQueue.length
   return {

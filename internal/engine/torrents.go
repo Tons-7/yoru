@@ -19,7 +19,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// hashOf reads the info hash from a magnet link.
 func hashOf(magnet string) (metainfo.Hash, []string, error) {
 	m, err := metainfo.ParseMagnetUri(strings.TrimSpace(magnet))
 	if err != nil {
@@ -37,7 +36,6 @@ func (e *Engine) awaitInfo(ctx context.Context, t *bt.Torrent) error {
 	}
 }
 
-// inspect resolves a magnet's file list without downloading any of it.
 func (e *Engine) inspect(ctx context.Context, magnet string) (torrent.Detail, error) {
 	hash, _, err := hashOf(magnet)
 	if err != nil {
@@ -76,7 +74,6 @@ func (e *Engine) inspect(ctx context.Context, magnet string) (torrent.Detail, er
 	if err := e.awaitInfo(ctx, in.t); err != nil {
 		return torrent.Detail{}, err
 	}
-	// An add may have taken the torrent over meanwhile; its selection stands.
 	e.mu.Lock()
 	en, managed := e.byHash[hash]
 	if !managed {
@@ -91,7 +88,6 @@ func (e *Engine) inspect(ctx context.Context, magnet string) (torrent.Detail, er
 	return detailOf(in.t, e.names, nil), nil
 }
 
-// add starts a torrent or adds to one held, selecting the files matching only, the rest as they were.
 func (e *Engine) add(ctx context.Context, magnet, only string) (*entry, error) {
 	hash, trackers, err := hashOf(magnet)
 	if err != nil {
@@ -147,7 +143,6 @@ func (e *Engine) add(ctx context.Context, magnet, only string) (*entry, error) {
 	return en, nil
 }
 
-// forgetMissing clears records of deleted files' pieces, or a regrown file would pass zero-filled holes.
 func (e *Engine) forgetMissing(t *bt.Torrent) {
 	pieces := e.pieceStore()
 	if pieces == nil {
@@ -163,14 +158,12 @@ func (e *Engine) forgetMissing(t *bt.Torrent) {
 	}
 }
 
-// pieceStore is the running client's piece completion; nil while the client is down.
 func (e *Engine) pieceStore() storage.PieceCompletion {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.pieces
 }
 
-// track registers a torrent under a new id. Caller holds the lock.
 func (e *Engine) track(t *bt.Torrent, trackers []string) *entry {
 	id := e.keepIDs[t.InfoHash()]
 	if id == 0 {
@@ -187,7 +180,6 @@ func (e *Engine) track(t *bt.Torrent, trackers []string) *entry {
 	return en
 }
 
-// vanished has bt re-read the completion of a deleted file's pieces, which storage has just cleared.
 func (e *Engine) vanished(hash metainfo.Hash, first, last int) {
 	e.mu.Lock()
 	en, ok := e.byHash[hash]
@@ -201,10 +193,8 @@ func (e *Engine) vanished(hash metainfo.Hash, first, last int) {
 	}
 }
 
-// A failed write stops the torrent's downloading; this long later it tries again, in case space was freed.
 const writeRetry = time.Minute
 
-// writeFailed stops downloading a torrent whose chunks can't be written and says so in its stats.
 func (e *Engine) writeFailed(en *entry, err error) {
 	if errors.Is(err, errStorageClosed) {
 		return
@@ -220,7 +210,6 @@ func (e *Engine) writeFailed(en *entry, err error) {
 	en.t.DisallowDataDownload()
 }
 
-// retryWrites lets a torrent stopped by a write failure download again once writeRetry has passed.
 func (e *Engine) retryWrites(en *entry, now time.Time) {
 	e.mu.Lock()
 	due := en.writeErr != "" && now.Sub(en.writeErrAt) >= writeRetry
@@ -234,7 +223,6 @@ func (e *Engine) retryWrites(en *entry, now time.Time) {
 	}
 }
 
-// apply turns the selection and pause state into file priorities.
 func (e *Engine) apply(en *entry) {
 	if en.t.Info() == nil {
 		return
@@ -243,12 +231,10 @@ func (e *Engine) apply(en *entry) {
 	selected := maps.Clone(en.selected)
 	paused := en.paused
 	if !paused {
-		// Resumed or added again: that is the retry, now.
 		en.writeErr = ""
 	}
 	e.mu.Unlock()
 	for i, f := range en.t.Files() {
-		// Paused wants nothing: a torrent wanting pieces keeps dialing peers, taking a download's budget.
 		if selected[i] && !paused {
 			f.SetPriority(bt.PiecePriorityNormal)
 		} else {
@@ -272,7 +258,6 @@ func (e *Engine) setPaused(en *entry, paused bool) {
 	e.saveSession()
 }
 
-// remove drops a torrent; with data, its files go too.
 func (e *Engine) remove(en *entry, data bool) error {
 	e.mu.Lock()
 	delete(e.byID, en.id)
@@ -283,7 +268,6 @@ func (e *Engine) remove(en *entry, data bool) error {
 	var paths []string
 	var pieces int
 	if info := en.t.Info(); info != nil && data {
-		// A file another held torrent maps to is its now, whatever the names say.
 		others := e.held()
 		for _, f := range en.t.Files() {
 			if p := e.names.filePath(en.t, f); !e.names.shared(p, en.t.InfoHash(), others) {
@@ -304,7 +288,6 @@ func (e *Engine) remove(en *entry, data bool) error {
 		e.names.forget(hash)
 		return nil
 	}
-	// Completion would otherwise claim pieces whose bytes are gone.
 	if store := e.pieceStore(); store != nil {
 		if f, ok := store.(interface{ Forget(metainfo.Hash) error }); !ok || f.Forget(hash) != nil {
 			for i := range pieces {
@@ -317,7 +300,6 @@ func (e *Engine) remove(en *entry, data bool) error {
 		switch err := os.Remove(p); {
 		case err == nil || os.IsNotExist(err):
 		case inUse(err):
-			// A stream switching releases still reads the old file for a moment; it goes once let go.
 			e.doom(p, folder, err)
 		default:
 			failed = append(failed, p)
@@ -333,7 +315,6 @@ func (e *Engine) remove(en *entry, data bool) error {
 	return nil
 }
 
-// Long enough for any reader to finish closing; past it, the file stays for the orphan cleanup.
 const doomedFor = 30 * time.Minute
 
 type doomedFile struct {
@@ -351,7 +332,6 @@ func (e *Engine) doom(path, folder string, err error) {
 	e.doomed[path] = doomedFile{folder: folder, until: time.Now().Add(doomedFor)}
 }
 
-// reap tries the doomed files again; one a torrent maps to again, added back since, is that torrent's now.
 func (e *Engine) reap(now time.Time) {
 	e.mu.Lock()
 	doomed := maps.Clone(e.doomed)
@@ -381,7 +361,6 @@ func (e *Engine) reap(now time.Time) {
 	}
 }
 
-// held lists the torrents the engine manages.
 func (e *Engine) held() []*bt.Torrent {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -392,7 +371,6 @@ func (e *Engine) held() []*bt.Torrent {
 	return out
 }
 
-// removeEmptyDirs deletes dir and empty folders below it, leaving any with files.
 func removeEmptyDirs(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -406,7 +384,6 @@ func removeEmptyDirs(dir string) {
 	os.Remove(dir)
 }
 
-// fileName is a file's path inside the torrent, "/"-joined.
 func fileName(t *bt.Torrent, f *bt.File) string {
 	parts := components(t, f)
 	return strings.Join(parts, "/")
@@ -421,7 +398,6 @@ func components(t *bt.Torrent, f *bt.File) []string {
 	return slices.Clone(fi.BestPath())
 }
 
-// diskComponents is where a file is under OutputFolder: names made safe, a single file's hash tag.
 func diskComponents(t *bt.Torrent, f *bt.File, names *layout) []string {
 	info := t.Info()
 	if !info.IsDir() {
@@ -454,13 +430,11 @@ func detailOf(t *bt.Torrent, names *layout, selected map[int]bool) torrent.Detai
 	return d
 }
 
-// stats reports the fields Yoru reads, in rqbit's stats/v1 shape.
 func (e *Engine) stats(en *entry) torrent.Stats {
 	var s torrent.Stats
 	e.mu.Lock()
 	selected := maps.Clone(en.selected)
 	paused, verifying := en.paused, en.verifying
-	// A write failure retries after writeRetry, so it is a warning: as Error, waiters would give up for good.
 	s.Error, s.Warning = en.err, en.writeErr
 	e.mu.Unlock()
 
@@ -476,6 +450,7 @@ func (e *Engine) stats(en *entry) torrent.Stats {
 		for i, f := range en.t.Files() {
 			done := f.BytesCompleted()
 			s.FileProgress = append(s.FileProgress, done)
+			s.FileIncluded = append(s.FileIncluded, selected[i])
 			if selected[i] {
 				s.ProgressBytes += done
 				s.TotalBytes += f.Length()
@@ -509,8 +484,6 @@ func (e *Engine) stats(en *entry) torrent.Stats {
 	return s
 }
 
-// fileRanges merges a file's complete pieces into the stretches of it that are on disk.
-// verified: the selected files' pieces all passed their hash; BytesCompleted also counts chunks awaiting one.
 func verified(t *bt.Torrent, selected map[int]bool) bool {
 	for i, f := range t.Files() {
 		if !selected[i] {

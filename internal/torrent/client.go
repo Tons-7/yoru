@@ -1,4 +1,3 @@
-// Package torrent is the engine's loopback client; its stream waits for pieces a sparse file reads as zeroes.
 package torrent
 
 import (
@@ -25,18 +24,16 @@ import (
 
 type Client struct {
 	http *http.Client
-	// No timeouts: stream reads, even headers, take as long as the swarm; the caller's context bounds them.
+
 	stream *http.Client
 	base   string
 	engine Engine
 
-	// Magnets whose metadata never resolved, so a retry skips the timeout; a swarm can revive, so it expires.
 	mu         sync.Mutex
 	badMagnets map[string]time.Time
 	secret     string
 }
 
-// Engine is what this client talks to; wired in, calls start it on demand.
 type Engine interface {
 	Ensure(context.Context) error
 }
@@ -46,26 +43,21 @@ func (c *Client) WithEngine(e Engine) *Client {
 	return c
 }
 
-// Limits are the engine's speed, upload and network settings, changed from Settings while it runs.
 type Limits struct {
-	// DownloadBytes caps download in bytes a second; 0 is no cap.
 	DownloadBytes int64
 	Upload        string
-	// Adapter is the network adapter torrents keep to (a VPN's), down or not; empty is any.
+
 	Adapter string
 }
 
-// Network is where torrents go out: the adapter chosen, its address in use, or that they wait for it.
 type Network struct {
 	Adapter string `json:"adapter"`
 	Address string `json:"address,omitempty"`
 	Waiting bool   `json:"waiting"`
 }
 
-// NetworkReporter is an engine that can say how it is connected.
 type NetworkReporter interface{ Network() Network }
 
-// Network asks the engine how torrents are connected; the zero value when it can't say.
 func (c *Client) Network() Network {
 	if r, ok := c.engine.(NetworkReporter); ok {
 		return r.Network()
@@ -73,16 +65,13 @@ func (c *Client) Network() Network {
 	return Network{}
 }
 
-// Upload settings: share only while a torrent downloads (finished ones never seed), or never.
 const (
 	UploadWhileDownloading = "while_downloading"
 	UploadNever            = "never"
 )
 
-// Limiter is an engine that takes Limits without being started for them.
 type Limiter interface{ SetLimits(Limits) }
 
-// SetLimits hands the settings to the engine; false when it can't take them.
 func (c *Client) SetLimits(l Limits) bool {
 	lim, ok := c.engine.(Limiter)
 	if ok {
@@ -91,10 +80,8 @@ func (c *Client) SetLimits(l Limits) bool {
 	return ok
 }
 
-// SecretHeader carries the per-run secret the engine wants on every request that is not a stream.
 const SecretHeader = "X-Yoru-Engine"
 
-// NewSecret is a random token for one run.
 func NewSecret() string {
 	b := make([]byte, 16)
 	rand.Read(b)
@@ -106,14 +93,12 @@ func (c *Client) WithSecret(secret string) *Client {
 	return c
 }
 
-// WithTransport sends every request through rt; a test answers in memory, which testing/synctest needs.
 func (c *Client) WithTransport(rt http.RoundTripper) *Client {
 	c.http.Transport = rt
 	c.stream.Transport = rt
 	return c
 }
 
-// Addr is the engine's host:port.
 func (c *Client) Addr() string {
 	if u, err := url.Parse(c.base); err == nil {
 		return u.Host
@@ -123,10 +108,8 @@ func (c *Client) Addr() string {
 
 func (c *Client) url(path string) string { return c.base + path }
 
-// ErrUnavailable wraps every unreachable engine, so "no engine" differs from "the engine said no".
 var ErrUnavailable = errors.New("torrent engine unavailable")
 
-// Within reports whether path is dir or inside it.
 func Within(dir, path string) bool {
 	if dir == "" || path == "" {
 		return false
@@ -138,8 +121,6 @@ func Within(dir, path string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
-// How long a dead magnet stays skipped. Long enough to spare a retry storm,
-// short enough that a swarm coming back is picked up on the next attempt.
 const inspectFailTTL = 3 * time.Minute
 
 func NewClient(base string) *Client {
@@ -173,23 +154,21 @@ type Detail struct {
 type Stats struct {
 	State         string `json:"state"`
 	Error         string `json:"error"`
-	Warning       string `json:"warning,omitempty"` // retried by the engine itself (a failed disk write); not fatal
+	Warning       string `json:"warning,omitempty"`
 	ProgressBytes int64  `json:"progress_bytes"`
 	TotalBytes    int64  `json:"total_bytes"`
 	Finished      bool   `json:"finished"`
-	// Per file, in the order of Detail.Files.
+
 	FileProgress []int64 `json:"file_progress"`
+	FileIncluded []bool  `json:"file_included"`
 	Live         *Live   `json:"live"`
 }
 
-// Live is present while the torrent is downloading.
 type Live struct {
 	DownloadSpeed struct {
-		// MiB/s, despite the name.
 		Mbps float64 `json:"mbps"`
 	} `json:"download_speed"`
 	Snapshot struct {
-		// Includes unverified bytes, so it moves mid-piece.
 		FetchedBytes int64 `json:"fetched_bytes"`
 		PeerStats    struct {
 			Live int `json:"live"`
@@ -197,7 +176,8 @@ type Live struct {
 	} `json:"snapshot"`
 }
 
-// Peers is how many are actually connected. A tracker's seeder count is routinely wrong.
+func (l *Live) BytesPerSecond() float64 { return l.DownloadSpeed.Mbps * (1 << 20) }
+
 func (s Stats) Peers() int {
 	if s.Live == nil {
 		return 0
@@ -205,7 +185,6 @@ func (s Stats) Peers() int {
 	return s.Live.Snapshot.PeerStats.Live
 }
 
-// Received counts every byte arrived, verified or not.
 func (s Stats) Received() int64 {
 	if s.Live == nil {
 		return s.ProgressBytes
@@ -213,7 +192,6 @@ func (s Stats) Received() int64 {
 	return max(s.ProgressBytes, s.Live.Snapshot.FetchedBytes)
 }
 
-// FileDone falls back to the torrent's state without per-file progress.
 func (s Stats) FileDone(d Detail, i int) bool {
 	if i < 0 || i >= len(d.Files) || i >= len(s.FileProgress) {
 		return s.Finished
@@ -228,11 +206,8 @@ func (s Stats) Percent() float64 {
 	return float64(s.ProgressBytes) / float64(s.TotalBytes) * 100
 }
 
-// How long a magnet gets to produce its file list. A live swarm answers in
-// seconds, a dead one never does — short so a dead release doesn't stall the queue.
 const inspectTimeout = 25 * time.Second
 
-// Inspect fetches the file list before any download; a magnet that just failed to resolve is refused at once.
 func (c *Client) Inspect(parent context.Context, magnet string) (*Torrent, error) {
 	if until, bad := c.magnetFailedRecently(magnet); bad {
 		return nil, fmt.Errorf("metadata did not resolve; skipping for %s", time.Until(until).Round(time.Second))
@@ -242,17 +217,14 @@ func (c *Client) Inspect(parent context.Context, magnet string) (*Torrent, error
 	defer cancel()
 
 	got, err := c.add(ctx, magnet, url.Values{"list_only": {"true"}})
-	// A caller cancelling says nothing about the swarm, so it isn't marked.
 	if err != nil && parent.Err() == nil {
 		c.markMagnetFailed(magnet)
 	}
 	return got, err
 }
 
-// A release picked by hand has no next candidate to fall back on, so its file list is waited for.
 const pickedInspectTimeout = 3 * time.Minute
 
-// InspectPicked is Inspect for a release someone chose: a longer wait, never refused for an earlier failure.
 func (c *Client) InspectPicked(parent context.Context, magnet string) (*Torrent, error) {
 	ctx, cancel := context.WithTimeout(parent, pickedInspectTimeout)
 	defer cancel()
@@ -278,7 +250,6 @@ func (c *Client) markMagnetFailed(magnet string) {
 	c.mu.Unlock()
 }
 
-// Add downloads exactly one file of a pack; one already held keeps its other selected files.
 func (c *Client) Add(ctx context.Context, magnet string, file File) (*Torrent, error) {
 	return c.add(ctx, magnet, url.Values{
 		"overwrite":        {"true"},
@@ -301,7 +272,6 @@ func (c *Client) add(ctx context.Context, magnet string, params url.Values) (*To
 	return &out, nil
 }
 
-// Details reports where the files landed, so their disk cost is measured, not inferred.
 func (c *Client) Details(ctx context.Context, id int) (Detail, error) {
 	var d Detail
 	err := c.get(ctx, fmt.Sprintf("/torrents/%d", id), &d)
@@ -314,12 +284,10 @@ func (c *Client) Stats(ctx context.Context, id int) (Stats, error) {
 	return s, err
 }
 
-// StreamURL goes to mpv or ffmpeg; ranged reads make the engine fetch there first.
 func (c *Client) StreamURL(id, fileIndex int) string {
 	return c.url(fmt.Sprintf("/torrents/%d/stream/%d", id, fileIndex))
 }
 
-// WaitLive blocks until the torrent is past "initializing", before which streaming fails.
 func (c *Client) WaitLive(ctx context.Context, id int, timeout time.Duration) error {
 	until := time.Now().Add(timeout)
 	var resumed bool
@@ -329,19 +297,13 @@ func (c *Client) WaitLive(ctx context.Context, id int, timeout time.Duration) er
 		stats, err := c.Stats(ctx, id)
 		switch {
 		case err != nil:
-			// Transient during startup; keep trying until the deadline.
 		case stats.Error != "":
 			return fmt.Errorf("torrent %d: %s", id, stats.Error)
 		case stats.State == "live" || stats.Finished:
 			return nil
-
-		// While the engine re-checks files ("initializing"), the deadline extends as progress climbs.
 		case stats.State == "initializing" && stats.ProgressBytes > verified:
 			verified = stats.ProgressBytes
 			until = time.Now().Add(timeout)
-
-		// A paused torrent never goes live on its own; pauses come from the queue
-		// or startup, never from a decision about this episode, so resume it.
 		case stats.State == "paused" && !resumed:
 			resumed = true
 			if err := c.Start(ctx, id); err != nil {
@@ -360,8 +322,6 @@ func (c *Client) WaitLive(ctx context.Context, id int, timeout time.Duration) er
 	}
 }
 
-// Prewarm fetches the first and last bytes of the file before playback starts.
-// mkvmerge writes the Matroska seek index at the tail, so without it scrubbing breaks.
 func (c *Client) Prewarm(ctx context.Context, id, fileIndex int, window int64) error {
 	if window <= 0 {
 		window = 2 << 20
@@ -371,7 +331,6 @@ func (c *Client) Prewarm(ctx context.Context, id, fileIndex int, window int64) e
 	}
 	stream := c.StreamURL(id, fileIndex)
 
-	// Tail first, head last: the head is what playback reads first.
 	for _, spec := range []string{
 		fmt.Sprintf("bytes=-%d", window),
 		fmt.Sprintf("bytes=0-%d", window-1),
@@ -383,8 +342,6 @@ func (c *Client) Prewarm(ctx context.Context, id, fileIndex int, window int64) e
 	return nil
 }
 
-// PrewarmHead fetches only what playback starts from. Unlike Prewarm it skips
-// the tail seek index, which isn't worth minutes of spinner on a slow line.
 func (c *Client) PrewarmHead(ctx context.Context, id, fileIndex int, window int64) error {
 	if window <= 0 {
 		window = 2 << 20
@@ -403,7 +360,6 @@ func (c *Client) streamClient() *http.Client {
 	return http.DefaultClient
 }
 
-// A ranged read tells the engine what to fetch next; the bytes are discarded.
 func (c *Client) readRange(ctx context.Context, stream, spec string, window int64) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, stream, nil)
 	if err != nil {
@@ -419,7 +375,6 @@ func (c *Client) readRange(ctx context.Context, stream, spec string, window int6
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		return fmt.Errorf("prewarm %s: engine answered %s", spec, res.Status)
 	}
-	// Headers come before any byte; only a full read proves delivery.
 	want := window
 	if res.ContentLength >= 0 && res.ContentLength < want {
 		want = res.ContentLength
@@ -434,13 +389,11 @@ func (c *Client) readRange(ctx context.Context, stream, spec string, window int6
 	return nil
 }
 
-// PrioritiseAt moves the download window with a ranged read, at a fraction since callers know seconds.
 func (c *Client) PrioritiseAt(ctx context.Context, id, fileIndex int, fraction float64) error {
 	if fraction <= 0 || fraction >= 1 {
 		return nil
 	}
 
-	// The file's own length: the selected files' total put a pack's later episode at the wrong place.
 	d, err := c.Details(ctx, id)
 	if err != nil {
 		return err
@@ -467,26 +420,41 @@ func (c *Client) PrioritiseAt(ctx context.Context, id, fileIndex int, fraction f
 	return nil
 }
 
-// ErrPaused marks a download stopped on purpose, which the queue drops instead of reporting.
 var ErrPaused = errors.New("download paused")
 
-// How often Await asks the engine where it is. Overridden in tests.
 var AwaitPoll = 5 * time.Second
 
-// StallError is Await giving up: nothing arrived for Quiet, with Percent of the file on disk.
 type StallError struct {
 	Percent float64
 	Quiet   time.Duration
-	Cause   string // the engine's warning at the time (a failed disk write), when it had one
+	Cause   string
 }
 
 func (e *StallError) Error() string { return fmt.Sprintf("stalled at %.0f%%", e.Percent) }
 
-// Await blocks until the torrent has everything it was asked for. It gives up
-// once nothing has arrived for stall, so one dead release can't hold up the queue.
+type SlowError struct {
+	ID      int
+	Rate    float64
+	Percent float64
+}
+
+func (e *SlowError) Error() string {
+	return fmt.Sprintf("downloading at %.0f KB/s at %.0f%%", e.Rate/1024, e.Percent)
+}
+
+type sample struct {
+	at    time.Time
+	bytes int64
+}
+
 func (c *Client) Await(ctx context.Context, id int, stall time.Duration) error {
+	return c.AwaitPaced(ctx, id, stall, 0, 0, 0)
+}
+
+func (c *Client) AwaitPaced(ctx context.Context, id int, stall time.Duration, minRate float64, window time.Duration, fewPeers int) error {
 	var best int64
 	var quiet time.Duration
+	var samples []sample
 
 	for {
 		stats, err := c.Stats(ctx, id)
@@ -509,6 +477,19 @@ func (c *Client) Await(ctx context.Context, id int, stall time.Duration) error {
 				return &StallError{Percent: stats.Percent(), Quiet: quiet, Cause: stats.Warning}
 			}
 		}
+		if minRate > 0 && window > 0 {
+			now := time.Now()
+			samples = append(samples, sample{now, stats.ProgressBytes})
+			for len(samples) > 1 && now.Sub(samples[1].at) >= window {
+				samples = samples[1:]
+			}
+			if span := now.Sub(samples[0].at); span >= window {
+				rate := float64(stats.ProgressBytes-samples[0].bytes) / span.Seconds()
+				if rate < minRate && (fewPeers <= 0 || stats.Peers() < fewPeers) {
+					return &SlowError{ID: id, Rate: rate, Percent: stats.Percent()}
+				}
+			}
+		}
 
 		select {
 		case <-ctx.Done():
@@ -518,10 +499,8 @@ func (c *Client) Await(ctx context.Context, id int, stall time.Duration) error {
 	}
 }
 
-// Checking reports the engine verifying data on disk; progress climbs from zero.
 func (s Stats) Checking() bool { return s.State == "initializing" && !s.Finished }
 
-// PauseUnfinished stops part-downloaded torrents the engine resumed on launch, except keep's.
 func (c *Client) PauseUnfinished(ctx context.Context, keep func(infoHash string) bool) (paused, kept int, checking []string, err error) {
 	list, err := c.List(ctx)
 	if err != nil {
@@ -548,7 +527,6 @@ func (c *Client) PauseUnfinished(ctx context.Context, keep func(infoHash string)
 	return paused, kept, checking, nil
 }
 
-// Delete removes the torrent and its data; Forget keeps the files on disk.
 func (c *Client) Delete(ctx context.Context, id int) error {
 	return c.post(ctx, fmt.Sprintf("/torrents/%d/delete", id))
 }
@@ -557,8 +535,6 @@ func (c *Client) Forget(ctx context.Context, id int) error {
 	return c.post(ctx, fmt.Sprintf("/torrents/%d/forget", id))
 }
 
-// Asking for a state the torrent is already in is the outcome the caller wanted,
-// not a failure — a button pressed against a slightly stale view shouldn't error.
 func alreadyThere(err error) bool {
 	if err == nil {
 		return false
@@ -583,6 +559,18 @@ func (c *Client) Start(ctx context.Context, id int) error {
 	return err
 }
 
+func (c *Client) IncludeFile(ctx context.Context, id, index int, on bool) error {
+	verb := "exclude"
+	if on {
+		verb = "include"
+	}
+	return c.post(ctx, fmt.Sprintf("/torrents/%d/files/%d/%s", id, index, verb))
+}
+
+func (c *Client) DeleteFile(ctx context.Context, id, index int) error {
+	return c.post(ctx, fmt.Sprintf("/torrents/%d/files/%d/delete", id, index))
+}
+
 type listing struct {
 	Torrents []struct {
 		ID       int    `json:"id"`
@@ -597,7 +585,6 @@ func (c *Client) List(ctx context.Context) (listing, error) {
 	return out, err
 }
 
-// Live maps info hash to the engine's current id, which changes per session.
 func (c *Client) Live(ctx context.Context) (map[string]int, error) {
 	list, err := c.List(ctx)
 	if err != nil {
@@ -613,7 +600,6 @@ func (c *Client) Live(ctx context.Context) (map[string]int, error) {
 	return out, nil
 }
 
-// Ready reports whether the engine is accepting requests.
 func (c *Client) Ready(ctx context.Context) bool {
 	_, err := c.List(ctx)
 	return err == nil
@@ -666,7 +652,6 @@ func (c *Client) do(req *http.Request, out any) error {
 	return json.Unmarshal(body, out)
 }
 
-// PickVideo chooses the largest video file, right for a single release among samples and extras.
 func PickVideo(files []File) (File, int, bool) {
 	best, bestIdx := File{}, -1
 	for i, f := range files {
@@ -680,7 +665,6 @@ func PickVideo(files []File) (File, int, bool) {
 	return best, bestIdx, bestIdx >= 0
 }
 
-// PickEpisode finds an episode in a pack by filename number; numbers are every count it may carry, own first.
 func PickEpisode(files []File, numbers ...int) (File, int, bool) {
 	if len(numbers) == 0 {
 		return PickVideo(files)
@@ -688,8 +672,11 @@ func PickEpisode(files []File, numbers ...int) (File, int, bool) {
 	return PickNumbered(files, numbers[0], numbers)
 }
 
-// PickNumbered is PickEpisode knowing the episode asked, so it reads a pack's count ("12" or "23").
 func PickNumbered(files []File, episode int, numbers []int) (File, int, bool) {
+	return PickInPack(files, episode, numbers, Scope{})
+}
+
+func PickInPack(files []File, episode int, numbers []int, scope Scope) (File, int, bool) {
 	numbers = slices.DeleteFunc(slices.Clone(numbers), func(n int) bool { return n <= 0 })
 	if episode <= 0 && len(numbers) > 0 {
 		episode = numbers[0]
@@ -708,7 +695,6 @@ func PickNumbered(files []File, episode int, numbers []int) (File, int, bool) {
 		return File{}, -1, false
 	}
 
-	// A lone unnumbered file only for a one-episode entry, or a film plays as an episode.
 	if len(videos) == 1 {
 		only := files[videos[0]]
 		got := episodeInName(parse.BaseName(only.Name))
@@ -735,19 +721,187 @@ func PickNumbered(files []File, episode int, numbers []int) (File, int, bool) {
 	}
 	want := packNumber(episode, numbers, lowest, highest)
 
-	best := -1
+	var matches []int
 	for _, i := range videos {
-		if numbered[i] == want && (best < 0 || files[i].Length > files[best].Length) {
-			best = i
+		if numbered[i] == want {
+			matches = append(matches, i)
 		}
 	}
-	if best < 0 {
+	matches = inScope(files, matches, scope)
+	if len(matches) == 0 {
 		return File{}, -1, false
+	}
+	best := matches[0]
+	for _, i := range matches[1:] {
+		if files[i].Length > files[best].Length {
+			best = i
+		}
 	}
 	return files[best], best, true
 }
 
-// packNumber: of the counts the episode may carry, one the pack holds; of several, the one starting nearest 1.
+type Scope struct {
+	Season  int
+	Counted int
+	Others  []string
+}
+
+func (s Scope) seasons() []int {
+	var out []int
+	if s.Counted > 0 && s.Counted != s.Season {
+		out = append(out, s.Counted)
+	}
+	if s.Season > 0 {
+		out = append(out, s.Season)
+	}
+	return out
+}
+
+func inScope(files []File, matches []int, scope Scope) []int {
+	if len(matches) == 0 {
+		return nil
+	}
+	wanted := scope.seasons()
+	root := sharedFolder(files)
+	kept := slices.DeleteFunc(slices.Clone(matches), func(i int) bool {
+		stated := pathSeason(files[i].Name)
+		return namesOther(strings.TrimPrefix(strings.ReplaceAll(files[i].Name, `\`, "/"), root), scope.Others) ||
+			(len(wanted) > 0 && stated > 0 && !slices.Contains(wanted, stated))
+	})
+	if len(kept) <= 1 {
+		return kept
+	}
+	for _, season := range wanted {
+		stating := slices.DeleteFunc(slices.Clone(kept), func(i int) bool { return pathSeason(files[i].Name) != season })
+		if len(stating) > 0 && sameFolder(files, stating) {
+			return stating
+		}
+	}
+	if sameFolder(files, kept) {
+		return kept
+	}
+	if scope.Season <= 1 {
+		plain := slices.DeleteFunc(slices.Clone(kept), func(i int) bool { return pathSeason(files[i].Name) != 0 })
+		if len(plain) > 0 && len(plain) < len(kept) && sameFolder(files, plain) {
+			return plain
+		}
+	}
+	if sameName(files, kept) && (scope.Season <= 1 || !slices.ContainsFunc(kept, func(i int) bool { return pathSeason(files[i].Name) == 0 })) {
+		return kept
+	}
+	return nil
+}
+
+func sharedFolder(files []File) string {
+	if len(files) == 0 {
+		return ""
+	}
+	prefix := strings.Split(strings.ReplaceAll(files[0].Name, `\`, "/"), "/")
+	prefix = prefix[:len(prefix)-1]
+	for _, f := range files[1:] {
+		parts := strings.Split(strings.ReplaceAll(f.Name, `\`, "/"), "/")
+		parts = parts[:len(parts)-1]
+		n := 0
+		for n < len(prefix) && n < len(parts) && prefix[n] == parts[n] {
+			n++
+		}
+		prefix = prefix[:n]
+	}
+	if len(prefix) == 0 {
+		return ""
+	}
+	return strings.Join(prefix, "/") + "/"
+}
+
+func sameName(files []File, idx []int) bool {
+	first := strings.ToLower(parse.BaseName(files[idx[0]].Name))
+	for _, i := range idx[1:] {
+		if strings.ToLower(parse.BaseName(files[i].Name)) != first {
+			return false
+		}
+	}
+	return true
+}
+
+func pathSeason(path string) int {
+	parts := strings.Split(strings.ReplaceAll(path, `\`, "/"), "/")
+	for k := len(parts) - 1; k >= 0; k-- {
+		part := strings.NewReplacer("_", " ", ".", " ").Replace(parts[k])
+		if seasonRange.MatchString(part) {
+			continue
+		}
+		if n := parse.SeasonOf(part); n > 0 {
+			return n
+		}
+		if n := parse.Parse(part).Season; n > 0 {
+			return n
+		}
+		if m := wordSeason.FindStringSubmatch(part); m != nil {
+			return ordinals[strings.ToLower(m[1])]
+		}
+	}
+	return 0
+}
+
+var (
+	wordSeason = regexp.MustCompile(`(?i)\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+season\b`)
+	ordinals   = map[string]int{"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7,
+		"eighth": 8, "ninth": 9, "tenth": 10}
+	seasonRange = regexp.MustCompile(`(?i)\bS\d{1,2}\s?(?:-|~|&|to)\s?S\d{1,2}\b|\bSeasons\s?\d{1,2}\s?(?:-|~|&|to)\s?\d{1,2}\b|` +
+		`\bSeason\s?\d{1,2}(?:-|~|&)\d{1,2}\b|\bSeason\s?\d{1,2}\s(?:~|&|to)\s\d{1,2}\b`)
+	episodeMarker = regexp.MustCompile(`(?i)\bS\d{1,2}\s?E\d{1,4}|\b(?:E|EP|Episode)\s?\d{1,4}\b|\s-\s\d{1,4}(?:v\d)?\b|\[\d{1,4}(?:v\d)?\]`)
+)
+
+func namedPart(path string) string {
+	path = strings.ReplaceAll(path, `\`, "/")
+	dir, base := "", path
+	if j := strings.LastIndex(path, "/"); j >= 0 {
+		dir, base = path[:j], path[j+1:]
+	}
+	if loc := episodeMarker.FindStringIndex(base); loc != nil {
+		base = base[:loc[0]]
+	}
+	return dir + "/" + base
+}
+
+func namesOther(path string, others []string) bool {
+	if len(others) == 0 {
+		return false
+	}
+	words := map[string]bool{}
+	for _, w := range pathWords.Split(strings.ToLower(namedPart(path)), -1) {
+		words[w] = true
+	}
+	for _, o := range others {
+		if words[strings.ToLower(o)] {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	pathWords   = regexp.MustCompile(`[^\p{L}\p{N}]+`)
+	qualityTags = regexp.MustCompile(`(?i)\b(?:\d{3,4}p|4k|uhd|bd|bdrip|blu-?ray|web(?:-?dl|rip)?|hevc|x26[45]|h\.?26[45]|av1|10-?bit|8-?bit|hi10p?|flac|aac|opus|dual[\s._-]?audio|remux)\b|[\[\]\(\)_.\-]+`)
+)
+
+func sameFolder(files []File, idx []int) bool {
+	dir := func(i int) string {
+		p := strings.ReplaceAll(files[i].Name, `\`, "/")
+		if j := strings.LastIndex(p, "/"); j >= 0 {
+			return strings.TrimSpace(qualityTags.ReplaceAllString(strings.ToLower(p[:j]), " "))
+		}
+		return ""
+	}
+	first := dir(idx[0])
+	for _, i := range idx[1:] {
+		if dir(i) != first {
+			return false
+		}
+	}
+	return true
+}
+
 func packNumber(episode int, numbers []int, lowest, highest int) int {
 	if len(numbers) == 0 {
 		return 0
@@ -770,7 +924,6 @@ func packNumber(episode int, numbers []int, lowest, highest int) int {
 	return best
 }
 
-// extra: in an extras folder, or named as an opening, ending, preview, commercial or menu.
 func extra(path string) bool {
 	path = strings.ReplaceAll(path, `\`, "/")
 	dirs := strings.Split(path, "/")
@@ -798,24 +951,16 @@ func medianLength(files []File, idx []int) int64 {
 	return lengths[len(lengths)/2]
 }
 
-// Resolution, year and CRC checksums are all numbers in a filename, so the
-// bracketed and tagged parts are stripped before looking for the episode.
 var (
-	episodeTags = regexp.MustCompile(`(?i)[\[\(][^\]\)]*[\]\)]|\b\d{3,4}[pi]\b|\bx?26[45]\b`)
-	// "[05]", "[05v2]": the episode in a bracket of its own, read before the tags go.
-	bracketNum = regexp.MustCompile(`\[(\d{1,4})(?:v\d)?\]`)
-	// A revision suffix is glued on ("05v2"), leaving no word boundary.
+	episodeTags   = regexp.MustCompile(`(?i)[\[\(][^\]\)]*[\]\)]|\b\d{3,4}[pi]\b|\bx?26[45]\b`)
+	bracketNum    = regexp.MustCompile(`\[(\d{1,4})(?:v\d)?\]`)
 	versionSuffix = regexp.MustCompile(`(?i)(\d{1,4})v\d\b`)
 	episodeNum    = regexp.MustCompile(`(?i)(?:\bS\d{1,2}E(\d{1,4})\b|(?:^|[\s_.-])(\d{1,4})(?:[\s_.-]|$))`)
 	seasonEpisode = regexp.MustCompile(`(?i)\bS\d{1,2}[\s._]?E(\d{1,4})\b`)
-	// "E05", "EP05", "Ep. 5": the marked form without a season.
 	markedEpisode = regexp.MustCompile(`(?i)(?:^|[\s._\-\[(])E(?:P|PISODE)?\.?\s*(\d{1,4})(?:v\d)?\b`)
-	// "Show - 11 - 511 Kinderheim": the dashed number, not the title's.
-	dashed = regexp.MustCompile(`[\s_]-[\s_]+(\d{1,4})(?:v\d)?(?:[\s_]|$)`)
-	// "FLAC.2.0", "DDP5.1": read as numbers, every file of a pack was episode 2.
-	audioLayout = regexp.MustCompile(`(?i)(?:^|[\s_.-]|[a-z])[2567]\.[01](?:[\s_.-]|$)`)
-	// "12.5": a recap between two episodes, not episode 12.
-	fractional = regexp.MustCompile(`(?:^|[\s_-])\d{1,4}\.\d(?:[\s_-]|$)`)
+	dashed        = regexp.MustCompile(`[\s_]-[\s_]+(\d{1,4})(?:v\d)?(?:[\s_]|$)`)
+	audioLayout   = regexp.MustCompile(`(?i)(?:^|[\s_.-]|[a-z])[2567]\.[01](?:[\s_.-]|$)`)
+	fractional    = regexp.MustCompile(`(?:^|[\s_-])\d{1,4}\.\d(?:[\s_-]|$)`)
 )
 
 func episodeInName(name string) int {
@@ -825,7 +970,6 @@ func episodeInName(name string) int {
 		}
 	}
 	cleaned := episodeTags.ReplaceAllString(name, " ")
-	// SxxEyy wins over any other number.
 	if m := seasonEpisode.FindStringSubmatch(cleaned); m != nil {
 		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
 			return n
@@ -857,7 +1001,6 @@ func episodeInName(name string) int {
 			if err != nil || n <= 0 || n >= 5000 {
 				continue
 			}
-			// A 4-digit year like "Title.2022.1080p" is not an episode number.
 			if len(group) == 4 && n >= 1900 && n <= 2099 {
 				continue
 			}
@@ -867,19 +1010,16 @@ func episodeInName(name string) int {
 	return 0
 }
 
-// ByteRange is a stretch of a file, [From, To) in bytes.
 type ByteRange struct {
 	From int64 `json:"from"`
 	To   int64 `json:"to"`
 }
 
-// FileRanges is what has arrived of one file: its length and the complete stretches, in order.
 type FileRanges struct {
 	Length int64       `json:"length"`
 	Ranges []ByteRange `json:"ranges"`
 }
 
-// Ranges reports the stretches of a file the engine has verified on disk.
 func (c *Client) Ranges(ctx context.Context, id, file int) (FileRanges, error) {
 	var out FileRanges
 	err := c.get(ctx, fmt.Sprintf("/torrents/%d/files/%d/ranges", id, file), &out)

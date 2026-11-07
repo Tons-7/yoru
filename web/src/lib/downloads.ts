@@ -1,35 +1,88 @@
 import { bytes, speed, type SpeedUnit } from './format'
 import type { Download, Queued } from './queries'
 
-/** The downloads list by state, as the Downloads page and the panel both show it. */
+export interface DownloadPart {
+  epKey: string
+  fileIndex: number
+  size: number
+  done: number
+  complete: boolean
+  kept: boolean
+  pinned: boolean
+  paused: boolean
+}
+
+export interface EpisodeRow extends Download {
+  key: string
+  part?: DownloadPart
+  whole?: Download
+}
+
 export interface DownloadSections {
-  active: Download[]
-  /** Paused part-way: by hand, or by the queue until its turn. */
-  held: Download[]
-  finished: Download[]
-  /** Claimed by the queue, its release not found yet: no torrent to show. */
+  active: EpisodeRow[]
+  held: EpisodeRow[]
+  finished: EpisodeRow[]
   searching: Queued[]
   waitingQueue: Queued[]
   failed: Queued[]
+  line: ({ d: EpisodeRow; q?: Queued } | { q: Queued; d?: undefined })[]
 }
 
-export function sortDownloads(items: Download[], queued: Queued[]): DownloadSections {
-  // A queue entry and its torrent are one download: the torrent shows while the entry is alive; a failed
-  // entry shows instead, with the torrent's progress, rather than a red row plus a paused one under Waiting.
+export function byEpisode(items: Download[]): EpisodeRow[] {
+  return items.flatMap((d): EpisodeRow[] => {
+    const parts = (d as Download & { parts?: DownloadPart[] }).parts ?? []
+    if (parts.length < 2) return [{ ...d, key: d.infoHash }]
+    return parts.map((p) => ({
+      ...d,
+      key: `${d.infoHash}:${p.fileIndex}`,
+      episodes: [p.epKey],
+      episode: p.epKey,
+      totalBytes: p.size,
+      bytesOnDisk: p.done,
+      percent: p.complete ? 100 : p.size > 0 ? Math.min(99.9, (p.done / p.size) * 100) : 0,
+      kept: p.kept,
+      pinned: p.pinned,
+      paused: !!d.paused || p.paused,
+      part: p,
+      whole: d,
+    }))
+  })
+}
+
+export const rowKey = (d: EpisodeRow) => `pc:${d.key}`
+
+export function sortDownloads(items: Download[], queued: Queued[], hidden?: ReadonlySet<string>): DownloadSections {
   const entries = new Map(queued.map((q) => [`${q.animeId}-${q.epKey}`, q]))
-  const paired = items.map((d) => {
+  const rows = byEpisode(items).filter((d) => !hidden?.has(rowKey(d)))
+  const paired = rows.map((d) => {
     const q = d.episodes.map((e) => entries.get(`${d.animeId}-${e}`)).find(Boolean)
     return q ? { ...d, queued: q } : d
   })
   const absorbed = (d: Download) => d.percent < 100 && !!d.paused && d.queued?.state === 'failed'
   const started = new Set(paired.filter((d) => !absorbed(d)).flatMap((d) => d.episodes.map((e) => `${d.animeId}-${e}`)))
   const unstarted = (q: Queued) => !started.has(`${q.animeId}-${q.epKey}`)
+  const held = paired.filter((d) => d.percent < 100 && d.paused && !absorbed(d))
+  const waitingQueue = queued.filter((q) => (q.state === 'pending' || q.state === 'paused') && unstarted(q))
+  const placed = new Set<EpisodeRow>()
+  const line: DownloadSections['line'] = []
+  for (const q of queued) {
+    if (q.state !== 'pending' && q.state !== 'paused') continue
+    const d = held.find((h) => !placed.has(h) && h.animeId === q.animeId && h.episodes.includes(q.epKey))
+    if (d) {
+      placed.add(d)
+      line.push({ d, q })
+    } else if (waitingQueue.includes(q)) {
+      line.push({ q })
+    }
+  }
+  for (const d of held) if (!placed.has(d)) line.push({ d })
   return {
+    line,
     active: paired.filter((d) => d.percent < 100 && !d.paused),
-    held: paired.filter((d) => d.percent < 100 && d.paused && !absorbed(d)),
+    held,
     finished: paired.filter((d) => d.percent >= 100),
     searching: queued.filter((q) => q.state === 'active' && unstarted(q)),
-    waitingQueue: queued.filter((q) => q.state === 'pending' && unstarted(q)),
+    waitingQueue,
     failed: queued
       .filter((q) => q.state === 'failed')
       .map((q) => {
@@ -39,19 +92,22 @@ export function sortDownloads(items: Download[], queued: Queued[]): DownloadSect
   }
 }
 
-/** "tries again at 03:41" for an entry waiting out a dead swarm, or nothing. */
+export function totalSpeed(rows: Download[]): number {
+  const seen = new Map<string, number>()
+  for (const d of rows) seen.set(d.infoHash, d.mbps ?? 0)
+  return [...seen.values()].reduce((n, v) => n + v, 0)
+}
+
 export function retryNote(q: Queued | undefined): string {
   if (!q?.retryAt) return ''
   return `tries again at ${new Date(q.retryAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
 }
 
-/** What a download is, for a person: the show and episode, or the release when no show is attached. */
 export function downloadLabel(d: Download): string {
   if (!d.title) return d.name
   return d.episodes.length > 0 ? `${d.title} episode${d.episodes.length > 1 ? 's' : ''} ${d.episode}` : d.title
 }
 
-/** How far, how big, how fast: the line under a download that is still arriving. */
 export function downloadProgress(d: Download, unit?: SpeedUnit): string {
   return [
     `${Math.round(d.percent)}%`,
@@ -65,7 +121,6 @@ export function downloadProgress(d: Download, unit?: SpeedUnit): string {
     .join(' · ')
 }
 
-/** The whole list as plain text, to paste into a bug report. */
 export function downloadsReport(s: DownloadSections, unit?: SpeedUnit): string {
   const waiting = (q: Queued | undefined) => (q?.retryAt ? ` · ${retryNote(q)}: ${q.error}` : '')
   const queuedLine = (q: Queued) =>
@@ -73,7 +128,6 @@ export function downloadsReport(s: DownloadSections, unit?: SpeedUnit): string {
     `${q.torrent ? ` — ${Math.round(q.torrent.percent)}% on disk` : ''}${q.error ? ` — ${q.error}` : ''}${waiting(q)}`
   const downloadLine = (d: Download) =>
     `- ${downloadLabel(d)} — ${downloadProgress(d, unit)}${d.pinned ? ' · playing' : ''}${d.kept ? ' · kept' : ''}${waiting(d.queued)}` +
-    // The release under the show; one under no show is already named by it.
     (d.title ? `\n  ${d.name}` : '')
   const section = (name: string, lines: string[]) => (lines.length ? [`${name} (${lines.length})`, ...lines, ''] : [])
 
@@ -89,21 +143,18 @@ export function downloadsReport(s: DownloadSections, unit?: SpeedUnit): string {
     .trim()
 }
 
-/** Copies text; the clipboard API only exists on https and localhost, so a LAN address needs the old way. */
 export async function copyText(text: string, within: HTMLElement = document.body): Promise<boolean> {
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text)
-      return true
-    }
-  } catch {
-    // Refused or unavailable: the selection-based copy below still works.
+  if (navigator.clipboard && window.isSecureContext) {
+    const written = await navigator.clipboard.writeText(text).then(
+      () => true,
+      () => false,
+    )
+    if (written) return true
   }
   const area = document.createElement('textarea')
   area.value = text
   area.setAttribute('readonly', '')
   area.style.cssText = 'position:fixed;top:0;left:0;opacity:0'
-  // Inside the fullscreen element when there is one: outside it nothing can take focus.
   within.appendChild(area)
   area.select()
   let ok = false

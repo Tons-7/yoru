@@ -1,4 +1,3 @@
-// Package server is the HTTP API: handlers parse, delegate and write JSON, with no SQL or outside calls.
 package server
 
 import (
@@ -32,125 +31,101 @@ import (
 )
 
 type Server struct {
-	cfg        config.Config
-	store      *store.Store
-	anilist    *anilist.Client
-	importer   *library.Importer
-	ingester   *library.Ingester
-	finder     *library.Finder
-	playback   *library.Playback
-	watcher    *library.Watcher
-	enricher   *library.Enricher
-	relations  *library.Relations
-	cache      *library.Cache
-	streams    *transcode.Manager
-	subtitles  *transcode.Subtitles
-	thumbs     *transcode.Thumbnails
-	jobs       *jobs.Scheduler
-	mal        *mal.Client
-	malSync    *library.MALSync
-	scanner    *library.Scanner
-	syncer     *library.Sync
-	prefetch   *library.Prefetcher
-	player     library.Player
-	indexer    indexer.Source
-	sites      *indexer.Sites
-	push       *push.Sender
-	deps       *deps.Manager
-	downloader *library.Downloader
-	updater    *update.Updater
-	// engine takes the download cap and upload choice as they change.
-	engine *torrent.Client
-	// presence shows what plays on Discord, when Settings say so.
-	presence *library.Presence
-	// relaunch restarts Yoru, for a change that needs one.
-	relaunch func()
-	log      *slog.Logger
-	// exit ends Yoru; showWindow brings its window up.
+	cfg              config.Config
+	store            *store.Store
+	anilist          *anilist.Client
+	importer         *library.Importer
+	ingester         *library.Ingester
+	finder           *library.Finder
+	playback         *library.Playback
+	watcher          *library.Watcher
+	enricher         *library.Enricher
+	relations        *library.Relations
+	cache            *library.Cache
+	streams          *transcode.Manager
+	subtitles        *transcode.Subtitles
+	thumbs           *transcode.Thumbnails
+	jobs             *jobs.Scheduler
+	mal              *mal.Client
+	malSync          *library.MALSync
+	scanner          *library.Scanner
+	syncer           *library.Sync
+	prefetch         *library.Prefetcher
+	player           library.Player
+	indexer          indexer.Source
+	sites            *indexer.Sites
+	push             *push.Sender
+	deps             *deps.Manager
+	downloader       *library.Downloader
+	updater          *update.Updater
+	engine           *torrent.Client
+	presence         *library.Presence
+	relaunch         func()
+	log              *slog.Logger
 	exit, showWindow func()
-	// Other devices playing, by address, for Exit Yoru to say what it would stop.
-	watchingMu sync.Mutex
-	watching   map[string]watching
-	// Streams TVs and player apps read through their links: how many are open, and when the last one ended.
-	linkReads  atomic.Int32
-	linkReadAt atomic.Int64
+	watchingMu       sync.Mutex
+	watching         map[string]watching
+	linkReads        atomic.Int32
+	linkReadAt       atomic.Int64
 
-	// Extracted fonts per stream session, filled in the background so a stream needn't wait.
 	fontsMu  sync.Mutex
 	fonts    map[string][]transcode.FontFile
 	fontJobs map[string]struct{}
 
-	// When each episode readied the one after it, by session id (ready.go).
 	readyMu  sync.Mutex
 	readying map[string]time.Time
 
-	// Shows whose skips are being found, and when each episode was last tried (skipfind.go).
 	findMu    sync.Mutex
 	finding   map[int]bool
 	findTried map[string]time.Time
 
-	// Japanese subtitles from jimaku.cc, and each episode's last listing of them (jimaku.go).
 	jimaku      *jimaku.Client
 	jimakuMu    sync.Mutex
 	jimakuFiles map[string]jimakuListing
 
-	// A lock per file built on request (a PGS track, a Jimaku file), so two asks don't write one file at once.
 	building sync.Map
 
-	// Version lookups in flight, so a polling setup page cannot stack them.
 	latestMu   sync.Mutex
 	latestJobs map[string]time.Time
 
 	counts      browseCounts
 	studioWorks studioLists
 
-	// What a system ffmpeg is and can do, per binary; Setup polls every second.
 	systemMu sync.Mutex
 	systemFF map[string]systemTool
 
-	// Shows whose episode list is being derived from releases.
 	derivingMu sync.Mutex
 	deriving   map[int]struct{}
 
-	// Home's "For you" (home.go), kept a day.
 	forYouMu sync.Mutex
 	forYou   forYouPicks
 
-	// Devices pairing with a code (pairing.go), by the secret in their pairing cookie.
 	pairMu sync.Mutex
 	pairs  map[string]*pairing
 
-	// Watch together rooms (together.go), by their code.
 	togetherMu sync.Mutex
 	rooms      map[string]*togetherRoom
 
-	// The TV's queue (castqueue.go): episodes opening for it, where it has read each, pages' last reports.
 	tvMu         sync.Mutex
 	tvOpens      map[string]*tvOpen
 	tvSeen       map[string]*tvWatch
 	pageReported map[string]time.Time
 
-	// Rotated from a handler while the guard reads it.
-	tokenMu sync.RWMutex
-	token   string
-	// The last request a proxy on this machine passed on, for Settings to say devices come that way.
-	proxyMu sync.Mutex
-	proxy   proxySeen
-	// grantSecret signs player-app links (see external.go); new each run, so a restart ends them.
+	tokenMu     sync.RWMutex
+	token       string
+	proxyMu     sync.Mutex
+	proxy       proxySeen
 	grantSecret []byte
-	// grantEpoch is in the signing key too: denying or removing a device ends the links made so far.
-	grantEpoch atomic.Int64
-	// Set by main, which owns the listener; nil in tests.
-	rebind func(addr string) error
-	// HTTPS certificates; nil in tests and builds that do not serve.
-	certs      *certs.Source
-	approvals  approvals
-	vocab      vocabulary
-	index      indexHolder
-	rising     risingCache
-	refreshing atomic.Bool
-	scanning   atomic.Bool
-	rescan     atomic.Bool // asked for while scanning: the running scan goes round once more
+	grantEpoch  atomic.Int64
+	rebind      func(addr string) error
+	certs       *certs.Source
+	approvals   approvals
+	vocab       vocabulary
+	index       indexHolder
+	rising      risingCache
+	refreshing  atomic.Bool
+	scanning    atomic.Bool
+	rescan      atomic.Bool // asked for while scanning: the running scan goes round once more
 }
 
 type Deps struct {
@@ -195,7 +170,6 @@ func New(d Deps) *Server {
 		cfg: d.Config, store: d.Store, anilist: d.AniList,
 		importer: d.Importer, ingester: d.Ingester,
 		indexer: d.Indexer, sites: d.Sites, push: d.Push, log: d.Log,
-		// Built once by the caller; a second one here lacked the real one's configuration.
 		finder:       d.Finder,
 		playback:     d.Playback,
 		watcher:      d.Watcher,
@@ -240,7 +214,6 @@ func New(d Deps) *Server {
 	return s
 }
 
-// watchedArrived: the episode a session plays is whole on disk, or the session is gone.
 func (s *Server) watchedArrived(ctx context.Context, id string) bool {
 	if s.streams == nil {
 		return true
@@ -387,6 +360,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/downloads/{hash}/files", s.downloadFiles)
 	mux.HandleFunc("POST /api/downloads/{hash}/files/{index}/keep", s.keepFile)
 	mux.HandleFunc("POST /api/downloads/{hash}/files/{index}/unkeep", s.unkeepFile)
+	mux.HandleFunc("POST /api/downloads/{hash}/files/{index}/pause", s.pauseFile)
+	mux.HandleFunc("POST /api/downloads/{hash}/files/{index}/resume", s.resumeFile)
+	mux.HandleFunc("DELETE /api/downloads/{hash}/files/{index}", s.removeFile)
+	mux.HandleFunc("POST /api/download/queue/arrange", s.arrangeQueued)
 	mux.HandleFunc("POST /api/downloads/clear", s.clearDownloads)
 	mux.HandleFunc("GET /api/better-copies", s.betterCopies)
 	mux.HandleFunc("POST /api/better-copies/{anime}/replace", s.replaceWithBetter)
@@ -454,7 +431,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/access/devices/{id}", hostOnly(s.decideDevice))
 	mux.HandleFunc("DELETE /api/access/devices/{id}", hostOnly(s.removeDevice))
 	mux.HandleFunc("POST /api/access/approval", hostOnly(s.setApproval))
-	// Pairing with a code: entered by a device already in (pairApprove decides which), asked after by the TV.
 	mux.HandleFunc("POST /api/pair", s.pairApprove)
 	mux.HandleFunc("GET /api/pair/wait", s.pairWait)
 	mux.HandleFunc("GET /api/access/https", hostOnly(s.accessHTTPS))
@@ -473,15 +449,12 @@ func (s *Server) Handler() http.Handler {
 		app = spa(assets)
 	}
 
-	// Chosen by prefix, not a "/" mux pattern: a catch-all there would shadow every
-	// route, turning wrong-method 405s into 404s and handing the SPA to JSON callers.
 	api := served(mux)
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			api.ServeHTTP(w, r)
 			return
 		}
-		// Non-API routes the mux does know, such as the OAuth callbacks.
 		if _, pattern := mux.Handler(r); pattern != "" {
 			mux.ServeHTTP(w, r)
 			return
@@ -549,7 +522,6 @@ func (s *Server) libraryCounts(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, counts)
 }
 
-// searchLocal answers from shows Yoru holds, at once and offline; AniList is the slow path behind it.
 func (s *Server) searchLocal(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	results, err := s.store.SearchLocal(r.Context(), r.URL.Query().Get("q"), limit)
@@ -564,7 +536,6 @@ func (s *Server) searchLocal(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"results": results})
 }
 
-// nextEpisode is what plays after an episode, honouring the show's filler rule.
 func (s *Server) nextEpisode(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.URL.Query().Get("id"))
 	after, _ := strconv.Atoi(r.URL.Query().Get("after"))
@@ -644,7 +615,6 @@ func (s *Server) logging(next http.Handler) http.Handler {
 
 func send(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
-	// None of this is worth a second: a stale list is what makes a toggle look like it did nothing.
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)

@@ -1450,6 +1450,27 @@ function DownloadsTab() {
             ]}
           />
         </Row>
+        <Row
+          label="Preferred video format"
+          hint={
+            {
+              av1: 'AV1 first: the same picture in a smaller file. Newer phones decode it in hardware; older ones in software, using more battery.',
+              hevc: 'HEVC first: plays on almost every phone, TV and PC in hardware.',
+              any: 'Neither ranks higher: resolution, source, seeders and groups decide.',
+            }[f.value('quality.codec') || 'hevc'] ?? ''
+          }
+          keywords="codec av1 hevc h265 x265 format encode"
+        >
+          <ValueMenu
+            value={f.value('quality.codec') || 'hevc'}
+            onChange={(v) => f.set('quality.codec', v)}
+            options={[
+              { value: 'av1', label: 'AV1 first' },
+              { value: 'hevc', label: 'HEVC first' },
+              { value: 'any', label: 'No preference' },
+            ]}
+          />
+        </Row>
         <PreferGroups f={f} />
         <AvoidRows f={f} />
         <Row

@@ -22,6 +22,7 @@ import (
 	"yoru/internal/parse"
 	"yoru/internal/score"
 	"yoru/internal/store"
+	"yoru/internal/torrent"
 )
 
 type Finder struct {
@@ -229,6 +230,8 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	}
 
 	identity := newShowIdentity(append(append([]string{}, titles...), english))
+	others := otherEntries(req, append(append([]string{}, titles...), english))
+	held, _ := f.store.ShowTorrents(ctx, req.AnimeID)
 
 	seen := map[string]struct{}{}
 	var cands []score.Candidate
@@ -254,6 +257,10 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 				Torrent: t, Release: rel, TotalEpisodes: total, RuntimeMinutes: runtime,
 				WrongShow: !pasted && !identity.matches(rel, t.Title),
 				ByHand:    pasted,
+				Season:    req.Season,
+				Counted:   req.Counted,
+				Others:    others,
+				Held:      held[strings.ToLower(t.InfoHash)],
 			}
 			if series != nil {
 				c.Film = &series.key
@@ -511,6 +518,13 @@ func (f *Finder) numbering(ctx context.Context, req Request, titles []string, en
 	return req
 }
 
+func (f *Finder) PackScope(ctx context.Context, animeID, episode, season int) torrent.Scope {
+	titles, _ := f.store.SearchTitles(ctx, animeID)
+	english, _ := f.store.EnglishTitle(ctx, animeID)
+	req := f.numbering(ctx, Request{AnimeID: animeID, Episode: episode, Season: season}, titles, english)
+	return torrent.Scope{Season: req.Season, Counted: req.Counted, Others: otherEntries(req, append(append([]string{}, titles...), english))}
+}
+
 func (f *Finder) defaultSeason(ctx context.Context, animeID int, titles []string) int {
 	for _, t := range titles {
 		if n := parse.SeasonOf(t); n > 0 {
@@ -739,6 +753,31 @@ func series(format *string) bool {
 		return false
 	}
 	return true
+}
+
+var notAnEpisode = []string{"movie", "movies", "film", "films", "ova", "ovas", "oad", "oads", "special", "specials", "recap"}
+
+func otherEntries(req Request, titles []string) []string {
+	own := map[string]bool{}
+	for _, t := range titles {
+		for _, w := range wordSplit.Split(strings.ToLower(t), -1) {
+			own[w] = true
+		}
+	}
+	var out []string
+	for _, w := range req.Cour.Siblings {
+		if !own[w] {
+			out = append(out, w)
+		}
+	}
+	if !req.Apart {
+		for _, w := range notAnEpisode {
+			if !own[w] {
+				out = append(out, w)
+			}
+		}
+	}
+	return out
 }
 
 func subtitleWords(titles []string) [][]string {

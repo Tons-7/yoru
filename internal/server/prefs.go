@@ -16,8 +16,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// Values are validated against the known set so a typo cannot silently disable
-// a feature: an unrecognised Anime4K mode would otherwise fail at playback.
 var allowed = map[string][]string{
 	"playback.player":          store.Players,
 	"playback.anime4k_mode":    store.Anime4KModes,
@@ -31,25 +29,21 @@ var allowed = map[string][]string{
 	"downloads.while_watching": {"pause", "continue"},
 	"display.speed":            {"mbps", "mbs"},
 	"quality.prefer":           {"best", "720p", "480p"},
+	"quality.codec":            {"hevc", "av1", "any"},
 	"downloads.upload":         {torrent.UploadWhileDownloading, torrent.UploadNever},
 	"window.mode":              {"fullscreen", "maximized"},
 	"window.on_close":          {"exit", "tray"},
-	// 2, 3, 5 or 10 GiB an episode, or none.
-	"quality.max_auto_bytes": {"2147483648", "3221225472", "5368709120", "10737418240", "0"},
-	"display.spoilers":       {store.SpoilersOff, store.SpoilersAfterNext, store.SpoilersUnwatched},
-	// Episodes auto next plays unattended before asking whether anyone is watching; 0 never asks.
-	"playback.still_watching": {"0", "2", "3", "5"},
-	// The share of an episode that counts as watching it, or where its ending starts.
-	"sync.progress_at":     {"0.8", "0.85", "0.9", "0.95", store.EndingThreshold},
-	"subtitle.with_dub":    {"signs", "off", "same"},
-	"subtitle.look":        {"outline", "yellow", "box", "yellow-box"},
-	"playback.autoskip_op": store.SkipValues,
-	"playback.autoskip_ed": store.SkipValues,
-	// Hours auto-download holds a new episode for a preferred group or a higher resolution; 0 takes the first.
-	"autodownload.wait_hours": {"0", "1", "3", "6", "12"},
+	"quality.max_auto_bytes":   {"2147483648", "3221225472", "5368709120", "10737418240", "0"},
+	"display.spoilers":         {store.SpoilersOff, store.SpoilersAfterNext, store.SpoilersUnwatched},
+	"playback.still_watching":  {"0", "2", "3", "5"},
+	"sync.progress_at":         {"0.8", "0.85", "0.9", "0.95", store.EndingThreshold},
+	"subtitle.with_dub":        {"signs", "off", "same"},
+	"subtitle.look":            {"outline", "yellow", "box", "yellow-box"},
+	"playback.autoskip_op":     store.SkipValues,
+	"playback.autoskip_ed":     store.SkipValues,
+	"autodownload.wait_hours":  {"0", "1", "3", "6", "12"},
 }
 
-// numeric settings take whole numbers; a typo would read as zero.
 var numeric = map[string]bool{
 	"cache.budget_bytes": true, "notify.poll_seconds": true, "cache.prefetch_count": true, "downloads.limit_bytes": true,
 }
@@ -66,7 +60,6 @@ func (s *Server) getPrefs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := map[string]any{"effective": prefs.All(), "defaults": store.Defaults}
-	// Negative ids are MAL-only shows: still a show, not the globals.
 	if animeID != 0 {
 		overrides, err := s.store.AnimePrefs(r.Context(), animeID)
 		if err != nil {
@@ -78,7 +71,6 @@ func (s *Server) getPrefs(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, body)
 }
 
-// Without an anime id this sets the default; with one, a per-show override (empty removes it).
 func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int    `json:"animeId"`
@@ -94,12 +86,10 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "unknown setting " + body.Key})
 		return
 	}
-	// Which network this machine's torrents use is the host's to say, as its firewall is.
 	if hostSettings[body.Key] && !fromHost(r) {
 		send(w, http.StatusForbidden, map[string]any{"error": "change this from the host machine"})
 		return
 	}
-	// Booleans are read as == "true", so "True" or "yes" would silently mean off.
 	if isBool(store.Defaults[body.Key]) {
 		if body.Value != "" && body.Value != "true" && body.Value != "false" {
 			send(w, http.StatusBadRequest, map[string]any{
@@ -140,15 +130,12 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// limitSettings are the engine's; hostSettings change only from the machine Yoru runs on.
 var (
 	limitSettings = map[string]bool{"downloads.limit_bytes": true, "downloads.upload": true, "downloads.adapter": true}
-	// The Discord card is the host's account, as the network is the host's machine.
-	hostSettings = map[string]bool{"downloads.adapter": true, "discord.enabled": true, "discord.everywhere": true,
+	hostSettings  = map[string]bool{"downloads.adapter": true, "discord.enabled": true, "discord.everywhere": true,
 		"power.awake_watching": true, "power.awake_downloading": true}
 )
 
-// applyLimits hands the engine the download cap, upload choice and network as saved; they apply at once.
 func (s *Server) applyLimits(ctx context.Context) {
 	prefs, err := s.store.Prefs(ctx, 0)
 	if err != nil {
@@ -219,7 +206,6 @@ func (s *Server) markRead(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// notificationID reads ?id=, refusing a bad one, since zero would clear every notification.
 func notificationID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := r.URL.Query().Get("id")
 	if raw == "" {
@@ -233,7 +219,6 @@ func notificationID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return id, true
 }
 
-// deleteNotification removes one by id, or all of them when none is given.
 func (s *Server) deleteNotification(w http.ResponseWriter, r *http.Request) {
 	id, ok := notificationID(w, r)
 	if !ok {
@@ -268,7 +253,6 @@ func (s *Server) setFollow(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"following": body.Enabled})
 }
 
-// setNotify turns a show's new-episode alerts on or off, whatever turned them on: a follow, Watching, auto.
 func (s *Server) setNotify(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.PathValue("id"))
 	var body struct {
@@ -290,7 +274,6 @@ func (s *Server) setNotify(w http.ResponseWriter, r *http.Request) {
 	s.sendFollow(w, r, id)
 }
 
-// wantEpisode marks one episode to download when the release watch finds it; 0 takes the mark off.
 func (s *Server) wantEpisode(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.PathValue("id"))
 	var body struct {
@@ -327,7 +310,6 @@ func (s *Server) sendFollow(w http.ResponseWriter, r *http.Request, id int) {
 	send(w, http.StatusOK, f)
 }
 
-// hydrate fills in placeholder rows, which otherwise sit titled "Unknown".
 func (s *Server) hydrate(ctx context.Context, ids []int) {
 	if s.importer == nil {
 		return
@@ -341,7 +323,6 @@ func (s *Server) hydrate(ctx context.Context, ids []int) {
 	}
 }
 
-// previewReleases says per show what auto-download would take next and why, taking nothing.
 func (s *Server) previewReleases(w http.ResponseWriter, r *http.Request) {
 	if s.watcher == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "watcher unavailable"})
@@ -355,7 +336,6 @@ func (s *Server) previewReleases(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"items": rows})
 }
 
-// releaseWaits lists the new episodes auto-download holds for a better release: what each waits for, and until.
 func (s *Server) releaseWaits(w http.ResponseWriter, r *http.Request) {
 	waits, err := s.store.Waits(r.Context(), 0)
 	if err != nil {
@@ -379,7 +359,6 @@ func (s *Server) releaseWaits(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"items": out})
 }
 
-// takeWaitingNow stops holding an episode and queues it: the queue takes the best release there is.
 func (s *Server) takeWaitingNow(w http.ResponseWriter, r *http.Request) {
 	animeID, _ := strconv.Atoi(r.PathValue("anime"))
 	episode, _ := strconv.Atoi(r.PathValue("episode"))

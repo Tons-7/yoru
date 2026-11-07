@@ -12,11 +12,8 @@ import (
 
 type scorePrefs = score.Preferences
 
-// resolutions, highest first: what "up to" orders the ladder by.
 var resolutions = []string{"2160p", "1440p", "1080p", "720p", "576p", "540p", "480p", "360p"}
 
-// upTo puts the tiers at or under limit first, best first, then any of no listed resolution, then those above,
-// nearest first, so nothing is lost.
 func upTo(limit string, ladder []score.Tier) []score.Tier {
 	at := slices.Index(resolutions, limit)
 	var under, other, over []score.Tier
@@ -44,10 +41,35 @@ func upTo(limit string, ladder []score.Tier) []score.Tier {
 	return slices.Concat(under, other, over)
 }
 
+func withCodec(ladder []score.Tier, choice string) []score.Tier {
+	var out []score.Tier
+	switch choice {
+	case "av1":
+		for _, t := range ladder {
+			if t.Codec != "" && t.Codec != "AV1" {
+				av1 := t
+				av1.Codec, av1.BitDepth = "AV1", 0
+				if !slices.Contains(out, av1) && !slices.Contains(ladder, av1) {
+					out = append(out, av1)
+				}
+			}
+			out = append(out, t)
+		}
+	case "any":
+		for _, t := range ladder {
+			t.Codec, t.BitDepth = "", 0
+			if !slices.Contains(out, t) {
+				out = append(out, t)
+			}
+		}
+	default:
+		return ladder
+	}
+	return out
+}
+
 func defaultScorePrefs() scorePrefs { return score.DefaultPreferences() }
 
-// prefsFromSettings turns resolved settings into scoring preferences. Settings
-// are pre-resolved, so a per-show override is applied like a global default.
 func prefsFromSettings(p store.Prefs) scorePrefs {
 	prefs := score.DefaultPreferences()
 
@@ -58,10 +80,10 @@ func prefsFromSettings(p store.Prefs) scorePrefs {
 			prefs.Ladder = append(prefs.Ladder, score.ParseTier(t))
 		}
 	}
+	prefs.Ladder = withCodec(prefs.Ladder, p.String("quality.codec"))
 	if limit := p.String("quality.prefer"); limit == "720p" || limit == "480p" {
 		prefs.Ladder = upTo(limit, prefs.Ladder)
 	}
-	// 0 is no limit, chosen in Settings; unset keeps the default.
 	if s := p.String("quality.max_auto_bytes"); s != "" {
 		if n, err := strconv.ParseInt(s, 10, 64); err == nil && n >= 0 {
 			prefs.MaxAutoBytes = n
@@ -88,15 +110,12 @@ func prefsFromSettings(p store.Prefs) scorePrefs {
 			prefs.SubLanguages = langs
 		}
 	}
-	// Never unattended: waiting is how a subbed release, hours after the raw, gets picked.
 	prefs.AllowRaw = false
 	return prefs
 }
 
-// Preferences is the entry point for callers that have an anime id.
 func Preferences(p store.Prefs) score.Preferences { return prefsFromSettings(p) }
 
-// TorrentLimits is the engine's download cap, upload choice and network from Settings.
 func TorrentLimits(p store.Prefs) torrent.Limits {
 	return torrent.Limits{
 		DownloadBytes: max(0, p.Int64("downloads.limit_bytes")),
