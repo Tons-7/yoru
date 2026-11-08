@@ -609,8 +609,8 @@ function WindowSection({ f }: { f: ReturnType<typeof useFlag> }) {
         label="Stay awake while another device watches"
         hint={
           f.get('power.awake_watching')
-            ? "A phone, TV or cast keeps this computer from sleeping while it plays. The screen still turns off, and the lid and power button still sleep it."
-            : 'This computer sleeps on its own schedule, even partway through an episode on another device.'
+            ? 'A phone, TV or cast keeps this computer awake while it plays. The screen still turns off.'
+            : 'This computer sleeps on its own schedule, even mid-episode on another device.'
         }
         keywords="sleep awake power standby phone tv cast"
       >
@@ -620,8 +620,8 @@ function WindowSection({ f }: { f: ReturnType<typeof useFlag> }) {
         label="Stay awake while downloading"
         hint={
           f.get('power.awake_downloading')
-            ? 'This computer stays awake while a download is receiving, and may sleep a couple of minutes after the last.'
-            : 'Downloads stop while this computer sleeps, and carry on when it wakes.'
+            ? 'This computer stays awake until downloads finish.'
+            : 'Downloads stop while this computer sleeps and carry on when it wakes.'
         }
         keywords="sleep awake power standby downloads overnight"
       >
@@ -649,7 +649,7 @@ function SignInRow() {
     : set.isError
       ? (set.error as Error).message
       : on
-        ? `Yoru starts ${where} when you sign in, so downloads, alerts and your other devices work without opening it.`
+        ? 'Downloads, alerts and your other devices work without opening it.'
         : 'Yoru starts when you open it.'
   return (
     <Row label={`Start Yoru when I sign in, ${where}`} hint={hint} keywords="startup sign in login boot autostart tray">
@@ -666,8 +666,8 @@ function CloseWindowRow({ f }: { f: ReturnType<typeof useFlag> }) {
       label="When the window closes"
       hint={
         tray
-          ? 'Yoru keeps downloading and serving your other devices; its tray icon opens or exits it.'
-          : 'Yoru exits, and downloads and your other devices stop with it.'
+          ? 'Downloads and your other devices keep going; the tray icon opens or exits Yoru.'
+          : 'Downloads and your other devices stop with it.'
       }
       keywords="close exit quit tray background minimize"
     >
@@ -688,15 +688,15 @@ function CastingSection({ f }: { f: ReturnType<typeof useFlag> }) {
   return (
     <Section
       title="Casting"
-      hint="To a Chromecast or Google TV, from the Cast button in the player's bar. If casting can't start, it says what's missing."
+      hint="To a Chromecast or Google TV, from the Cast button in the player's bar."
       keywords="chromecast google tv cast"
     >
       <Row
         label="Draw subtitles into the picture"
         hint={
           f.get('cast.burn_subtitles')
-            ? 'The TV shows them as they look here, signs included; this PC re-encodes the video while casting. The episode must be downloaded.'
-            : 'Off, the TV draws plain text it can turn off, without the fonts and signs.'
+            ? 'The TV shows them as here, signs included. Needs the episode downloaded.'
+            : 'The TV shows plain text, without fonts and signs.'
         }
         keywords="burn burned subtitles signs fonts"
       >
@@ -736,8 +736,8 @@ function PlaybackTab() {
           label="Ask if still watching"
           hint={
             f.get('playback.autonext')
-              ? 'After this many episodes in a row with no key, tap or mouse, Auto next stops and asks. A TV cast to stops there too.'
-              : 'Only with Auto next episode on.'
+              ? 'After this many episodes untouched, Auto next stops and asks.'
+              : 'Needs Auto next episode.'
           }
           keywords="still watching asleep sleep binge pause"
           under
@@ -755,7 +755,7 @@ function PlaybackTab() {
         </Row>
         <Row
           label="Skip filler and recap episodes"
-          hint="Next and download ahead step over them; the list still shows them. Recap scenes are under Skipping."
+          hint="Next and download ahead step over them."
         >
           <Switch on={f.get('playback.skip_filler')} onChange={(v) => f.set('playback.skip_filler', String(v))} />
         </Row>
@@ -763,8 +763,8 @@ function PlaybackTab() {
           label="Counts as watched at"
           hint={
             f.value('sync.progress_at') === 'ed'
-              ? 'Ticked and sent to your tracker when the ending song starts. An episode with no known ending, or one that starts before 70%, counts at 90%.'
-              : 'How far into an episode it is ticked and sent to your tracker. Lower if you stop at the credits.'
+              ? 'When the ending song starts, or at 90% if that is unknown.'
+              : 'How far in an episode is ticked and synced to your tracker.'
           }
           keywords="watched threshold progress percent credits ending"
         >
@@ -785,7 +785,7 @@ function PlaybackTab() {
       <SkippingSection f={f} />
 
       <Section title="Player">
-        <Row label="Default player" hint="mpv and VLC play on this computer only; a phone or TV uses the browser." keywords="mpv vlc external">
+        <Row label="Default player" hint="mpv and VLC play on this computer only; phones and TVs use the browser." keywords="mpv vlc external">
           <ValueMenu
             value={f.value('playback.player')}
             onChange={(v) => f.set('playback.player', v)}
@@ -799,7 +799,7 @@ function PlaybackTab() {
         <VLCNote />
         <Row
           label="Keyboard shortcuts"
-          hint="Change the player's keys, or keep them to the player so a screen reader's own keys work elsewhere. Kept on this device."
+          hint="Change the player's keys on this device."
           keywords="keys hotkeys keyboard accessibility screen reader"
         >
           <Button size="sm" onClick={() => window.dispatchEvent(new Event(SHOW_SHORTCUTS))}>
@@ -820,8 +820,8 @@ function LanguageTab() {
 
   return (
     <div className="space-y-4">
-      <Section title="Language">
-        <Row label="Audio preference" keywords="sub dub dubbed subbed">
+      <Section title="Audio and subtitles">
+        <Row label="Audio preference" keywords="sub dub dubbed subbed language">
           <ValueMenu
             value={f.value('audio.prefer')}
             onChange={(v) => f.set('audio.prefer', v)}
@@ -834,9 +834,13 @@ function LanguageTab() {
         </Row>
         <SubtitleLanguages f={f} />
         <SubtitlesWithDub f={f} />
+        <JimakuKey />
+      </Section>
+
+      <Section title="Subtitle style">
         <Row
           label="Subtitle look"
-          hint="For dialogue; signs and songs stay as made. Also on a TV, and in mpv for plain-text subtitles."
+          hint="Dialogue only; signs and songs stay as made."
           keywords="subs captions style colour color outline box yellow readable"
           below={
             <span
@@ -851,12 +855,14 @@ function LanguageTab() {
         </Row>
         <Row
           label="Raise subtitles"
-          hint="Dialogue higher on the screen, clear of text burned into the picture. In mpv, plain-text subtitles only; not on a TV you cast to."
+          hint="Moves dialogue clear of text in the picture. Not when casting."
           keywords="subs position height margin higher"
         >
           <Switch on={f.get('subtitle.raise')} onChange={(v) => f.set('subtitle.raise', String(v))} />
         </Row>
-        <JimakuKey />
+      </Section>
+
+      <Section title="Display">
         <Row label="Show titles as" keywords="english romaji names">
           <ValueMenu
             value={f.value('display.titles')}
@@ -867,12 +873,9 @@ function LanguageTab() {
             ]}
           />
         </Row>
-      </Section>
-
-      <Section title="Spoilers">
         <Row
           label="Hide spoilers"
-          hint="Unwatched episodes show a blurred picture and no title or synopsis; tap the eye to see one. Shows you finished or are rewatching show everything. A show's episode list can show all of its titles."
+          hint="Blurs unwatched episodes and hides their titles. Tap the eye to see one."
           keywords="spoilers blur hide titles synopsis thumbnails"
         >
           <ValueMenu
@@ -891,7 +894,7 @@ function LanguageTab() {
         <HomeRowsRow f={f} />
         <Row
           label="Adult titles"
-          hint="Off, For you, Schedule and Recent leave out 18+ shows that aren't on your list."
+          hint="Off hides 18+ shows that aren't on your list."
           keywords="adult 18+ nsfw hentai recommendations schedule recent"
         >
           <Switch on={f.get('home.adult_picks')} onChange={(v) => f.set('home.adult_picks', String(v))} />
@@ -911,7 +914,7 @@ function HomeRowsRow({ f }: { f: ReturnType<typeof useFlag> }) {
   return (
     <Row
       label="Rows on Home"
-      hint="Off takes a row off Home on every device. To reorder or fold rows, use Edit Home at the end of Home."
+      hint="On every device. Reorder them with Edit Home, at the end of Home."
       keywords="home rows rails hide collapse for you sequels trending season upcoming"
       stacked
     >
@@ -1121,8 +1124,8 @@ function SubtitleLanguages({ f }: { f: ReturnType<typeof useFlag> }) {
       label="Subtitle languages"
       hint={
         chosen.length === 0
-          ? 'With none chosen, subtitle language is ignored when ranking releases.'
-          : 'In order, best first. A release in none of them ranks lower, never refused.'
+          ? "None chosen: language doesn't affect which release is picked."
+          : 'In order, best first.'
       }
       keywords="subs captions"
       stacked
@@ -1172,8 +1175,8 @@ function JimakuKey() {
         save.isError
           ? (save.error as Error).message
           : set
-            ? "Set. The player's subtitles menu lists jimaku.cc's files for each episode."
-            : 'Paste an API key from your account page on jimaku.cc to list its Japanese subtitles in the player.'
+            ? "Saved. Jimaku's files show in the player's subtitles menu."
+            : 'Paste an API key from jimaku.cc for Japanese subtitles in the player.'
       }
       keywords="japanese subtitles jimaku learning immersion api key"
     >
@@ -1206,7 +1209,7 @@ function SubtitlesWithDub({ f }: { f: ReturnType<typeof useFlag> }) {
   return (
     <Row
       label="Subtitles with a dub"
-      hint="When the audio is in one of your subtitle languages. Any track can still be picked in the player."
+      hint="When the dub is in one of your subtitle languages."
       keywords="dub signs songs forced captions"
     >
       <ValueMenu
@@ -1267,7 +1270,7 @@ function StorageTab() {
     <div className="space-y-4">
       <Section
         title="Space"
-        hint="Watched episodes stay so a rewatch is instant; the oldest go first. Episodes you download yourself don't count."
+        hint="Watched episodes stay for an instant rewatch; the oldest go first. Your downloads don't count."
         keywords="cache disk"
       >
         <Row label="Budget" hint="How much watched episodes may take." keywords="size space gb cache">
@@ -1279,7 +1282,13 @@ function StorageTab() {
         </Row>
         <Row
           label="Auto-delete watched"
-          hint="Once two more are watched keeps the last one, so going back is still free."
+          hint={
+            {
+              off: 'Watched episodes stay until the budget is full.',
+              now: 'Each goes as soon as it is watched.',
+              keep2: 'Keeps the one before, so going back is free.',
+            }[f.value('cache.autodelete') || 'off']
+          }
           keywords="remove clean up"
         >
           <ValueMenu
@@ -1295,7 +1304,7 @@ function StorageTab() {
         {(f.value('cache.autodelete') || 'off') !== 'off' && (
           <Row
             label="Also delete downloaded episodes"
-            hint="Episodes you chose to keep are deleted from disk too, once watched. Nothing else ever removes a download."
+            hint="Episodes you kept go too, once watched."
             under
           >
             {confirmPurge ? (
@@ -1318,6 +1327,9 @@ function StorageTab() {
             )}
           </Row>
         )}
+      </Section>
+
+      <Section title="Clean up" keywords="cache disk">
         <Row
           label="In use"
           hint={
@@ -1357,7 +1369,7 @@ function StorageTab() {
                 ? found.removed === 0
                   ? 'Nothing orphaned.'
                   : `${found.removed} found · ${bytes(found.freedBytes)}`
-                : 'Files the torrent engine no longer knows, left by a crash or a delete outside Yoru.'
+                : 'Files left by a crash or a delete outside Yoru.'
           }
           keywords="leftover clean up"
         >
@@ -1412,22 +1424,22 @@ function DownloadsTab() {
     <div className="space-y-4">
       <Section
         title="Release sites"
-        hint="Where Yoru looks for episodes. Saved at once, no restart."
+        hint="Where Yoru looks for episodes."
         keywords="indexer nyaa tokyotosho torrent sites sources search"
       >
         <SitesEditor />
       </Section>
-      <Section title="While you watch">
+      <Section title="Download ahead" keywords="while you watch">
         <Row
           label="Find the next episode ahead of time"
-          hint="Looks up its release while you watch, so Next starts at once. Downloads nothing."
+          hint="Looks up its release so Next starts at once. Downloads nothing."
           keywords="prefetch prepare search"
         >
           <Switch on={f.get('playback.prepare_next')} onChange={(v) => f.set('playback.prepare_next', String(v))} />
         </Row>
         <Row
           label="Download ahead while watching"
-          hint="Downloads the next episodes while one plays, sharing your connection. Leave off on a slow line."
+          hint="Downloads the next episodes while one plays. Leave off on a slow line."
           keywords="prefetch preload next"
         >
           <ValueMenu
@@ -1447,16 +1459,27 @@ function DownloadsTab() {
           label="Carry on into the next season"
           hint={
             f.get('cache.prefetch_next')
-              ? "At a season's last episode, downloads the next season's first. Off, it stops at the finale."
-              : "Works with Download ahead while watching, which is off. At a season's last episode, downloads the next season's first."
+              ? "At a finale, downloads the next season's first episode."
+              : 'Needs Download ahead while watching.'
           }
           keywords="prefetch sequel season finale"
+          under
         >
           <Switch on={f.get('cache.prefetch_sequel')} onChange={(v) => f.set('cache.prefetch_sequel', String(v))} />
         </Row>
         <Row
+          label="Keep whole episode"
+          hint="Finishes downloading after you stop, so coming back is instant."
+          keywords="finish complete"
+        >
+          <Switch on={f.get('cache.prefetch_full')} onChange={(v) => f.set('cache.prefetch_full', String(v))} />
+        </Row>
+      </Section>
+
+      <Section title="Queue" keywords="while you watch">
+        <Row
           label="Download queue while watching"
-          hint="Pausing gives the episode on screen the whole connection; one already on disk pauses nothing."
+          hint="Pausing gives the episode you're watching the whole connection."
           keywords="pause queued wait"
         >
           <ValueMenu
@@ -1470,21 +1493,14 @@ function DownloadsTab() {
         </Row>
         <Row
           label="Downloads at once"
-          hint="One finishes each episode soonest. A download held back by its few seeders stops holding the line after a few minutes, and Start now always runs alongside."
+          hint="One finishes each episode soonest."
           keywords="parallel simultaneous concurrent queue"
         >
           <ValueMenu value={f.value('downloads.parallel') || '1'} onChange={(v) => f.set('downloads.parallel', v)} options={PACES} />
         </Row>
-        <Row
-          label="Keep whole episode"
-          hint="Finishes downloading after you stop, so coming back is instant. Off, it pauses when you leave."
-          keywords="finish complete"
-        >
-          <Switch on={f.get('cache.prefetch_full')} onChange={(v) => f.set('cache.prefetch_full', String(v))} />
-        </Row>
       </Section>
 
-      <Section title="Releases" hint="What Yoru picks when it finds an episode.">
+      <Section title="Quality" hint="What Yoru picks when it finds an episode." keywords="releases">
         <Row
           label="Preferred quality"
           hint={
@@ -1508,9 +1524,9 @@ function DownloadsTab() {
           label="Preferred video format"
           hint={
             {
-              av1: 'AV1 first: the same picture in a smaller file. Newer phones decode it in hardware; older ones in software, using more battery.',
-              hevc: 'HEVC first: plays on almost every phone, TV and PC in hardware.',
-              any: 'Neither ranks higher: resolution, source, seeders and groups decide.',
+              av1: 'Smaller files. Older phones use more battery playing it.',
+              hevc: 'Plays smoothly on almost every phone, TV and PC.',
+              any: 'Resolution, source, seeders and groups decide.',
             }[f.value('quality.codec') || 'hevc'] ?? ''
           }
           keywords="codec av1 hevc h265 x265 format encode"
@@ -1525,11 +1541,9 @@ function DownloadsTab() {
             ]}
           />
         </Row>
-        <PreferGroups f={f} />
-        <AvoidRows f={f} />
         <Row
           label="Largest automatic episode"
-          hint="Bigger releases are left for you to choose by hand. Films scale by their runtime."
+          hint="Bigger releases are left for you to pick. Films scale by runtime."
           keywords="size limit remux 4k gb"
         >
           <ValueMenu
@@ -1546,14 +1560,19 @@ function DownloadsTab() {
         </Row>
         <Row
           label="Allow 10-bit H.264 (Hi10P)"
-          hint="No hardware decodes it; expect high CPU. Off, it's still used when no other release would do, once a day has passed."
+          hint="Heavy on the CPU. Off, it's only a last resort."
           keywords="hi10p codec"
         >
           <Switch on={f.get('quality.allow_hi10p')} onChange={(v) => f.set('quality.allow_hi10p', String(v))} />
         </Row>
       </Section>
 
-      <Section title="Auto-download" hint="New episodes of the shows you follow, picked by the rules above." keywords="automatic">
+      <Section title="Release groups" keywords="releases fansub">
+        <PreferGroups f={f} />
+        <AvoidRows f={f} />
+      </Section>
+
+      <Section title="Auto-download" hint="Picked by the rules above." keywords="automatic">
         <Row label="Auto-download followed anime" hint="New episodes of shows you follow download by themselves." keywords="automatic new episodes">
           <Switch on={f.get('autodownload.enabled')} onChange={(v) => f.set('autodownload.enabled', String(v))} />
         </Row>
@@ -1561,8 +1580,8 @@ function DownloadsTab() {
           label="Wait for a better release"
           hint={
             (f.value('autodownload.wait_hours') || '0') === '0'
-              ? "Auto-download takes a new episode's first good release. A group's fixed v2 still replaces it."
-              : `Auto-download holds a new episode up to ${waitLabel(f.value('autodownload.wait_hours'))} for a preferred group or the top resolution, then takes the best there is. If that release turns up within two days, it replaces the episode while it's unwatched.`
+              ? 'Takes the first good release. A fixed v2 still replaces it.'
+              : `Waits up to ${waitLabel(f.value('autodownload.wait_hours'))} for a preferred group or the top resolution, then takes the best there is.`
           }
           keywords="wait upgrade preferred group better release v2 repack"
         >
@@ -1579,7 +1598,7 @@ function DownloadsTab() {
         <SpeedLimitRow f={f} />
         <Row
           label="Show speeds in"
-          hint="Speed tests count megabits, file sizes megabytes. 8 Mbps is about 1 MB/s."
+          hint="8 Mbps is about 1 MB/s."
           keywords="mbps mb/s units"
         >
           <ValueMenu
@@ -1596,8 +1615,8 @@ function DownloadsTab() {
           label="Sharing"
           hint={
             f.value('downloads.upload') === 'never'
-              ? 'Nothing is shared. Downloads get slower, as peers send most to those who share back.'
-              : 'Pieces go to other viewers only while you download, which keeps them sending to you.'
+              ? 'Downloads get slower: peers favour those who share back.'
+              : 'Shares only while downloading, so peers keep sending to you.'
           }
           keywords="upload seed seeding"
         >
@@ -1690,7 +1709,7 @@ function SpeedLimitRow({ f }: { f: ReturnType<typeof useFlag> }) {
       hint={
         limit > 0 && limit < STREAM_BYTES
           ? `Under about ${speedLimit(STREAM_BYTES, unit)} a 1080p episode plays faster than it downloads, so it stops to wait.`
-          : 'Leaves room on your connection for everything else. Streaming counts against it too.'
+          : 'Leaves room for everything else. Streaming counts too.'
       }
     >
       <ValueMenu
@@ -1722,7 +1741,7 @@ function TorrentNetworkRow({ f }: { f: ReturnType<typeof useFlag> }) {
   const missing = chosen && !adapters.some((a) => a.name === chosen)
 
   let hint =
-    "Pick your VPN app's adapter to keep torrents to it. Only torrents use it; Yoru itself, AniList and searches don't."
+    "Pick your VPN's adapter to keep torrents on it. Only torrents use it."
   if (chosen && network.waiting) {
     hint = `Waiting for ${chosen} to connect. Downloads stay paused until it does; nothing goes out over your normal connection.`
   } else if (chosen) {
@@ -1856,7 +1875,7 @@ function PreferGroups({ f }: { f: ReturnType<typeof useFlag> }) {
       f={f}
       setting="release.prefer_groups"
       label="Preferred release groups"
-      hint="Comma separated, e.g. SubsPlease, Erai-raws. A match ranks the release higher."
+      hint="Comma separated. A match ranks higher."
       placeholder="SubsPlease, Erai-raws"
       keywords="fansub uploader"
     />
@@ -1870,7 +1889,7 @@ function AvoidRows({ f }: { f: ReturnType<typeof useFlag> }) {
         f={f}
         setting="release.avoid_groups"
         label="Avoided release groups"
-        hint="Comma separated. Never picked on their own; still in the release list to choose by hand."
+        hint="Comma separated. Never picked on their own."
         placeholder="Group, Another"
         keywords="block ban fansub uploader exclude"
       />
@@ -1878,7 +1897,7 @@ function AvoidRows({ f }: { f: ReturnType<typeof useFlag> }) {
         f={f}
         setting="release.exclude_terms"
         label="Excluded words"
-        hint="Comma separated, e.g. x265 mini, Hindi Dub. A release with them in its name is never picked on its own."
+        hint="Comma separated. Releases named with these are never picked on their own."
         placeholder="x265 mini, CamRip"
         keywords="block filter exclude words terms"
       />
@@ -1886,8 +1905,8 @@ function AvoidRows({ f }: { f: ReturnType<typeof useFlag> }) {
         label="Avoid low-quality groups"
         hint={
           f.get('release.avoid_lq')
-            ? "Groups on TRaSH Guides' low-quality list are never picked on their own."
-            : "Groups on TRaSH Guides' low-quality list rank below others of the same resolution."
+            ? "TRaSH Guides' low-quality groups are never picked on their own."
+            : "TRaSH Guides' low-quality groups rank lower."
         }
         keywords="trash guides lq low quality tier"
       >
@@ -1904,12 +1923,8 @@ function SkippingSection({ f }: { f: ReturnType<typeof useFlag> }) {
     staleTime: 10 * 60_000,
   })
   return (
-    <Section title="Skipping" hint="Opening and ending can be set per show on its watch page.">
-      <Row
-        label="Skip openings"
-        hint="Off: no Skip button. Button: Skip shows while it plays. Auto: skipped for you, with Undo."
-        keywords="intro op skip button auto"
-      >
+    <Section title="Skipping" hint="Button shows a Skip button; Auto skips for you, with Undo. Each show can differ, from its watch page.">
+      <Row label="Skip openings" keywords="intro op skip button auto">
         <Segmented
           size="sm"
           label="Skip openings"
@@ -1918,11 +1933,7 @@ function SkippingSection({ f }: { f: ReturnType<typeof useFlag> }) {
           options={SKIP_MODES}
         />
       </Row>
-      <Row
-        label="Skip endings"
-        hint="Off: no Skip button. Button: Skip shows while it plays. Auto: skipped for you, with Undo."
-        keywords="outro ed credits skip button auto"
-      >
+      <Row label="Skip endings" keywords="outro ed credits skip button auto">
         <Segmented
           size="sm"
           label="Skip endings"
@@ -1933,7 +1944,7 @@ function SkippingSection({ f }: { f: ReturnType<typeof useFlag> }) {
       </Row>
       <Row
         label="Keep the songs on a first and last episode"
-        hint="A first episode's opening plays even when skipping, and so does a finale's ending."
+        hint="A first episode's opening and a finale's ending still play."
         keywords="first episode finale opening ending songs"
         under
       >
@@ -1942,12 +1953,12 @@ function SkippingSection({ f }: { f: ReturnType<typeof useFlag> }) {
           onChange={(v) => f.set('playback.skip_keep_bookends', String(v))}
         />
       </Row>
-      <Row label="Skip recap scenes" hint="The part of an episode that retells the last one." keywords="recap previously">
+      <Row label="Skip recap scenes" hint="The part that retells the last episode." keywords="recap previously">
         <Switch on={f.get('playback.autoskip_recap')} onChange={(v) => f.set('playback.autoskip_recap', String(v))} />
       </Row>
       <Row
         label="Skip previews"
-        hint="The next episode's preview after the ending, and the short eyecatch breaks."
+        hint="Next-episode previews and eyecatch breaks."
         keywords="preview next episode eyecatch"
       >
         <Switch on={f.get('playback.autoskip_preview')} onChange={(v) => f.set('playback.autoskip_preview', String(v))} />
@@ -1956,7 +1967,7 @@ function SkippingSection({ f }: { f: ReturnType<typeof useFlag> }) {
         f={f}
         setting="playback.skip_chapters"
         label="More chapters to skip"
-        hint="Comma separated. A chapter whose name has one of these in it is always skipped."
+        hint="Comma separated. Chapters named with these are skipped."
         placeholder="Sponsor, Logo"
         keywords="chapters skip names custom"
       />
@@ -1964,8 +1975,8 @@ function SkippingSection({ f }: { f: ReturnType<typeof useFlag> }) {
         label="Find openings and endings"
         hint={
           finder.data?.available === false
-            ? "This computer's ffmpeg can't compare episodes' sound (it lacks chromaprint), so only chapters and AniSkip are used."
-            : "When neither the file nor AniSkip knows them, Yoru finds them in the sound two episodes share. The player's skip times menu can mark your own."
+            ? "This computer's ffmpeg lacks chromaprint, so only chapters and AniSkip are used."
+            : "When chapters and AniSkip don't know them, Yoru finds them by sound."
         }
         keywords="detect find intro chromaprint"
       >
@@ -1975,7 +1986,7 @@ function SkippingSection({ f }: { f: ReturnType<typeof useFlag> }) {
       </Row>
       <Row
         label="Share skip times with AniSkip"
-        hint="Gives AniSkip the times it lacks (from chapters and your marks) and votes on its own, under an anonymous ID. Only the show, episode and times are sent."
+        hint="Sends missing times and votes, anonymously. Only the show, episode and times."
         keywords="aniskip share submit vote contribute"
       >
         <Switch on={f.get('skips.share')} onChange={(v) => f.set('skips.share', String(v))} />
@@ -2705,67 +2716,71 @@ function DevicesAccess() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['access'] }),
   })
 
+  const host = !!access.data?.host
+  const reachable = !!access.data?.reachable
   return (
-    <Section
-      title="Watch on your phone or TV"
-      hint="Opening this listens on every network this machine is on. The link carries a token; anything without it is refused."
-      keywords="devices pair qr access remote"
-    >
-      {access.data?.canSwitch && (
-        <Row
-          label="Allow other devices"
-          hint={
-            setNetwork.isError
-              ? (setNetwork.error as Error).message
-              : `Listening on ${access.data.listening}`
-          }
-        >
-          <Switch
-            on={!!access.data.reachable}
-            onChange={(v) => setNetwork.mutate(v)}
-          />
-        </Row>
-      )}
+    <>
+      <Section
+        title="Watch on your phone or TV"
+        hint="Devices on your network get in only with this link."
+        keywords="devices pair qr access remote"
+      >
+        {access.data?.canSwitch && (
+          <Row
+            label="Allow other devices"
+            hint={setNetwork.isError ? (setNetwork.error as Error).message : `Listening on ${access.data.listening}`}
+          >
+            <Switch on={!!access.data.reachable} onChange={(v) => setNetwork.mutate(v)} />
+          </Row>
+        )}
 
-      {access.isPending ? (
-        <Skeleton className="my-3 h-40 w-full" />
-      ) : access.isError ? (
-        <p className="py-3 text-sm text-recap">{(access.error as Error).message}</p>
-      ) : !access.data?.reachable ? (
-        <p className="py-3 text-sm text-base-400">
-          {proxy ? 'Only this machine, and the proxy on it, can reach Yoru.' : 'Only this machine can reach Yoru right now.'}
-        </p>
-      ) : access.data.urls.length === 0 ? (
-        <p className="py-3 text-sm text-base-300">
-          This machine has no home-network address right now (not on Wi-Fi or Ethernet, or only on a
-          VPN), so there is nothing a phone could open yet.
-        </p>
-      ) : (
-        <div className="flex flex-wrap items-center gap-5 py-3">
-          <img
-            src={`/api/access/qr.svg?url=${encodeURIComponent(access.data.urls[0])}`}
-            alt="Pairing QR code"
-            className="size-40 rounded-lg bg-white p-2"
-          />
-          <div className="min-w-0 flex-1">
-            <p className="mb-1 text-xs text-base-500">Scan, or open this on the device:</p>
-            {access.data.urls.map((url) => (
-              <div key={url} className="flex items-center gap-2">
-                <code className="min-w-0 truncate text-xs text-accent-300">{url}</code>
-                <CopyButton text={url} />
-              </div>
-            ))}
+        {access.isPending ? (
+          <Skeleton className="my-3 h-40 w-full" />
+        ) : access.isError ? (
+          <p className="py-3 text-sm text-recap">{(access.error as Error).message}</p>
+        ) : !access.data?.reachable ? (
+          <p className="py-3 text-sm text-base-400">
+            {proxy ? 'Only this machine, and the proxy on it, can reach Yoru.' : 'Only this machine can reach Yoru right now.'}
+          </p>
+        ) : access.data.urls.length === 0 ? (
+          <p className="py-3 text-sm text-base-300">
+            This machine has no home-network address (not on Wi-Fi or Ethernet, or only on a VPN).
+          </p>
+        ) : (
+          <div className="flex flex-wrap items-center gap-5 py-3">
+            <img
+              src={`/api/access/qr.svg?url=${encodeURIComponent(access.data.urls[0])}`}
+              alt="Pairing QR code"
+              className="size-40 rounded-lg bg-white p-2"
+            />
+            <div className="min-w-0 flex-1">
+              <p className="mb-1 text-xs text-base-500">Scan, or open this on the device:</p>
+              {access.data.urls.map((url) => (
+                <div key={url} className="flex items-center gap-2">
+                  <code className="min-w-0 truncate text-xs text-accent-300">{url}</code>
+                  <CopyButton text={url} />
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
+        {access.data?.reachable && access.data.urls.length > 0 && <PairDevice url={access.data.urls[0]} />}
+        {proxy && <ProxyRow proxy={proxy} token={access.data?.token ?? ''} />}
+      </Section>
+
+      <Section title="Install" keywords="app pwa home screen">
+        <InstallHere />
+        {reachable && host && <InstallAsApp />}
+      </Section>
+
+      {host && (reachable || proxy) && (
+        <Section title="Security" keywords="devices access approval firewall sign out">
+          {reachable && <FirewallPanel />}
+          <DeviceApproval />
+          <RevokeDevices />
+        </Section>
       )}
-      {access.data?.reachable && access.data.urls.length > 0 && <PairDevice url={access.data.urls[0]} />}
-      <InstallHere />
-      {proxy && <ProxyRow proxy={proxy} token={access.data?.token ?? ''} />}
-      {access.data?.reachable && access.data.host && <FirewallPanel />}
-      {(access.data?.reachable || proxy) && access.data?.host && <DeviceApproval />}
-      {access.data?.reachable && access.data.host && <InstallAsApp />}
-      {(access.data?.reachable || proxy) && access.data?.host && <RevokeDevices />}
-    </Section>
+    </>
   )
 }
 
@@ -2776,15 +2791,13 @@ function ThisDeviceStreaming() {
     <Section title="This device" hint="Streaming here, away from the computer Yoru runs on." keywords="mobile data cellular quality wifi saver">
       <Row
         label="On mobile data"
-        hint={`Ask first shows the episode's size before it plays. ${
-          knows ? '' : "This device doesn't say when it's on mobile data, so this applies whenever it's away from home."
-        }`}
+        hint={`Ask first shows the episode's size before it plays.${knows ? '' : ' Applies whenever this device is away from home.'}`}
       >
         <ValueMenu value={net.onMobile} onChange={(v) => setOnMobile(v as OnMobile)} options={ON_MOBILE} />
       </Row>
       <Row
         label="Streaming quality"
-        hint="Auto changes nothing at home; away, it lowers a connection that can't keep up. Downloads keep their quality."
+        hint="Away from home, Auto lowers it when the connection can't keep up."
       >
         <ValueMenu value={net.quality} onChange={(v) => setDeviceQuality(v as Quality)} options={QUALITIES} />
       </Row>

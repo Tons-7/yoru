@@ -12,8 +12,6 @@ import (
 	"yoru/internal/store"
 )
 
-// A show on the list as watching, with its status synced from the tracker rather than set here.
-// Episode 5 airs at `airs`; everything before has aired.
 func watchedShow(t *testing.T, airs time.Time) *store.Store {
 	t.Helper()
 	st := prefetchStore(t)
@@ -58,7 +56,6 @@ func episodeOf(n store.Notification) int {
 	return *n.Episode
 }
 
-// Nothing past the viewer has aired, so there is no news; once an episode airs it is announced, once.
 func TestWatcherAnnouncesAnEpisodeOnceItAirs(t *testing.T) {
 	st := prefetchStore(t)
 	setAiring(t, st, 4, time.Now().Add(time.Hour))
@@ -77,7 +74,6 @@ func TestWatcherAnnouncesAnEpisodeOnceItAirs(t *testing.T) {
 		t.Fatalf("announced before anything aired: %+v", rep)
 	}
 
-	// Episode 4 airs, and 5 is next.
 	setAiring(t, st, 5, time.Now().Add(time.Hour))
 	rep, _ = w.Poll(ctx)
 	got := notifications(t, st)
@@ -89,8 +85,6 @@ func TestWatcherAnnouncesAnEpisodeOnceItAirs(t *testing.T) {
 	}
 }
 
-// The reported bug: on episode 3 of a show at 9, with part of the backlog recorded by an earlier build,
-// every poll announced the rest of it. Only the latest aired episode is news, whatever the records say.
 func TestWatcherAnnouncesOnlyTheLatestWhateverWasRecordedBefore(t *testing.T) {
 	st := prefetchStore(t)
 	setAiring(t, st, 10, time.Now().Add(24*time.Hour))
@@ -116,7 +110,6 @@ func TestWatcherAnnouncesOnlyTheLatestWhateverWasRecordedBefore(t *testing.T) {
 	}
 }
 
-// Episodes 4 and 5 aired while Yoru was off: auto-download fetches both, oldest first; the bell names only 5.
 func TestAutoDownloadCatchesUpWhatAiredWhileOff(t *testing.T) {
 	st := prefetchStore(t)
 	setAiring(t, st, 6, time.Now().Add(time.Hour))
@@ -124,7 +117,6 @@ func TestAutoDownloadCatchesUpWhatAiredWhileOff(t *testing.T) {
 	if err := st.SetAnimePref(ctx, 1, "autodownload.enabled", "true"); err != nil {
 		t.Fatal(err)
 	}
-	// The watch saw episode 3 before Yoru was closed.
 	if err := st.RecordNotified(ctx, "old:3", 1, 3); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +146,6 @@ func TestAutoDownloadCatchesUpWhatAiredWhileOff(t *testing.T) {
 	}
 }
 
-// A long absence is caught up a few episodes a poll, and one no site has yet isn't searched again each time.
 func TestCatchUpIsSpreadOverPolls(t *testing.T) {
 	st := prefetchStore(t)
 	setAiring(t, st, 12, time.Now().Add(time.Hour))
@@ -182,19 +173,16 @@ func TestCatchUpIsSpreadOverPolls(t *testing.T) {
 		return len(queued)
 	}
 	w.Poll(ctx)
-	// Four tried (4-7, 6 found nowhere), and the latest.
 	if n := count(); n != 4 {
 		t.Fatalf("first poll queued %d, want 4, 5, 7 and 11", n)
 	}
 	w.Poll(ctx)
 	w.Poll(ctx)
-	// 4-10 but 6, and 11: the missing one waits instead of using up each poll.
 	if n := count(); n != 7 {
 		t.Errorf("after three polls %d queued, want 7", n)
 	}
 }
 
-// The group posts a fixed v2 of an episode already taken and unwatched: it's queued over the v1, a single time.
 func TestAFixedReleaseReplacesTheTakenOne(t *testing.T) {
 	st := prefetchStore(t)
 	setAiring(t, st, 5, time.Now().Add(time.Hour))
@@ -227,7 +215,6 @@ func TestAFixedReleaseReplacesTheTakenOne(t *testing.T) {
 	}
 }
 
-// A same-version re-upload or another group's release never replaces a taken episode without a wait set.
 func TestNothingReplacesATakenEpisodeButAFix(t *testing.T) {
 	st := prefetchStore(t)
 	setAiring(t, st, 5, time.Now().Add(time.Hour))
@@ -245,7 +232,6 @@ func TestNothingReplacesATakenEpisodeButAFix(t *testing.T) {
 		t.Fatalf("queued %+v; only a fix replaces a taken episode unless a wait is set", queued)
 	}
 
-	// With a wait set, the release it waits for (here the top resolution) does.
 	st.SetAnimePref(ctx, 1, "autodownload.wait_hours", "3")
 	w.lookedAt = nil
 	w.Poll(ctx)
@@ -254,7 +240,6 @@ func TestNothingReplacesATakenEpisodeButAFix(t *testing.T) {
 	}
 }
 
-// With a wait set, an equally good release with more seeders never replaces the taken one.
 func TestAWaitNeverSwapsForSeeders(t *testing.T) {
 	st := prefetchStore(t)
 	setAiring(t, st, 5, time.Now().Add(time.Hour))
@@ -274,7 +259,6 @@ func TestAWaitNeverSwapsForSeeders(t *testing.T) {
 	}
 }
 
-// With a wait set, a new episode is held until a preferred group's release lands, then taken straight away.
 func TestAutoDownloadWaitsForThePreferredGroup(t *testing.T) {
 	st := prefetchStore(t)
 	setAiring(t, st, 5, time.Now().Add(time.Hour))
@@ -304,7 +288,6 @@ func TestAutoDownloadWaitsForThePreferredGroup(t *testing.T) {
 	}
 }
 
-// airsNext saves show 1 as AniList would answer: releasing, its next episode due at airs, or undated (nil).
 func airsNext(t *testing.T, st *store.Store, next int, airs *time.Time) {
 	t.Helper()
 	episodes, current, status := 12, "CURRENT", "RELEASING"
@@ -319,7 +302,6 @@ func airsNext(t *testing.T, st *store.Store, next int, airs *time.Time) {
 	}
 }
 
-// AniList moves a followed show's episode two days later: told a single time, with the new date.
 func TestADelayedEpisodeIsAnnounced(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -343,8 +325,6 @@ func TestADelayedEpisodeIsAnnounced(t *testing.T) {
 	}
 }
 
-// A future episode losing its date is a delay, said with no date and again when one comes; a finale whose
-// date AniList drops after it aired isn't.
 func TestADroppedDateIsADelayAndAFinaleIsNot(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -374,7 +354,6 @@ func TestADroppedDateIsADelayAndAFinaleIsNot(t *testing.T) {
 	}
 }
 
-// An episode asked for from the player downloads when it's out, alone: the show's later ones don't.
 func TestAWantedEpisodeDownloadsWhenOut(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -407,7 +386,6 @@ func TestAWantedEpisodeDownloadsWhenOut(t *testing.T) {
 	}
 }
 
-// Asked for from the player, an episode isn't held by the show's auto-download wait.
 func TestAWantedEpisodeSkipsTheWait(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -415,7 +393,6 @@ func TestAWantedEpisodeSkipsTheWait(t *testing.T) {
 	st.SetAnimePref(ctx, 1, "autodownload.enabled", "true")
 	st.SetAnimePref(ctx, 1, "autodownload.wait_hours", "6")
 	st.SetAnimePref(ctx, 1, "autodownload.want", "4")
-	// 720p: not the release a wait holds out for.
 	w := watcherWith(st, release(goodHash, "[Other] Show - 04 [720p].mkv", 500)).WithDownloader(NewDownloader(st, nil, nil, discard()))
 	w.Poll(ctx)
 	if queued, _ := st.QueuedDownloads(ctx); !slices.ContainsFunc(queued, func(q store.QueuedDownload) bool { return q.Episode == 4 }) {
@@ -423,7 +400,6 @@ func TestAWantedEpisodeSkipsTheWait(t *testing.T) {
 	}
 }
 
-// The asked episode is the one taken, though a later one aired meanwhile (Yoru closed, or a raw-only week).
 func TestAWantedEpisodeIsTheOneTakenWhenLaterOnesAired(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -443,7 +419,6 @@ func TestAWantedEpisodeIsTheOneTakenWhenLaterOnesAired(t *testing.T) {
 	}
 }
 
-// A release picked by hand, or one being watched, is never swapped for auto-download's choice.
 func TestAHandPickedOrStartedEpisodeIsNeverSwapped(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -473,7 +448,6 @@ func TestAHandPickedOrStartedEpisodeIsNeverSwapped(t *testing.T) {
 	}
 }
 
-// A hold nothing will settle (auto-download turned off) is let go, not listed forever.
 func TestAHoldEndsWhenAutoDownloadIsTurnedOff(t *testing.T) {
 	st := prefetchStore(t)
 	setAiring(t, st, 5, time.Now().Add(time.Hour))
@@ -494,7 +468,6 @@ func TestAHoldEndsWhenAutoDownloadIsTurnedOff(t *testing.T) {
 	}
 }
 
-// Notify me says why it's on, and off means off whatever turned it on.
 func TestNotifyMeFollowsTheWatchsRules(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -509,10 +482,8 @@ func TestNotifyMeFollowsTheWatchsRules(t *testing.T) {
 		t.Fatalf("turned off, yet %+v", f)
 	}
 	follows, _ := st.Follows(ctx)
-	for _, f := range follows {
-		if f.AnimeID == 1 {
-			t.Fatal("the release watch still follows a show turned off")
-		}
+	if !slices.ContainsFunc(follows, func(f store.Follow) bool { return f.AnimeID == 1 }) {
+		t.Fatal("a watching show with alerts off must still be checked for releases")
 	}
 	if err := st.SetNotify(ctx, 1, true); err != nil {
 		t.Fatal(err)
@@ -522,7 +493,6 @@ func TestNotifyMeFollowsTheWatchsRules(t *testing.T) {
 	}
 }
 
-// Preview says what auto-download would take and why, and takes, records and queues nothing.
 func TestPreviewTakesNothing(t *testing.T) {
 	st := prefetchStore(t)
 	setAiring(t, st, 5, time.Now().Add(time.Hour))
@@ -551,7 +521,6 @@ func TestPreviewTakesNothing(t *testing.T) {
 	}
 }
 
-// Auto-download turned on for a show far behind: the latest comes, the backlog is left to Download all.
 func TestCatchUpLeavesABacklogAlone(t *testing.T) {
 	st := prefetchStore(t)
 	setAiring(t, st, 10, time.Now().Add(time.Hour))
@@ -576,7 +545,6 @@ func TestCatchUpLeavesABacklogAlone(t *testing.T) {
 	}
 }
 
-// The viewer caught up past what has aired: nothing to say until the next episode airs.
 func TestWatcherIsQuietWhenTheViewerIsUpToDate(t *testing.T) {
 	st := prefetchStore(t)
 	setAiring(t, st, 5, time.Now().Add(time.Hour))
@@ -602,7 +570,6 @@ func finishedShow(t *testing.T, ended time.Time, progress int) *store.Store {
 	return st
 }
 
-// A show that finished long ago has nothing new, however far behind the viewer is.
 func TestWatcherIsSilentAboutAShowFinishedLongAgo(t *testing.T) {
 	st := finishedShow(t, time.Now().AddDate(0, 0, -30), 3)
 	ctx := context.Background()
@@ -614,7 +581,6 @@ func TestWatcherIsSilentAboutAShowFinishedLongAgo(t *testing.T) {
 	}
 }
 
-// The finale: the catalogue drops the airing schedule once a show ends, but its last episode is still news.
 func TestWatcherAnnouncesTheFinaleOfAShowThatJustEnded(t *testing.T) {
 	st := finishedShow(t, time.Now().AddDate(0, 0, -1), 11)
 	ctx := context.Background()
@@ -625,17 +591,13 @@ func TestWatcherAnnouncesTheFinaleOfAShowThatJustEnded(t *testing.T) {
 	}
 }
 
-// A show muted on its own page is left alone while the rest are announced.
-func TestWatcherSkipsAShowMutedOnItsPage(t *testing.T) {
+func TestWatcherChecksAShowMutedOnItsPageSilently(t *testing.T) {
 	st := watchedShow(t, time.Now().Add(-time.Hour))
 	ctx := context.Background()
 	if err := st.SetAnimePref(ctx, 1, "notify.enabled", "false"); err != nil {
 		t.Fatal(err)
 	}
-	w := watcherWith(st, release(goodHash, "[Best] Show - 04 [1080p].mkv", 500))
-	if rep, _ := w.Poll(ctx); rep.Checked != 0 || len(notifications(t, st)) != 0 {
-		t.Fatalf("a muted show was checked: %+v", rep)
-	}
+	quietlyFound(t, st)
 }
 
 func TestWatcherIsQuietWhenNotificationsAreOff(t *testing.T) {
@@ -644,8 +606,18 @@ func TestWatcherIsQuietWhenNotificationsAreOff(t *testing.T) {
 	if err := st.SetSetting(ctx, "notify.enabled", "false"); err != nil {
 		t.Fatal(err)
 	}
-	w := watcherWith(st, release(goodHash, "[Best] Show - 04 [1080p].mkv", 500))
-	if rep, _ := w.Poll(ctx); rep.Checked != 0 || len(notifications(t, st)) != 0 {
-		t.Fatalf("notifications off, yet %+v", rep)
+	quietlyFound(t, st)
+}
+
+func quietlyFound(t *testing.T, st *store.Store) {
+	t.Helper()
+	ctx := context.Background()
+	w := watcherWith(st, release(goodHash, "[Best] Show - 05 [1080p].mkv", 500))
+	rep, _ := w.Poll(ctx)
+	if rep.Checked != 1 || rep.Found != 1 || rep.Notified != 0 || len(notifications(t, st)) != 0 {
+		t.Fatalf("want checked and found without a notification, got %+v", rep)
+	}
+	if ready, _ := st.ReadyEpisodes(ctx, []int{1}); !ready[[2]int{1, 5}] {
+		t.Error("the found episode isn't ready to play")
 	}
 }

@@ -92,7 +92,7 @@ export function Rail({
 
   return (
     <section className="group/rail">
-      <div className="mb-3 flex items-center justify-between gap-3">
+      <div className="mb-3 flex items-center justify-between gap-3 md:min-h-11">
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
           <RailHeading title={title} to={to} />
           {meta && !folded && <span className="text-sm text-base-500 tabular-nums">{meta}</span>}
@@ -112,10 +112,12 @@ export function Rail({
         ) : (
           <div className="flex shrink-0 items-center gap-2">
             {action}
-            <div aria-hidden={!scrollable || undefined} inert={!scrollable} className={cx('hidden gap-1.5 md:flex', !scrollable && 'invisible')}>
-              <ArrowButton direction={-1} disabled={atStart} onClick={() => scrollBy(-1)} />
-              <ArrowButton direction={1} disabled={atEnd} onClick={() => scrollBy(1)} />
-            </div>
+            {scrollable && (
+              <div className="hidden gap-1.5 md:flex">
+                <ArrowButton direction={-1} disabled={atStart} onClick={() => scrollBy(-1)} />
+                <ArrowButton direction={1} disabled={atEnd} onClick={() => scrollBy(1)} />
+              </div>
+            )}
           </div>
         )}
       </div>

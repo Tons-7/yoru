@@ -361,8 +361,6 @@ const followQuery = `
 		FROM list_entry e
 		LEFT JOIN anime a ON a.id = e.anime_id
 		WHERE e.status IN ('CURRENT', 'REPEATING')
-		  AND NOT EXISTS (SELECT 1 FROM anime_pref p
-		                  WHERE p.anime_id = e.anime_id AND p.key = 'notify.enabled' AND p.value = 'false')
 	)
 	GROUP BY anime_id`
 

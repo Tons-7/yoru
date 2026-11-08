@@ -19,7 +19,6 @@ import (
 	"yoru/internal/score"
 )
 
-// The matcher index is rebuilt after ingestion and swapped behind a lock, never mutated.
 type indexHolder struct {
 	mu sync.RWMutex
 	ix *match.Index
@@ -54,7 +53,6 @@ func (s *Server) corpusStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Ingestion takes minutes under AniList's limit, so it runs detached from the request.
 func (s *Server) corpusRefresh(w http.ResponseWriter, r *http.Request) {
 	force := r.URL.Query().Get("force") == "true"
 
@@ -71,7 +69,6 @@ func (s *Server) corpusRefresh(w http.ResponseWriter, r *http.Request) {
 		return errors.Join(err, s.RebuildIndex(ctx))
 	}
 
-	// Under the scheduled job's lock, so the two never ingest at once.
 	var err error
 	if s.jobs != nil {
 		err = s.jobs.RunAs("corpus", refresh)
@@ -95,7 +92,6 @@ func (s *Server) corpusRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Episode data is fetched when a detail page opens, so only shows looked at cost a request.
 func (s *Server) episodes(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.URL.Query().Get("id"))
 	if id == 0 {
@@ -103,8 +99,6 @@ func (s *Server) episodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The enricher decides internally what is missing: episode data and recap
-	// markers come from different sources and go stale independently.
 	if s.enricher != nil {
 		if _, err := s.enricher.Episodes(r.Context(), id); err != nil {
 			s.log.Warn("fetch episodes", "anime", id, "err", err)
@@ -117,8 +111,6 @@ func (s *Server) episodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A show reached only through the schedule has never been stored, so even
-	// its episode count is unknown locally and the list comes back empty.
 	if len(eps) == 0 && s.importer != nil {
 		if _, err := s.importer.Hydrate(r.Context(), []int{id}); err != nil {
 			s.log.Warn("hydrate anime", "anime", id, "err", err)
@@ -128,16 +120,13 @@ func (s *Server) episodes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Rows invented from an episode count are all this show has; releases are the
-	// only real evidence, so search for them behind the response for the next load.
-	if len(eps) > 0 && eps[0].Planned {
+	if len(eps) > 0 && (eps[0].Planned || !s.store.Finished(r.Context(), id) && s.store.EpisodesFromReleasesOnly(r.Context(), id)) {
 		s.deriveEpisodesAsync(id)
 	}
 
 	send(w, http.StatusOK, map[string]any{"items": eps, "count": len(eps)})
 }
 
-// deriveEpisodesAsync records which episodes have releases, daily, for uncatalogued titles.
 func (s *Server) deriveEpisodesAsync(animeID int) {
 	if s.finder == nil || s.store.EpisodesDerived(context.Background(), animeID) {
 		return
@@ -177,15 +166,12 @@ func (s *Server) deriveEpisodesAsync(animeID int) {
 	}()
 }
 
-// cleanOrphans deletes cache files no download claims; GET only lists them.
-// Separate from the sweep because deleting by inference deserves an explicit ask.
 func (s *Server) cleanOrphans(w http.ResponseWriter, r *http.Request) {
 	if s.cache == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "torrent engine unavailable"})
 		return
 	}
 
-	// A POST deletes the names the page showed, not whatever counts as orphaned by the time it lands.
 	var body struct {
 		Names []string `json:"names"`
 	}
@@ -213,7 +199,6 @@ func (s *Server) cleanOrphans(w http.ResponseWriter, r *http.Request) {
 		bytes += f.Bytes
 		removed[f.Name] = true
 	}
-	// Shown but kept: claimed by a download since, or gone already.
 	kept := []string{}
 	for _, n := range body.Names {
 		if !removed[n] {
@@ -257,8 +242,6 @@ func (s *Server) franchise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The graph is walked the first time a show is opened; a standalone entry
-	// is recorded as a franchise of one so it is not retried every visit.
 	if s.relations != nil {
 		if err := s.relations.Ensure(r.Context(), id); err != nil {
 			s.log.Warn("fetch relations", "anime", id, "err", err)
@@ -271,7 +254,6 @@ func (s *Server) franchise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Related entries are recorded as bare ids, so any never imported would render as a blank row.
 	var missing []int
 	for _, season := range fr.Seasons {
 		if season.Romaji == "" {
@@ -291,7 +273,6 @@ func (s *Server) franchise(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.log.Warn("related entries", "anime", id, "err", err)
 	}
-	// Same as the seasons: an id never imported would render as a blank chip.
 	var blank []int
 	for _, e := range related {
 		if e.Romaji == "" {
@@ -314,7 +295,6 @@ func (s *Server) franchise(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// episodeSources lists releases for the manual picker, ranked as play would.
 func (s *Server) episodeSources(w http.ResponseWriter, r *http.Request) {
 	if s.finder == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{
@@ -330,13 +310,10 @@ func (s *Server) episodeSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The search terms are the show's stored titles; one never opened on a
-	// fresh install (corpus still seeding) has none, and every search is empty.
 	if id > 0 {
 		s.hydrate(r.Context(), []int{id})
 	}
 
-	// Season 0 lets the finder read it from the title, as play does.
 	season, _ := strconv.Atoi(r.URL.Query().Get("season"))
 	prefs := s.preferences(r.Context(), id)
 	switch a := r.URL.Query().Get("audio"); a {
@@ -344,8 +321,6 @@ func (s *Server) episodeSources(w http.ResponseWriter, r *http.Request) {
 		prefs.Audio = a
 	}
 
-	// The picker's own words, or a magnet found by hand: kept for the play or download that picks from them.
-	// Only by POST, which another site's page can't send: a link opened from one could plant a release.
 	if m := strings.TrimSpace(r.URL.Query().Get("magnet")); m != "" && r.Method == http.MethodPost {
 		magnet, err := metainfo.ParseMagnetUri(m)
 		if err != nil {
@@ -376,8 +351,6 @@ func (s *Server) episodeSources(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, got)
 }
 
-// preferences resolves the settings for one show: a per-show override wins over
-// the global, which is what playback already does. Zero means no show in mind.
 func (s *Server) preferences(ctx context.Context, animeID int) score.Preferences {
 	resolved, err := s.store.Prefs(ctx, animeID)
 	if err != nil {
@@ -397,7 +370,6 @@ func (s *Server) RebuildIndex(ctx context.Context) error {
 	return nil
 }
 
-// match resolves a release name as downloads do, to reproduce a wrong pick without a torrent.
 func (s *Server) match(w http.ResponseWriter, r *http.Request) {
 	title := r.URL.Query().Get("title")
 	if title == "" {

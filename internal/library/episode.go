@@ -414,12 +414,57 @@ func (f *Finder) EpisodeNumbers(ctx context.Context, animeID int) ([]int, error)
 		}
 	}
 
+	limit, firm := f.store.EpisodeLimit(ctx, animeID)
+	offsets := f.earlierCounts(ctx, animeID)
 	out := make([]int, 0, len(seen))
 	for n := range seen {
-		out = append(out, n)
+		if n = ownNumber(n, limit, store.Slack(firm), offsets); n > 0 {
+			out = append(out, n)
+		}
 	}
 	slices.Sort(out)
-	return out, nil
+	return slices.Compact(out), nil
+}
+
+func ownNumber(n, limit, slack int, offsets []int) int {
+	if limit <= 0 || n <= limit {
+		return n
+	}
+	for _, off := range offsets {
+		if own := n - off; own >= 1 && own <= limit {
+			return own
+		}
+	}
+	if n <= limit+slack {
+		return n
+	}
+	return 0
+}
+
+func (f *Finder) earlierCounts(ctx context.Context, animeID int) []int {
+	franchise, err := f.store.Franchise(ctx, animeID)
+	if err != nil {
+		return nil
+	}
+	var earlier []store.Season
+	for _, s := range franchise.Seasons {
+		if s.ID == animeID {
+			break
+		}
+		if s.Format != nil && series(s.Format) {
+			earlier = append(earlier, s)
+		}
+	}
+	var offsets []int
+	sum := 0
+	for i := len(earlier) - 1; i >= 0; i-- {
+		if earlier[i].Episodes == nil || *earlier[i].Episodes <= 0 {
+			break
+		}
+		sum += *earlier[i].Episodes
+		offsets = append(offsets, sum)
+	}
+	return offsets
 }
 
 func shortTerms(titles []string, english string) []string {

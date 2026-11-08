@@ -104,11 +104,8 @@ func (w *Watcher) Coverage(ctx context.Context) map[int]Coverage {
 	}
 	now := time.Now().Unix()
 	for _, r := range rows {
-		notify, auto := flag(r.Notify, "notify.enabled"), flag(r.Auto, "autodownload.enabled")
+		auto := flag(r.Auto, "autodownload.enabled")
 		wanted, _ := strconv.Atoi(r.Want)
-		if !notify && !auto && wanted <= 0 {
-			continue
-		}
 		out[r.AnimeID] = Coverage{
 			Latest: r.Latest(now), Progress: r.Progress, Episodes: r.Episodes, First: r.First, Wanted: wanted, Auto: auto,
 		}
@@ -173,9 +170,6 @@ func (w *Watcher) Poll(ctx context.Context) (WatchReport, error) {
 		notifyOn, wanted := notifyOn, 0
 		if p, err := w.store.Prefs(ctx, f.AnimeID); err == nil {
 			notifyOn, wanted = p.Bool("notify.enabled"), p.Int("autodownload.want")
-		}
-		if !notifyOn && !auto && wanted == 0 {
-			continue
 		}
 		rep.Checked++
 
