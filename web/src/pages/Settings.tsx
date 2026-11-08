@@ -1034,7 +1034,7 @@ function SoundTab() {
         </Row>
         <Row
           label="Smooth held drawings"
-          hint="Anime is often drawn on twos. On, those held drawings move smoothly too; big steps can look softer."
+          hint="Anime characters are often drawn every other frame. Off: pans and camera moves are smoothed, characters keep their drawn rhythm. On: characters move smoothly too, though fast moves can look blurry."
           keywords="smooth motion frame generation cadence twos"
         >
           <Switch on={f.get('playback.smooth_held')} onChange={(v) => f.set('playback.smooth_held', String(v))} />

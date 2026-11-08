@@ -249,7 +249,7 @@ export function SmoothDialog({
           </p>
           <SwitchCard
             label="Smooth held drawings"
-            hint="Anime is often drawn on twos, each drawing held for two frames. On, those drawings move smoothly too; big steps can look softer."
+            hint="Anime characters are often drawn every other frame. Off: pans and camera moves are smoothed, characters keep their drawn rhythm. On: characters move smoothly too, though fast moves can look blurry."
             on={held}
             onChange={onHeld}
             dim={!on}
