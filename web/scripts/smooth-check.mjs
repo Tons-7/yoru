@@ -211,8 +211,8 @@ if (gpu && !status.ready) {
   check(await dialog.isVisible().catch(() => false), 'its dialog opens')
   check(await dialog.getByText('Frame rate').isVisible().catch(() => false), 'the dialog offers a frame rate')
   check(
-    await dialog.getByText('Anime4K is off on this device').isVisible().catch(() => false),
-    "the dialog says how Anime4K stands, as a note rather than a switch",
+    !(await dialog.getByText(/Anime4K/).isVisible().catch(() => false)),
+    'with Anime4K off, the dialog does not mention it',
   )
   await missing.page.screenshot({ path: join(SHOTS, 'smooth-dialog-missing.png') })
   await dialog.getByRole('button', { name: 'Download' }).click()

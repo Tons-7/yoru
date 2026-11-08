@@ -4,7 +4,6 @@ import { api } from '../lib/api'
 import { bytes, cx } from '../lib/format'
 import { useDismiss, useModalFocus } from '../lib/hooks'
 import {
-  HIGHEST_FPS,
   rateFps,
   topFps,
   useKnownScreenHz,
@@ -23,9 +22,9 @@ const DEVICE_CHOICES: ReadonlyArray<{ value: DeviceSmooth; label: string }> = [
 ]
 
 const DEVICE_HINTS: Record<DeviceSmooth, string> = {
-  auto: 'Follows Settings on a computer; off on phones and tablets.',
+  auto: 'Follows Settings; off on phones.',
   off: 'Never on this device.',
-  on: 'Always on this device, whatever Settings says.',
+  on: 'Always on this device.',
 }
 
 function rateChoices(screenHz: number): Array<{ value: SmoothRate; label: string }> {
@@ -48,10 +47,8 @@ function shownRate(rate: SmoothRate, screenHz: number): SmoothRate {
 
 function rateHint(rate: SmoothRate, screenHz: number): string {
   const fps = Math.round(rateFps(rate, screenHz))
-  if (!fps) {
-    return `As smooth as this screen and graphics card allow, up to ${Math.round(topFps(screenHz))} frames a second. Fewer in fast scenes.`
-  }
-  return `${fps} frames a second, an even fit for this ${screenHz} Hz screen.`
+  if (!fps) return `As smooth as this device allows, up to ${Math.round(topFps(screenHz))} fps.`
+  return `${fps} fps, an even fit for this screen.`
 }
 
 function FilesRow() {
@@ -212,14 +209,14 @@ export function SmoothDialog({
             label={on && !stopped ? 'On' : 'Off'}
             hint={
               stopped && on
-                ? 'Turned off for this episode: this device was falling behind. Switch it on to try again.'
+                ? 'Off for this episode: this device fell behind.'
                 : on && running === 'unsupported'
-                  ? "Can't run in this browser: it has no WebGPU."
+                  ? 'This browser has no WebGPU.'
                   : on && running === 'failed'
-                    ? "Couldn't start on this device's graphics card. Switch it off and on to try again."
+                    ? "Couldn't start on this device."
                     : on && running === 'off'
-                      ? 'Paused while the picture is in picture-in-picture or on AirPlay.'
-                      : "Frames between the episode's own, made on this device's graphics card."
+                      ? 'Paused in picture-in-picture or AirPlay.'
+                      : 'Smoother motion, made on this device.'
             }
             on={on && !stopped}
             onChange={onChange}
@@ -243,13 +240,13 @@ export function SmoothDialog({
             />
           </div>
           <p className="px-1 text-xs text-base-500">
-            {episodeFps ? `This episode: ${formatFps(episodeFps)} fps` : "This episode's own rate shows once it's open"}
-            {screenHz ? ` · This screen: ${screenHz} Hz` : ''}
-            {` · At most ${HIGHEST_FPS} fps, so most of what you see stays the episode's own drawing.`}
+            {[episodeFps ? `Episode: ${formatFps(episodeFps)} fps` : '', screenHz ? `Screen: ${screenHz} Hz` : '']
+              .filter(Boolean)
+              .join(' · ')}
           </p>
           <SwitchCard
             label="Smooth held drawings"
-            hint="Anime characters are often drawn every other frame. Off: pans and camera moves are smoothed, characters keep their drawn rhythm. On: characters move smoothly too, though fast moves can look blurry."
+            hint="Smooths characters too, not just the camera. Fast moves can look blurry."
             on={held}
             onChange={onHeld}
             dim={!on}
@@ -265,18 +262,10 @@ export function SmoothDialog({
         </div>
 
         <div className="mt-3 space-y-1.5 text-xs leading-snug text-base-500">
-          <p>
-            {anime4k
-              ? `Anime4K is on (${anime4k}) on this device, so both run: each real frame is sharpened first, then the frames between are made.`
-              : 'Anime4K is off on this device. It has its own menu, Sharper picture; with both on, each real frame is sharpened first.'}
-          </p>
-          <p>The sound is held back by the same fraction of a second as the picture, so the two stay in step.</p>
-          <p>Off in picture-in-picture. If this device can't keep up, it turns itself off and says so.</p>
-          <p>
-            On a laptop with two graphics chips, Yoru's own window uses the stronger one. Another browser may pick the
-            weaker one; set it to High performance in Windows' graphics settings.
-          </p>
-          <p className="text-base-600">Frame generation by FlyHigh Engine (Apache 2.0); its model is under CC BY-NC 4.0.</p>
+          {anime4k && <p>Anime4K ({anime4k}) runs too, before the frames are added.</p>}
+          <p>Sound is delayed slightly to stay in sync.</p>
+          <p>Slow in another browser on a laptop? Set it to High performance in Windows' graphics settings.</p>
+          <p className="text-base-600">Frame generation by FlyHigh Engine (Apache 2.0); model under CC BY-NC 4.0.</p>
         </div>
       </div>
     </div>

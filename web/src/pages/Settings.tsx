@@ -1011,19 +1011,19 @@ function SoundTab() {
 
       <Section
         title="Smooth motion"
-        hint="Browser player only. Each device can change these from Smooth motion in the player."
+        hint="Browser player only."
         keywords="frame generation interpolation fps flyhigh 60fps"
       >
         <Row
           label="Smooth motion"
-          hint="Frames between the episode's own, made on the watching device's graphics card. Computers follow this; phones keep it off unless turned on there. Its files come from About › Programs Yoru uses, or the player."
+          hint="Adds frames for smoother motion. Phones stay off unless turned on there."
           keywords="frame generation interpolation fps flyhigh 60fps"
         >
           <Switch on={f.get('playback.smooth')} onChange={(v) => f.set('playback.smooth', String(v))} />
         </Row>
         <Row
           label="Frame rate"
-          hint="Each device turns this into an even fit for its own screen, never above 120 frames a second. On a 240 Hz screen: Highest 120, Middle 80, Lowest 60; on a 60 Hz screen all three are 60."
+          hint="Fitted to each screen, at most 120 fps."
           keywords="smooth motion frame generation fps"
         >
           <ValueMenu
@@ -1034,7 +1034,7 @@ function SoundTab() {
         </Row>
         <Row
           label="Smooth held drawings"
-          hint="Anime characters are often drawn every other frame. Off: pans and camera moves are smoothed, characters keep their drawn rhythm. On: characters move smoothly too, though fast moves can look blurry."
+          hint="Smooths characters too, not just the camera. Fast moves can look blurry."
           keywords="smooth motion frame generation cadence twos"
         >
           <Switch on={f.get('playback.smooth_held')} onChange={(v) => f.set('playback.smooth_held', String(v))} />
