@@ -164,7 +164,12 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
 		return
 	}
-	dir := s.cfg.ResolveDataDir(strings.TrimSpace(body.Path))
+	path := strings.TrimSpace(body.Path)
+	if strings.Contains(path, "..") {
+		send(w, http.StatusBadRequest, map[string]any{"error": "Choose the folder by its full path, without \"..\"."})
+		return
+	}
+	dir := s.cfg.ResolveDataDir(path)
 	if dir == s.cfg.DataDir() {
 		send(w, http.StatusOK, map[string]any{"dataDir": dir, "copied": false, "restart": false})
 		return
@@ -203,7 +208,7 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 		}
 		copied = true
 	}
-	if err := s.cfg.SetDataDir(strings.TrimSpace(body.Path)); err != nil {
+	if err := s.cfg.SetDataDir(path); err != nil {
 		s.fail(w, "write config", err)
 		return
 	}
