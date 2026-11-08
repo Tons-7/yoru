@@ -67,7 +67,7 @@ import {
 } from '../components/ui'
 import { buttonClass, ControlLabel } from '../lib/ui'
 import { useDebounced, useHeldData, useMediaQuery } from '../lib/hooks'
-import { copyText } from '../lib/downloads'
+import { copyText, PACES } from '../lib/downloads'
 
 const TABS = [
   { id: 'New', label: 'New', summary: '', tile: '' },
@@ -1422,6 +1422,13 @@ function DownloadsTab() {
           />
         </Row>
         <Row
+          label="Downloads at once"
+          hint="One finishes each episode soonest. A download held back by its few seeders stops holding the line after a few minutes, and Start now always runs alongside."
+          keywords="parallel simultaneous concurrent queue"
+        >
+          <ValueMenu value={f.value('downloads.parallel') || '1'} onChange={(v) => f.set('downloads.parallel', v)} options={PACES} />
+        </Row>
+        <Row
           label="Keep whole episode"
           hint="Finishes downloading after you stop, so coming back is instant. Off, it pauses when you leave."
           keywords="finish complete"
@@ -1490,7 +1497,11 @@ function DownloadsTab() {
             ]}
           />
         </Row>
-        <Row label="Allow 10-bit H.264 (Hi10P)" hint="No hardware decodes it; expect high CPU." keywords="hi10p codec">
+        <Row
+          label="Allow 10-bit H.264 (Hi10P)"
+          hint="No hardware decodes it; expect high CPU. Off, it's still used when no other release would do, once a day has passed."
+          keywords="hi10p codec"
+        >
           <Switch on={f.get('quality.allow_hi10p')} onChange={(v) => f.set('quality.allow_hi10p', String(v))} />
         </Row>
       </Section>

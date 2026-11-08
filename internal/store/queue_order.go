@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -96,6 +98,51 @@ func (s *Store) moveInLine(ctx context.Context, animeID int, epKey string, place
 	return true, tx.Commit()
 }
 
+func (s *Store) ClaimQueued(ctx context.Context, animeID int, epKey string) (QueuedDownload, bool, error) {
+	var q QueuedDownload
+	var hash, name *string
+	err := s.w.QueryRowContext(ctx, `
+		UPDATE download_queue SET state = 'active', started_at = ?
+		WHERE anime_id = ? AND ep_key = ? AND state = 'pending'
+		RETURNING anime_id, ep_key, episode, season, info_hash, release_name, attempts`,
+		time.Now().Unix(), animeID, epKey).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season, &hash, &name, &q.Attempts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return QueuedDownload{}, false, nil
+	}
+	if err != nil {
+		return QueuedDownload{}, false, err
+	}
+	q.InfoHash, q.Release, q.State = derefString(hash), derefString(name), "active"
+	return q, true, nil
+}
+
+func (s *Store) NextFromTorrents(ctx context.Context, hashes []string) (QueuedDownload, bool, error) {
+	if len(hashes) == 0 {
+		return QueuedDownload{}, false, nil
+	}
+	args := []any{time.Now().UnixMilli()}
+	for _, h := range hashes {
+		args = append(args, strings.ToLower(h))
+	}
+	var animeID int
+	var epKey string
+	err := s.r.QueryRowContext(ctx, `
+		SELECT q.anime_id, q.ep_key FROM download_queue q
+		JOIN torrent_file f ON f.anime_id = q.anime_id AND f.ep_key = q.ep_key AND f.selected = 1
+		WHERE q.state = 'pending' AND (q.retry_at IS NULL OR q.retry_at <= ?)
+		  AND lower(f.info_hash) IN (`+strings.TrimSuffix(strings.Repeat("?,", len(hashes)), ",")+`)
+		  AND (q.info_hash IS NULL OR lower(q.info_hash) = lower(f.info_hash))
+		ORDER BY q.queued_at, q.episode
+		LIMIT 1`, args...).Scan(&animeID, &epKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return QueuedDownload{}, false, nil
+	}
+	if err != nil {
+		return QueuedDownload{}, false, err
+	}
+	return s.ClaimQueued(ctx, animeID, epKey)
+}
+
 func (s *Store) PrioritiseWaiting(ctx context.Context, animeID int, epKey string) (bool, error) {
 	res, err := s.w.ExecContext(ctx, `
 		UPDATE download_queue
@@ -149,7 +196,8 @@ func (s *Store) releaseEpisodes(ctx context.Context, infoHash string, fileIndex 
 		LEFT JOIN cache_entry c ON c.info_hash = f.info_hash AND (c.file_index = f.file_index OR c.file_index = ?)
 		WHERE lower(f.info_hash) = lower(?) AND f.selected = 1 AND f.anime_id IS NOT NULL AND f.ep_key IS NOT NULL
 		  AND (? < 0 OR f.file_index = ?)
-		GROUP BY f.anime_id, f.ep_key`, WholeTorrent, infoHash, fileIndex, fileIndex)
+		GROUP BY f.anime_id, f.ep_key
+		ORDER BY f.anime_id, CAST(f.ep_key AS INTEGER), f.ep_key`, WholeTorrent, infoHash, fileIndex, fileIndex)
 	if err != nil {
 		return nil, err
 	}

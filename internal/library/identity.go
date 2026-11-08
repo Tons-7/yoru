@@ -14,13 +14,10 @@ import (
 	"yoru/internal/store"
 )
 
-// A release covering this much of a title's characters shortens it, not another show.
 const shortFormCoverage = 0.4
 
-// Below this share of common vocabulary two names are different shows: "Monster" and "Re:Monster" share half.
 const sameNameOverlap = 0.7
 
-// showIdentity is what a show goes by, prepared once per search.
 type showIdentity struct {
 	names  [][]string
 	bases  [][]string
@@ -36,7 +33,6 @@ func newShowIdentity(known []string) *showIdentity {
 		}
 		id.names = append(id.names, tokens)
 		id.folded = append(id.folded, identityTokens(corpus.Fold(k)))
-		// Groups name "Mushoku Tensei II: …" "Mushoku Tensei S2": the numeral is a season.
 		base := identityTokens(corpus.Normalise(baseOf(k)))
 		if n := len(base); n > 1 && isNumber(base[n-1]) {
 			base = base[:n-1]
@@ -48,14 +44,11 @@ func newShowIdentity(known []string) *showIdentity {
 	return id
 }
 
-// matches reports whether a release names this show. Groups shorten titles and
-// name sequels by the base, so both pass; extra words on a one-word title do not.
 func (id *showIdentity) matches(rel parse.Release, rawTitle string) bool {
 	title := strings.TrimSpace(rel.Title)
 	if title == "" {
 		title = rawTitle
 	}
-	// "Romaji | English": either name is the show's.
 	for _, part := range altSplit.Split(title, -1) {
 		if id.matchesName(strings.Trim(part, " -")) {
 			return true
@@ -83,23 +76,43 @@ func (id *showIdentity) matchesName(title string) bool {
 		}
 	}
 
-	// Same-length respellings only; extra words ("Tensura Nikki - …") are another show.
 	folded := identityTokens(corpus.Fold(title))
 	for _, f := range id.folded {
 		if len(f) > 0 && (slices.Equal(folded, f) ||
-			(len(folded) == len(f) && overlap(folded, f) >= sameNameOverlap)) {
+			(len(folded) == len(f) && overlap(folded, f) >= sameNameOverlap) ||
+			(len(f) > 1 && slices.Equal(singular(folded), singular(f)))) {
 			return true
 		}
 	}
 	return false
 }
 
+func singular(tokens []string) []string {
+	out := make([]string, len(tokens))
+	for i, t := range tokens {
+		if len(t) > 3 && strings.HasSuffix(t, "s") && !strings.HasSuffix(t, "ss") {
+			t = t[:len(t)-1]
+		}
+		out[i] = t
+	}
+	return out
+}
+
 func identifiesShow(rel parse.Release, rawTitle string, known []string) bool {
 	return newShowIdentity(known).matches(rel, rawTitle)
 }
 
-// heldNamesShow checks a release recorded before identity was enforced, since
-// TorrentForEpisode skips the search. No titles means no evidence.
+func heldStands(ctx context.Context, st *store.Store, f *Finder, animeID, episode int, rec store.TorrentRecord) bool {
+	if rec.Manual {
+		return true
+	}
+	if st.SeaDexListed(ctx, animeID, rec.InfoHash) {
+		return true
+	}
+	return heldNamesShow(ctx, st, animeID, rec.Name) &&
+		!f.anotherFilm(ctx, animeID, episode, rec.Name, parse.BaseName(rec.FilePath))
+}
+
 func heldNamesShow(ctx context.Context, st *store.Store, animeID int, name string) bool {
 	if strings.TrimSpace(name) == "" {
 		return true
@@ -126,7 +139,6 @@ func startsWith(tokens, prefix []string) bool {
 	return len(tokens) >= len(prefix) && slices.Equal(tokens[:len(prefix)], prefix)
 }
 
-// baseOf is the title before its subtitle: "Made in Abyss" of "Made in Abyss: Retsujitsu no Ougonkyou".
 func baseOf(title string) string {
 	cut := len(title)
 	for _, sep := range []string{":", " - ", " – ", " — "} {
@@ -160,7 +172,6 @@ func tokenSet(tokens []string) map[string]bool {
 	return out
 }
 
-// identityTokens drops symbols, the year, and the season marker verifies() checks apart.
 func identityTokens(normalised string) []string {
 	fields := strings.Fields(stripSymbols(normalised))
 	out := make([]string, 0, len(fields))

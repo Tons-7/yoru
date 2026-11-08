@@ -13,14 +13,12 @@ import (
 	"yoru/internal/torrent"
 )
 
-// workerQueue: a fake engine holding episode 1 complete, with nothing to find for others.
 func workerQueue(t *testing.T) (*Downloader, *store.Store) {
 	t.Helper()
 	d, st, _ := workerQueueWith(t)
 	return d, st
 }
 
-// workerQueueWith is workerQueue with an indexer offering these releases, and the engine to look at.
 func workerQueueWith(t *testing.T, releases ...indexer.Torrent) (*Downloader, *store.Store, *fakeEngine) {
 	t.Helper()
 	engine := newFakeEngine()
@@ -36,7 +34,6 @@ func workerQueueWith(t *testing.T, releases ...indexer.Torrent) (*Downloader, *s
 		t.Fatal(err)
 	}
 	if err := st.RecordTorrent(ctx, store.TorrentRecord{
-		// Named for the show: a held copy that does not name it is not trusted.
 		InfoHash: goodHash, Name: "[Group] Show - 01 [1080p].mkv", AnimeID: 1, EpKey: "1", FilePath: "Show - 01.mkv", TotalSize: 100,
 	}); err != nil {
 		t.Fatal(err)
@@ -44,7 +41,6 @@ func workerQueueWith(t *testing.T, releases ...indexer.Torrent) (*Downloader, *s
 	if err := st.SetCacheBytes(ctx, goodHash, 0, 100, true); err != nil {
 		t.Fatal(err)
 	}
-	// An id the engine will not hand out itself (it counts from 1).
 	engine.ids[99] = goodHash
 	engine.finished[goodHash] = true
 
@@ -53,8 +49,6 @@ func workerQueueWith(t *testing.T, releases ...indexer.Torrent) (*Downloader, *s
 	return NewDownloader(st, NewPrefetcher(st, finder, torrent.NewClient(srv.URL), discard()), prefs, discard()), st, engine
 }
 
-// A release chosen by hand replaces the copy held under another: that one is fetched, and the old
-// finished copy goes once the new one is whole, not before (a dead swarm would cost both).
 func TestWorkerDownloadsTheReleaseChosenOverTheHeldOne(t *testing.T) {
 	d, st, engine := workerQueueWith(t,
 		release(goodHash, "[Group] Show - 01 [1080p].mkv", 500),
@@ -90,7 +84,6 @@ func TestWorkerDownloadsTheReleaseChosenOverTheHeldOne(t *testing.T) {
 	}
 }
 
-// A chosen release the sites no longer list fails the row rather than downloading something else.
 func TestWorkerFailsWhenTheChosenReleaseIsGone(t *testing.T) {
 	d, st, _ := workerQueueWith(t, release(goodHash, "[Group] Show - 02 [1080p].mkv", 500))
 	ctx := context.Background()
@@ -108,7 +101,6 @@ func TestWorkerFailsWhenTheChosenReleaseIsGone(t *testing.T) {
 	}
 }
 
-// Restart puts the episode first and stops the one downloading, even when that is the episode itself.
 func TestRestartStopsTheEpisodeDownloading(t *testing.T) {
 	d, st := workerQueue(t)
 	ctx := context.Background()
@@ -119,9 +111,7 @@ func TestRestartStopsTheEpisodeDownloading(t *testing.T) {
 		t.Fatal(err)
 	}
 	running, stop := context.WithCancel(ctx)
-	d.mu.Lock()
-	d.current = &inFlight{animeID: 1, epKey: "1", stop: stop}
-	d.mu.Unlock()
+	d.track(&inFlight{animeID: 1, epKey: "1", stop: stop})
 
 	if moved, err := d.Restart(ctx, 1, "1"); err != nil || !moved {
 		t.Fatalf("moved=%v err=%v", moved, err)
@@ -140,7 +130,6 @@ func queued(t *testing.T, st *store.Store) []store.QueuedDownload {
 	return items
 }
 
-// runUntil runs the worker until done reports true, failing after five seconds.
 func runUntil(t *testing.T, d *Downloader, done func() bool) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -170,7 +159,6 @@ func TestWorkerTakesAFinishedEpisodeOffTheQueue(t *testing.T) {
 	}
 }
 
-// Download anyway while an episode plays downloads; it once requeued at once, in a tight loop, forever.
 func TestDownloadAnywayDownloadsWhileWatching(t *testing.T) {
 	d, st := workerQueue(t)
 	ctx := context.Background()
@@ -182,7 +170,6 @@ func TestDownloadAnywayDownloadsWhileWatching(t *testing.T) {
 	runUntil(t, d, func() bool { return len(queued(t, st)) == 0 })
 }
 
-// A release that cannot be found leaves a failed row saying why, and the worker moves on.
 func TestWorkerMarksAnEpisodeItCannotFindAsFailed(t *testing.T) {
 	d, st := workerQueue(t)
 	ctx := context.Background()
@@ -199,7 +186,6 @@ func TestWorkerMarksAnEpisodeItCannotFindAsFailed(t *testing.T) {
 	}
 }
 
-// Whatever a crash left marked active goes back in line, and a paused queue stays put.
 func TestWorkerRequeuesInterruptedWorkAndRespectsThePause(t *testing.T) {
 	d, st := workerQueue(t)
 	ctx := context.Background()
@@ -232,11 +218,10 @@ func TestWorkerRequeuesInterruptedWorkAndRespectsThePause(t *testing.T) {
 	}
 }
 
-// Watching gives the connection back: another episode's download stops, the watched one's does not.
 func TestHoldStopsADownloadUnlessItIsTheEpisodeBeingWatched(t *testing.T) {
 	d, _ := pausableQueue(t)
 	stopped := false
-	d.current = &inFlight{animeID: 1, epKey: "3", stop: func() { stopped = true }}
+	d.track(&inFlight{animeID: 1, epKey: "3", stop: func() { stopped = true }})
 
 	d.Hold("1-3")
 	if stopped {
@@ -282,7 +267,6 @@ func TestReleaseGivesTheQueueBackOnlyOnceNothingIsWatching(t *testing.T) {
 	}
 }
 
-// The queue waits only while the episode on screen still arrives: once it is whole, the queue carries on.
 func TestQueueCarriesOnOnceTheWatchedEpisodeArrives(t *testing.T) {
 	d, _ := pausableQueue(t)
 	whole := map[string]bool{}
@@ -299,7 +283,6 @@ func TestQueueCarriesOnOnceTheWatchedEpisodeArrives(t *testing.T) {
 	if !d.held() {
 		t.Fatal("the queue carried on while one episode still arrives")
 	}
-	// Looked at every few seconds while it waits, not on the half-minute idle tick.
 	if got := d.idle(context.Background()); got != watchedIdle {
 		t.Errorf("waiting for an episode on screen, the worker looks again after %s, want %s", got, watchedIdle)
 	}
@@ -313,7 +296,6 @@ func TestQueueCarriesOnOnceTheWatchedEpisodeArrives(t *testing.T) {
 	}
 }
 
-// "Download anyway" lets the queue run beside the episode on screen; the next episode waits again.
 func TestProceedLastsUntilNothingIsWatched(t *testing.T) {
 	d, _ := pausableQueue(t)
 	d.Hold("1-1")
@@ -322,27 +304,26 @@ func TestProceedLastsUntilNothingIsWatched(t *testing.T) {
 		t.Fatal("Download anyway left the queue waiting")
 	}
 	stopped := false
-	d.current = &inFlight{animeID: 3, epKey: "1", stop: func() { stopped = true }}
-	// The same episode opened again (a reopened session) is the same viewing.
+	d.track(&inFlight{animeID: 3, epKey: "1", stop: func() { stopped = true }})
 	d.Hold("1-1")
 	if stopped || d.held() {
 		t.Fatal("reopening the episode stopped the queue again")
 	}
 
-	// The next episode opens before the last one closes, as the player does: it waits again.
 	d.Hold("2-1")
 	d.Release("1-1")
 	if !stopped || !d.held() || !d.Watching() {
 		t.Errorf("the next episode didn't wait as the setting asks: stopped=%v held=%v", stopped, d.held())
 	}
 
-	d.current = nil
+	d.mu.Lock()
+	delete(d.running, "3-1")
+	d.mu.Unlock()
 	d.Release("2-1")
 	d.Hold("4-1")
 	if !d.held() || !d.Watching() {
 		t.Error("the next viewing didn't wait as the setting asks")
 	}
-	// Nothing playing: nothing to proceed past, and no lasting pass.
 	d.Release("4-1")
 	d.Proceed()
 	d.Hold("5-1")
@@ -351,7 +332,6 @@ func TestProceedLastsUntilNothingIsWatched(t *testing.T) {
 	}
 }
 
-// Cancelling reaches the episode in flight, which has no queue row left to delete.
 func TestCancelStopsTheEpisodeInFlight(t *testing.T) {
 	d, st := pausableQueue(t)
 	ctx := context.Background()
@@ -359,7 +339,7 @@ func TestCancelStopsTheEpisodeInFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	stopped := false
-	d.current = &inFlight{animeID: 1, epKey: "3", stop: func() { stopped = true }}
+	d.track(&inFlight{animeID: 1, epKey: "3", stop: func() { stopped = true }})
 
 	if n, err := d.Cancel(ctx, 1, "4"); err != nil || n != 1 || stopped {
 		t.Fatalf("cancelling a waiting episode: removed=%d stopped=%v err=%v", n, stopped, err)

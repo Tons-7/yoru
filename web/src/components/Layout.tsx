@@ -275,6 +275,7 @@ function Header({ wide, back, bare }: { wide: boolean; back: Back | null; bare: 
 
   return (
     <header
+      data-stuck="always"
       className={cx(
         'sticky top-0 z-40 transition-[background-color,transform] duration-200',
         tucked && '-translate-y-full',

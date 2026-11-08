@@ -1,7 +1,17 @@
 import { bytes, speed, type SpeedUnit } from './format'
 import type { Download, Queued } from './queries'
 
+export const PACES = [
+  { value: '1', label: 'One at a time' },
+  { value: '2', label: 'Up to 2 at a time' },
+  { value: '3', label: 'Up to 3 at a time' },
+  { value: '5', label: 'Up to 5 at a time' },
+] as const
+
 export interface DownloadPart {
+  animeId?: number
+  title?: string
+  cover?: string
   epKey: string
   fileIndex: number
   size: number
@@ -14,6 +24,8 @@ export interface DownloadPart {
 
 export interface EpisodeRow extends Download {
   key: string
+  bitDepth?: number
+  files?: number
   part?: DownloadPart
   whole?: Download
 }
@@ -31,9 +43,13 @@ export interface DownloadSections {
 export function byEpisode(items: Download[]): EpisodeRow[] {
   return items.flatMap((d): EpisodeRow[] => {
     const parts = (d as Download & { parts?: DownloadPart[] }).parts ?? []
-    if (parts.length < 2) return [{ ...d, key: d.infoHash }]
+    const own = (p?: DownloadPart) =>
+      p?.animeId ? { animeId: p.animeId, title: p.title ?? d.title, cover: p.cover ?? d.cover } : {}
+    const pack = parts.length > 1 || (parts.length === 1 && ((d as EpisodeRow).files ?? 0) > 1)
+    if (!pack) return [{ ...d, ...own(parts[0]), key: d.infoHash }]
     return parts.map((p) => ({
       ...d,
+      ...own(p),
       key: `${d.infoHash}:${p.fileIndex}`,
       episodes: [p.epKey],
       episode: p.epKey,
@@ -59,9 +75,15 @@ export function sortDownloads(items: Download[], queued: Queued[], hidden?: Read
     return q ? { ...d, queued: q } : d
   })
   const absorbed = (d: Download) => d.percent < 100 && !!d.paused && d.queued?.state === 'failed'
-  const started = new Set(paired.filter((d) => !absorbed(d)).flatMap((d) => d.episodes.map((e) => `${d.animeId}-${e}`)))
+  const superseded = (d: Download) =>
+    d.percent < 100 &&
+    d.queued?.state === 'active' &&
+    !!d.queued.infoHash &&
+    d.queued.infoHash.toLowerCase() !== d.infoHash.toLowerCase()
+  const current = paired.filter((d) => !superseded(d))
+  const started = new Set(current.filter((d) => !absorbed(d)).flatMap((d) => d.episodes.map((e) => `${d.animeId}-${e}`)))
   const unstarted = (q: Queued) => !started.has(`${q.animeId}-${q.epKey}`)
-  const held = paired.filter((d) => d.percent < 100 && d.paused && !absorbed(d))
+  const held = current.filter((d) => d.percent < 100 && d.paused && !absorbed(d))
   const waitingQueue = queued.filter((q) => (q.state === 'pending' || q.state === 'paused') && unstarted(q))
   const placed = new Set<EpisodeRow>()
   const line: DownloadSections['line'] = []
@@ -78,7 +100,7 @@ export function sortDownloads(items: Download[], queued: Queued[], hidden?: Read
   for (const d of held) if (!placed.has(d)) line.push({ d })
   return {
     line,
-    active: paired.filter((d) => d.percent < 100 && !d.paused),
+    active: current.filter((d) => d.percent < 100 && !d.paused),
     held,
     finished: paired.filter((d) => d.percent >= 100),
     searching: queued.filter((q) => q.state === 'active' && unstarted(q)),
@@ -113,7 +135,7 @@ export function downloadProgress(d: Download, unit?: SpeedUnit): string {
     `${Math.round(d.percent)}%`,
     `${bytes(d.bytesOnDisk)} of ${bytes(d.totalBytes)}`,
     !d.paused && d.mbps ? speed(d.mbps, unit) : '',
-    !d.paused && d.peers ? `${d.peers} peers` : '',
+    !d.paused && d.peers ? `${d.peers} ${d.peers === 1 ? 'peer' : 'peers'}` : '',
     d.paused ? 'paused' : '',
     d.checking ? 'checking file' : '',
   ]

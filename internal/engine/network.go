@@ -14,11 +14,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// Torrents can keep to one adapter, a VPN's: listening, peer dials, trackers, DHT and web seeds all take its
-// address, and with the adapter gone (the VPN dropped) the client stays down rather than use the open line.
-
-// bindAddrs are the adapter's addresses torrents use; none is no binding. all is every address it has, dns
-// the DNS servers it was given.
 type bindAddrs struct {
 	v4, v6 net.IP
 	all    []net.IP
@@ -27,7 +22,6 @@ type bindAddrs struct {
 
 func (b bindAddrs) none() bool { return b.v4 == nil && b.v6 == nil }
 
-// keeps: the adapter still has b's addresses; IPv6 privacy addresses coming and going beside them don't count.
 func (now bindAddrs) keeps(b bindAddrs) bool {
 	has := func(ip net.IP) bool {
 		return ip == nil || slices.ContainsFunc(append([]net.IP{now.v4, now.v6}, now.all...), ip.Equal)
@@ -45,13 +39,10 @@ func (b bindAddrs) String() string {
 	return strings.Join(out, ", ")
 }
 
-// errNoAdapter: the chosen adapter is gone, down or without an address, so torrents wait for it.
 var errNoAdapter = errors.New("not connected")
 
-// errRestarting turns an add away while the client is down for the network; the caller tries again.
 var errRestarting = fmt.Errorf("%w: torrents are waiting for the chosen network", torrent.ErrUnavailable)
 
-// resolveAdapter finds the addresses of the adapter named; one that is down or gone has none.
 func resolveAdapter(name string) (bindAddrs, error) {
 	iface, err := net.InterfaceByName(name)
 	if err != nil || iface.Flags&net.FlagUp == 0 {
@@ -82,7 +73,6 @@ func resolveAdapter(name string) (bindAddrs, error) {
 	return b, nil
 }
 
-// local is the address to leave from for a remote of addr's family; nil when the adapter has none.
 func (b bindAddrs) local(addr string) net.IP {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -94,14 +84,12 @@ func (b bindAddrs) local(addr string) net.IP {
 		}
 		return b.v4
 	}
-	// A name resolves to whichever family the local address asks for; IPv4 first, as most trackers have it.
 	if b.v4 != nil {
 		return b.v4
 	}
 	return b.v6
 }
 
-// dialer dials from the adapter's address, so trackers and web seeds see only it; res looks the name up.
 func (b bindAddrs) dialer(res *net.Resolver) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		ip := b.local(addr)
@@ -113,11 +101,8 @@ func (b bindAddrs) dialer(res *net.Resolver) func(ctx context.Context, network, 
 	}
 }
 
-// Var so tests can answer on another port.
 var dnsPort = "53"
 
-// resolver asks the adapter's own DNS servers, from its address, so lookups don't leave by another network
-// (Windows asks every adapter's). An adapter given none leaves names to the system; nil is that resolver.
 func (b bindAddrs) resolver() *net.Resolver {
 	if len(b.dns) == 0 {
 		return nil
@@ -147,7 +132,6 @@ func (b bindAddrs) resolver() *net.Resolver {
 	}}
 }
 
-// bootstrapVia looks the DHT's starting routers up through res.
 func bootstrapVia(res *net.Resolver) dht.StartingNodesGetter {
 	return func() ([]dht.Addr, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -156,7 +140,6 @@ func bootstrapVia(res *net.Resolver) dht.StartingNodesGetter {
 	}
 }
 
-// listenPacket gives a UDP tracker a socket on the adapter's address.
 func (b bindAddrs) listenPacket(network, _ string) (net.PacketConn, error) {
 	ip := b.v4
 	if strings.HasSuffix(network, "6") || ip == nil {
@@ -168,8 +151,6 @@ func (b bindAddrs) listenPacket(network, _ string) (net.PacketConn, error) {
 	return net.ListenPacket(network, net.JoinHostPort(ip.String(), "0"))
 }
 
-// applyBinding points every way out of the client at b; uPnP is off, as the router can't forward into a VPN.
-// Peers are dialled from the listening sockets, TCP and uTP, which ListenHost puts on b.
 func applyBinding(cfg *bt.ClientConfig, b bindAddrs) {
 	if b.none() {
 		return
@@ -192,8 +173,6 @@ func applyBinding(cfg *bt.ClientConfig, b bindAddrs) {
 	cfg.NoDefaultPortForwarding = true
 }
 
-// binding is what the client should be on now: nothing chosen is no binding; a chosen adapter that's gone is
-// an error, which keeps the client from starting at all.
 func (e *Engine) binding() (bindAddrs, error) {
 	e.mu.Lock()
 	adapter := e.limits.Adapter
@@ -209,11 +188,8 @@ func (e *Engine) binding() (bindAddrs, error) {
 	return b, nil
 }
 
-// Var so tests need not wait.
 var networkEvery = 5 * time.Second
 
-// watchNetwork follows the chosen adapter: the client restarts on its new address, goes down without it, and
-// comes back with it. On any network it follows the machine's addresses instead (followAddresses).
 func (e *Engine) watchNetwork() {
 	tick := time.NewTicker(networkEvery)
 	defer tick.Stop()
@@ -229,7 +205,6 @@ func (e *Engine) watchNetwork() {
 		if adapter == "" && up {
 			addrs, stranded = e.followAddresses(addrs, stranded)
 		}
-		// Not started yet: the first request starts it, on the network as it is then.
 		if adapter == "" || (!up && !offline) {
 			continue
 		}
@@ -247,10 +222,8 @@ func (e *Engine) watchNetwork() {
 	}
 }
 
-// Var so tests can move the machine between networks.
 var localAddrs = machineAddrs
 
-// machineAddrs are the machine's addresses now: up, not loopback or link-local; nil if unknown.
 func machineAddrs() map[string]bool {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -274,15 +247,18 @@ func machineAddrs() map[string]bool {
 	return out
 }
 
-// followAddresses drops what a network change killed, and redials once an address is up.
 func (e *Engine) followAddresses(prev map[string]bool, stranded bool) (map[string]bool, bool) {
 	now := localAddrs()
 	if now == nil || prev == nil {
 		return now, stranded
 	}
-	added, gone := false, false
+	added, gone, addedV4 := false, false, false
 	for a := range now {
-		added = added || !prev[a]
+		if !prev[a] {
+			added = true
+			ip := net.ParseIP(a)
+			addedV4 = addedV4 || (ip != nil && ip.To4() != nil)
+		}
 	}
 	for a := range prev {
 		gone = gone || !now[a]
@@ -293,7 +269,9 @@ func (e *Engine) followAddresses(prev map[string]bool, stranded bool) (map[strin
 	if e.dropDead(prev, now) > 0 {
 		stranded = true
 	}
-	// Not before an address is up: with no network the dials only fail.
+	if addedV4 {
+		e.forwardPort()
+	}
 	if stranded && added {
 		e.redial()
 		stranded = false
@@ -301,10 +279,21 @@ func (e *Engine) followAddresses(prev map[string]bool, stranded bool) (map[strin
 	return now, stranded
 }
 
-// Var so tests can route as their machine would; nil without a route.
+var forwardOn = func(cl *bt.Client) { cl.ForwardPort() }
+
+func (e *Engine) forwardPort() {
+	e.mu.Lock()
+	cl := e.cl
+	e.mu.Unlock()
+	if cl == nil {
+		return
+	}
+	e.log.Info("on a new network; asking its router to forward the peer port")
+	forwardOn(cl)
+}
+
 var routeSource = sourceFor
 
-// sourceFor is the address the machine sends to remote from now; asking sends no packet.
 func sourceFor(remote net.IP) net.IP {
 	c, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: remote, Port: 9})
 	if err != nil {
@@ -314,7 +303,6 @@ func sourceFor(remote net.IP) net.IP {
 	return c.LocalAddr().(*net.UDPAddr).IP
 }
 
-// dropDead closes TCP on a gone address, and uTP to a peer unroutable now or reached from a new address.
 func (e *Engine) dropDead(prev, now map[string]bool) int {
 	sources := map[string]net.IP{}
 	dropped := 0
@@ -324,7 +312,6 @@ func (e *Engine) dropDead(prev, now map[string]bool) int {
 			if local == nil {
 				continue
 			}
-			// Loopback and link-local are never listed, so they never count as gone.
 			dead := prev[local.String()] && !now[local.String()]
 			if local.IsUnspecified() {
 				remote := hostIP(pc.RemoteAddr)
@@ -361,7 +348,6 @@ func hostIP(a interface{ String() string }) net.IP {
 	return net.ParseIP(host)
 }
 
-// redial has every download wanting data try its known peers now, its backoff reset.
 func (e *Engine) redial() {
 	type ask struct {
 		t     *bt.Torrent
@@ -391,8 +377,6 @@ func (e *Engine) redial() {
 	}
 }
 
-// rebind closes the client and starts one on the network as it is now. Torrents keep their ids; reads in
-// flight end and their players open them again.
 func (e *Engine) rebind(why string) {
 	e.startMu.Lock()
 	defer e.startMu.Unlock()
@@ -404,10 +388,8 @@ func (e *Engine) rebind(why string) {
 	}
 	if e.running {
 		e.log.Info("restarting the torrent engine", "why", why)
-		// Offline first, so no add lands on a client about to close.
 		e.mu.Lock()
 		e.offline = true
-		// The next client restores this, not session.json, which a failed save (a full disk) could leave stale.
 		carry, _ := e.sessionLocked()
 		e.carry = &carry
 		e.mu.Unlock()
@@ -426,7 +408,6 @@ func (e *Engine) rebind(why string) {
 	e.running = true
 }
 
-// Network says which adapter torrents keep to, the address they use, and whether they wait for it.
 func (e *Engine) Network() torrent.Network {
 	e.mu.Lock()
 	defer e.mu.Unlock()

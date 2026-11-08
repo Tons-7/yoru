@@ -38,7 +38,7 @@ type Prefetcher struct {
 
 	prepared map[string]preparedRelease
 
-	claimed map[string]bool
+	claimed map[string]int
 
 	fetching map[string]*inFlightFetch
 
@@ -47,6 +47,23 @@ type Prefetcher struct {
 	slow       map[string]time.Time
 	switched   map[string][]time.Time
 	userPaused map[string]bool
+
+	onSlow func(animeID, episode int)
+}
+
+func (p *Prefetcher) WhenSlow(f func(animeID, episode int)) {
+	p.mu.Lock()
+	p.onSlow = f
+	p.mu.Unlock()
+}
+
+func (p *Prefetcher) reportSlow(animeID, episode int) {
+	p.mu.Lock()
+	f := p.onSlow
+	p.mu.Unlock()
+	if f != nil {
+		f(animeID, episode)
+	}
 }
 
 var (
@@ -77,27 +94,39 @@ func (p *Prefetcher) pausedByUser(hash string) bool {
 	return p.userPaused[strings.ToLower(hash)]
 }
 
-func (p *Prefetcher) Unpause(ctx context.Context, rec store.TorrentRecord) {
-	keys := []string{strings.ToLower(rec.InfoHash), FileKey(rec.InfoHash, rec.FileIndex)}
-	if p.pausedByUser(keys[0]) && p.torrent != nil {
+func (p *Prefetcher) narrowPause(ctx context.Context, hash string, except int) {
+	hash = strings.ToLower(hash)
+	if !p.pausedByUser(hash) {
+		return
+	}
+	var id int
+	var held bool
+	if p.torrent != nil {
 		live, _ := p.torrent.Live(ctx)
-		id, held := live[keys[0]]
-		parts, _ := p.store.DownloadParts(ctx)
-		for _, part := range parts[keys[0]] {
-			if part.FileIndex == rec.FileIndex || part.Complete {
-				continue
-			}
-			if held {
-				if err := p.torrent.IncludeFile(ctx, id, part.FileIndex, false); err != nil {
-					p.log.Debug("keep the rest of a paused pack paused", "torrent", id, "err", err)
-				}
-			}
-			k := FileKey(rec.InfoHash, part.FileIndex)
-			p.SetUserPaused(k, true)
-			if err := p.store.SetHandPaused(ctx, k, true); err != nil {
-				p.log.Warn("remember a pause by hand", "err", err)
+		id, held = live[hash]
+	}
+	parts, _ := p.store.DownloadParts(ctx)
+	for _, part := range parts[hash] {
+		if part.FileIndex == except || part.Complete {
+			continue
+		}
+		if held {
+			if err := p.torrent.IncludeFile(ctx, id, part.FileIndex, false); err != nil {
+				p.log.Debug("keep the rest of a paused pack paused", "torrent", id, "err", err)
 			}
 		}
+		k := FileKey(hash, part.FileIndex)
+		p.SetUserPaused(k, true)
+		if err := p.store.SetHandPaused(ctx, k, true); err != nil {
+			p.log.Warn("remember a pause by hand", "err", err)
+		}
+	}
+}
+
+func (p *Prefetcher) Unpause(ctx context.Context, rec store.TorrentRecord) {
+	keys := []string{strings.ToLower(rec.InfoHash), FileKey(rec.InfoHash, rec.FileIndex)}
+	if p.torrent != nil {
+		p.narrowPause(ctx, keys[0], rec.FileIndex)
 	}
 	var was []string
 	for _, k := range keys {
@@ -230,7 +259,7 @@ func (p *Prefetcher) beginFetch(animeID, episode int) (*inFlightFetch, bool) {
 func (p *Prefetcher) endFetch(animeID, episode int, f *inFlightFetch) {
 	p.mu.Lock()
 	delete(p.fetching, fetchKey(animeID, episode))
-	delete(p.claimed, f.hash)
+	p.unclaimLocked(f.hash)
 	p.mu.Unlock()
 	f.once.Do(func() { close(f.added) })
 	close(f.done)
@@ -296,29 +325,59 @@ func (p *Prefetcher) WithRoom(room func(ctx context.Context, need int64, animeID
 func (p *Prefetcher) claim(f *inFlightFetch, hash string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.claimed == nil {
-		p.claimed = map[string]bool{}
+	if f.hash != "" {
+		p.unclaimLocked(f.hash)
 	}
 	f.hash = strings.ToLower(hash)
-	p.claimed[f.hash] = true
+	if f.hash != "" {
+		p.claimLocked(f.hash)
+	}
+}
+
+func (p *Prefetcher) claimLocked(hash string) {
+	if p.claimed == nil {
+		p.claimed = map[string]int{}
+	}
+	p.claimed[hash]++
+}
+
+func (p *Prefetcher) unclaimLocked(hash string) {
+	if hash == "" {
+		return
+	}
+	if p.claimed[hash]--; p.claimed[hash] <= 0 {
+		delete(p.claimed, hash)
+	}
 }
 
 func (p *Prefetcher) claimWhile(hash string) func() {
 	hash = strings.ToLower(hash)
 	p.mu.Lock()
-	if p.claimed == nil {
-		p.claimed = map[string]bool{}
-	}
-	p.claimed[hash] = true
+	p.claimLocked(hash)
 	p.mu.Unlock()
+	var once sync.Once
 	return func() {
-		p.mu.Lock()
-		delete(p.claimed, hash)
-		p.mu.Unlock()
+		once.Do(func() {
+			p.mu.Lock()
+			p.unclaimLocked(hash)
+			p.mu.Unlock()
+		})
 	}
 }
 
+func (p *Prefetcher) discardIfAlone(ctx context.Context, id int, hash string) {
+	if p.claims(hash) > 1 {
+		p.log.Info("leaving a release this episode gave up: another episode downloads from it", "torrent", id)
+		return
+	}
+	discardUnclaimed(ctx, p.store, p.torrent, p.log, id, hash)
+}
+
 func (p *Prefetcher) Claimed(hash string) bool {
+	return p.claims(hash) > 0
+}
+
+func (p *Prefetcher) claims(hash string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.claimed[strings.ToLower(hash)]
@@ -541,7 +600,7 @@ func (p *Prefetcher) awaitResolve(ctx context.Context, animeID, episode int, dea
 
 func (p *Prefetcher) held(ctx context.Context, animeID, episode int) (store.TorrentRecord, bool) {
 	rec, ok, err := p.store.TorrentForEpisode(ctx, animeID, epKey(episode))
-	if err != nil || !ok || (!rec.Manual && !heldNamesShow(ctx, p.store, animeID, rec.Name)) {
+	if err != nil || !ok || !heldStands(ctx, p.store, p.finder, animeID, episode, rec) {
 		return store.TorrentRecord{}, false
 	}
 	return rec, true
@@ -637,17 +696,40 @@ func (p *Prefetcher) DownloadRelease(ctx context.Context, animeID, episode, seas
 }
 
 func (p *Prefetcher) download(ctx context.Context, animeID, episode, season int, prefs score.Preferences, stall time.Duration, pick string) error {
-	paced := pick == ""
+	switching := pick == ""
+	var carried time.Duration
+	last := int64(-1)
 	for {
-		err := p.downloadOnce(ctx, animeID, episode, season, prefs, stall, pick, paced && p.switches(animeID, episode) < slowSwitches)
+		err := p.downloadOnce(ctx, animeID, episode, season, prefs, max(stall-carried, torrent.AwaitPoll), pick, true)
 		var slow *torrent.SlowError
 		if !errors.As(err, &slow) {
 			return err
 		}
-		if !p.switchAway(ctx, animeID, episode, season, prefs, slow) {
-			paced = false
+		if slow.Bytes == last {
+			carried += slow.Quiet
+		} else {
+			carried = slow.Quiet
+		}
+		last = slow.Bytes
+		if switching && p.replaceable(ctx, animeID, episode) && p.switchAway(ctx, animeID, episode, season, prefs, slow) {
+			carried, last = 0, -1
+			continue
+		}
+		p.reportSlow(animeID, episode)
+		switching = false
+		if ctx.Err() != nil {
+			p.stop(context.WithoutCancel(ctx), slow.ID, false, "was stood down while slow", ctx.Err())
+			return ctx.Err()
 		}
 	}
+}
+
+func (p *Prefetcher) replaceable(ctx context.Context, animeID, episode int) bool {
+	if p.switches(animeID, episode) >= slowSwitches {
+		return false
+	}
+	rec, ok := p.held(ctx, animeID, episode)
+	return !ok || (!rec.Manual && !p.ruledOut(rec.InfoHash))
 }
 
 func (p *Prefetcher) switchAway(ctx context.Context, animeID, episode, season int, prefs score.Preferences, slow *torrent.SlowError) bool {
@@ -674,12 +756,13 @@ func (p *Prefetcher) switchAway(ctx context.Context, animeID, episode, season in
 		return false
 	}
 	p.ruleOut(animeID, episode, hash)
-	if p.store.TorrentEpisodeCount(ctx, hash) > 1 {
+	if p.store.TorrentEpisodeCount(ctx, hash) > 1 || p.claims(hash) > 0 {
 		if held && rec.FileIndex >= 0 && strings.EqualFold(rec.InfoHash, hash) {
 			if err := p.torrent.IncludeFile(ctx, slow.ID, rec.FileIndex, false); err != nil {
 				p.log.Debug("stop fetching the switched episode", "torrent", slow.ID, "err", err)
 			}
 		}
+		p.stop(context.WithoutCancel(ctx), slow.ID, false, "this episode switched away from", slow)
 		p.log.Info("queued release downloads too slowly, switching this episode; the pack keeps what other episodes have",
 			"anime", animeID, "episode", episode, "release", d.Name, "kbps", int(slow.Rate/1024))
 		return true
@@ -748,7 +831,6 @@ func (p *Prefetcher) downloadOnce(ctx context.Context, animeID, episode, season 
 		if pick == "" && p.pausedByUser(FileKey(rec.InfoHash, rec.FileIndex)) {
 			return errEpisodePaused
 		}
-		paced = paced && !rec.Manual
 		if err := p.keepEpisode(ctx, rec.InfoHash, rec.FileIndex); err != nil {
 			return err
 		}
@@ -762,7 +844,7 @@ func (p *Prefetcher) downloadOnce(ctx context.Context, animeID, episode, season 
 		default:
 			done := p.claimWhile(rec.InfoHash)
 			defer done()
-			return p.awaitPaced(ctx, id, stall, animeID, paced, rec.TotalSize)
+			return p.awaitPaced(ctx, id, stall, animeID, paced, rec)
 		}
 	}
 
@@ -770,19 +852,23 @@ func (p *Prefetcher) downloadOnce(ctx context.Context, animeID, episode, season 
 	if err != nil || !started {
 		return err
 	}
-	var bytes int64
-	if rec, ok := p.held(ctx, animeID, episode); ok {
-		bytes = rec.TotalSize
-		if p.ruledOut(rec.InfoHash) {
-			paced = false
-		}
+	rec, ok := p.held(ctx, animeID, episode)
+	if ok {
+		done := p.claimWhile(rec.InfoHash)
+		defer done()
+	} else {
+		rec = store.TorrentRecord{FileIndex: -1}
 	}
-	return p.awaitPaced(ctx, id, stall, animeID, paced, bytes)
+	return p.awaitPaced(ctx, id, stall, animeID, paced, rec)
 }
 
-func (p *Prefetcher) awaitPaced(ctx context.Context, id int, stall time.Duration, animeID int, paced bool, episodeBytes int64) error {
-	var minRate float64
+func (p *Prefetcher) awaitPaced(ctx context.Context, id int, stall time.Duration, animeID int, paced bool, rec store.TorrentRecord) error {
+	pace := torrent.Pace{File: rec.FileIndex, FileSize: rec.TotalSize}
+	if rec.FileIndex < 0 {
+		pace.FileSize = 0
+	}
 	if paced {
+		episodeBytes := rec.TotalSize
 		if episodeBytes <= 0 {
 			if stats, err := p.torrent.Stats(ctx, id); err == nil {
 				episodeBytes = stats.TotalBytes
@@ -793,24 +879,34 @@ func (p *Prefetcher) awaitPaced(ctx context.Context, id int, stall time.Duration
 			if runtime <= 0 {
 				runtime = 24
 			}
-			minRate = slowShare * float64(episodeBytes) / float64(runtime*60)
+			pace.MinRate = slowShare * float64(episodeBytes) / float64(runtime*60)
 		}
 		if global, err := p.store.Prefs(ctx, 0); err == nil {
-			if limit := global.Int64("downloads.limit_bytes"); limit > 0 && float64(limit) < 2*minRate {
-				minRate = 0
+			if limit := global.Int64("downloads.limit_bytes"); limit > 0 && float64(limit) < 2*pace.MinRate {
+				pace.MinRate = 0
 			}
 		}
+		pace.Window, pace.FewPeers = slowWindow, fewPeers
 	}
-	err := p.torrent.AwaitPaced(ctx, id, stall, minRate, slowWindow, fewPeers)
-	if err != nil && !errors.Is(err, torrent.ErrPaused) {
-		p.stop(context.WithoutCancel(ctx), id, "did not finish", err)
+	err := p.torrent.AwaitPaced(ctx, id, stall, pace)
+	var slow *torrent.SlowError
+	if err != nil && !errors.Is(err, torrent.ErrPaused) && !errors.As(err, &slow) {
+		p.stop(context.WithoutCancel(ctx), id, true, "did not finish", err)
 	}
 	return err
 }
 
-func (p *Prefetcher) stop(ctx context.Context, id int, what string, reason error) {
+func (p *Prefetcher) stop(ctx context.Context, id int, claimed bool, what string, reason error) {
 	if p.playing(ctx, id) {
 		p.log.Info("leaving a download that "+what+" running: it is playing", "torrent", id, "reason", reason)
+		return
+	}
+	mine := 0
+	if claimed {
+		mine = 1
+	}
+	if d, err := p.torrent.Details(ctx, id); err == nil && p.claims(d.InfoHash) > mine {
+		p.log.Info("leaving a download that "+what+" running: another episode downloads from it", "torrent", id, "reason", reason)
 		return
 	}
 	p.log.Info("stopping a download that "+what, "torrent", id, "reason", reason)
@@ -864,7 +960,7 @@ func (p *Prefetcher) resume(ctx context.Context, rec store.TorrentRecord) (id in
 	if err != nil {
 		return 0, false, err
 	}
-	if stats.Finished {
+	if _, _, done := (torrent.Pace{File: rec.FileIndex, FileSize: rec.TotalSize}).Progress(stats); done {
 		return id, false, nil
 	}
 
@@ -1035,14 +1131,14 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 			switch rerr := record(context.WithoutCancel(ctx)); {
 			case errors.Is(rerr, errOvertaken):
 				p.setTorrent(flight, store.TorrentRecord{})
-				discardUnclaimed(context.WithoutCancel(ctx), p.store, p.torrent, p.log, added.ID, best.Torrent.InfoHash)
+				p.discardIfAlone(context.WithoutCancel(ctx), added.ID, best.Torrent.InfoHash)
 				return err
 			case rerr != nil:
 				p.log.Warn("record interrupted download", "err", rerr)
 			}
 		}
 		if err != nil {
-			p.stop(context.WithoutCancel(ctx), added.ID, "did not start", err)
+			p.stop(context.WithoutCancel(ctx), added.ID, true, "did not start", err)
 		}
 		return err
 	}
@@ -1063,7 +1159,7 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 			if err != nil {
 				p.log.Info("release resolved ahead did not start, searching", "anime", animeID, "episode", episode)
 				p.setTorrent(flight, store.TorrentRecord{})
-				discardUnclaimed(context.WithoutCancel(ctx), p.store, p.torrent, p.log, added.ID, rel.Torrent.InfoHash)
+				p.discardIfAlone(context.WithoutCancel(ctx), added.ID, rel.Torrent.InfoHash)
 				stale, added, lastErr = rel.Torrent.InfoHash, nil, err
 			}
 		}
@@ -1104,6 +1200,16 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 				return 0, false, err
 			}
 		}
+		if more := score.Fallbacks(results); added == nil && pick == "" && !skippedPaused && len(more) > 0 {
+			allowRuled = false
+			prior := lastErr
+			if err := addFirst(more); err != nil {
+				return 0, false, err
+			}
+			if added == nil && swarmFailure(prior) {
+				lastErr = prior
+			}
+		}
 		if added == nil && byHash {
 			return 0, false, fmt.Errorf("release %s not found: no search lists it, and by its hash: %w", pick, lastErr)
 		}
@@ -1123,7 +1229,7 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 		p.log.Info("another release was recorded for the episode meanwhile; this one goes",
 			"anime", animeID, "episode", episode)
 		p.setTorrent(flight, store.TorrentRecord{})
-		discardUnclaimed(context.WithoutCancel(ctx), p.store, p.torrent, p.log, added.ID, best.Torrent.InfoHash)
+		p.discardIfAlone(context.WithoutCancel(ctx), added.ID, best.Torrent.InfoHash)
 		return 0, false, err
 	case err != nil:
 		return added.ID, true, err

@@ -114,6 +114,25 @@ func TestPausingAPackKeepsItsUnfinishedEpisodesInLine(t *testing.T) {
 	}
 }
 
+func TestAPackEntersTheLineInEpisodeOrder(t *testing.T) {
+	_, st, _ := workerQueueWith(t)
+	ctx := context.Background()
+	recordPack(t, st, otherHash, "9", "10", "11", "12")
+	if _, err := st.KeepDownload(ctx, otherHash, true); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.SetReleaseQueuedPaused(ctx, otherHash, -1, true); err != nil || n != 4 {
+		t.Fatalf("placed %d, %v", n, err)
+	}
+	var order []int
+	for _, r := range queued(t, st) {
+		order = append(order, r.Episode)
+	}
+	if !slices.Equal(order, []int{9, 10, 11, 12}) {
+		t.Errorf("line %v; want 9 to 12 in order", order)
+	}
+}
+
 func TestEpisodesMoveUpAndDownTheLine(t *testing.T) {
 	_, st, _ := workerQueueWith(t)
 	ctx := context.Background()

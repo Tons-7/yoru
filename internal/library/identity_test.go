@@ -1,10 +1,14 @@
 package library
 
 import (
+	"context"
 	"testing"
 
 	"yoru/internal/corpus"
+	"yoru/internal/indexer"
+	"yoru/internal/metadata"
 	"yoru/internal/parse"
+	"yoru/internal/score"
 )
 
 func identifies(t *testing.T, releaseTitle string, known ...string) bool {
@@ -12,7 +16,61 @@ func identifies(t *testing.T, releaseTitle string, known ...string) bool {
 	return identifiesShow(parse.Parse(releaseTitle), releaseTitle, known)
 }
 
-// BD and dual-audio groups name both titles; one of them is enough.
+func TestPluralOfAMultiWordTitleMatches(t *testing.T) {
+	known := []string{"Princess Principal Picture Drama", "プリンセス・プリンシパル ピクチャードラマ"}
+	for _, title := range []string{
+		"[Kametsu] Princess Principal - Picture Dramas (BD 1080p Hi10 FLAC) [Dual-Audio]",
+		"[supai] Princess Principal Picture Dramas [BD 1080p AAC]",
+		"[Kametsu] Princess Principal Picture Drama - 01 (BD 1080p Hi10 FLAC) [BBF1B4CE].mkv",
+	} {
+		if !identifies(t, title, known...) {
+			t.Errorf("rejected over a plural: %s", title)
+		}
+	}
+	if identifies(t, "[Group] Monsters - 01 [1080p].mkv", "Monster") {
+		t.Error("a one-word title took its plural")
+	}
+	if identifies(t, "[Group] Monster [1080p].mkv", "Monsters: Ippyaku Sanjou Hiryuu Jigoku") {
+		t.Error("a one-word plural took the singular show")
+	}
+}
+
+func TestASeaDexListingForTheEntryNamesTheShow(t *testing.T) {
+	st := monsterStore(t)
+	listed := "5555555555555555555555555555555555555555"
+	unlisted := "6666666666666666666666666666666666666666"
+	if _, err := st.SaveSeaDex(context.Background(), []metadata.SeaDexRelease{{
+		AniListID: 19, InfoHash: listed, ReleaseGroup: "Kaibutsu", Tracker: "Nyaa", IsBest: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	f := NewFinder(st, fixedIndexer{results: []indexer.Torrent{
+		release(listed, "[Kaibutsu] Urasawa Collection 01-74 (BD 1080p)", 30),
+		release(unlisted, "[Other] Urasawa Collection 01-74 (BD 1080p)", 30),
+	}}, discard())
+	got, err := f.Find(context.Background(), Request{AnimeID: 19, Episode: 3, Season: 1, Prefs: score.DefaultPreferences()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, r := range got.Results {
+		seen[r.Torrent.InfoHash] = true
+		switch r.Torrent.InfoHash {
+		case listed:
+			if r.WrongShow {
+				t.Error("SeaDex's own listing for the entry was taken for another show")
+			}
+		case unlisted:
+			if !r.WrongShow {
+				t.Error("an unlisted release with a foreign name passed as the show")
+			}
+		}
+	}
+	if !seen[listed] || !seen[unlisted] {
+		t.Fatalf("results = %v, want both releases listed", seen)
+	}
+}
+
 func TestEitherNameInAPairedTitle(t *testing.T) {
 	known := []string{"Kusuriya no Hitorigoto 2nd Season", "The Apothecary Diaries Season 2"}
 	for _, title := range []string{
@@ -28,7 +86,6 @@ func TestEitherNameInAPairedTitle(t *testing.T) {
 	}
 }
 
-// A spin-off's name contains the main show's; extra words are another show.
 func TestSpinOffIsNotTheMainShow(t *testing.T) {
 	known := []string{"Tensei shitara Slime Datta Ken", "That Time I Got Reincarnated as a Slime"}
 	if identifies(t, "[SubsPlease] Tensura Nikki - Tensei Shitara Slime Datta Ken - 05 (1080p)", known...) {
@@ -39,8 +96,6 @@ func TestSpinOffIsNotTheMainShow(t *testing.T) {
 	}
 }
 
-// Monster is one common word, so every search for it returned other shows and
-// the scorer preferred whichever of them was newest and highest resolution.
 func TestMonsterOnlyMatchesMonster(t *testing.T) {
 	known := []string{"MONSTER", "Monster", "Potwór"}
 
@@ -81,7 +136,6 @@ func TestMonsterOnlyMatchesMonster(t *testing.T) {
 	}
 }
 
-// The group spells it "Semi", the catalogue "Zemi": one word apart is still the same show.
 func TestRomanisationDifferenceStillMatches(t *testing.T) {
 	known := []string{
 		"Onaji Zemi no Someya-san ga Sexy Joyuu Datta Hanashi.",
@@ -111,7 +165,6 @@ func TestShortenedTitlesMatch(t *testing.T) {
 	if !identifies(t, "[Group] Kaguya-sama wa Kokurasetai - 05 [1080p].mkv", long) {
 		t.Error("a group dropping the subtitle should still match")
 	}
-	// Not backwards: most of a long title is a shortening, one word of it another show.
 	if identifies(t, "[Group] Kaguya - 05 [1080p].mkv", long) {
 		t.Error("one leading word is not enough to claim a long title")
 	}
@@ -132,7 +185,6 @@ func TestSeasonAndYearAreNotIdentity(t *testing.T) {
 	}
 }
 
-// Adding words to a one-word title is another show.
 func TestSiblingEntriesAreNotAccepted(t *testing.T) {
 	pairs := []struct{ release, known string }{
 		{"[Group] Steins;Gate 0 - 03 [1080p].mkv", "Steins;Gate"},
@@ -146,8 +198,6 @@ func TestSiblingEntriesAreNotAccepted(t *testing.T) {
 	}
 }
 
-// A sequel's catalogue title carries a subtitle groups never use; they name
-// the base and count seasons. Both used to be blocked as other shows.
 func TestSequelsNamedByTheirBaseTitleMatch(t *testing.T) {
 	pairs := []struct{ release, known string }{
 		{"[Judas] Made in Abyss (Season 2) (BD 1080p)", "Made in Abyss: Retsujitsu no Ougonkyou"},
@@ -161,7 +211,6 @@ func TestSequelsNamedByTheirBaseTitleMatch(t *testing.T) {
 			t.Errorf("%q was rejected for %q", p.release, p.known)
 		}
 	}
-	// A one-word base gives no such licence; this only keeps other shows out, not cours.
 	if identifies(t, "[Group] Monster Musume no Oisha-san - 01 [1080p].mkv", "Monster: Season 1") {
 		t.Error("a one-word base accepted a longer show")
 	}
@@ -251,7 +300,6 @@ func TestIdentityTokens(t *testing.T) {
 	}
 }
 
-// "Monster - 02 - Downfall" names Monster; the words after the number are the episode's, not another show's.
 func TestEpisodeTitleAfterTheNumberStillNamesTheShow(t *testing.T) {
 	known := []string{"MONSTER", "Monster"}
 	for _, name := range []string{

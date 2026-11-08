@@ -9,26 +9,21 @@ import (
 	"time"
 )
 
-// QueuedDownload is one episode waiting its turn. The queue is deliberately
-// serial: parallel torrents share one connection and each finishes later.
 type QueuedDownload struct {
-	AnimeID int     `json:"animeId"`
-	EpKey   string  `json:"epKey"`
-	Episode int     `json:"episode"`
-	Season  int     `json:"season"`
-	State   string  `json:"state"`
-	Error   *string `json:"error,omitempty"`
-	Title   string  `json:"title,omitempty"`
-	Cover   *string `json:"cover,omitempty"`
-	// A release chosen by hand: the worker downloads this one instead of searching.
-	InfoHash string `json:"infoHash,omitempty"`
-	Release  string `json:"release,omitempty"`
-	// Tries that found a dead swarm, and when the next one is due (unix millis); Error says why it waits.
-	Attempts int   `json:"attempts,omitempty"`
-	RetryAt  int64 `json:"retryAt,omitempty"`
+	AnimeID  int     `json:"animeId"`
+	EpKey    string  `json:"epKey"`
+	Episode  int     `json:"episode"`
+	Season   int     `json:"season"`
+	State    string  `json:"state"`
+	Error    *string `json:"error,omitempty"`
+	Title    string  `json:"title,omitempty"`
+	Cover    *string `json:"cover,omitempty"`
+	InfoHash string  `json:"infoHash,omitempty"`
+	Release  string  `json:"release,omitempty"`
+	Attempts int     `json:"attempts,omitempty"`
+	RetryAt  int64   `json:"retryAt,omitempty"`
 }
 
-// SetQueuedRelease pins a queued episode to one release, by hash, with its name for the list.
 func (s *Store) SetQueuedRelease(ctx context.Context, animeID int, epKey, infoHash, name string) (bool, error) {
 	res, err := s.w.ExecContext(ctx, `
 		UPDATE download_queue SET info_hash = ?, release_name = ?, error = NULL, attempts = 0, retry_at = NULL,
@@ -41,7 +36,6 @@ func (s *Store) SetQueuedRelease(ctx context.Context, animeID int, epKey, infoHa
 	return n > 0, nil
 }
 
-// EnqueueRelease queues an episode pinned to a release in one write, so the worker never claims it unpinned.
 func (s *Store) EnqueueRelease(ctx context.Context, animeID, season, episode int, infoHash, name string) error {
 	if err := s.EnsureAnime(ctx, animeID); err != nil {
 		return err
@@ -57,7 +51,6 @@ func (s *Store) EnqueueRelease(ctx context.Context, animeID, season, episode int
 	return err
 }
 
-// Enqueue adds episodes at the back; a queued one keeps its place, and the worker drops ones on disk.
 func (s *Store) Enqueue(ctx context.Context, animeID, season int, episodes []int) (int, error) {
 	if animeID == 0 || len(episodes) == 0 {
 		return 0, nil
@@ -98,10 +91,7 @@ func (s *Store) Enqueue(ctx context.Context, animeID, season int, episodes []int
 	return added, tx.Commit()
 }
 
-// NextQueued claims the oldest pending episode and marks it active, so a
-// restart mid-download does not leave a row that nothing will ever pick up.
 func (s *Store) NextQueued(ctx context.Context) (QueuedDownload, bool, error) {
-	// One statement: a cancel between a read and the claim would otherwise be downloaded anyway.
 	var q QueuedDownload
 	var hash, name *string
 	now := time.Now()
@@ -125,7 +115,6 @@ func (s *Store) NextQueued(ctx context.Context) (QueuedDownload, bool, error) {
 	return q, true, nil
 }
 
-// PeekQueued is the pending episode NextQueued would claim, left unclaimed.
 func (s *Store) PeekQueued(ctx context.Context) (QueuedDownload, bool, error) {
 	q := QueuedDownload{State: "pending"}
 	err := s.r.QueryRowContext(ctx, `
@@ -139,8 +128,6 @@ func (s *Store) PeekQueued(ctx context.Context) (QueuedDownload, bool, error) {
 	return q, err == nil, err
 }
 
-// Defer puts the episode downloading back in line for a later try: behind the rest, not before at, with
-// why it waits in Error. Its hold on a release stays, so the try resumes what is on disk.
 func (s *Store) Defer(ctx context.Context, animeID int, epKey string, cause error, at time.Time) error {
 	_, err := s.w.ExecContext(ctx, `
 		UPDATE download_queue
@@ -150,7 +137,6 @@ func (s *Store) Defer(ctx context.Context, animeID int, epKey string, cause erro
 	return err
 }
 
-// NextRetry is when the earliest deferred episode is due, if any is still waiting for its time.
 func (s *Store) NextRetry(ctx context.Context) (time.Time, bool, error) {
 	var at *int64
 	err := s.r.QueryRowContext(ctx, `
@@ -162,8 +148,6 @@ func (s *Store) NextRetry(ctx context.Context) (time.Time, bool, error) {
 	return time.UnixMilli(*at), true, nil
 }
 
-// FinishQueued records the outcome. A failure is kept rather than deleted: a
-// row that vanishes silently is indistinguishable from one that worked.
 func (s *Store) FinishQueued(ctx context.Context, animeID int, epKey string, cause error) error {
 	if cause == nil {
 		_, err := s.w.ExecContext(ctx,
@@ -176,8 +160,6 @@ func (s *Store) FinishQueued(ctx context.Context, animeID int, epKey string, cau
 	return err
 }
 
-// RequeueActive puts one interrupted episode back in line, reporting whether a
-// row was still there. A cancel deletes the row first, so false tells them apart.
 func (s *Store) RequeueActive(ctx context.Context, animeID int, epKey string) (bool, error) {
 	res, err := s.w.ExecContext(ctx, `
 		UPDATE download_queue SET state = 'pending', started_at = NULL
@@ -189,21 +171,19 @@ func (s *Store) RequeueActive(ctx context.Context, animeID int, epKey string) (b
 	return n > 0, nil
 }
 
-// ResetActive returns anything left mid-flight to the queue, for startup.
 func (s *Store) ResetActive(ctx context.Context) error {
-	_, err := s.w.ExecContext(ctx,
-		`UPDATE download_queue SET state = 'pending', started_at = NULL WHERE state = 'active'`)
+	_, err := s.w.ExecContext(ctx, `
+		UPDATE download_queue
+		SET state = 'pending', started_at = NULL,
+		    queued_at = coalesce((SELECT min(queued_at) FROM download_queue), queued_at) - 1
+		WHERE state = 'active'`)
 	return err
 }
 
-// Prioritise moves one waiting episode to the front. The worker takes the
-// oldest pending row, so being first in line is a queued_at older than the rest.
 func (s *Store) Prioritise(ctx context.Context, animeID int, epKey string) (bool, error) {
 	return s.promote(ctx, animeID, epKey, "pending")
 }
 
-// Promote is Prioritise for the episode downloading too: interrupted for a change of release, it
-// comes back at the front rather than behind the rest.
 func (s *Store) Promote(ctx context.Context, animeID int, epKey string) (bool, error) {
 	return s.promote(ctx, animeID, epKey, "pending", "active")
 }
@@ -213,7 +193,6 @@ func (s *Store) promote(ctx context.Context, animeID int, epKey string, states .
 	for _, st := range states {
 		args = append(args, st)
 	}
-	// First in line now: a wait for a later try is over too.
 	marks := strings.TrimSuffix(strings.Repeat("?,", len(states)), ",")
 	res, err := s.w.ExecContext(ctx, `
 		UPDATE download_queue
@@ -262,7 +241,6 @@ func (s *Store) QueuedDownloads(ctx context.Context) ([]QueuedDownload, error) {
 	return out, rows.Err()
 }
 
-// Dequeue drops queued episodes in any state, the one fetching included; bytes on disk stay.
 func (s *Store) Dequeue(ctx context.Context, animeID int, epKey string) (int, error) {
 	query := `DELETE FROM download_queue WHERE anime_id = ?`
 	args := []any{animeID}

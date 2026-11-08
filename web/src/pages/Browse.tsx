@@ -261,6 +261,7 @@ export function Browse() {
           rememberSearch(text)
           field()?.blur()
         }}
+        data-stuck="narrow"
         className="sticky top-[var(--bar,4rem)] z-30 -mx-4 -my-2 bg-base-950 px-4 py-2 transition-[top] duration-200 sm:static sm:m-0 sm:max-w-2xl sm:bg-transparent sm:p-0"
       >
         <div className="relative">
@@ -417,7 +418,7 @@ export function Browse() {
         </div>
       ) : (
         <>
-          <div className="sticky top-[calc(var(--bar,4rem)+4rem)] z-20 -mx-4 flex gap-2 bg-base-950 px-4 py-2 transition-[top] duration-200">
+          <div data-stuck="always" className="sticky top-[calc(var(--bar,4rem)+4rem)] z-20 -mx-4 flex gap-2 bg-base-950 px-4 py-2 transition-[top] duration-200">
             <Button className="min-w-0 flex-1" onClick={() => setSheet('filters')} aria-haspopup="dialog">
               <FilterGlyph />
               <span className="tabular-nums">{chips.length > 0 ? `Filters · ${chips.length}` : 'Filters'}</span>

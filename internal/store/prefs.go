@@ -107,6 +107,8 @@ var Defaults = map[string]string{
 
 	"downloads.limit_bytes": "0",
 
+	"downloads.parallel": "1",
+
 	"display.speed": "mbps",
 
 	"downloads.upload": "while_downloading",

@@ -1,11 +1,11 @@
-import { Fragment, useEffect, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react'
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
-import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
+import { SortableContext, arrayMove, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError, fetchAuthed, type DownloadFile, type Page } from '../lib/api'
-import { downloadLabel, retryNote, rowKey, sortDownloads, type DownloadPart, type EpisodeRow } from '../lib/downloads'
+import { downloadLabel, PACES, retryNote, rowKey, sortDownloads, type DownloadPart, type DownloadSections, type EpisodeRow } from '../lib/downloads'
 import { bytes, cx, relativeTime, speed } from '../lib/format'
 import {
   refreshDownloads,
@@ -42,6 +42,7 @@ import {
   StorageCard,
 } from '../components/DownloadsBits'
 import { MoreMenu, type MoreItem } from '../components/MoreMenu'
+import { ValueMenu } from '../components/ValueMenu'
 import { cannotSave, saveEpisodes, savedKey, sendWatched, useSaved, useWatched } from '../lib/offline'
 import {
   Badge,
@@ -142,6 +143,16 @@ interface Sortable {
 }
 
 const lineId = (q: Pick<Queued, 'animeId' | 'epKey'>) => `q-${q.animeId}-${q.epKey}`
+
+
+function inDroppedOrder(line: DownloadSections['line'], order: string[]): DownloadSections['line'] {
+  const rank = new Map(order.map((id, i) => [id, i]))
+  const at = (x: DownloadSections['line'][number], i: number) => (x.q && rank.get(lineId(x.q))) ?? order.length + i
+  return line
+    .map((x, i) => ({ x, r: at(x, i) }))
+    .sort((a, b) => a.r - b.r)
+    .map(({ x }) => x)
+}
 
 function LineSlot({ id, children }: { id: string; children: (s: Sortable) => ReactNode }) {
   const { setNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({ id })
@@ -536,7 +547,7 @@ function PcActions() {
       disabled={pauseAll.isPending}
       title={
         paused
-          ? 'Start downloading again, one at a time'
+          ? 'Start downloading again'
           : 'Stop every download. Pausing a single one lets the next in line start.'
       }
     >
@@ -585,6 +596,8 @@ function PcList({ host }: { host: boolean }) {
     },
   })
   const prefs = usePrefs()
+  const setPref = useSetPref()
+  const atOnce = Math.max(1, Number(prefs.data?.effective['downloads.parallel'] ?? '1') || 1)
   const mode = prefs.data?.effective['cache.autodelete'] ?? 'off'
   const keptGo = mode !== 'off' && prefs.data?.effective['cache.autodelete_downloads'] === 'true'
 
@@ -620,10 +633,18 @@ function PcList({ host }: { host: boolean }) {
       api.post('/api/download/queue/now', { animeId: q.animeId, epKey: q.epKey }),
     onSuccess: done,
   })
+  const [dropped, setDropped] = useState<string[] | null>(null)
+  const drops = useRef(0)
   const arrange = useMutation({
-    mutationFn: (v: { animeId: number; epKey: string; action: string; target?: { animeId: number; epKey: string } }) =>
-      api.post('/api/download/queue/arrange', v),
-    onSettled: done,
+    mutationFn: (v: { animeId: number; epKey: string; action: string; target?: { animeId: number; epKey: string }; drop?: number }) =>
+      api.post('/api/download/queue/arrange', { animeId: v.animeId, epKey: v.epKey, action: v.action, target: v.target }),
+    onSettled: async (_data, _err, v) => {
+      refreshDownloads(qc)
+      await Promise.all(
+        ['downloads', 'download-queue'].map((key) => qc.refetchQueries({ queryKey: [key] }, { cancelRefetch: false })),
+      )
+      if (v.drop != null && v.drop === drops.current) setDropped(null)
+    },
   })
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -741,7 +762,8 @@ function PcList({ host }: { host: boolean }) {
   const holdItems = holds.data?.items ?? []
   const offers = better.data?.items ?? []
 
-  const { active, finished, searching, failed, line } = sections
+  const { active, finished, searching, failed } = sections
+  const line = dropped ? inDroppedOrder(sections.line, dropped) : sections.line
   const waiting = line.length
   const lineIds = line.flatMap((x) => (x.q ? [lineId(x.q)] : []))
   const onDragEnd = ({ active: dragged, over }: DragEndEvent) => {
@@ -749,21 +771,17 @@ function PcList({ host }: { host: boolean }) {
     const from = line.find((x) => x.q && lineId(x.q) === dragged.id)?.q
     const to = line.find((x) => x.q && lineId(x.q) === over.id)?.q
     if (!from || !to) return
-    const after = lineIds.indexOf(String(over.id)) > lineIds.indexOf(String(dragged.id))
-    void qc.cancelQueries({ queryKey: ['download-queue'] })
-    qc.setQueryData<{ items: Queued[] }>(['download-queue'], (old) => {
-      if (!old) return old
-      const items = old.items.filter((q) => lineId(q) !== dragged.id)
-      const at = items.findIndex((q) => lineId(q) === over.id)
-      if (at < 0) return old
-      items.splice(after ? at + 1 : at, 0, from)
-      return { ...old, items }
-    })
+    const fromAt = lineIds.indexOf(String(dragged.id))
+    const toAt = lineIds.indexOf(String(over.id))
+    const after = toAt > fromAt
+    const drop = ++drops.current
+    setDropped(arrayMove(lineIds, fromAt, toAt))
     arrange.mutate({
       animeId: from.animeId,
       epKey: from.epKey,
       action: after ? 'after' : 'before',
       target: { animeId: to.animeId, epKey: to.epKey },
+      drop,
     })
   }
   const kept = finished.filter((d) => d.kept)
@@ -779,8 +797,11 @@ function PcList({ host }: { host: boolean }) {
       }
     }).map((x) => ('items' in x ? { show: x, section } : { d: x }))
 
+  const running = active.filter((d) => d.queued?.state === 'active').length + searching.length
   const rows: Row[] = [
-    ...(active.length + searching.length > 0 ? [{ group: 'Downloading', meta: 'one at a time' }] : []),
+    ...(running > 0
+      ? [{ group: 'Downloading', meta: running > atOnce ? `plus ${running - atOnce} alongside` : undefined, pace: true as const }]
+      : []),
     ...searching.map((q) => ({ q })),
     ...active.map((d) => ({ d })),
     ...(waiting > 0 ? [{ group: 'Waiting', meta: String(waiting) }] : []),
@@ -958,7 +979,26 @@ function PcList({ host }: { host: boolean }) {
                   />
                 </li>
               )
-            if ('group' in r) return <Group key={r.group} label={r.group} meta={r.meta} note={r.note} change={r.change} />
+            if ('group' in r)
+              return (
+                <Group
+                  key={r.group}
+                  label={r.group}
+                  meta={r.meta}
+                  note={r.note}
+                  change={r.change}
+                  control={
+                    r.pace && (
+                      <ValueMenu
+                        aria-label="Downloads at once"
+                        value={String(atOnce)}
+                        onChange={(v) => setPref.mutate({ key: 'downloads.parallel', value: v })}
+                        options={PACES}
+                      />
+                    )
+                  }
+                />
+              )
             if ('offer' in r)
               return (
                 <li key={`offer-${r.offer.animeId}`} className={cx(card, 'flex items-center gap-3 p-3')}>
@@ -1060,7 +1100,7 @@ function PcList({ host }: { host: boolean }) {
 
 type Row =
   | { tools: true }
-  | { group: string; meta?: string; note?: string; change?: string }
+  | { group: string; meta?: string; note?: string; change?: string; pace?: true }
   | { d: EpisodeRow; position?: number }
   | { q: Queued; position?: number }
   | { show: Show; section: string }
@@ -1326,8 +1366,14 @@ function progressWords(d: Download, held: boolean, mbps: number | undefined): st
 
 const CODECS: Record<string, string> = { H264: 'H.264' }
 
-function releaseFacts(d: Download): string[] {
-  return [d.resolution, d.group, d.codec && (CODECS[d.codec] ?? d.codec)].filter((f): f is string => !!f)
+function codecLabel(d: EpisodeRow): string | undefined {
+  if (!d.codec) return undefined
+  const name = CODECS[d.codec] ?? d.codec
+  return d.codec === 'H264' && d.bitDepth === 10 ? `${name} 10-bit` : name
+}
+
+function releaseFacts(d: EpisodeRow): string[] {
+  return [d.resolution, d.group, codecLabel(d)].filter((f): f is string => !!f)
 }
 
 function DownloadRow({
@@ -1435,7 +1481,7 @@ function DownloadRow({
               <p className="text-xs text-base-400 tabular-nums">
                 {`${bytes(d.bytesOnDisk)} of ${bytes(d.totalBytes)}`}
                 {!d.paused && d.mbps ? ` · ${speed(d.mbps, unit)}` : ''}
-                {!d.paused && d.peers ? ` · ${d.peers} peers` : ''}
+                {!d.paused && d.peers ? ` · ${d.peers} ${d.peers === 1 ? 'peer' : 'peers'}` : ''}
               </p>
             </>
           ) : (
@@ -1504,12 +1550,29 @@ function Gutter({ children }: { children?: ReactNode }) {
   )
 }
 
-function Group({ label, meta, note, change }: { label: string; meta?: string; note?: string; change?: string }) {
+function Group({
+  label,
+  meta,
+  note,
+  change,
+  control,
+}: {
+  label: string
+  meta?: string
+  note?: string
+  change?: string
+  control?: ReactNode
+}) {
   return (
     <li className="px-1 pt-3 first:pt-0">
-      <div className="flex items-baseline justify-between gap-3">
+      <div className={cx('flex justify-between gap-3', control ? 'items-center' : 'items-baseline')}>
         <h2 className="text-[13px] font-semibold text-base-300">{label}</h2>
-        {meta && <span className="text-xs text-base-500 tabular-nums">{meta}</span>}
+        {(meta || control) && (
+          <div className="flex min-w-0 items-center gap-2">
+            {meta && <span className="text-xs text-base-500 tabular-nums">{meta}</span>}
+            {control}
+          </div>
+        )}
       </div>
       {note && (
         <p className="text-[13px] text-base-400">
@@ -1607,7 +1670,7 @@ function QueueRow({
             <button
               onClick={onNow}
               aria-label="Download now"
-              title="Download now. The one downloading goes back to wait behind it."
+              title="Download now, alongside whatever is already downloading"
               className={iconButton}
             >
               <FrontGlyph />

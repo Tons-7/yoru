@@ -604,6 +604,16 @@ func (s *Store) BestGroups(ctx context.Context, animeID int) ([]string, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) SeaDexListed(ctx context.Context, animeID int, hash string) bool {
+	if hash == "" {
+		return false
+	}
+	var one int
+	err := s.r.QueryRowContext(ctx, `
+		SELECT 1 FROM seadex WHERE anime_id = ? AND lower(info_hash) = lower(?) LIMIT 1`, animeID, hash).Scan(&one)
+	return err == nil
+}
+
 func (s *Store) SeaDexFor(ctx context.Context, animeID int) (byHash, byGroup map[string]SeaDexInfo, err error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT info_hash, coalesce(release_group, ''), is_best, dual_audio, coalesce(notes, ''), comparison, incomplete

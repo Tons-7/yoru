@@ -159,7 +159,7 @@ func TestInspectCancelledByTheCallerIsNotHeldAgainstTheMagnet(t *testing.T) {
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("engine hit %d times", n)
 	}
-	if _, bad := c.magnetFailedRecently(magnet); bad {
+	if _, _, bad := c.magnetFailure(magnet); bad {
 		t.Fatal("a caller-cancelled inspect was recorded as a dead magnet")
 	}
 }

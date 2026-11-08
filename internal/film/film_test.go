@@ -2,19 +2,18 @@ package film
 
 import "testing"
 
-// The Garden of Sinners as the catalogue has it: one entry per film.
 var series = map[string]Entry{
-	"ch1":    {[]string{"Kara no Kyoukai: Fukan Fuukei", "the Garden of sinners Chapter 1: Thanatos. (Overlooking View)"}},
-	"ch2":    {[]string{"Kara no Kyoukai: Satsujin Kousatsu (Zen)", "the Garden of sinners Chapter 2: …and nothing heart. (Murder Speculation Part A)"}},
-	"ch3":    {[]string{"Kara no Kyoukai: Tsuukaku Zanryuu", "the Garden of sinners Chapter 3: ever cry, never life. (Remaining Sense of Pain)"}},
-	"ch4":    {[]string{"Kara no Kyoukai: Garan no Dou", "the Garden of sinners Chapter 4: garan-no-dou. (The Hollow Shrine)"}},
-	"ch5":    {[]string{"Kara no Kyoukai: Mujun Rasen", "the Garden of sinners Chapter 5: Paradox Paradigm"}},
-	"ch6":    {[]string{"Kara no Kyoukai: Boukyaku Rokuon", "the Garden of sinners Chapter 6: Fairy Tale. (Oblivion Recording)"}},
-	"ch7":    {[]string{"Kara no Kyoukai: Satsujin Kousatsu (Kou)", "the Garden of sinners Chapter 7: ……not nothing heart. (Murder Speculation Part B)"}},
-	"remix":  {[]string{"Kara no Kyoukai Remix: Gate of seventh heaven"}},
-	"ch8":    {[]string{"Kara no Kyoukai: Shuushou", "the Garden of sinners Chapter 8: The Final Chapter"}},
-	"future": {[]string{"Kara no Kyoukai: Mirai Fukuin", "the Garden of sinners -recalled out summer-"}},
-	"chorus": {[]string{"Kara no Kyoukai: Mirai Fukuin - extra chorus"}},
+	"ch1":    {Titles: []string{"Kara no Kyoukai: Fukan Fuukei", "the Garden of sinners Chapter 1: Thanatos. (Overlooking View)"}},
+	"ch2":    {Titles: []string{"Kara no Kyoukai: Satsujin Kousatsu (Zen)", "the Garden of sinners Chapter 2: …and nothing heart. (Murder Speculation Part A)"}},
+	"ch3":    {Titles: []string{"Kara no Kyoukai: Tsuukaku Zanryuu", "the Garden of sinners Chapter 3: ever cry, never life. (Remaining Sense of Pain)"}},
+	"ch4":    {Titles: []string{"Kara no Kyoukai: Garan no Dou", "the Garden of sinners Chapter 4: garan-no-dou. (The Hollow Shrine)"}},
+	"ch5":    {Titles: []string{"Kara no Kyoukai: Mujun Rasen", "the Garden of sinners Chapter 5: Paradox Paradigm"}},
+	"ch6":    {Titles: []string{"Kara no Kyoukai: Boukyaku Rokuon", "the Garden of sinners Chapter 6: Fairy Tale. (Oblivion Recording)"}},
+	"ch7":    {Titles: []string{"Kara no Kyoukai: Satsujin Kousatsu (Kou)", "the Garden of sinners Chapter 7: ……not nothing heart. (Murder Speculation Part B)"}},
+	"remix":  {Titles: []string{"Kara no Kyoukai Remix: Gate of seventh heaven"}},
+	"ch8":    {Titles: []string{"Kara no Kyoukai: Shuushou", "the Garden of sinners Chapter 8: The Final Chapter"}},
+	"future": {Titles: []string{"Kara no Kyoukai: Mirai Fukuin", "the Garden of sinners -recalled out summer-"}},
+	"chorus": {Titles: []string{"Kara no Kyoukai: Mirai Fukuin - extra chorus"}},
 }
 
 func keyFor(name string) Key {
@@ -37,7 +36,6 @@ func files(pairs ...any) []File {
 	return out
 }
 
-// File lists as real releases carry them, sizes in GB.
 var batches = map[string][]File{
 	"AnimeTime": files(
 		0.15, "09.5 Kara No Kyoukai - Mirai Fukuin - Extra Chorus-11.mkv",
@@ -95,7 +93,6 @@ var batches = map[string][]File{
 		0.61, "[Trix] Kara No Kyoukai 8 - Shuushou (2011) (BD 1080p AV1).mkv",
 		0.47, "[Trix] Kara No Kyoukai 9 - Mirai Fukuin (2013) (BD 1080p AV1).mkv",
 	),
-	// Mislabelled as uploaded: two files carry chapter 6's subtitle.
 	"Judas": files(
 		4.17, "[Judas] Kara no Kyoukai - 05 - Mujun Rasen.mkv",
 		0.57, "[Judas] Kara no Kyoukai - 02 - Satsujin Kousatsu (Zen).mkv",
@@ -112,7 +109,6 @@ var batches = map[string][]File{
 }
 
 func TestPickFindsEachFilmInRealBatches(t *testing.T) {
-	// "" is a film the batch cannot be trusted for: absent, unnamed, or mislabelled.
 	want := map[string]map[string]string{
 		"AnimeTime": {
 			"ch1": "01 Kara No Kyoukai - Fukan Fuukei-1.mkv", "ch2": "02 Kara No Kyoukai - Satsujin Kousatsu (Zen)-2.mkv",
@@ -123,17 +119,15 @@ func TestPickFindsEachFilmInRealBatches(t *testing.T) {
 			"chorus": "09.5 Kara No Kyoukai - Mirai Fukuin - Extra Chorus-11.mkv",
 		},
 		"ANE": {
-			"ch1": "[ANE] Kara no Kyoukai - 1 - Overlooking View [BDRip 1080p x264 FLAC].mkv",
-			"ch2": "[ANE] Kara no Kyoukai - 2 - Murder Speculation (Part A) [BDRip 1080p x264 FLAC].mkv",
-			"ch3": "[ANE] Kara no Kyoukai - 3 - Remaining Sense of Pain [BDRip 1080p x264 FLAC].mkv",
-			"ch4": "[ANE] Kara no Kyoukai - 4v0 - The Hollow Shrine [BDRip 1080p x264 FLAC].mkv",
-			"ch5": "[ANE] Kara no Kyoukai - 5v0 - Paradox Paradigm [BDRip 1080p x264 FLAC].mkv",
-			// Not "Cinema Intro 6", which carries the same number.
+			"ch1":   "[ANE] Kara no Kyoukai - 1 - Overlooking View [BDRip 1080p x264 FLAC].mkv",
+			"ch2":   "[ANE] Kara no Kyoukai - 2 - Murder Speculation (Part A) [BDRip 1080p x264 FLAC].mkv",
+			"ch3":   "[ANE] Kara no Kyoukai - 3 - Remaining Sense of Pain [BDRip 1080p x264 FLAC].mkv",
+			"ch4":   "[ANE] Kara no Kyoukai - 4v0 - The Hollow Shrine [BDRip 1080p x264 FLAC].mkv",
+			"ch5":   "[ANE] Kara no Kyoukai - 5v0 - Paradox Paradigm [BDRip 1080p x264 FLAC].mkv",
 			"ch6":   "[ANE] Kara no Kyoukai - 6 - Oblivion Recording [BDRip 1080p x264 FLAC].mkv",
 			"ch7":   "[ANE] Kara no Kyoukai - 7v0 - Murder Speculation (Part B) [BDRip 1080p x264 FLAC].mkv",
 			"remix": "[ANE] Kara no Kyoukai - Remix v0 - Gate of Seventh Heaven [BDRip 1080p x264 FLAC].mkv",
-			// "Epilogue" is in no catalogue title, and nothing else says chapter 8.
-			"ch8": "", "future": "", "chorus": "",
+			"ch8":   "", "future": "", "chorus": "",
 		},
 		"Fortissimo": {
 			"ch1": "[Fortissimo] Kara no Kyoukai - 1.0 - Overlooking View.mkv", "ch2": "[Fortissimo] Kara no Kyoukai - 2.0 - Murder Speculation (Part 1).mkv",
@@ -141,7 +135,6 @@ func TestPickFindsEachFilmInRealBatches(t *testing.T) {
 			"ch7": "[Fortissimo] Kara no Kyoukai - 7.0 - Murder Speculation (Part 2).mkv", "ch8": "[Fortissimo] Kara no Kyoukai - 8.0 - Epilogue.mkv",
 			"remix":  "[Fortissimo] Kara no Kyoukai - 6.5 - Remix - Gate of Seventh Heaven (recap).mkv",
 			"chorus": "[Fortissimo] Kara no Kyoukai - 9.5 - Future Gospel - Extra Chorus.mkv",
-			// "Future Gospel" is a name the catalogue does not carry, and the entry states no chapter.
 			"future": "",
 		},
 		"Trix": {
@@ -151,9 +144,7 @@ func TestPickFindsEachFilmInRealBatches(t *testing.T) {
 		},
 		"Judas": {
 			"ch2": "[Judas] Kara no Kyoukai - 02 - Satsujin Kousatsu (Zen).mkv",
-			// Two files claim the subtitle; the number settles it.
 			"ch6": "[Judas] Kara no Kyoukai - 06 - Boukyaku Rokuon.mkv",
-			// File 07 is named as chapter 6 and file 08 as a film numbered otherwise: neither is trusted.
 			"ch7": "", "ch8": "",
 		},
 	}
@@ -185,7 +176,6 @@ func TestMatchSortsRealReleaseNames(t *testing.T) {
 		"[HalfOrange] Kara no Kyoukai 01v2 Overlooking View [855p-Hi444P][5.1-Opus][EAA4A479].mkv":                                                   Other,
 		"[UTW]_Kara_no_Kyoukai_-_Extra_Chorus_[BD][h264-1080p][FLAC][46FCA8E0].mkv":                                                                  Other,
 
-		// The whole series: only its file list can say.
 		"[Anime Time] Kara No Kyoukai (The Garden of Sinners) - Full Series [BD][All Movie][1080p][HEVC 10bit x265][AAC]":         Unknown,
 		"[ANE] Kara no Kyoukai [BDRip 1080p x264 FLAC]":                                                                           Unknown,
 		"[Fortissimo] Kara no Kyoukai/The Garden of Sinners v2 (all movies, HEVC FLAC 2.0 & 5.1)":                                 Unknown,
@@ -206,7 +196,6 @@ func TestKeyReadsTheChapterAndTheSeriesSize(t *testing.T) {
 	if k := keyFor("ch6"); k.Number != 6 || k.Count != len(series) {
 		t.Errorf("chapter 6: number %d, count %d", k.Number, k.Count)
 	}
-	// No title of it states a chapter; a number can then say nothing.
 	if k := keyFor("future"); k.Number != 0 {
 		t.Errorf("recalled out summer: number %d, want 0", k.Number)
 	}
@@ -237,7 +226,6 @@ func TestLoneFileIsTakenUnlessItNamesAnotherFilm(t *testing.T) {
 	if _, ok := ch6.Pick(files(1.5, "[Group] Kara no Kyoukai - Boukyaku Rokuon [1080p].mkv")); !ok {
 		t.Error("the film's own single release was refused")
 	}
-	// Unnamed: a single-film release with nothing to contradict it, as before.
 	if _, ok := ch6.Pick(files(1.5, "movie.mkv")); !ok {
 		t.Error("an unnamed lone file was refused")
 	}
@@ -249,7 +237,6 @@ func TestLoneFileIsTakenUnlessItNamesAnotherFilm(t *testing.T) {
 	}
 }
 
-// A PV beside the film carries its name too; the film is the one that is not a fraction of the other.
 func TestNamedExtraDoesNotTieWithTheFilm(t *testing.T) {
 	ch6 := keyFor("ch6")
 	batch := files(
@@ -260,7 +247,6 @@ func TestNamedExtraDoesNotTieWithTheFilm(t *testing.T) {
 	if i, ok := ch6.Pick(batch); !ok || i != 0 {
 		t.Errorf("picked %d, %v; want the film", i, ok)
 	}
-	// Two full-size files claiming the same film is still nobody's call.
 	twins := files(4.0, "[G] Kara no Kyoukai - 06 - Boukyaku Rokuon [BD 1080p].mkv",
 		3.9, "[G] Kara no Kyoukai - 06 - Boukyaku Rokuon [BD 720p].mkv",
 		3.8, "[G] Kara no Kyoukai - 05 - Mujun Rasen [BD 1080p].mkv")

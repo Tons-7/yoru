@@ -292,7 +292,7 @@ func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, boo
 		defer func() { recorded = p.store.TorrentClaimed(context.WithoutCancel(ctx), rec.InfoHash) }()
 	}
 
-	if !rec.Manual && !heldNamesShow(ctx, p.store, req.AnimeID, rec.Name) {
+	if !heldStands(ctx, p.store, p.finder, req.AnimeID, req.Episode, rec) {
 		p.log.Warn("held release names another show, searching again",
 			"anime", req.AnimeID, "episode", req.Episode, "release", rec.Name)
 		return nil, false, nil

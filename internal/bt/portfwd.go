@@ -2,6 +2,7 @@ package bt
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -28,12 +29,14 @@ func (cl *Client) addPortMapping(d upnp.Device, proto upnp.Protocol, internalPor
 		return
 	}
 	cl.lock()
-	// Discovery is slow; a client closed meanwhile has already cleared its list, so undo this one now.
 	if cl.closed.IsSet() {
 		cl.unlock()
 		cl.deletePortMapping(d, proto, externalPort)
 		return
 	}
+	cl.upnpMappings = slices.DeleteFunc(cl.upnpMappings, func(m *upnpMapping) bool {
+		return m.proto == proto && m.externalPort == externalPort && m.d.GetLocalIPAddress().Equal(d.GetLocalIPAddress())
+	})
 	cl.upnpMappings = append(cl.upnpMappings, &upnpMapping{d, proto, externalPort})
 	cl.unlock()
 	level := log.Info
@@ -41,6 +44,13 @@ func (cl *Client) addPortMapping(d upnp.Device, proto upnp.Protocol, internalPor
 		level = log.Warning
 	}
 	logger.WithDefaultLevel(level).Printf("success: external port %v", externalPort)
+}
+
+func (cl *Client) ForwardPort() {
+	if cl.config.NoDefaultPortForwarding || cl.closed.IsSet() {
+		return
+	}
+	go cl.forwardPort()
 }
 
 func (cl *Client) forwardPort() {
@@ -68,8 +78,6 @@ func (cl *Client) deletePortMapping(d upnp.Device, proto upnp.Protocol, external
 	}
 }
 
-// clearPortMappings starts removing the router mappings; the caller waits on the result outside the
-// client lock, or an exit straight after Close cuts the requests off and the mappings stay.
 func (cl *Client) clearPortMappings() *sync.WaitGroup {
 	var wg sync.WaitGroup
 	for _, m := range cl.upnpMappings {
@@ -79,7 +87,6 @@ func (cl *Client) clearPortMappings() *sync.WaitGroup {
 	return &wg
 }
 
-// waitBriefly waits for wg, but no longer than d: a router that doesn't answer mustn't hold up exit.
 func waitBriefly(wg *sync.WaitGroup, d time.Duration) {
 	done := make(chan struct{})
 	go func() {

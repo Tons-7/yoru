@@ -19,7 +19,6 @@ func pausableQueue(t *testing.T) (*Downloader, *store.Store) {
 	return NewDownloader(st, NewPrefetcher(st, nil, nil, discard()), nil, discard()), st
 }
 
-// Pausing one row lets the next in line start; pausing the queue is the way to stop them all.
 func TestPausedQueueStartsNothingUntilResumed(t *testing.T) {
 	d, _ := pausableQueue(t)
 	ctx := context.Background()
@@ -40,7 +39,6 @@ func TestPausedQueueStartsNothingUntilResumed(t *testing.T) {
 	if d.held() {
 		t.Error("a resumed queue is still held")
 	}
-	// Resuming wakes the worker rather than leaving it to its next idle tick.
 	select {
 	case <-d.wake:
 	default:
@@ -48,7 +46,6 @@ func TestPausedQueueStartsNothingUntilResumed(t *testing.T) {
 	}
 }
 
-// A nearly full drive holds the queue and says how much is left; room again lets it carry on.
 func TestQueueWaitsForRoomOnTheDrive(t *testing.T) {
 	d, _ := pausableQueue(t)
 	d.WithRoom(t.TempDir())
@@ -72,21 +69,20 @@ func TestQueueWaitsForRoomOnTheDrive(t *testing.T) {
 	}
 }
 
-// Pausing also stops the download in flight, which goes back to wait its turn.
-func TestPausingTheQueueStopsTheDownloadInFlight(t *testing.T) {
+func TestPausingTheQueueStopsEveryDownloadInFlight(t *testing.T) {
 	d, _ := pausableQueue(t)
-	stopped := false
-	d.current = &inFlight{animeID: 1, epKey: "3", stop: func() { stopped = true }}
+	stopped := 0
+	d.track(&inFlight{animeID: 1, epKey: "3", stop: func() { stopped++ }})
+	d.track(&inFlight{animeID: 1, epKey: "4", stop: func() { stopped++ }})
 
 	if err := d.SetPaused(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
-	if !stopped {
-		t.Error("the download in flight kept going under a paused queue")
+	if stopped != 2 {
+		t.Errorf("stopped %d of 2 downloads under a paused queue", stopped)
 	}
 }
 
-// A restart must not start downloading again by itself.
 func TestPausedQueueStaysPausedAcrossARestart(t *testing.T) {
 	d, st := pausableQueue(t)
 	ctx := context.Background()
@@ -110,8 +106,7 @@ func TestPausedQueueStaysPausedAcrossARestart(t *testing.T) {
 	}
 }
 
-// "Download now" puts the episode first, stops the one in flight, and resumes a paused queue.
-func TestDownloadNowJumpsTheLineAndResumes(t *testing.T) {
+func TestStartNowRunsAlongsideAndResumes(t *testing.T) {
 	d, st := pausableQueue(t)
 	ctx := context.Background()
 	if _, err := st.Enqueue(ctx, 1, 1, []int{1, 2, 3}); err != nil {
@@ -122,7 +117,7 @@ func TestDownloadNowJumpsTheLineAndResumes(t *testing.T) {
 		t.Fatalf("active %+v, err %v", active, err)
 	}
 	stopped := false
-	d.current = &inFlight{animeID: 1, epKey: "1", stop: func() { stopped = true }}
+	d.track(&inFlight{animeID: 1, epKey: "1", stop: func() { stopped = true }})
 	if err := d.SetPaused(ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -132,26 +127,20 @@ func TestDownloadNowJumpsTheLineAndResumes(t *testing.T) {
 	if err != nil || !moved {
 		t.Fatalf("moved %v, err %v", moved, err)
 	}
-	if !stopped || d.Paused() {
+	if stopped || d.Paused() {
 		t.Errorf("in flight stopped: %v, queue still paused: %v", stopped, d.Paused())
 	}
 
-	// The worker requeues what it stopped; the asked-for episode is then first, the stopped one right behind.
-	if _, err := st.RequeueActive(ctx, 1, "1"); err != nil {
-		t.Fatal(err)
-	}
-	first, _, _ := st.NextQueued(ctx)
-	second, _, _ := st.NextQueued(ctx)
-	if first.Episode != 3 || second.Episode != 1 {
-		t.Errorf("order after download now: %d then %d, want 3 then 1", first.Episode, second.Episode)
+	next, how, ok := d.claim(ctx, 1)
+	if !ok || next.Episode != 3 || how != onPurpose {
+		t.Errorf("claimed %+v as %v, %v; want episode 3 started on purpose past the limit", next, how, ok)
 	}
 }
 
-// An episode that is not waiting cannot be started now, and nothing is disturbed for it.
 func TestDownloadNowIgnoresWhatIsNotWaiting(t *testing.T) {
 	d, _ := pausableQueue(t)
 	stopped := false
-	d.current = &inFlight{animeID: 1, epKey: "1", stop: func() { stopped = true }}
+	d.track(&inFlight{animeID: 1, epKey: "1", stop: func() { stopped = true }})
 
 	moved, err := d.Now(context.Background(), 1, "9")
 	if err != nil || moved || stopped {

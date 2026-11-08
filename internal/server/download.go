@@ -311,7 +311,8 @@ func (s *Server) downloads(w http.ResponseWriter, r *http.Request) {
 	out := make([]downloadItem, len(items))
 	for i, d := range items {
 		hash := strings.ToLower(d.InfoHash)
-		out[i] = downloadItem{Download: d, Parts: liveParts(parts[hash], live[hash].Files, live[hash].Included, d.Percent >= 100)}
+		out[i] = downloadItem{Download: d, BitDepth: parse.Parse(d.Name).BitDepth, Files: len(live[hash].Files),
+			Parts: liveParts(parts[hash], live[hash].Files, live[hash].Included, d.Percent >= 100)}
 	}
 	send(w, http.StatusOK, map[string]any{"items": out, "count": len(out)})
 }
@@ -404,7 +405,9 @@ func (s *Server) removeFile(w http.ResponseWriter, r *http.Request) {
 
 type downloadItem struct {
 	store.Download
-	Parts []store.DownloadPart `json:"parts"`
+	BitDepth int                  `json:"bitDepth,omitempty"`
+	Files    int                  `json:"files,omitempty"`
+	Parts    []store.DownloadPart `json:"parts"`
 }
 
 func liveParts(parts []store.DownloadPart, files []int64, included []bool, finished bool) []store.DownloadPart {

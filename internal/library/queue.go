@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,7 +26,9 @@ type Downloader struct {
 	wake chan struct{}
 
 	mu         sync.Mutex
-	current    *inFlight
+	running    map[string]*inFlight
+	forced     map[store.EpisodeRef]bool
+	workers    sync.WaitGroup
 	userPaused map[string]bool
 	watching   map[string]struct{}
 	through    map[string]struct{}
@@ -155,17 +158,59 @@ func (d *Downloader) SetPaused(ctx context.Context, paused bool) error {
 	}
 	d.mu.Lock()
 	d.paused = paused
-	current := d.current
+	running := d.runningLocked()
 	d.mu.Unlock()
 
-	if paused && current != nil {
+	if paused && len(running) > 0 {
 		d.log.Info("download queue paused")
-		current.stop()
+		for _, f := range running {
+			f.stop()
+		}
 	}
 	if !paused {
 		d.Wake()
 	}
 	return nil
+}
+
+func (d *Downloader) runningLocked() []*inFlight {
+	out := make([]*inFlight, 0, len(d.running))
+	for _, f := range d.running {
+		out = append(out, f)
+	}
+	return out
+}
+
+func (d *Downloader) force(animeID int, epKey string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.forceLocked(animeID, epKey)
+}
+
+func (d *Downloader) forceLocked(animeID int, epKey string) {
+	if d.forced == nil {
+		d.forced = map[store.EpisodeRef]bool{}
+	}
+	d.forced[store.EpisodeRef{AnimeID: animeID, EpKey: epKey}] = true
+}
+
+var slowHold = 5 * time.Minute
+
+func (d *Downloader) markSlow(animeID, episode int) {
+	key := lineKey(animeID, strconv.Itoa(episode))
+	now := time.Now()
+	d.mu.Lock()
+	f := d.running[key]
+	fresh := f != nil && !f.slow(now)
+	if f != nil {
+		f.slowUntil = now.Add(slowHold)
+	}
+	d.mu.Unlock()
+	if fresh {
+		d.log.Info("a slow download no longer holds the line; the next one can start alongside",
+			"anime", animeID, "episode", episode)
+		d.Wake()
+	}
 }
 
 func (d *Downloader) restorePaused(ctx context.Context) {
@@ -190,12 +235,7 @@ func (d *Downloader) Now(ctx context.Context, animeID int, epKey string) (bool, 
 		d.markUserPaused(rec.InfoHash, false)
 		d.markUserPaused(FileKey(rec.InfoHash, rec.FileIndex), false)
 	}
-	d.mu.Lock()
-	current := d.current
-	d.mu.Unlock()
-	if current != nil && (current.animeID != animeID || current.epKey != epKey) {
-		current.stop()
-	}
+	d.force(animeID, epKey)
 	return true, d.SetPaused(ctx, false)
 }
 
@@ -208,33 +248,57 @@ func (d *Downloader) Restart(ctx context.Context, animeID int, epKey string) (bo
 		return moved, err
 	}
 	d.mu.Lock()
-	current := d.current
+	same := d.running[lineKey(animeID, epKey)]
+	if same == nil || !same.counted(time.Now()) {
+		d.forceLocked(animeID, epKey)
+	}
 	d.mu.Unlock()
-	if current != nil {
-		current.stop()
+	if same != nil {
+		same.stop()
 	}
 	return true, d.SetPaused(ctx, false)
 }
 
 type inFlight struct {
-	animeID int
-	epKey   string
-	stop    context.CancelFunc
+	animeID   int
+	epKey     string
+	stop      context.CancelFunc
+	forced    bool
+	along     bool
+	slowUntil time.Time
 }
 
 func (f *inFlight) session() string {
-	return fmt.Sprintf("%d-%s", f.animeID, f.epKey)
+	return lineKey(f.animeID, f.epKey)
+}
+
+func (f *inFlight) slow(now time.Time) bool {
+	return now.Before(f.slowUntil)
+}
+
+func (f *inFlight) counted(now time.Time) bool {
+	return !f.forced && !f.along && !f.slow(now)
+}
+
+func lineKey(animeID int, epKey string) string {
+	return fmt.Sprintf("%d-%s", animeID, epKey)
 }
 
 func NewDownloader(s *store.Store, p *Prefetcher, prefs func(context.Context, int) score.Preferences, log *slog.Logger) *Downloader {
-	return &Downloader{
+	d := &Downloader{
 		store:    s,
 		prefetch: p,
 		prefs:    prefs,
 		log:      log,
 		wake:     make(chan struct{}, 1),
 		watching: map[string]struct{}{},
+		running:  map[string]*inFlight{},
+		forced:   map[store.EpisodeRef]bool{},
 	}
+	if p != nil {
+		p.WhenSlow(d.markSlow)
+	}
+	return d
 }
 
 func (d *Downloader) Hold(sessionID string) {
@@ -245,19 +309,21 @@ func (d *Downloader) Hold(sessionID string) {
 	_, already := d.watching[sessionID]
 	_, through := d.through[sessionID]
 	d.watching[sessionID] = struct{}{}
-	current := d.current
+	var others []*inFlight
+	for _, f := range d.running {
+		if f.session() != transcode.BaseID(sessionID) {
+			others = append(others, f)
+		}
+	}
 	d.mu.Unlock()
 
-	if already || current == nil || through {
+	if already || through || len(others) == 0 {
 		return
 	}
-
-	if current.session() == transcode.BaseID(sessionID) {
-		return
-	}
-
 	d.log.Info("pausing the queue while an episode plays", "session", sessionID)
-	current.stop()
+	for _, f := range others {
+		f.stop()
+	}
 }
 
 func (d *Downloader) Downloading(sessionID string) bool {
@@ -266,7 +332,8 @@ func (d *Downloader) Downloading(sessionID string) bool {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.current != nil && d.current.session() == transcode.BaseID(sessionID)
+	_, ok := d.running[transcode.BaseID(sessionID)]
+	return ok
 }
 
 func (d *Downloader) Release(sessionID string) {
@@ -396,14 +463,14 @@ func (d *Downloader) Run(ctx context.Context) {
 	d.restorePaused(ctx)
 	d.restoreUserPaused(ctx)
 
+	defer d.workers.Wait()
 	for {
 		d.releaseArrived(ctx)
-		worked := !d.held() && d.roomy() && d.step(ctx)
+		if !d.held() && d.roomy() {
+			d.fill(ctx)
+		}
 		if ctx.Err() != nil {
 			return
-		}
-		if worked {
-			continue
 		}
 		select {
 		case <-ctx.Done():
@@ -412,6 +479,158 @@ func (d *Downloader) Run(ctx context.Context) {
 		case <-time.After(d.idle(ctx)):
 		}
 	}
+}
+
+const (
+	parallelSetting = "downloads.parallel"
+	maxParallel     = 5
+	slowExtra       = 4
+)
+
+func (d *Downloader) Parallel(ctx context.Context) int {
+	if d == nil {
+		return 1
+	}
+	prefs, err := d.store.Prefs(ctx, 0)
+	if err != nil {
+		return 1
+	}
+	return min(max(prefs.Int(parallelSetting), 1), maxParallel)
+}
+
+func (d *Downloader) fill(ctx context.Context) {
+	limit := d.Parallel(ctx)
+	for ctx.Err() == nil && d.roomForAnother() {
+		next, how, ok := d.claim(ctx, limit)
+		if !ok {
+			return
+		}
+		d.launch(ctx, next, how)
+	}
+}
+
+type startedAs int
+
+const (
+	inTurn startedAs = iota
+	onPurpose
+	alongside
+)
+
+func (d *Downloader) claim(ctx context.Context, limit int) (store.QueuedDownload, startedAs, bool) {
+	d.mu.Lock()
+	var wanted []store.EpisodeRef
+	for ref := range d.forced {
+		if _, busy := d.running[lineKey(ref.AnimeID, ref.EpKey)]; !busy {
+			wanted = append(wanted, ref)
+		}
+	}
+	counted, total, now := 0, len(d.running), time.Now()
+	for _, f := range d.running {
+		if f.counted(now) {
+			counted++
+		}
+	}
+	d.mu.Unlock()
+
+	for _, ref := range wanted {
+		q, ok, err := d.store.ClaimQueued(ctx, ref.AnimeID, ref.EpKey)
+		if err != nil {
+			d.log.Warn("start a download now", "err", err)
+			continue
+		}
+		if ok {
+			return q, onPurpose, true
+		}
+		d.unforce(ref)
+	}
+
+	if counted < limit && total < limit+slowExtra {
+		next, ok, err := d.store.NextQueued(ctx)
+		if err != nil {
+			d.log.Warn("read download queue", "err", err)
+		}
+		if err == nil && ok {
+			return next, inTurn, true
+		}
+		return store.QueuedDownload{}, inTurn, false
+	}
+	if total < limit+slowExtra {
+		if q, ok := d.rideAlong(ctx); ok {
+			return q, alongside, true
+		}
+	}
+	return store.QueuedDownload{}, inTurn, false
+}
+
+func (d *Downloader) unforce(ref store.EpisodeRef) {
+	d.mu.Lock()
+	delete(d.forced, ref)
+	d.mu.Unlock()
+}
+
+func (d *Downloader) roomForAnother() bool {
+	d.mu.Lock()
+	n := len(d.running)
+	d.mu.Unlock()
+	if d.dir == "" || n == 0 {
+		return true
+	}
+	free, _, err := freeSpace(d.dir)
+	return err != nil || free >= MinFree*int64(n+1)
+}
+
+func (d *Downloader) rideAlong(ctx context.Context) (store.QueuedDownload, bool) {
+	d.mu.Lock()
+	running := d.runningLocked()
+	d.mu.Unlock()
+	var busy []string
+	for _, f := range running {
+		if rec, ok, err := d.store.TorrentForEpisode(ctx, f.animeID, f.epKey); err == nil && ok {
+			busy = append(busy, rec.InfoHash)
+		}
+	}
+	q, ok, err := d.store.NextFromTorrents(ctx, busy)
+	if err != nil {
+		d.log.Warn("look for episodes of a torrent already downloading", "err", err)
+	}
+	return q, err == nil && ok
+}
+
+func (d *Downloader) launch(parent context.Context, next store.QueuedDownload, how startedAs) {
+	ctx, stop := context.WithCancel(parent)
+	key := lineKey(next.AnimeID, next.EpKey)
+	f := &inFlight{animeID: next.AnimeID, epKey: next.EpKey, stop: stop}
+	ref := store.EpisodeRef{AnimeID: next.AnimeID, EpKey: next.EpKey}
+	d.mu.Lock()
+	f.forced = how == onPurpose || d.forced[ref]
+	f.along = how == alongside
+	delete(d.forced, ref)
+	if d.running == nil {
+		d.running = map[string]*inFlight{}
+	}
+	d.running[key] = f
+	if d.paused || d.holding() {
+		stop()
+	}
+	d.mu.Unlock()
+
+	d.workers.Add(1)
+	go func() {
+		defer d.workers.Done()
+		defer stop()
+		d.work(parent, ctx, next, func() bool {
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			return d.running[key] != f
+		})
+		d.mu.Lock()
+		if d.running[key] == f {
+			delete(d.running, key)
+		}
+		d.mu.Unlock()
+		d.Wake()
+	}()
 }
 
 func (d *Downloader) idle(ctx context.Context) time.Duration {
@@ -428,7 +647,7 @@ func (d *Downloader) idle(ctx context.Context) time.Duration {
 
 func swarmFailure(err error) bool {
 	var stall *torrent.StallError
-	return errors.Is(err, ErrSeedersSilent) || errors.As(err, &stall)
+	return errors.Is(err, ErrSeedersSilent) || errors.Is(err, torrent.ErrNoFileList) || errors.As(err, &stall)
 }
 
 func describe(err error) error {
@@ -442,6 +661,8 @@ func describe(err error) error {
 			minutes, plural(minutes), stall.Percent)
 	case errors.Is(err, ErrSeedersSilent):
 		return ErrSeedersSilent
+	case errors.Is(err, torrent.ErrNoFileList):
+		return torrent.ErrNoFileList
 	}
 	return err
 }
@@ -458,15 +679,12 @@ func (d *Downloader) Cancel(ctx context.Context, animeID int, epKey string) (int
 		return 0, nil
 	}
 
-	d.mu.Lock()
-	c := d.current
-	d.mu.Unlock()
-	matches := c != nil && c.animeID == animeID && (epKey == "" || c.epKey == epKey)
-	hasRow := false
-	if matches {
+	hits := d.matching(animeID, epKey)
+	rowed := map[string]bool{}
+	if len(hits) > 0 {
 		if rows, err := d.store.QueuedDownloads(ctx); err == nil {
 			for _, r := range rows {
-				hasRow = hasRow || (r.AnimeID == c.animeID && r.EpKey == c.epKey)
+				rowed[lineKey(r.AnimeID, r.EpKey)] = true
 			}
 		}
 	}
@@ -476,16 +694,25 @@ func (d *Downloader) Cancel(ctx context.Context, animeID int, epKey string) (int
 		return 0, err
 	}
 
-	d.mu.Lock()
-	if c := d.current; c != nil && c.animeID == animeID && (epKey == "" || c.epKey == epKey) {
-		c.stop()
-		if !hasRow {
+	for _, f := range d.matching(animeID, epKey) {
+		f.stop()
+		if !rowed[f.session()] {
 			removed++
 		}
 	}
-	d.mu.Unlock()
-
 	return removed, nil
+}
+
+func (d *Downloader) matching(animeID int, epKey string) []*inFlight {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []*inFlight
+	for _, f := range d.running {
+		if f.animeID == animeID && (epKey == "" || f.epKey == epKey) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func (d *Downloader) SetUserPaused(hash string, paused bool) {
@@ -543,11 +770,8 @@ func (d *Downloader) StopEpisode(animeID int, epKey string) {
 	if d == nil {
 		return
 	}
-	d.mu.Lock()
-	c := d.current
-	d.mu.Unlock()
-	if c != nil && c.animeID == animeID && c.epKey == epKey {
-		c.stop()
+	for _, f := range d.matching(animeID, epKey) {
+		f.stop()
 	}
 }
 
@@ -651,16 +875,7 @@ func (d *Downloader) pausedByUser(ctx context.Context, animeID int, ep string) b
 	return d.userPausedHash(rec.InfoHash)
 }
 
-func (d *Downloader) step(parent context.Context) bool {
-	next, ok, err := d.store.NextQueued(parent)
-	if err != nil {
-		d.log.Warn("read download queue", "err", err)
-		return false
-	}
-	if !ok {
-		return false
-	}
-
+func (d *Downloader) work(parent, ctx context.Context, next store.QueuedDownload, replaced func() bool) {
 	d.log.Info("downloading queued episode",
 		"anime", next.AnimeID, "episode", next.Episode)
 
@@ -668,37 +883,29 @@ func (d *Downloader) step(parent context.Context) bool {
 		d.prefetch.Ahead(after.AnimeID, after.Episode, after.Season, d.prefs(parent, after.AnimeID))
 	}
 
-	ctx, stop := context.WithCancel(parent)
-	defer stop()
-
-	d.mu.Lock()
-	d.current = &inFlight{animeID: next.AnimeID, epKey: next.EpKey, stop: stop}
-	if d.paused || d.holding() {
-		stop()
-	}
-	d.mu.Unlock()
-
-	err = d.prefetch.DownloadRelease(ctx, next.AnimeID, next.Episode, next.Season, d.prefs(parent, next.AnimeID), queueStall, next.InfoHash)
-
-	d.mu.Lock()
-	d.current = nil
-	d.mu.Unlock()
+	err := d.prefetch.DownloadRelease(ctx, next.AnimeID, next.Episode, next.Season, d.prefs(parent, next.AnimeID), queueStall, next.InfoHash)
 
 	switch {
+	case parent.Err() != nil:
+		return
+
 	case ctx.Err() != nil && parent.Err() == nil:
+		if replaced() {
+			return
+		}
+		d.prefetch.standDown(parent, next.AnimeID, next.Episode)
 		requeued, err := d.store.RequeueActive(parent, next.AnimeID, next.EpKey)
 		if err != nil {
 			d.log.Warn("requeue held download", "err", err)
 		}
 		if requeued {
-			d.prefetch.standDown(parent, next.AnimeID, next.Episode)
 			d.log.Info("queue stood down, episode back in line",
 				"anime", next.AnimeID, "episode", next.Episode)
 		} else {
 			d.log.Info("queued download cancelled",
 				"anime", next.AnimeID, "episode", next.Episode)
 		}
-		return true
+		return
 
 	case errors.Is(err, errReleasePaused), errors.Is(err, errEpisodePaused):
 		d.log.Info("queued episode stays paused in its place: it was paused from the downloads list",
@@ -706,21 +913,21 @@ func (d *Downloader) step(parent context.Context) bool {
 		if _, err := d.store.SetQueuedPaused(parent, next.AnimeID, next.EpKey, true); err != nil {
 			d.log.Warn("keep a paused episode in line", "err", err)
 		}
-		return true
+		return
 
 	case errors.Is(err, torrent.ErrPaused):
 		if !d.pausedByUser(parent, next.AnimeID, next.EpKey) {
 			if _, err := d.store.RequeueActive(parent, next.AnimeID, next.EpKey); err != nil {
 				d.log.Warn("requeue paused download", "err", err)
 			}
-			return true
+			return
 		}
 		d.log.Info("queued download paused; it keeps its place in line",
 			"anime", next.AnimeID, "episode", next.Episode)
 		if _, err := d.store.SetQueuedPaused(parent, next.AnimeID, next.EpKey, true); err != nil {
 			d.log.Warn("keep a paused episode in line", "err", err)
 		}
-		return true
+		return
 
 	case err != nil && swarmFailure(err) && next.Attempts < queueRetries:
 		wait := queueRetryDelay * time.Duration(next.Attempts+1)
@@ -729,7 +936,7 @@ func (d *Downloader) step(parent context.Context) bool {
 		if err := d.store.Defer(parent, next.AnimeID, next.EpKey, describe(err), time.Now().Add(wait)); err != nil {
 			d.log.Warn("defer queued download", "err", err)
 		}
-		return true
+		return
 
 	case err != nil:
 		d.log.Warn("queued download failed",
@@ -743,5 +950,4 @@ func (d *Downloader) step(parent context.Context) bool {
 	if err := d.store.FinishQueued(parent, next.AnimeID, next.EpKey, err); err != nil {
 		d.log.Warn("finish queued download", "err", err)
 	}
-	return true
 }

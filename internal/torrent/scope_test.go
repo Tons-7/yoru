@@ -171,3 +171,16 @@ func TestOneSeasonPackIsUnchanged(t *testing.T) {
 		t.Errorf("picked %q", f.Name)
 	}
 }
+
+func TestPictureDramaPackPlaysEachEpisode(t *testing.T) {
+	var files []File
+	for ep := 1; ep <= 6; ep++ {
+		files = append(files, File{Name: fmt.Sprintf("[Kametsu] Princess Principal - Picture Dramas (BD 1080p Hi10 FLAC) [Dual-Audio]/[Kametsu] Princess Principal Picture Drama - %02d (BD 1080p Hi10 FLAC) [%08X].mkv", ep, ep*0x1111), Length: 170 << 20})
+	}
+	for ep := 1; ep <= 6; ep++ {
+		f, _, ok := PickInPack(files, ep, []int{ep}, Scope{Season: 1, Others: []string{"crown", "handler"}})
+		if !ok || !strings.Contains(f.Name, fmt.Sprintf("Drama - %02d ", ep)) {
+			t.Errorf("episode %d picked %q, %v", ep, f.Name, ok)
+		}
+	}
+}

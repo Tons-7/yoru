@@ -40,6 +40,14 @@ type Finder struct {
 
 	askedMu sync.Mutex
 	asked   map[[2]int]asked
+
+	seriesMu   sync.Mutex
+	seriesSeen map[int]seriesMemo
+}
+
+type seriesMemo struct {
+	series *filmSeries
+	at     time.Time
 }
 
 type asked struct {
@@ -187,6 +195,7 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	var series *filmSeries
 	if req.Episode <= 1 {
 		series = f.filmSeries(ctx, req.AnimeID)
+		f.rememberSeries(req.AnimeID, series)
 	}
 	tvdb := req.Alias.Tvdb
 	if tvdb < req.Episode {
@@ -264,6 +273,7 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 			}
 			if series != nil {
 				c.Film = &series.key
+				c.WrongShow = c.WrongShow || (!pasted && !series.named(t.Title))
 				switch series.key.Match(t.Title) {
 				case film.Ours:
 					c.Confirmed = series.key.Named(t.Title)
@@ -281,6 +291,7 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 			}
 			if info, ok := bestByHash[strings.ToLower(t.InfoHash)]; ok {
 				c.SeaDexBest, c.SeaDexGroup, c.SeaDexListed = info.IsBest, true, true
+				c.WrongShow = false
 				c.SeaDexNotes, c.SeaDexCompare, c.SeaDexIncomplete = info.Notes, info.Comparison, info.Incomplete
 			} else if info, ok := bestByGroup[strings.ToLower(rel.Group)]; ok {
 				c.SeaDexGroup = true
@@ -1081,7 +1092,7 @@ func searchTerms(
 
 	terms := make([]string, 0, maxSearchTerms)
 	push := func(t string) {
-		if len(terms) < maxSearchTerms {
+		if len(terms) < maxSearchTerms && !slices.ContainsFunc(terms, func(x string) bool { return strings.EqualFold(x, t) }) {
 			terms = append(terms, t)
 		}
 	}
@@ -1127,12 +1138,9 @@ func searchTerms(
 		}
 	}
 	for _, name := range series {
-		key := strings.ToLower(name)
-		if _, dup := seen[key]; dup || key == "" {
-			continue
+		if name != "" {
+			push(name)
 		}
-		seen[key] = struct{}{}
-		push(name)
 	}
 	for _, t := range latin {
 		push(t)

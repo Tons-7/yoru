@@ -1,4 +1,3 @@
-// Package film tells the films of one series apart by subtitle and chapter: each is catalogued as "episode 1".
 package film
 
 import (
@@ -12,35 +11,33 @@ import (
 	"yoru/internal/parse"
 )
 
-// Entry is one film, by the titles it goes by.
-type Entry struct{ Titles []string }
-
-// Key identifies one film among its series.
-type Key struct {
-	// Number is the chapter the film's own titles state, 0 when they state none.
-	Number int
-	// Count is how many films the series has, for sizing one inside a batch.
-	Count int
-
-	own    [][]string
-	others [][][]string
+type Entry struct {
+	Titles []string
+	Extra  bool
 }
 
-// Verdict is what a name says about which film it is.
+type Key struct {
+	Number int
+	Count  int
+
+	own          [][]string
+	others       [][][]string
+	extra        bool
+	shared       bool
+	extraSibling bool
+}
+
 type Verdict int
 
 const (
-	// Unknown: names the series at most, as a batch of all of it does.
 	Unknown Verdict = iota
 	Ours
 	Other
 )
 
-// New prepares the key for one film against the rest of its series.
 func New(own Entry, siblings []Entry) Key {
 	all := append([]Entry{own}, siblings...)
 
-	// A word most entries share names the series, not a film.
 	seen := map[string]int{}
 	for _, e := range all {
 		words := map[string]bool{}
@@ -66,7 +63,7 @@ func New(own Entry, siblings []Entry) Key {
 		return out
 	}
 
-	k := Key{Count: len(all), own: sets(own)}
+	k := Key{Count: len(all), own: sets(own), extra: own.Extra}
 	for _, t := range own.Titles {
 		if n := stated(t); n > 0 {
 			k.Number = n
@@ -75,23 +72,24 @@ func New(own Entry, siblings []Entry) Key {
 	}
 	for _, s := range siblings {
 		k.others = append(k.others, sets(s))
+		if k.Number > 0 && slices.ContainsFunc(s.Titles, func(t string) bool { return stated(t) == k.Number }) {
+			k.shared = true
+			k.extraSibling = k.extraSibling || s.Extra
+		}
 	}
 	return k
 }
 
-// Match judges a release name or a file name.
 func (k Key) Match(name string) Verdict {
 	v, _ := k.judge(name)
 	return v
 }
 
-// Named reports a name carrying this film's title words; a number alone varies by group and confirms nothing.
 func (k Key) Named(name string) bool {
 	v, grade := k.judge(name)
 	return v == Ours && grade >= 2
 }
 
-// judge also grades the evidence: 2 for the film's words, plus 1 for an agreeing number.
 func (k Key) judge(name string) (Verdict, int) {
 	words := tokens(name)
 	ours := fit(k.own, words)
@@ -101,7 +99,7 @@ func (k Key) judge(name string) (Verdict, int) {
 			theirs = e
 		}
 	}
-	num, fractional := Number(name)
+	num, fractional, kind := numbered(name)
 	agrees := k.Number > 0 && num == k.Number
 	disagrees := k.Number > 0 && num > 0 && num != k.Number
 
@@ -114,27 +112,30 @@ func (k Key) judge(name string) (Verdict, int) {
 	case theirs.beats(ours):
 		return Other, 0
 	case ours.hits > 0:
-		// Two films share the subtitle ("Murder Speculation" A and B); only the number separates them.
 		if agrees {
 			return Ours, 3
 		}
 		return Other, 0
 	case fractional || disagrees:
-		// "06.5" is an extra between two films; another number is another film.
 		return Other, 0
+	case agrees && k.shared && kind == "vol":
+		return Unknown, 0
+	case agrees && k.shared:
+		if side := sideNamed(name); side != k.extra && (k.extra || k.extraSibling) {
+			return Other, 0
+		}
+		return Ours, 1
 	case agrees:
 		return Ours, 1
 	}
 	return Unknown, 0
 }
 
-// File is what Pick needs of a torrent's file.
 type File struct {
 	Name   string
 	Length int64
 }
 
-// Pick finds this film among a release's files; among several one must stand out, or a mislabelled batch wins.
 func (k Key) Pick(files []File) (int, bool) {
 	var videos []int
 	for i, f := range files {
@@ -149,7 +150,6 @@ func (k Key) Pick(files []File) (int, bool) {
 		return videos[0], k.Match(parse.BaseName(files[videos[0]].Name)) != Other
 	}
 
-	// Trailers and cinema intros are numbered like the films; they are a fraction of the size.
 	lengths := make([]int64, 0, len(videos))
 	for _, i := range videos {
 		lengths = append(lengths, files[i].Length)
@@ -161,7 +161,6 @@ func (k Key) Pick(files []File) (int, bool) {
 	var tied []int
 	for _, i := range videos {
 		v, g := k.judge(parse.BaseName(files[i].Name))
-		// A number alone is not proof for a small file; the film's own name is, whatever its length.
 		if v != Ours || (g == 1 && files[i].Length < floor) {
 			continue
 		}
@@ -175,7 +174,6 @@ func (k Key) Pick(files []File) (int, bool) {
 	if best < 0 {
 		return -1, false
 	}
-	// Named alike: a PV beside the film carries its name too. The film is the one that is not a fraction.
 	tied = append(tied, best)
 	slices.SortFunc(tied, func(a, b int) int { return cmp.Compare(files[b].Length, files[a].Length) })
 	if len(tied) == 1 || files[tied[1]].Length < floor || files[tied[1]].Length*4 <= files[tied[0]].Length {
@@ -193,7 +191,6 @@ func (e evidence) beats(o evidence) bool {
 	return e.ratio > o.ratio || (e.ratio == o.ratio && e.hits > o.hits)
 }
 
-// fit is how well a name carries one of an entry's titles: at least half its distinctive words.
 func fit(titles [][]string, words map[string]bool) evidence {
 	var best evidence
 	for _, t := range titles {
@@ -212,19 +209,21 @@ func fit(titles [][]string, words map[string]bool) evidence {
 }
 
 var (
-	split = regexp.MustCompile(`[^\p{L}\p{N}]+`)
-	// Square brackets hold tags; round ones hold tags too, unless it is just the number: "(6)".
-	square = regexp.MustCompile(`\[[^\]]*\]`)
-	round  = regexp.MustCompile(`\(([^)]*)\)`)
-	digits = regexp.MustCompile(`^\d{1,2}$`)
-	// "FLAC 2.0", "DDP5.1": an audio layout, not film 2 or 5.
-	layout = regexp.MustCompile(`(?i)(?:aac|flac|ac3|e-?ac-?3|dts(?:-?hd)?|opus|ddp?|truehd|l?pcm|ma)[\s._-]*\d\.\d`)
-	// "Movies 1 - 8", "01~07": a range names the whole series.
-	spanned = regexp.MustCompile(`(?:^|[\s_])\d{1,2}\s*[-~]\s*\d{1,2}(?:$|[\s_])`)
-	marker  = regexp.MustCompile(`(?i)\b(?:chapter|movie|film|vol(?:ume)?)\.?\s*(\d{1,2})\b`)
-	// A number standing alone: "06 ", "- 6 -", "4v0", "6.0", and "6.5" with its fraction.
-	alone = regexp.MustCompile(`(?:^|[\s_-])(\d{1,2})(?:\.(\d))?(?:v\d)?(?:$|[\s_:-])`)
+	split     = regexp.MustCompile(`[^\p{L}\p{N}]+`)
+	square    = regexp.MustCompile(`\[[^\]]*\]`)
+	round     = regexp.MustCompile(`\(([^)]*)\)`)
+	digits    = regexp.MustCompile(`^\d{1,2}$`)
+	layout    = regexp.MustCompile(`(?i)(?:aac|flac|ac3|e-?ac-?3|dts(?:-?hd)?|opus|ddp?|truehd|l?pcm|ma)[\s._-]*\d\.\d`)
+	spanned   = regexp.MustCompile(`(?:^|[\s_])\d{1,2}\s*[-~]\s*\d{1,2}(?:$|[\s_])`)
+	marker    = regexp.MustCompile(`(?i)\b(chapter|movie|film|vol(?:ume)?)\.?\s*(\d{1,2})\b(?:\s*[-~]\s*(\d{1,2})\b)?`)
+	alone     = regexp.MustCompile(`(?:^|[\s_-])(\d{1,2})(?:\.(\d))?(?:v\d)?(?:$|[\s_:-])`)
+	sideStory = regexp.MustCompile(`(?i)\b(?:ova|oad|specials?|sp\d{0,3})\b`)
+	edition   = regexp.MustCompile(`(?i)\bspecial\s+edition\b`)
 )
+
+func sideNamed(name string) bool {
+	return sideStory.MatchString(edition.ReplaceAllString(name, ""))
+}
 
 var stop = map[string]bool{
 	"the": true, "and": true, "with": true, "from": true, "part": true, "movie": true, "film": true,
@@ -241,7 +240,6 @@ func tokens(name string) map[string]bool {
 	return out
 }
 
-// distinctive are a title's words long enough to mean something: "no", "Zen" and "Kou" are not.
 func distinctive(title string) []string {
 	var out []string
 	for _, w := range split.Split(strings.ToLower(title), -1) {
@@ -256,20 +254,31 @@ func distinctive(title string) []string {
 	return out
 }
 
-// stated is the chapter a catalogue title names outright: "Chapter 6".
 func stated(title string) int {
 	if m := marker.FindStringSubmatch(title); m != nil {
-		n, _ := strconv.Atoi(m[1])
+		n, _ := strconv.Atoi(m[2])
 		return n
 	}
 	return 0
 }
 
-// Number is the film a name is numbered as, 0 when it gives none or a range. fractional marks "6.5".
 func Number(name string) (n int, fractional bool) {
+	n, fractional, _ = numbered(name)
+	return n, fractional
+}
+
+func numbered(name string) (n int, fractional bool, kind string) {
 	if m := marker.FindStringSubmatch(name); m != nil {
-		n, _ = strconv.Atoi(m[1])
-		return n, false
+		n, _ = strconv.Atoi(m[2])
+		if m[3] != "" {
+			if end, _ := strconv.Atoi(m[3]); end > n {
+				return 0, false, ""
+			}
+		}
+		if kind = strings.ToLower(m[1]); strings.HasPrefix(kind, "vol") {
+			kind = "vol"
+		}
+		return n, false, kind
 	}
 	s := square.ReplaceAllString(name, " ")
 	s = round.ReplaceAllStringFunc(s, func(group string) string {
@@ -280,15 +289,15 @@ func Number(name string) (n int, fractional bool) {
 	})
 	s = layout.ReplaceAllString(s, " ")
 	if spanned.MatchString(s) {
-		return 0, false
+		return 0, false, ""
 	}
 	m := alone.FindStringSubmatch(s)
 	if m == nil {
-		return 0, false
+		return 0, false, ""
 	}
 	n, _ = strconv.Atoi(m[1])
 	if m[2] != "" && m[2] != "0" {
-		return 0, true
+		return 0, true, ""
 	}
-	return n, false
+	return n, false, ""
 }

@@ -62,6 +62,8 @@ a browser player and one config file.
   first, and why any was ruled out.
 - **Cleans up after itself.** Downloads stay within a size you set and watched
   episodes can delete themselves; keep the ones you want.
+- **Downloads one at a time, or up to five at once.** A download held back by
+  its few seeders stops holding up the rest of the line.
 - **Player comforts:** picture-in-picture, media keys, seek-bar thumbnails,
   keyboard shortcuts you can change, and clearer voices. On a phone it stays
   pinned while you scroll and swipes down into a miniplayer.

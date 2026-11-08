@@ -65,6 +65,11 @@ func (s *Store) DropTorrentFile(ctx context.Context, infoHash string, fileIndex 
 	return err
 }
 
+func (s *Store) DropFileCache(ctx context.Context, infoHash string, fileIndex int) error {
+	_, err := s.w.ExecContext(ctx, `DELETE FROM cache_entry WHERE lower(info_hash) = lower(?) AND file_index = ?`, infoHash, fileIndex)
+	return err
+}
+
 func (s *Store) FileEpisode(ctx context.Context, infoHash string, fileIndex int) (int, string, bool) {
 	var animeID int
 	var ep string

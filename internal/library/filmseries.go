@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"yoru/internal/film"
 	"yoru/internal/parse"
@@ -14,8 +15,68 @@ import (
 )
 
 type filmSeries struct {
-	key   film.Key
-	names []string
+	key       film.Key
+	names     []string
+	colliders *showIdentity
+}
+
+const seriesMemoTTL = time.Minute
+
+func (f *Finder) rememberSeries(animeID int, s *filmSeries) {
+	f.seriesMu.Lock()
+	defer f.seriesMu.Unlock()
+	if f.seriesSeen == nil {
+		f.seriesSeen = map[int]seriesMemo{}
+	}
+	f.seriesSeen[animeID] = seriesMemo{series: s, at: time.Now()}
+}
+
+func (f *Finder) knownSeries(ctx context.Context, animeID int) *filmSeries {
+	f.seriesMu.Lock()
+	m, ok := f.seriesSeen[animeID]
+	f.seriesMu.Unlock()
+	if ok && time.Since(m.at) < seriesMemoTTL {
+		return m.series
+	}
+	s := f.filmSeries(ctx, animeID)
+	f.rememberSeries(animeID, s)
+	return s
+}
+
+func (f *Finder) anotherFilm(ctx context.Context, animeID, episode int, names ...string) bool {
+	if f == nil || episode > 1 {
+		return false
+	}
+	s := f.knownSeries(ctx, animeID)
+	if s == nil {
+		return false
+	}
+	judged := false
+	for _, name := range names {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		judged = true
+		if s.named(name) && s.key.Match(name) != film.Other {
+			return false
+		}
+	}
+	return judged
+}
+
+func (s *filmSeries) named(title string) bool {
+	return s.colliders == nil || !s.colliders.matches(parse.Parse(title), title)
+}
+
+func sideStory(format *string) bool {
+	if format == nil {
+		return false
+	}
+	switch strings.ToUpper(*format) {
+	case "OVA", "SPECIAL":
+		return true
+	}
+	return false
 }
 
 func (s *filmSeries) queries() []string {
@@ -58,33 +119,34 @@ func (f *Finder) filmSeries(ctx context.Context, animeID int) *filmSeries {
 		return titles
 	}
 
-	base := seriesBase(own.Romaji)
-	if base == "" {
+	bases := seriesBases(own.Romaji)
+	var romaji, english []string
+	chosen := -1
+	for i, base := range bases {
+		if romaji, english = filmsSharing(members, base); len(romaji) >= 2 {
+			chosen = i
+			break
+		}
+	}
+	if chosen < 0 {
 		return nil
 	}
 	var siblings []film.Entry
-	var romaji, english []string
-	sharing := 0
+	var colliding []string
 	for _, m := range members {
-		if strings.EqualFold(seriesBase(m.Romaji), base) {
-			if !single(m.Format, m.Episodes) {
-				return nil
-			}
-			sharing++
-			romaji = append(romaji, m.Romaji)
-			if m.English != nil {
-				english = append(english, *m.English)
-			}
+		shares := slices.Contains(seriesBases(m.Romaji), bases[chosen])
+		if chosen > 0 && !shares && slices.Contains(seriesBases(m.Romaji), bases[0]) && !single(m.Format, m.Episodes) {
+			colliding = append(colliding, titlesOf(m)...)
 		}
-		if m.ID != animeID {
-			siblings = append(siblings, film.Entry{Titles: titlesOf(m)})
+		if m.ID != animeID && (chosen == 0 || shares) {
+			siblings = append(siblings, film.Entry{Titles: titlesOf(m), Extra: sideStory(m.Format)})
 		}
-	}
-	if sharing < 2 {
-		return nil
 	}
 
-	out := &filmSeries{key: film.New(film.Entry{Titles: titlesOf(*own)}, siblings)}
+	out := &filmSeries{key: film.New(film.Entry{Titles: titlesOf(*own), Extra: sideStory(own.Format)}, siblings)}
+	if len(colliding) > 0 {
+		out.colliders = newShowIdentity(colliding)
+	}
 	for _, name := range []string{commonPrefix(romaji), commonPrefix(english)} {
 		if name = cleanQuery(name); len(strings.Fields(name)) >= 2 && mostlyLatin(name) {
 			out.names = append(out.names, name)
@@ -129,8 +191,37 @@ func (f *Finder) seriesMembers(ctx context.Context, animeID int) []store.Season 
 	})
 }
 
-func seriesBase(title string) string {
-	return strings.ToLower(strings.TrimSpace(baseOf(title)))
+func filmsSharing(members []store.Season, base string) (romaji, english []string) {
+	for _, m := range members {
+		if !slices.Contains(seriesBases(m.Romaji), base) {
+			continue
+		}
+		if !single(m.Format, m.Episodes) {
+			return nil, nil
+		}
+		romaji = append(romaji, m.Romaji)
+		if m.English != nil {
+			english = append(english, *m.English)
+		}
+	}
+	return romaji, english
+}
+
+var seriesSeparator = regexp.MustCompile(`:|\s[-–—]\s`)
+
+func seriesBases(title string) []string {
+	var out []string
+	for _, at := range seriesSeparator.FindAllStringIndex(title, -1) {
+		if base := strings.ToLower(strings.TrimSpace(title[:at[0]])); base != "" {
+			out = append(out, base)
+		}
+	}
+	if len(out) == 0 {
+		if whole := strings.ToLower(strings.TrimSpace(title)); whole != "" {
+			out = append(out, whole)
+		}
+	}
+	return out
 }
 
 var trailingMarker = regexp.MustCompile(`(?i)[\s:,-]+(?:chapter|movie|film|part|vol(?:ume)?|the)?\s*\d*\s*$`)

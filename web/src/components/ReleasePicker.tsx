@@ -32,28 +32,22 @@ export function ReleasePicker({
   const panel = useDismiss<HTMLDivElement>(close)
   useModalFocus(panel)
 
-  // Words of the person's own, searched before the show's titles, or a magnet found elsewhere.
   const [typed, setTyped] = useState('')
   const [asked, setAsked] = useState('')
   const magnet = asked.startsWith('magnet:') ? asked : undefined
   const sources = useQuery({
     queryKey: ['sources', animeId, episode, audio, asked],
-    // Asking is a POST: the server keeps the words or magnet for the next searches, so another site mustn't.
     queryFn: ({ signal }) => {
       const path = `/api/episode/sources${query({ id: animeId, episode, audio, q: magnet ? undefined : asked || undefined, magnet })}`
       type Found = { results: ReleaseCandidate[]; queries: string[] }
       return asked ? api.post<Found>(path, undefined, signal) : api.get<Found>(path, signal)
     },
-    // Kept while the picker is open, even through a refetch of everything: each search is seconds per site.
     staleTime: 'static',
-    // The search already tries every title; retrying it tripled the wait before saying a site is down.
     retry: false,
   })
 
   const results = sources.data?.results ?? []
 
-  // Into the fullscreen player when there is one: outside it nothing is drawn,
-  // and the next click in the player counts as outside the panel.
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
@@ -83,7 +77,6 @@ export function ReleasePicker({
           </button>
         </div>
 
-        {/* The titles find nothing when a group spells the show its own way; a pasted magnet skips search. */}
         <form
           className="flex gap-2 border-b border-base-850 px-4 py-2.5"
           onSubmit={(e) => {
@@ -111,7 +104,6 @@ export function ReleasePicker({
               ))}
             </div>
           ) : sources.isError ? (
-            // A way to ask again without closing the dialog mid-episode.
             <div className="flex flex-wrap items-center gap-3 p-4">
               <p className="text-sm text-recap">{(sources.error as Error).message}</p>
               <Button size="sm" onClick={() => void sources.refetch()}>
@@ -129,14 +121,12 @@ export function ReleasePicker({
                   key={r.Torrent.infoHash}
                   candidate={r}
                   active={r.Torrent.infoHash === current}
-                  // From Downloads the current copy isn't necessarily playing.
                   activeLabel={purpose === 'download' ? 'Current' : 'Playing'}
                   onPick={() => onPick(r.Torrent.infoHash, r.Torrent.title)}
                 />
               ))}
             </ul>
           )}
-          {/* Picked here by hand they still play; the limit itself is a setting. */}
           {results.some((r) => r.blocked === 'larger than the automatic size limit') && (
             <p className="px-2 pt-2 text-xs text-base-500">
               Some are over the automatic size limit; pick one here, or{' '}
@@ -173,7 +163,6 @@ function Row({
     rel.Batch && 'batch',
   ].filter(Boolean)
 
-  // The curator's word on a release SeaDex lists: its notes and comparisons, under the row, not in its button.
   const curated = r.SeaDexBest || r.SeaDexListed
   const notes = curated ? r.SeaDexNotes : undefined
   const compare = curated ? (r.SeaDexCompare ?? []) : []
@@ -203,7 +192,7 @@ function Row({
             <span>peers unknown</span>
           ) : (
             <span className={cx(r.Torrent.seeders === 0 && 'text-recap')}>
-              {r.Torrent.seeders} seeders
+              {r.Torrent.seeders} {r.Torrent.seeders === 1 ? 'seeder' : 'seeders'}
             </span>
           )}
           <span className="ml-auto tabular-nums text-base-500">{Math.round(r.score)}</span>

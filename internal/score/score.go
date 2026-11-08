@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"yoru/internal/film"
 	"yoru/internal/indexer"
@@ -209,6 +211,7 @@ type Result struct {
 	AutoPick   bool        `json:"autoPick"`
 	Blocked    string      `json:"blocked,omitempty"`
 	Rejections []Rejection `json:"rejections,omitempty"`
+	Fallback   bool        `json:"fallback,omitempty"`
 
 	resRank    float64
 	unreadable bool
@@ -245,6 +248,7 @@ func Rank(cands []Candidate, prefs Preferences) []Result {
 	for _, c := range cands {
 		out = append(out, evaluate(c, prefs))
 	}
+	lastResort(out, prefs)
 	top := 0.0
 	for _, r := range out {
 		if r.AutoPick {
@@ -572,6 +576,44 @@ func ladderPlace(res string, prefs Preferences, best bool) float64 {
 }
 
 func (r *Result) add(reason string) { r.Reasons = append(r.Reasons, reason) }
+
+const fallbackAge = 24 * time.Hour
+
+func lastResort(out []Result, prefs Preferences) {
+	if prefs.AllowHi10P {
+		return
+	}
+	lifted := prefs
+	lifted.AllowHi10P = true
+	for i, r := range out {
+		fresh := !r.Torrent.Published.IsZero() && time.Since(r.Torrent.Published) < fallbackAge
+		out[i].Fallback = !r.ByHand && !fresh && len(r.Rejections) > 0 && len(evaluateSpecs(r.Candidate, lifted)) == 0
+	}
+	if slices.ContainsFunc(out, func(r Result) bool { return r.AutoPick }) {
+		return
+	}
+	for i := range out {
+		if out[i].Fallback {
+			out[i] = liftFallback(out[i])
+		}
+	}
+}
+
+func liftFallback(r Result) Result {
+	r.AutoPick, r.Blocked, r.Rejections = true, "", nil
+	r.Reasons = append(slices.Clone(r.Reasons), "no other release would do: 10-bit H.264, converted on the processor to play")
+	return r
+}
+
+func Fallbacks(results []Result) []Result {
+	var out []Result
+	for _, r := range results {
+		if r.Fallback && !r.AutoPick {
+			out = append(out, liftFallback(r))
+		}
+	}
+	return out
+}
 
 func (r *Result) addf(format string, args ...any) {
 	r.Reasons = append(r.Reasons, fmt.Sprintf(format, args...))

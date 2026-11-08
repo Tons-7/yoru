@@ -402,7 +402,11 @@ func (c *Cache) holdsUnrecorded(ctx context.Context, hash string, watched map[in
 
 func dropSuperseded(ctx context.Context, st *store.Store, tc *torrent.Client, log *slog.Logger, animeID int, epKey string) {
 	hashes, err := st.Superseded(ctx, animeID, epKey)
-	if err != nil || len(hashes) == 0 {
+	if err != nil {
+		return
+	}
+	files, err := st.SupersededFiles(ctx, animeID, epKey)
+	if err != nil || len(hashes)+len(files) == 0 {
 		return
 	}
 	live := map[string]int{}
@@ -426,6 +430,28 @@ func dropSuperseded(ctx context.Context, st *store.Store, tc *torrent.Client, lo
 			continue
 		}
 		log.Info("superseded release removed", "anime", animeID, "episode", epKey, "hash", hash)
+	}
+	for _, f := range files {
+		id, inEngine := live[strings.ToLower(f.InfoHash)]
+		if !inEngine {
+			continue
+		}
+		if ready, err := st.SupersededFileReady(ctx, animeID, epKey, f); err != nil || !ready {
+			continue
+		}
+		if err := tc.DeleteFile(ctx, id, f.FileIndex); err != nil {
+			log.Warn("remove a superseded episode from a pack", "hash", f.InfoHash, "file", f.FileIndex, "err", err)
+			continue
+		}
+		if err := st.DropTorrentFile(ctx, f.InfoHash, f.FileIndex); err != nil {
+			log.Warn("forget a superseded episode of a pack", "hash", f.InfoHash, "file", f.FileIndex, "err", err)
+			continue
+		}
+		if err := st.DropFileCache(ctx, f.InfoHash, f.FileIndex); err != nil {
+			log.Warn("forget a superseded episode's bytes", "hash", f.InfoHash, "file", f.FileIndex, "err", err)
+		}
+		log.Info("superseded episode removed from a pack the other episodes still use",
+			"anime", animeID, "episode", epKey, "hash", f.InfoHash, "file", f.FileIndex)
 	}
 }
 

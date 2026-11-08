@@ -283,6 +283,49 @@ func (s *Store) Superseded(ctx context.Context, animeID int, epKey string) ([]st
 	return out, rows.Err()
 }
 
+type FileRef struct {
+	InfoHash  string
+	FileIndex int
+}
+
+func (s *Store) SupersededFiles(ctx context.Context, animeID int, epKey string) ([]FileRef, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT DISTINCT f.info_hash, f.file_index FROM torrent_file f
+		WHERE f.anime_id = ? AND f.ep_key = ? AND f.selected = 0 AND f.file_index >= 0
+		  AND EXISTS (SELECT 1 FROM torrent_file s
+		              WHERE s.info_hash = f.info_hash AND s.selected = 1 AND s.file_index <> ?)`,
+		animeID, epKey, WholeTorrent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FileRef
+	for rows.Next() {
+		var f FileRef
+		if err := rows.Scan(&f.InfoHash, &f.FileIndex); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SupersededFileReady(ctx context.Context, animeID int, epKey string, f FileRef) (bool, error) {
+	var pinned, held, replaced int
+	err := s.r.QueryRowContext(ctx, `
+		SELECT
+		  EXISTS (SELECT 1 FROM cache_entry WHERE info_hash = ? AND pinned = 1),
+		  EXISTS (SELECT 1 FROM cache_entry WHERE info_hash = ? AND file_index = ? AND (complete = 1 OR bytes_on_disk > 0)),
+		  EXISTS (SELECT 1 FROM torrent_file n
+		          JOIN cache_entry c ON c.info_hash = n.info_hash AND (c.file_index = n.file_index OR c.file_index = ?)
+		          WHERE n.anime_id = ? AND n.ep_key = ? AND n.selected = 1 AND n.info_hash <> ? AND c.complete = 1)`,
+		f.InfoHash, f.InfoHash, f.FileIndex, WholeTorrent, animeID, epKey, f.InfoHash).Scan(&pinned, &held, &replaced)
+	if err != nil {
+		return false, err
+	}
+	return pinned == 0 && (held == 0 || replaced == 1), nil
+}
+
 func (s *Store) SupersededReady(ctx context.Context, animeID int, epKey, infoHash string) (bool, error) {
 	var pinned, held, replaced int
 	err := s.r.QueryRowContext(ctx, `
@@ -307,9 +350,7 @@ type EpisodeRef struct {
 func (s *Store) SupersededEpisodes(ctx context.Context) ([]EpisodeRef, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT DISTINCT f.anime_id, f.ep_key FROM torrent_file f
-		WHERE f.selected = 0 AND f.anime_id IS NOT NULL
-		  AND NOT EXISTS (SELECT 1 FROM torrent_file s
-		                  WHERE s.info_hash = f.info_hash AND s.selected = 1 AND s.file_index <> ?)`, WholeTorrent)
+		WHERE f.selected = 0 AND f.anime_id IS NOT NULL AND f.ep_key IS NOT NULL`)
 	if err != nil {
 		return nil, err
 	}

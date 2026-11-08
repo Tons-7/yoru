@@ -115,6 +115,24 @@
     scroll-padding-top: 5rem;
   }
 
+  html:has([data-stuck='always'] :focus) {
+    scroll-padding-top: 0;
+  }
+
+  [data-stuck='always'] :is(input, textarea, button, a, [tabindex]) {
+    scroll-margin-top: -5rem;
+  }
+
+  @media (width < 40rem) {
+    html:has([data-stuck='narrow'] :focus) {
+      scroll-padding-top: 0;
+    }
+
+    [data-stuck='narrow'] :is(input, textarea, button, a, [tabindex]) {
+      scroll-margin-top: -5rem;
+    }
+  }
+
   body {
     @apply bg-base-950 font-sans text-base-100 antialiased;
     font-feature-settings: 'cv11', 'ss01';

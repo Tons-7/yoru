@@ -2,6 +2,7 @@ package torrent
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -31,6 +32,7 @@ type Client struct {
 
 	mu         sync.Mutex
 	badMagnets map[string]time.Time
+	badReasons map[string]error
 	secret     string
 }
 
@@ -129,6 +131,7 @@ func NewClient(base string) *Client {
 		stream:     &http.Client{},
 		base:       strings.TrimRight(base, "/"),
 		badMagnets: map[string]time.Time{},
+		badReasons: map[string]error{},
 	}
 }
 
@@ -208,17 +211,19 @@ func (s Stats) Percent() float64 {
 
 const inspectTimeout = 25 * time.Second
 
+var ErrNoFileList = errors.New("no peer sent the release's file list in time")
+
 func (c *Client) Inspect(parent context.Context, magnet string) (*Torrent, error) {
-	if until, bad := c.magnetFailedRecently(magnet); bad {
-		return nil, fmt.Errorf("metadata did not resolve; skipping for %s", time.Until(until).Round(time.Second))
+	if until, why, bad := c.magnetFailure(magnet); bad {
+		return nil, fmt.Errorf("%w; asking again in %s", why, time.Until(until).Round(time.Second))
 	}
 
 	ctx, cancel := context.WithTimeout(parent, inspectTimeout)
 	defer cancel()
 
-	got, err := c.add(ctx, magnet, url.Values{"list_only": {"true"}})
-	if err != nil && parent.Err() == nil {
-		c.markMagnetFailed(magnet)
+	got, err := c.listFiles(ctx, magnet)
+	if err = timedOut(ctx, parent, err); err != nil && parent.Err() == nil {
+		c.markMagnetFailed(magnet, err)
 	}
 	return got, err
 }
@@ -228,36 +233,52 @@ const pickedInspectTimeout = 3 * time.Minute
 func (c *Client) InspectPicked(parent context.Context, magnet string) (*Torrent, error) {
 	ctx, cancel := context.WithTimeout(parent, pickedInspectTimeout)
 	defer cancel()
-	return c.add(ctx, magnet, url.Values{"list_only": {"true"}})
+	got, err := c.listFiles(ctx, magnet)
+	return got, timedOut(ctx, parent, err)
 }
 
-func (c *Client) magnetFailedRecently(magnet string) (time.Time, bool) {
+func (c *Client) listFiles(ctx context.Context, magnet string) (*Torrent, error) {
+	return c.add(ctx, c.streamClient(), magnet, url.Values{"list_only": {"true"}})
+}
+
+func timedOut(ctx, parent context.Context, err error) error {
+	if err != nil && parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return ErrNoFileList
+	}
+	return err
+}
+
+func (c *Client) magnetFailure(magnet string) (time.Time, error, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	until, ok := c.badMagnets[magnet]
 	if ok && time.Now().Before(until) {
-		return until, true
+		return until, cmp.Or(c.badReasons[magnet], ErrNoFileList), true
 	}
 	if ok {
 		delete(c.badMagnets, magnet)
+		delete(c.badReasons, magnet)
 	}
-	return time.Time{}, false
+	return time.Time{}, nil, false
 }
 
-func (c *Client) markMagnetFailed(magnet string) {
+func (c *Client) markMagnetFailed(magnet string, why error) {
 	c.mu.Lock()
 	c.badMagnets[magnet] = time.Now().Add(inspectFailTTL)
+	if c.badReasons != nil {
+		c.badReasons[magnet] = why
+	}
 	c.mu.Unlock()
 }
 
 func (c *Client) Add(ctx context.Context, magnet string, file File) (*Torrent, error) {
-	return c.add(ctx, magnet, url.Values{
+	return c.add(ctx, c.http, magnet, url.Values{
 		"overwrite":        {"true"},
 		"only_files_regex": {"^" + regexp.QuoteMeta(file.Name) + "$"},
 	})
 }
 
-func (c *Client) add(ctx context.Context, magnet string, params url.Values) (*Torrent, error) {
+func (c *Client) add(ctx context.Context, client *http.Client, magnet string, params url.Values) (*Torrent, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.url("/torrents?"+params.Encode()), strings.NewReader(magnet))
 	if err != nil {
@@ -266,7 +287,7 @@ func (c *Client) add(ctx context.Context, magnet string, params url.Values) (*To
 	req.Header.Set("Content-Type", "text/plain")
 
 	var out Torrent
-	if err := c.do(req, &out); err != nil {
+	if err := c.send(client, req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -436,6 +457,8 @@ type SlowError struct {
 	ID      int
 	Rate    float64
 	Percent float64
+	Bytes   int64
+	Quiet   time.Duration
 }
 
 func (e *SlowError) Error() string {
@@ -447,21 +470,39 @@ type sample struct {
 	bytes int64
 }
 
-func (c *Client) Await(ctx context.Context, id int, stall time.Duration) error {
-	return c.AwaitPaced(ctx, id, stall, 0, 0, 0)
+type Pace struct {
+	MinRate  float64
+	Window   time.Duration
+	FewPeers int
+	File     int
+	FileSize int64
 }
 
-func (c *Client) AwaitPaced(ctx context.Context, id int, stall time.Duration, minRate float64, window time.Duration, fewPeers int) error {
+func (p Pace) Progress(s Stats) (bytes int64, percent float64, done bool) {
+	if p.FileSize > 0 && p.File >= 0 && p.File < len(s.FileProgress) {
+		bytes = s.FileProgress[p.File]
+		return bytes, float64(bytes) / float64(p.FileSize) * 100, s.Finished || bytes >= p.FileSize
+	}
+	return s.ProgressBytes, s.Percent(), s.Finished
+}
+
+func (c *Client) Await(ctx context.Context, id int, stall time.Duration) error {
+	return c.AwaitPaced(ctx, id, stall, Pace{})
+}
+
+func (c *Client) AwaitPaced(ctx context.Context, id int, stall time.Duration, pace Pace) error {
 	var best int64
 	var quiet time.Duration
 	var samples []sample
 
 	for {
 		stats, err := c.Stats(ctx, id)
-		switch {
-		case err != nil:
+		if err != nil {
 			return err
-		case stats.Finished:
+		}
+		progress, percent, done := pace.Progress(stats)
+		switch {
+		case done:
 			return nil
 		case stats.Error != "":
 			return fmt.Errorf("%s", stats.Error)
@@ -469,24 +510,24 @@ func (c *Client) AwaitPaced(ctx context.Context, id int, stall time.Duration, mi
 			return ErrPaused
 		}
 
-		if stats.ProgressBytes > best {
-			best, quiet = stats.ProgressBytes, 0
+		if progress > best {
+			best, quiet = progress, 0
 		} else {
 			quiet += AwaitPoll
 			if quiet >= stall {
-				return &StallError{Percent: stats.Percent(), Quiet: quiet, Cause: stats.Warning}
+				return &StallError{Percent: percent, Quiet: quiet, Cause: stats.Warning}
 			}
 		}
-		if minRate > 0 && window > 0 {
+		if pace.MinRate > 0 && pace.Window > 0 {
 			now := time.Now()
-			samples = append(samples, sample{now, stats.ProgressBytes})
-			for len(samples) > 1 && now.Sub(samples[1].at) >= window {
+			samples = append(samples, sample{now, progress})
+			for len(samples) > 1 && now.Sub(samples[1].at) >= pace.Window {
 				samples = samples[1:]
 			}
-			if span := now.Sub(samples[0].at); span >= window {
-				rate := float64(stats.ProgressBytes-samples[0].bytes) / span.Seconds()
-				if rate < minRate && (fewPeers <= 0 || stats.Peers() < fewPeers) {
-					return &SlowError{ID: id, Rate: rate, Percent: stats.Percent()}
+			if span := now.Sub(samples[0].at); span >= pace.Window {
+				rate := float64(progress-samples[0].bytes) / span.Seconds()
+				if rate < pace.MinRate && (pace.FewPeers <= 0 || stats.Peers() < pace.FewPeers) {
+					return &SlowError{ID: id, Rate: rate, Percent: percent, Bytes: progress, Quiet: quiet}
 				}
 			}
 		}
@@ -622,6 +663,10 @@ func (c *Client) post(ctx context.Context, path string) error {
 }
 
 func (c *Client) do(req *http.Request, out any) error {
+	return c.send(c.http, req, out)
+}
+
+func (c *Client) send(client *http.Client, req *http.Request, out any) error {
 	if c.engine != nil {
 		if err := c.engine.Ensure(req.Context()); err != nil {
 			return err
@@ -631,7 +676,7 @@ func (c *Client) do(req *http.Request, out any) error {
 		req.Header.Set(SecretHeader, c.secret)
 	}
 
-	res, err := c.http.Do(req)
+	res, err := client.Do(req)
 	if err != nil {
 		return err
 	}

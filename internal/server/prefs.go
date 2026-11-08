@@ -27,6 +27,7 @@ var allowed = map[string][]string{
 	"playback.voice":           sound.Levels,
 	"playback.boost":           sound.Levels,
 	"downloads.while_watching": {"pause", "continue"},
+	"downloads.parallel":       {"1", "2", "3", "5"},
 	"display.speed":            {"mbps", "mbs"},
 	"quality.prefer":           {"best", "720p", "480p"},
 	"quality.codec":            {"hevc", "av1", "any"},
@@ -121,6 +122,9 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.AnimeID == 0 && limitSettings[body.Key] {
 		s.applyLimits(r.Context())
+	}
+	if body.AnimeID == 0 && body.Key == "downloads.parallel" {
+		s.downloader.Wake()
 	}
 	if body.AnimeID == 0 && strings.HasPrefix(body.Key, "discord.") && s.presence != nil {
 		if prefs, err := s.store.Prefs(r.Context(), 0); err == nil {

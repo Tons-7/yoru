@@ -14,7 +14,6 @@ func rejectionRules(c Candidate, prefs Preferences) []string {
 	return out
 }
 
-// A Blu-ray disc image is hours of menus and VOB structure, not an episode.
 func TestDiscImagesAreRejected(t *testing.T) {
 	prefs := DefaultPreferences()
 
@@ -29,7 +28,6 @@ func TestDiscImagesAreRejected(t *testing.T) {
 		}
 	}
 
-	// A normal Blu-ray encode is not a disc image.
 	ok := candidate("[Judas] Show - 01 [BD 1080p HEVC 10bit].mkv", 40, 1<<30)
 	if got := Rank([]Candidate{ok}, prefs)[0]; !got.AutoPick {
 		t.Errorf("a BD encode was rejected: %q", got.Blocked)
@@ -46,7 +44,6 @@ func TestSamplesAreRejected(t *testing.T) {
 	}
 }
 
-// The first refusing tier is what gets reported; a dead swarm should not be explained as a size problem.
 func TestRejectionsStopAtTheFirstTier(t *testing.T) {
 	prefs := DefaultPreferences()
 	prefs.MaxAutoBytes = 1 << 20
@@ -63,9 +60,13 @@ func TestRejectionCarriesItsRule(t *testing.T) {
 	prefs := DefaultPreferences()
 	prefs.AllowHi10P = false
 
-	got := Rank([]Candidate{
-		candidate("[Group] Show - 01 [1080p Hi10P AAC].mkv", 30, 1<<30),
-	}, prefs)[0]
+	hi10 := candidate("[Group] Show - 01 [1080p Hi10P AAC].mkv", 30, 1<<30)
+	var got Result
+	for _, r := range Rank([]Candidate{hi10, candidate("[Other] Show - 01 [1080p].mkv", 30, 1<<30)}, prefs) {
+		if r.Torrent.Title == hi10.Torrent.Title {
+			got = r
+		}
+	}
 
 	if len(got.Rejections) == 0 {
 		t.Fatal("no rejection recorded")
@@ -88,7 +89,6 @@ func TestAcceptedReleaseHasNoRejections(t *testing.T) {
 	}
 }
 
-// Patch files and subtitle packs are listed under the show's name; a title ending in a video's name is not one.
 func TestNonVideoReleasesAreRefused(t *testing.T) {
 	prefs := DefaultPreferences()
 	for _, title := range []string{
@@ -111,7 +111,6 @@ func TestNonVideoReleasesAreRefused(t *testing.T) {
 	}
 }
 
-// One film of a series inside a batch of all of them costs its share, not the whole batch.
 func TestFilmBatchIsSizedAsOneFilm(t *testing.T) {
 	key := film.New(film.Entry{Titles: []string{"Series: One"}}, []film.Entry{{Titles: []string{"Series: Two"}}, {Titles: []string{"Series: Three"}}})
 	batch := candidate("[Group] Series (All Movies) [1080p]", 20, 30<<30)
@@ -126,7 +125,6 @@ func TestFilmBatchIsSizedAsOneFilm(t *testing.T) {
 	}
 }
 
-// In a film series a one-seeder single release is the last resort, behind a healthy batch.
 func TestThinFilmReleaseRanksBehindAHealthyBatch(t *testing.T) {
 	key := film.New(film.Entry{Titles: []string{"Series: One"}}, []film.Entry{{Titles: []string{"Series: Two"}}})
 	single := candidate("[Group] Series - One [1080p]", 1, 1<<30)
@@ -137,7 +135,6 @@ func TestThinFilmReleaseRanksBehindAHealthyBatch(t *testing.T) {
 	if got := Rank([]Candidate{single, batch}, DefaultPreferences()); got[0].Torrent.Seeders != 40 {
 		t.Errorf("the one-seeder release ranked first: %s", got[0].Torrent.Title)
 	}
-	// Outside a film series a single episode still beats a pack, however thin.
 	single.Film, batch.Film = nil, nil
 	if got := Rank([]Candidate{single, batch}, DefaultPreferences()); got[0].Torrent.Seeders != 1 {
 		t.Errorf("a pack ranked above the single episode: %s", got[0].Torrent.Title)
