@@ -19,31 +19,22 @@ import (
 	"yoru/internal/transcode"
 )
 
-// Component is one external program Yoru shells out to. None are bundled:
-// together they exceed half a gigabyte, against a 25 MB application.
 type Component struct {
 	Name     string `json:"name"`
 	Label    string `json:"label"`
 	Purpose  string `json:"purpose"`
 	Size     string `json:"size"`
 	Required bool   `json:"required"`
-	// Role replaces the "Optional" badge where that would mislead.
-	Role    string `json:"role,omitempty"`
-	Present bool   `json:"present"`
-	Version string `json:"version,omitempty"`
-	// Latest is what is published, when known; newer than Version means an update is on offer.
-	Latest string `json:"latest,omitempty"`
-	Needs  string `json:"needs,omitempty"`
-	// Manual: the package-manager command, where Yoru cannot fetch this component on this OS.
-	Manual string `json:"manual,omitempty"`
-	// System: found on PATH rather than downloaded into bin/.
-	System bool `json:"system,omitempty"`
-	// Problem says why one that is there cannot be used.
-	Problem string `json:"problem,omitempty"`
+	Role     string `json:"role,omitempty"`
+	Present  bool   `json:"present"`
+	Version  string `json:"version,omitempty"`
+	Latest   string `json:"latest,omitempty"`
+	Needs    string `json:"needs,omitempty"`
+	Manual   string `json:"manual,omitempty"`
+	System   bool   `json:"system,omitempty"`
+	Problem  string `json:"problem,omitempty"`
 }
 
-// setup reports what is installed so the first-run screen can say exactly what
-// it wants to fetch and why, rather than downloading half a gigabyte unasked.
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	versions := s.installedVersions()
 
@@ -82,6 +73,14 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 			Version: versions["anime4k"],
 			Needs:   "mpv",
 		},
+		{
+			Name: "flyhigh", Label: "Smooth motion",
+			Purpose: "FlyHigh frame generation for the built-in player: frames between the episode's own, made " +
+				"on the watching device's graphics card. Turned on per device from the player.",
+			Size:    "2 MB",
+			Present: s.hasFlyHigh(),
+			Version: versions["flyhigh"],
+		},
 	}
 
 	for i := range components {
@@ -94,10 +93,8 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 			components[i].Manual = deps.ManualCommand(components[i].Name)
 		}
 	}
-	// Versions come from the network; the page gets what was last resolved and a refresh runs behind it.
 	if s.deps != nil {
 		for i := range components {
-			// The built-in engine updates with Yoru; a system install, with its package manager.
 			if !components[i].Present || components[i].System || !deps.Known(components[i].Name) {
 				continue
 			}
@@ -110,7 +107,6 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 
 	cache, _ := s.store.SettingInt(r.Context(), "cache.budget_bytes")
 
-	// Empty, not nil: the first-run page reads .length off this, and nil marshals to null.
 	roots, _ := s.scannerRoots(r)
 	if roots == nil {
 		roots = []string{}
@@ -123,7 +119,6 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Counted as usable, and the rest named: a bad one is skipped, not searched.
 	usable, bad := 0, []string{}
 	sites, _, _ := LoadSites(r.Context(), s.store, s.cfg)
 	for _, site := range sites {
@@ -160,12 +155,10 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, body)
 }
 
-// setDataDir writes the new folder to config.toml and copies the database there; empty means default.
 func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path string `json:"path"`
-		// UseExisting confirms switching to a database already in that folder.
-		UseExisting bool `json:"useExisting"`
+		Path        string `json:"path"`
+		UseExisting bool   `json:"useExisting"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&body); err != nil {
 		send(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
@@ -176,7 +169,6 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusOK, map[string]any{"dataDir": dir, "copied": false, "restart": false})
 		return
 	}
-	// Opening another history instead of carrying this one is asked, not assumed.
 	existing := ""
 	if p := filepath.Join(dir, config.Name+".db"); fileExists(p) {
 		existing = p
@@ -201,7 +193,6 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 	probe.Close()
 	os.Remove(probe.Name())
 
-	// Only into an empty home: a database already there is someone's history.
 	target := filepath.Join(dir, config.Name+".db")
 	copied := false
 	if dir != s.cfg.DataDir() && existing == "" && fileExists(s.cfg.DatabasePath()) {
@@ -216,7 +207,6 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "write config", err)
 		return
 	}
-	// Restarted now: anything written to the old database after the copy would be lost.
 	if s.relaunch != nil {
 		go func() {
 			time.Sleep(time.Second)
@@ -231,10 +221,8 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// Long enough that a failing lookup cannot be retried on every poll.
 const latestRetry = 10 * time.Minute
 
-// refreshLatest looks up a component's newest version in the background, one lookup per component at a time.
 func (s *Server) refreshLatest(name string) {
 	s.latestMu.Lock()
 	if s.latestJobs == nil {
@@ -254,7 +242,6 @@ func (s *Server) refreshLatest(name string) {
 	}
 }
 
-// installComponent starts a download and returns at once; the page polls for progress.
 func (s *Server) installComponent(w http.ResponseWriter, r *http.Request) {
 	if s.deps == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{
@@ -281,7 +268,6 @@ type systemTool struct {
 	canEncode bool
 }
 
-// describeSystemFFmpeg reads a PATH ffmpeg's version; one that can't encode counts as missing.
 func (s *Server) describeSystemFFmpeg(ctx context.Context, c *Component) {
 	path := s.cfg.Tool("ffmpeg")
 	if torrent.Within(s.cfg.BinDir, path) {
@@ -317,7 +303,6 @@ func (s *Server) describeSystemFFmpeg(ctx context.Context, c *Component) {
 	}
 }
 
-// hasBinary: the tool is in bin/ or on PATH, as macOS and Linux supply what Yoru can't fetch.
 func (s *Server) hasBinary(name string) bool {
 	info, err := os.Stat(s.cfg.Path(config.ExeName(name)))
 	if err == nil && !info.IsDir() && info.Size() > 0 {
@@ -327,7 +312,6 @@ func (s *Server) hasBinary(name string) bool {
 	return err == nil
 }
 
-// halfTranscoder explains a row that reads "not installed" to someone who has one of the pair.
 func (s *Server) halfTranscoder() string {
 	ffmpeg, ffprobe := s.hasBinary("ffmpeg"), s.hasBinary("ffprobe")
 	switch {
@@ -351,7 +335,6 @@ func (s *Server) scannerRoots(r *http.Request) ([]string, error) {
 	return s.scanner.Roots(r.Context())
 }
 
-// installedVersions reads what fetch-deps recorded; a hand-assembled bin has none, which is fine.
 func (s *Server) installedVersions() map[string]string {
 	out := map[string]string{}
 

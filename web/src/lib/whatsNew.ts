@@ -22,6 +22,8 @@ export const NEW_SETTINGS: NewSetting[] = [
   { label: 'Raise subtitles', since: '2026.10.30.1' },
   { label: 'Skip openings', since: '2026.10.30.2' },
   { label: 'Skip endings', since: '2026.10.30.2' },
+  { label: 'Carry on into the next season', since: '2026.11.09' },
+  { label: 'Smooth motion', since: '2026.11.09' },
 ]
 
 export interface Change {
@@ -40,6 +42,12 @@ export const CHANGES: Change[] = [
   },
   { what: 'Only my list, on Schedule and Recent', before: 'kept by each browser', now: 'the same on every device', since: '2026.10.30.1' },
   { what: 'Adult titles', before: 'left out of For you only', now: 'left out of For you, Schedule and Recent', since: '2026.10.30.1' },
+  {
+    what: 'Download ahead at a season finale',
+    before: "went on to the next season's first episode",
+    now: 'stops at the finale unless Carry on into the next season is on',
+    since: '2026.11.09',
+  },
 ]
 
 export function newer(a: string, b: string): boolean {

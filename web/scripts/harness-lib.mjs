@@ -1,19 +1,25 @@
-// Shared by the scripts that start their own Yoru.
 import { copyFileSync, linkSync, mkdirSync, readdirSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// linkBin hard-links the repo's programs, so an instance can delete its copies without touching the repo's.
+const WRITTEN_BY_YORU = new Set(['versions.json'])
+const INSTALLED_BY_TESTS = new Set(['flyhigh'])
+
 export function linkBin(from, to, only = null) {
   const exe = (n) => (process.platform === 'win32' ? `${n}.exe` : n)
   mkdirSync(to, { recursive: true })
   for (const entry of readdirSync(from, { withFileTypes: true })) {
     if (only && !only.some((n) => entry.name === exe(n) || entry.name === n)) continue
+    if (INSTALLED_BY_TESTS.has(entry.name)) continue
     const src = join(from, entry.name)
     const dst = join(to, entry.name)
     if (entry.isDirectory()) {
       symlinkSync(src, dst, process.platform === 'win32' ? 'junction' : 'dir')
+      continue
+    }
+    if (WRITTEN_BY_YORU.has(entry.name)) {
+      copyFileSync(src, dst)
       continue
     }
     try {
@@ -24,8 +30,6 @@ export function linkBin(from, to, only = null) {
   }
 }
 
-// prepareLocalEpisode makes the harness's test episode playable: points the
-// library at the generated file and assigns it to the catalogue id as ep 1.
 export async function prepareLocalEpisode({ base, lib, anime, autoplay = true }) {
   const post = (path, body) =>
     fetch(base + path, {

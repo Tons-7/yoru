@@ -16,14 +16,11 @@ import (
 const userAgent = "Yoru"
 
 type ghAsset struct {
-	Name string `json:"name"`
-	URL  string `json:"browser_download_url"`
-	// "sha256:<hex>" where GitHub has computed one.
+	Name   string `json:"name"`
+	URL    string `json:"browser_download_url"`
 	Digest string `json:"digest"`
 }
 
-// sha256Of turns GitHub's prefixed digest into the bare hex the installer
-// compares against, and ignores any other algorithm it might report.
 func sha256Of(digest string) string {
 	if h, ok := strings.CutPrefix(digest, "sha256:"); ok {
 		return h
@@ -55,7 +52,6 @@ func (m *Manager) getJSON(ctx context.Context, url string, out any) error {
 	return json.NewDecoder(res.Body).Decode(out)
 }
 
-// ffmpeg comes from gyan.dev on Windows and static builds on Linux; macOS uses Homebrew's on PATH.
 func resolveFfmpeg(ctx context.Context, m *Manager) (Release, error) {
 	switch runtime.GOOS {
 	case "windows":
@@ -65,7 +61,6 @@ func resolveFfmpeg(ctx context.Context, m *Manager) (Release, error) {
 		if err != nil {
 			return Release{}, err
 		}
-		// No version endpoint: the tarball's name tells an install happened. Only an MD5 is published.
 		sum := m.publishedSum(ctx, url+".md5", 32)
 		if sum == "" {
 			time.Sleep(2 * time.Second)
@@ -81,7 +76,6 @@ func resolveFfmpeg(ctx context.Context, m *Manager) (Release, error) {
 	}
 }
 
-// gyan.dev publishes the current version as a bare string, so nothing has to be scraped to find it.
 func resolveFfmpegWindows(ctx context.Context, m *Manager) (Release, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"https://www.gyan.dev/ffmpeg/builds/release-version", nil)
@@ -106,7 +100,6 @@ func resolveFfmpegWindows(ctx context.Context, m *Manager) (Release, error) {
 	const url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z"
 	sum := m.publishedSum(ctx, url+".sha256", 64)
 	if sum == "" {
-		// Once more after a moment: the sidecar is a tiny file a flaky line loses.
 		time.Sleep(2 * time.Second)
 		sum = m.publishedSum(ctx, url+".sha256", 64)
 	}
@@ -121,8 +114,6 @@ func resolveFfmpegWindows(ctx context.Context, m *Manager) (Release, error) {
 	}, nil
 }
 
-// publishedSum reads a source's published checksum of size hex digits; "" when unreadable, and the install
-// goes on unverified.
 func (m *Manager) publishedSum(ctx context.Context, url string, size int) string {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -143,7 +134,6 @@ func (m *Manager) publishedSum(ctx context.Context, url string, size int) string
 	if err != nil {
 		return ""
 	}
-	// Either a bare hash or "<hash>  <filename>".
 	sum, _, _ := strings.Cut(strings.TrimSpace(string(raw)), " ")
 	if _, err := hex.DecodeString(sum); err != nil || len(sum) != size {
 		return ""
@@ -151,10 +141,8 @@ func (m *Manager) publishedSum(ctx context.Context, url string, size int) string
 	return sum
 }
 
-// The plain x86_64 build runs anywhere; -v3 needs AVX2 and -dev is headers.
 var mpvAsset = regexp.MustCompile(`^mpv-x86_64-\d{8}-git-[0-9a-f]+\.7z$`)
 
-// mpv has prebuilt binaries only on Windows; elsewhere the package manager's is found on PATH.
 func resolveMpv(ctx context.Context, m *Manager) (Release, error) {
 	if runtime.GOOS != "windows" {
 		return Release{}, manualInstall("mpv")
@@ -177,7 +165,24 @@ func resolveMpv(ctx context.Context, m *Manager) (Release, error) {
 	return Release{}, fmt.Errorf("no plain x86_64 mpv build in %s", release.Tag)
 }
 
-// anime4kSums pins releases older than GitHub's asset digests; v4.0.1 has not changed since 2021.
+const (
+	FlyHighVersion = "0.3.1"
+	flyhighDigest  = "dd21571404a1dbc2315678d9b3058fa0f5ba04384caec14a2e207e237787000b"
+	FlyHighDir     = "flyhigh"
+)
+
+var FlyHighFiles = []string{"flyhigh_web.js", "flyhigh_web_bg.wasm", "flyhighfg.bin", "flyhighfg.json", "graph.json"}
+
+func resolveFlyHigh(context.Context, *Manager) (Release, error) {
+	v := FlyHighVersion
+	return Release{
+		Version: v,
+		URL:     fmt.Sprintf("https://github.com/Tons-7/flyhigh-engine/releases/download/v%s/flyhigh-v%s-web.tar.gz", v, v),
+		Archive: true,
+		Digest:  flyhighDigest,
+	}, nil
+}
+
 var anime4kSums = map[string]string{"v4.0.1": "139cd282086457c5adc79caf7b75b8b825091d71c9b54958c18745fea62d7ed7"}
 
 func resolveAnime4K(ctx context.Context, m *Manager) (Release, error) {

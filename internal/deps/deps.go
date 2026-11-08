@@ -1,4 +1,3 @@
-// Package deps fetches the programs Yoru shells out to on demand, from scripts/fetch-deps.ps1's sources.
 package deps
 
 import (
@@ -19,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -32,26 +32,25 @@ type Release struct {
 	Version string
 	URL     string
 	Archive bool
-	// Lowercase hex SHA-256 where published; these downloads are executed.
-	Digest string
+	Digest  string
 }
 
 type component struct {
 	name    string
 	files   []string
+	from    []string
 	glob    string
 	into    string
 	resolve func(context.Context, *Manager) (Release, error)
 }
 
-// Files are per OS: ffmpeg.exe on Windows, ffmpeg elsewhere, and mpv's console shim only on Windows.
 var components = []component{
 	{name: "ffmpeg", files: componentFiles("ffmpeg"), resolve: resolveFfmpeg},
 	{name: "mpv", files: componentFiles("mpv"), resolve: resolveMpv},
 	{name: "anime4k", glob: "*.glsl", into: "shaders", resolve: resolveAnime4K},
+	{name: "flyhigh", files: FlyHighFiles, from: []string{"pkg", "models"}, into: FlyHighDir, resolve: resolveFlyHigh},
 }
 
-// Coarse on purpose: "downloading 180 of 420 MB" is what a waiter wants.
 type Stage string
 
 const (
@@ -77,6 +76,7 @@ type Manager struct {
 	log    *slog.Logger
 
 	mu        sync.Mutex
+	recordMu  sync.Mutex
 	running   map[string]*Progress
 	installed func(name string)
 	latest    map[string]latestVersion
@@ -87,15 +87,12 @@ type latestVersion struct {
 	at      time.Time
 }
 
-// OnInstalled is called with each component that lands, so what was detected
-// at startup can be detected again instead of waiting for a restart.
 func (m *Manager) OnInstalled(hook func(name string)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.installed = hook
 }
 
-// Latest is a component's newest version, kept an hour since the setup page asks GitHub often.
 func (m *Manager) Latest(ctx context.Context, name string) (string, error) {
 	m.mu.Lock()
 	if v, ok := m.latest[name]; ok && time.Since(v.at) < time.Hour {
@@ -127,7 +124,6 @@ func (m *Manager) Latest(ctx context.Context, name string) (string, error) {
 	return rel.Version, nil
 }
 
-// LatestKnown is Latest without the network: what was last resolved, or "".
 func (m *Manager) LatestKnown(name string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -152,8 +148,6 @@ func Known(name string) bool {
 	return false
 }
 
-// Install fetches one component in the background. Asking for one already being
-// fetched is not an error, so a double click does nothing twice.
 func (m *Manager) Install(name string) error {
 	var spec *component
 	for i := range components {
@@ -174,8 +168,6 @@ func (m *Manager) Install(name string) error {
 	m.mu.Unlock()
 
 	go func() {
-		// Detached from the request: half an installed ffmpeg is worse than
-		// none, and the page that asked may be closed long before it lands.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 		defer cancel()
 
@@ -232,7 +224,6 @@ func (m *Manager) install(ctx context.Context, spec *component) error {
 	if err := os.MkdirAll(m.binDir, 0o755); err != nil {
 		return err
 	}
-	// On the bin drive: %TEMP% is on C:, which may be the drive that is full.
 	staging, err := os.MkdirTemp(m.binDir, ".install-")
 	if err != nil {
 		return err
@@ -262,11 +253,11 @@ func (m *Manager) install(ctx context.Context, spec *component) error {
 		return fmt.Errorf("extract: %w", err)
 	}
 
+	into := filepath.Join(m.binDir, spec.into)
+	if err := os.MkdirAll(into, 0o755); err != nil {
+		return err
+	}
 	if spec.glob != "" {
-		into := filepath.Join(m.binDir, spec.into)
-		if err := os.MkdirAll(into, 0o755); err != nil {
-			return err
-		}
 		found, err := findAll(unpacked, spec.glob)
 		if err != nil || len(found) == 0 {
 			return fmt.Errorf("no %s in the archive", spec.glob)
@@ -280,11 +271,11 @@ func (m *Manager) install(ctx context.Context, spec *component) error {
 	}
 
 	for _, want := range spec.files {
-		src, err := findOne(unpacked, want)
+		src, err := findOne(unpacked, want, spec.from...)
 		if err != nil {
 			return err
 		}
-		if err := install(src, filepath.Join(m.binDir, want)); err != nil {
+		if err := install(src, filepath.Join(into, want)); err != nil {
 			return err
 		}
 	}
@@ -292,7 +283,6 @@ func (m *Manager) install(ctx context.Context, spec *component) error {
 }
 
 func (m *Manager) download(ctx context.Context, name, url, dest, digest string) error {
-	// No overall deadline, which a slow line would always miss: only silence ends it, besides ctx.
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	quiet := time.AfterFunc(stallAfter, func() { cancel(errStalled) })
@@ -324,7 +314,6 @@ func (m *Manager) download(ctx context.Context, name, url, dest, digest string) 
 
 	started := time.Now()
 	var sum hash.Hash = sha256.New()
-	// "md5:" where a source publishes nothing better: it catches a broken transfer, not a swapped file.
 	if h, ok := strings.CutPrefix(digest, "md5:"); ok {
 		sum, digest = md5.New(), h
 	}
@@ -333,7 +322,6 @@ func (m *Manager) download(ctx context.Context, name, url, dest, digest string) 
 		report: func(n int64) { m.set(name, func(p *Progress) { p.Bytes = n }) },
 		alive:  func() { quiet.Reset(stallAfter) },
 	})
-	// Closed before the verdict: Windows will not remove a file still open.
 	f.Close()
 	if err != nil {
 		return stallOr(ctx, err)
@@ -346,8 +334,6 @@ func (m *Manager) download(ctx context.Context, name, url, dest, digest string) 
 		return fmt.Errorf("%s: checksum mismatch, refusing to install", name)
 	}
 
-	// ffmpeg is 420 MB and people report it as "slow" without a number. Said
-	// plainly here it separates a slow line from a slow disk from Yoru.
 	took := time.Since(started)
 	m.log.Info("downloaded", "component", name,
 		"mb", n>>20, "seconds", took.Round(time.Second).Seconds(),
@@ -355,12 +341,10 @@ func (m *Manager) download(ctx context.Context, name, url, dest, digest string) 
 	return nil
 }
 
-// stallAfter without data ends a download; a var so tests need not wait.
 var stallAfter = time.Minute
 
 var errStalled = errors.New("the download stopped: no data for a minute")
 
-// stallOr names a stall for what it is rather than "context canceled".
 func stallOr(ctx context.Context, err error) error {
 	if errors.Is(context.Cause(ctx), errStalled) {
 		return errStalled
@@ -368,11 +352,10 @@ func stallOr(ctx context.Context, err error) error {
 	return err
 }
 
-// counter reports every few megabytes; per read would spend more time locking than copying.
 type counter struct {
 	reader   io.Reader
 	report   func(int64)
-	alive    func() // on every read that brought bytes
+	alive    func()
 	total    int64
 	reported int64
 }
@@ -393,7 +376,6 @@ func (c *counter) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// zip and 7z unpack in Go: Windows 10's tar has no LZMA codec.
 func extract(ctx context.Context, archive, dest string) error {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
@@ -405,8 +387,6 @@ func extract(ctx context.Context, archive, dest string) error {
 		return un7z(archive, dest)
 	}
 
-	// A colon means host:path to tar, so an absolute Windows path reads as a
-	// machine called C. It runs from the directory instead, on a bare name.
 	name := filepath.Base(archive)
 	local := filepath.Join(dest, name)
 	if err := os.Rename(archive, local); err != nil {
@@ -422,7 +402,6 @@ func extract(ctx context.Context, archive, dest string) error {
 	return nil
 }
 
-// systemTar names Windows' own bsdtar rather than trusting PATH, where Git/MSYS put GNU tar first.
 func systemTar() string {
 	if runtime.GOOS != "windows" {
 		return "tar"
@@ -448,7 +427,6 @@ func unzip(archive, dest string) error {
 	defer r.Close()
 
 	for _, f := range r.File {
-		// A crafted archive can name ../ paths.
 		target := filepath.Join(dest, filepath.FromSlash(f.Name))
 		if !strings.HasPrefix(target, filepath.Clean(dest)+string(os.PathSeparator)) {
 			return fmt.Errorf("archive entry escapes the target directory: %s", f.Name)
@@ -518,8 +496,6 @@ func writeEntry(f entry, target string) error {
 	return err
 }
 
-// install writes dest whole or not at all: copied beside it, then renamed in.
-// A running binary (ffmpeg mid-play) can be renamed on Windows, not overwritten.
 func install(src, dest string) error {
 	fresh := dest + ".new"
 	if err := copyTo(src, fresh); err != nil {
@@ -559,12 +535,11 @@ func swapIn(fresh, dest string) error {
 		os.Rename(old, dest)
 		return fmt.Errorf("replace %s: %w", filepath.Base(dest), err)
 	}
-	// Still running, it can't go yet; the next install clears it.
 	os.Remove(old)
 	return nil
 }
 
-func findOne(root, name string) (string, error) {
+func findOne(root, name string, from ...string) (string, error) {
 	found, err := findAll(root, name)
 	if err != nil {
 		return "", err
@@ -572,7 +547,15 @@ func findOne(root, name string) (string, error) {
 	if len(found) == 0 {
 		return "", fmt.Errorf("%s not found in the archive", name)
 	}
-	return found[0], nil
+	if len(from) == 0 {
+		return found[0], nil
+	}
+	for _, path := range found {
+		if slices.Contains(from, filepath.Base(filepath.Dir(path))) {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("%s not found under %s in the archive", name, strings.Join(from, " or "))
 }
 
 func findAll(root, pattern string) ([]string, error) {
@@ -589,11 +572,8 @@ func findAll(root, pattern string) ([]string, error) {
 	return out, err
 }
 
-// obsolete are components Yoru no longer uses: rqbit, replaced by the built-in engine.
 var obsolete = []string{"rqbit"}
 
-// RemoveObsolete deletes dropped components and what a killed install left behind, returning what went. Only
-// names Yoru makes: bin_dir may be a folder the user keeps their own files in.
 func (m *Manager) RemoveObsolete() []string {
 	staging, _ := filepath.Glob(filepath.Join(m.binDir, ".install-*"))
 	for _, p := range staging {
@@ -602,9 +582,9 @@ func (m *Manager) RemoveObsolete() []string {
 	for _, c := range components {
 		var leftovers []string
 		for _, f := range c.files {
-			leftovers = append(leftovers, filepath.Join(m.binDir, f+".new"), filepath.Join(m.binDir, f+".old"))
+			leftovers = append(leftovers, filepath.Join(m.binDir, c.into, f+".new"), filepath.Join(m.binDir, c.into, f+".old"))
 		}
-		if c.into != "" {
+		if c.into != "" && c.glob != "" {
 			for _, ext := range []string{".new", ".old"} {
 				found, _ := filepath.Glob(filepath.Join(m.binDir, c.into, c.glob+ext))
 				leftovers = append(leftovers, found...)
@@ -623,7 +603,6 @@ func (m *Manager) RemoveObsolete() []string {
 	var removed []string
 	listed := false
 	for _, name := range obsolete {
-		// Listed means Yoru installed it; an rqbit of the user's own stays.
 		if _, ok := versions[name]; !ok {
 			continue
 		}
@@ -637,17 +616,17 @@ func (m *Manager) RemoveObsolete() []string {
 	}
 	if listed {
 		if raw, err := json.MarshalIndent(versions, "", "    "); err == nil {
-			os.WriteFile(path, raw, 0o644)
+			writeWhole(path, raw)
 		}
 	}
 	return removed
 }
 
-// withoutBOM drops the mark Windows PowerShell 5.1 puts before UTF-8, which JSON refuses.
 func withoutBOM(raw []byte) []byte { return bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf")) }
 
-// record mirrors what fetch-deps.ps1 writes, so the two are interchangeable.
 func (m *Manager) record(name, version string) error {
+	m.recordMu.Lock()
+	defer m.recordMu.Unlock()
 	path := filepath.Join(m.binDir, "versions.json")
 
 	versions := map[string]string{}
@@ -660,5 +639,18 @@ func (m *Manager) record(name, version string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, raw, 0o644)
+	return writeWhole(path, raw)
+}
+
+func writeWhole(path string, raw []byte) error {
+	fresh := path + ".new"
+	if err := os.WriteFile(fresh, raw, 0o644); err != nil {
+		os.Remove(fresh)
+		return err
+	}
+	if err := os.Rename(fresh, path); err != nil {
+		os.Remove(fresh)
+		return err
+	}
+	return nil
 }

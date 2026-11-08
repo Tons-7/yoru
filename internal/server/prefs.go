@@ -43,6 +43,7 @@ var allowed = map[string][]string{
 	"playback.autoskip_op":     store.SkipValues,
 	"playback.autoskip_ed":     store.SkipValues,
 	"autodownload.wait_hours":  {"0", "1", "3", "6", "12"},
+	"playback.smooth_rate":     {"auto", "high", "mid", "low"},
 }
 
 var numeric = map[string]bool{

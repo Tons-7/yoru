@@ -204,6 +204,7 @@ func windowArgs(url, profile string, maximized bool) []string {
 		start,
 		"--no-first-run",
 		"--no-default-browser-check",
+		"--force-high-performance-gpu",
 	}
 }
 

@@ -1,4 +1,3 @@
-// Package transcode serves video to a browser, rewriting Matroska into HLS, usually without re-encoding.
 package transcode
 
 import (
@@ -8,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -18,30 +18,43 @@ import (
 )
 
 type Stream struct {
-	Index    int    `json:"index"`
-	Kind     string `json:"kind"`
-	Codec    string `json:"codec"`
-	Profile  string `json:"profile"`
-	BitDepth int    `json:"bitDepth"`
-	Width    int    `json:"width"`
-	Height   int    `json:"height"`
-	Channels int    `json:"channels"`
-	Language string `json:"language"`
-	Title    string `json:"title"`
-	Default  bool   `json:"default"`
-	Forced   bool   `json:"forced"`
-	// The picture's transfer (smpte2084: HDR10, arib-std-b67: HLG), field order and Dolby Vision profile.
-	Transfer   string `json:"transfer,omitempty"`
-	FieldOrder string `json:"fieldOrder,omitempty"`
-	DVProfile  int    `json:"dvProfile,omitempty"`
+	Index      int     `json:"index"`
+	Kind       string  `json:"kind"`
+	Codec      string  `json:"codec"`
+	Profile    string  `json:"profile"`
+	BitDepth   int     `json:"bitDepth"`
+	Width      int     `json:"width"`
+	Height     int     `json:"height"`
+	Channels   int     `json:"channels"`
+	Language   string  `json:"language"`
+	Title      string  `json:"title"`
+	Default    bool    `json:"default"`
+	Forced     bool    `json:"forced"`
+	Transfer   string  `json:"transfer,omitempty"`
+	FieldOrder string  `json:"fieldOrder,omitempty"`
+	DVProfile  int     `json:"dvProfile,omitempty"`
+	FPS        float64 `json:"fps,omitempty"`
 }
 
-// HDR: a picture made for HDR screens, grey and washed out on any other unless tone-mapped.
+func frameRate(rates ...string) float64 {
+	for _, rate := range rates {
+		num, den, ok := strings.Cut(rate, "/")
+		n, errN := strconv.ParseFloat(num, 64)
+		d, errD := strconv.ParseFloat(den, 64)
+		if !ok || errN != nil || errD != nil || n <= 0 || d <= 0 {
+			continue
+		}
+		if fps := n / d; fps < 1000 {
+			return math.Round(fps*1000) / 1000
+		}
+	}
+	return 0
+}
+
 func (s Stream) HDR() bool {
 	return s.Transfer == "smpte2084" || s.Transfer == "arib-std-b67" || s.DVProfile > 0
 }
 
-// Interlaced: fields woven into each frame (DVD-era sources), combed on any progressive screen.
 func (s Stream) Interlaced() bool {
 	switch s.FieldOrder {
 	case "tt", "bb", "tb", "bt":
@@ -56,20 +69,15 @@ type Attachment struct {
 	MimeType string `json:"mimeType"`
 }
 
-// Chapter is the release's own marker, which beats AniSkip as it fits this exact file.
 type Chapter struct {
 	Title string  `json:"title"`
 	Start float64 `json:"start"`
 	End   float64 `json:"end"`
-	// "op", "ed", "recap", "preview", "eyecatch" or empty when the title names no part of the episode.
-	Kind string `json:"kind"`
+	Kind  string  `json:"kind"`
 }
 
-// Release groups label the same things a dozen ways: "Intro"/"Opening"/"OP", "Credits"/"Ending"/"Outro",
-// "Preview"/"Next Episode"/"予告", often numbered. Anything else is body.
 func chapterKind(title string) string {
 	t := strings.ToLower(strings.TrimSpace(title))
-	// The first word, minus any number: "op", "OP1", "ED 2", "OP - Kick Back".
 	var head string
 	if fields := strings.FieldsFunc(t, func(r rune) bool {
 		return r == ' ' || r == '-' || r == '_'
@@ -93,7 +101,6 @@ func chapterKind(title string) string {
 	return ""
 }
 
-// plausibleSpan is how long a part of this kind runs, in seconds.
 func plausibleSpan(kind string) (lo, hi float64) {
 	switch kind {
 	case "eyecatch":
@@ -145,6 +152,8 @@ type ffprobeOutput struct {
 		BitsPerRaw string `json:"bits_per_raw_sample"`
 		Transfer   string `json:"color_transfer"`
 		FieldOrder string `json:"field_order"`
+		AvgRate    string `json:"avg_frame_rate"`
+		BaseRate   string `json:"r_frame_rate"`
 		SideData   []struct {
 			Type      string `json:"side_data_type"`
 			DVProfile int    `json:"dv_profile"`
@@ -164,7 +173,6 @@ type ffprobeOutput struct {
 	} `json:"chapters"`
 }
 
-// ffprobe repeats itself per unreadable stream; the first line is the cause.
 func firstLine(s string) string {
 	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
 		return strings.TrimSpace(s[:i])
@@ -178,27 +186,20 @@ type Prober struct {
 
 func NewProber(ffprobe string) *Prober { return &Prober{ffprobe: ffprobe} }
 
-// A slow swarm can take minutes over the header. A var for tests.
 var probeLimit = 3 * time.Minute
 
-// ErrProbeTimeout: the start of the file had not arrived when the probe gave up.
 var ErrProbeTimeout = errors.New("the start of the file didn't arrive")
 
-// Probe inspects the source over HTTP, so the engine fetches only the header.
 func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeLimit)
 	defer cancel()
 
-	// -v error rather than quiet: diagnostics go to stderr so stdout JSON stays
-	// clean, and a failure can still say why instead of a bare "exit status 1".
 	cmd := proc.Hide(exec.CommandContext(ctx, p.ffprobe,
 		"-v", "error",
 		"-print_format", "json",
 		"-show_format",
 		"-show_streams",
 		"-show_chapters",
-		// Everything read below is in the headers; twenty seconds' worth meant
-		// tens of megabytes, a minute through the engine on a fresh swarm.
 		"-analyzeduration", "2M",
 		"-probesize", "8M",
 		url,
@@ -228,7 +229,6 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 	info.Bitrate, _ = strconv.ParseInt(raw.Format.BitRate, 10, 64)
 
 	var mediaEnd float64
-	// A track that does not say how long it is could be the one that runs longest.
 	lengthsKnown := true
 	media := func(duration string, tags map[string]string) {
 		n := streamSeconds(duration, tags)
@@ -252,6 +252,7 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 		}
 		if s.CodecType == "video" {
 			stream.Transfer, stream.FieldOrder = s.Transfer, s.FieldOrder
+			stream.FPS = frameRate(s.AvgRate, s.BaseRate)
 			for _, d := range s.SideData {
 				if d.DVProfile > 0 {
 					stream.DVProfile = d.DVProfile
@@ -261,7 +262,6 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 
 		switch s.CodecType {
 		case "video":
-			// Cover art is stored as a video stream; it is not the picture.
 			if s.Disposition.Attached == 1 {
 				continue
 			}
@@ -291,7 +291,6 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 		}
 		title := c.Tags["title"]
 		kind := chapterKind(title)
-		// Outside its kind's usual length, it's a mislabelled body.
 		if lo, hi := plausibleSpan(kind); end-start < lo || end-start > hi {
 			kind = ""
 		}
@@ -303,8 +302,6 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 	if info.Video == nil {
 		return nil, fmt.Errorf("no video stream in %s", url)
 	}
-	// The playlist ends with the picture and sound: subtitles running past them left slots with nothing in.
-	// Only by a little: a stale length tag from an older cut of the file mustn't cut real minutes off the end.
 	if lengthsKnown && mediaEnd > 0 && mediaEnd < info.Duration && info.Duration-mediaEnd <= maxSubtitleOverhang {
 		info.Duration = mediaEnd
 	}
@@ -313,15 +310,12 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 	return info, nil
 }
 
-// How far subtitles may run past the picture and sound before the tracks' own lengths are doubted.
 const maxSubtitleOverhang = 30.0
 
-// streamSeconds is one track's length: ffprobe's, or the DURATION tag Matroska muxers write; 0 when neither.
 func streamSeconds(duration string, tags map[string]string) float64 {
 	if v, err := strconv.ParseFloat(duration, 64); err == nil && v > 0 {
 		return v
 	}
-	// In sorted order, the plain DURATION before a DURATION-eng: a map's own order changes run to run.
 	for _, k := range slices.Sorted(maps.Keys(tags)) {
 		var h, m int
 		var s float64
@@ -334,7 +328,6 @@ func streamSeconds(duration string, tags map[string]string) float64 {
 	return 0
 }
 
-// dropMirror removes the phantom second copy of the tracks ffprobe reports mid-download.
 func dropMirror(tracks []Stream) []Stream {
 	n := len(tracks)
 	if n < 2 || n%2 != 0 {
@@ -366,35 +359,26 @@ func bitDepth(pixFmt, bitsPerRaw string) int {
 	return 0
 }
 
-// Plan decides what has to be re-encoded. Re-encoding costs GPU time and
-// quality, so it is only done when the browser cannot play the stream.
 type Plan struct {
-	VideoCopy  bool   `json:"videoCopy"`
-	AudioCopy  bool   `json:"audioCopy"`
-	VideoCodec string `json:"videoCodec"`
-	AudioCodec string `json:"audioCodec"`
-	// Channels: a converted track's channel count, 2 or 6; 0 keeps the source's (FLAC up to 5.1).
-	Channels int `json:"channels,omitempty"`
-	// ForDevice: copies what any browser's plan converts, as this device said it decodes it.
-	ForDevice bool `json:"forDevice,omitempty"`
-	// Picture changes, each forcing an encode: tone map, deinterlace, soften, a cap (height, bits/s).
-	ToneMap     bool `json:"toneMap,omitempty"`
-	Deinterlace bool `json:"deinterlace,omitempty"`
-	Soften      bool `json:"soften,omitempty"`
-	Height      int  `json:"height,omitempty"`
-	MaxRate     int  `json:"maxRate,omitempty"`
-	// Sound is what is done to the audio on the way out; anything at all forces an audio re-encode.
-	Sound  sound.Options `json:"sound"`
-	Reason string        `json:"reason"`
+	VideoCopy   bool          `json:"videoCopy"`
+	AudioCopy   bool          `json:"audioCopy"`
+	VideoCodec  string        `json:"videoCodec"`
+	AudioCodec  string        `json:"audioCodec"`
+	Channels    int           `json:"channels,omitempty"`
+	ForDevice   bool          `json:"forDevice,omitempty"`
+	ToneMap     bool          `json:"toneMap,omitempty"`
+	Deinterlace bool          `json:"deinterlace,omitempty"`
+	Soften      bool          `json:"soften,omitempty"`
+	Height      int           `json:"height,omitempty"`
+	MaxRate     int           `json:"maxRate,omitempty"`
+	Sound       sound.Options `json:"sound"`
+	Reason      string        `json:"reason"`
 }
 
-// Chromium decodes H.264 and AAC everywhere; HEVC needs a platform extension
-// and 10-bit H.264 has no hardware decoder, so neither can be relied on.
 func PlanFor(info *MediaInfo, encoder string) Plan {
 	return planFor(info, encoder, 0, sound.Options{}, nil)
 }
 
-// planOf: a session's plan; drawn-in subtitles change the picture, so it is always encoded.
 func planOf(info *MediaInfo, encoder string, track int, snd sound.Options, caps *Caps, want Want, burned bool) Plan {
 	plan := planWith(info, encoder, track, snd, caps, want)
 	if burned {
@@ -405,8 +389,6 @@ func planOf(info *MediaInfo, encoder string, track int, snd sound.Options, caps 
 	return plan
 }
 
-// plannable is info as planned with this ffmpeg's tone map; with none (or none found yet) HDR goes as it is,
-// as an encode would look no better than the copy.
 func plannable(info *MediaInfo, toneMapper string) *MediaInfo {
 	if toneMapper != "" || info.Video == nil || !info.Video.HDR() {
 		return info
@@ -417,12 +399,10 @@ func plannable(info *MediaInfo, toneMapper string) *MediaInfo {
 	return &shown
 }
 
-// planFor judges the track that will be sent, under the sound asked, for a device's caps or any browser (nil).
 func planFor(info *MediaInfo, encoder string, track int, snd sound.Options, caps *Caps) Plan {
 	return planWith(info, encoder, track, snd, caps, Want{})
 }
 
-// planWith is planFor under what the viewer wants of the picture.
 func planWith(info *MediaInfo, encoder string, track int, snd sound.Options, caps *Caps, want Want) Plan {
 	plan := Plan{VideoCopy: true, AudioCopy: true, Sound: sound.Normalized(snd)}
 	var reasons []string
@@ -433,7 +413,6 @@ func planWith(info *MediaInfo, encoder string, track int, snd sound.Options, cap
 		plan.VideoCopy = caps.Decodes(v.Codec, v.BitDepth)
 	case v.Codec == "h264" && v.BitDepth <= 8:
 	case v.Codec == "vp9", v.Codec == "av1":
-		// Chromium decodes both natively.
 	default:
 		plan.VideoCopy = false
 	}
@@ -443,11 +422,9 @@ func planWith(info *MediaInfo, encoder string, track int, snd sound.Options, cap
 	if v := info.Video; v != nil {
 		plan.Deinterlace = v.Interlaced()
 		plan.Soften = want.Soften
-		// A picture already under the cap is sent as it is.
 		if want.Height > 0 && (v.Height > want.Height || info.Bitrate > int64(want.Rate)*5/4) {
 			plan.Height, plan.MaxRate = min(v.Height, want.Height), want.Rate
 		}
-		// HDR stays only uncoded to an HDR screen; Dolby Vision 5 (no HDR10 under it) shows green and purple.
 		encoded := !plan.VideoCopy || plan.Deinterlace || plan.Soften || plan.MaxRate > 0
 		plan.ToneMap = v.HDR() && (encoded || caps == nil || !caps.HDR) || v.DVProfile == 5
 		for _, change := range []struct {
@@ -475,28 +452,24 @@ func planWith(info *MediaInfo, encoder string, track int, snd sound.Options, cap
 		if caps != nil {
 			plan.AudioCopy = caps.Decodes(a.Codec, 0)
 		} else {
-			// Not Vorbis: browsers take it only in WebM, and these segments are fMP4.
 			switch a.Codec {
 			case "aac", "mp3", "opus", "flac":
 			default:
 				plan.AudioCopy = false
 			}
 		}
-		// Under a cap, lossless sound would outweigh the picture.
 		if want.Rate > 0 && (a.Codec == "flac" || lossless(a)) {
 			plan.AudioCopy = false
 		}
 		if !plan.AudioCopy {
 			reasons = append(reasons, "audio "+a.Codec)
 		}
-		// The sound is shaped while encoding, so a track that could have been copied is encoded too.
 		if plan.Sound.Any() {
 			plan.AudioCopy = false
 			reasons = append(reasons, "sound")
 		}
 		if !plan.AudioCopy {
 			plan.AudioCodec = "aac"
-			// Lossless stays lossless as FLAC, where the device plays it (a device may say it doesn't).
 			if lossless(a) && want.Rate == 0 && (caps == nil || caps.Decodes("flac", 0)) {
 				plan.AudioCodec = "flac"
 			}
@@ -516,7 +489,6 @@ func planWith(info *MediaInfo, encoder string, track int, snd sound.Options, cap
 	return plan
 }
 
-// channelsOut: 5.1 for surround speakers, else stereo (as shaped sound is); lossless keeps its own if unsaid.
 func channelsOut(a Stream, codec string, shaped bool, caps *Caps) int {
 	switch {
 	case shaped:
@@ -529,13 +501,11 @@ func channelsOut(a Stream, codec string, shaped bool, caps *Caps) int {
 	return 2
 }
 
-// lossless reports an audio track that holds the sound exactly, which a lossy re-encode would throw away.
 func lossless(a Stream) bool {
 	switch a.Codec {
 	case "truehd", "mlp", "alac", "wavpack", "tta", "ape":
 		return true
 	case "dts":
-		// The core is lossy; only the Master Audio extension is not.
 		return strings.Contains(strings.ToUpper(a.Profile), "HD MA")
 	}
 	return strings.HasPrefix(a.Codec, "pcm_")

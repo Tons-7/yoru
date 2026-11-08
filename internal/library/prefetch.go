@@ -408,19 +408,32 @@ func prepareKey(animeID, episode int) string {
 	return fmt.Sprintf("prepare:%d/%d", animeID, episode)
 }
 
-func (p *Prefetcher) ahead() int {
+func (p *Prefetcher) ahead() (count int, sequels bool) {
 	global, err := p.store.Prefs(context.Background(), 0)
 	if err != nil || !global.Bool("cache.prefetch_next") {
-		return 0
+		return 0, false
 	}
-	return min(max(global.Int("cache.prefetch_count"), 1), 2)
+	return min(max(global.Int("cache.prefetch_count"), 1), 2), global.Bool("cache.prefetch_sequel")
+}
+
+func withinShow(picks []store.Pick, fromList, animeID int) []store.Pick {
+	last := animeID
+	if fromList > 0 {
+		last = picks[fromList-1].AnimeID
+	}
+	for i := fromList; i < len(picks); i++ {
+		if picks[i].AnimeID != last {
+			return picks[:i]
+		}
+	}
+	return picks
 }
 
 func (p *Prefetcher) Next(animeID, episode, season int, prefs score.Preferences) {
 	if p == nil || p.torrent == nil || animeID == 0 || episode <= 0 {
 		return
 	}
-	count := p.ahead()
+	count, sequels := p.ahead()
 	if count == 0 {
 		return
 	}
@@ -446,9 +459,12 @@ func (p *Prefetcher) Next(animeID, episode, season int, prefs score.Preferences)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(count)*30*time.Minute)
 		defer cancel()
 
-		picks, _, err := p.store.PlayOrder(ctx, animeID, episode, count)
+		picks, fromList, err := p.store.PlayOrder(ctx, animeID, episode, count)
 		if err != nil {
 			return
+		}
+		if !sequels {
+			picks = withinShow(picks, fromList, animeID)
 		}
 		for i, next := range picks {
 			nextPrefs, nextSeason := p.prefsOf(ctx, next.AnimeID, animeID, prefs, season)

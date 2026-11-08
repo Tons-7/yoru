@@ -5,7 +5,6 @@ import (
 	"runtime"
 )
 
-// exeExtFor is the suffix an executable carries on that OS.
 func exeExtFor(goos string) string {
 	if goos == "windows" {
 		return ".exe"
@@ -13,7 +12,6 @@ func exeExtFor(goos string) string {
 	return ""
 }
 
-// componentFiles is the executables a component installs here (mpv on Windows adds a .com shim).
 func componentFiles(name string) []string { return componentFilesFor(name, runtime.GOOS) }
 
 func componentFilesFor(name, goos string) []string {
@@ -30,7 +28,6 @@ func componentFilesFor(name, goos string) []string {
 	return nil
 }
 
-// ffmpegLinuxURL is John Van Sickle's static build: ffmpeg and ffprobe in one tar.xz.
 func ffmpegLinuxURL() (string, error) { return ffmpegLinuxURLFor(runtime.GOARCH) }
 
 func ffmpegLinuxURLFor(goarch string) (string, error) {
@@ -47,14 +44,13 @@ func ffmpegLinuxURLFor(goarch string) (string, error) {
 	return "", fmt.Errorf("no static ffmpeg build for linux/%s", goarch)
 }
 
-// ManualCommand is the package-manager command for a component Yoru cannot fetch here, or "".
 func ManualCommand(name string) string {
-	if runtime.GOOS == "windows" || name == "anime4k" {
+	if runtime.GOOS == "windows" || name == "anime4k" || name == "flyhigh" {
 		return ""
 	}
 	if name == "ffmpeg" && runtime.GOOS == "linux" {
 		if _, err := ffmpegLinuxURL(); err == nil {
-			return "" // John Van Sickle static build is fetched.
+			return ""
 		}
 	}
 	switch runtime.GOOS {
@@ -66,7 +62,6 @@ func ManualCommand(name string) string {
 	return ""
 }
 
-// manualInstall: the component comes from the package manager and is then found on PATH.
 func manualInstall(name string) error {
 	how := ManualCommand(name)
 	if how == "" {

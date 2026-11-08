@@ -34,6 +34,7 @@ import {
   type ApprovalMode,
 } from '../lib/queries'
 import { ANIME4K_MODES, ANIME4K_SIZES } from '../lib/anime4k'
+import { RATE_NAMES, SMOOTH_RATES } from '../player/smooth'
 import { ComponentState } from '../components/ComponentState'
 import { ReleaseNotesList, type Notes } from '../components/ReleaseNotes'
 import { SitesEditor } from '../components/SitesEditor'
@@ -73,7 +74,7 @@ const TABS = [
   { id: 'New', label: 'New', summary: '', tile: '' },
   { id: 'Playback', label: 'Playback', summary: 'Auto next, skipping, player', tile: 'bg-accent-600' },
   { id: 'Language', label: 'Language and display', summary: 'Audio, subtitles, titles, Home rows', tile: 'bg-[#2b8fbf]' },
-  { id: 'Sound', label: 'Sound and picture', summary: 'Voice boost, night mode, Anime4K', tile: 'bg-[#c0623a]' },
+  { id: 'Sound', label: 'Sound and picture', summary: 'Voice boost, night mode, Anime4K, smooth motion', tile: 'bg-[#c0623a]' },
   { id: 'Accounts', label: 'Accounts', summary: 'AniList, MyAnimeList, Discord', tile: 'bg-[#3c9a6b]' },
   { id: 'Library', label: 'Library', summary: 'Local files, backup', tile: 'bg-[#8a6bd0]' },
   { id: 'Notifications', label: 'Notifications', summary: 'New episode alerts', tile: 'bg-[#c9a23a]' },
@@ -1007,6 +1008,31 @@ function SoundTab() {
           />
         </Row>
         <Row
+          label="Smooth motion"
+          hint="Frames between the episode's own, made on the watching device's graphics card. Computers follow this; phones keep it off unless turned on there. The files come from Setup."
+          keywords="frame generation interpolation fps flyhigh 60fps"
+        >
+          <Switch on={f.get('playback.smooth')} onChange={(v) => f.set('playback.smooth', String(v))} />
+        </Row>
+        <Row
+          label="Smooth motion frame rate"
+          hint="Each device turns this into an even fit for its own screen, never above 120 frames a second. On a 240 Hz screen: Highest 120, Middle 80, Lowest 60; on a 60 Hz screen all three are 60."
+          keywords="frame generation fps"
+        >
+          <ValueMenu
+            value={f.value('playback.smooth_rate') || 'auto'}
+            onChange={(v) => f.set('playback.smooth_rate', v)}
+            options={SMOOTH_RATES.map((r) => ({ value: r, label: RATE_NAMES[r] }))}
+          />
+        </Row>
+        <Row
+          label="Smooth held drawings"
+          hint="Anime is often drawn on twos. On, those held drawings move smoothly too; big steps can look softer."
+          keywords="frame generation cadence twos"
+        >
+          <Switch on={f.get('playback.smooth_held')} onChange={(v) => f.set('playback.smooth_held', String(v))} />
+        </Row>
+        <Row
           label="Soften flashing"
           hint="Dims sudden bright flashes, on every device and in mpv. Not a guarantee against photosensitive epilepsy. Episodes are converted while it's on."
           keywords="photosensitive epilepsy seizure flash strobe"
@@ -1406,6 +1432,17 @@ function DownloadsTab() {
               { value: '2', label: 'Next 2 episodes' },
             ]}
           />
+        </Row>
+        <Row
+          label="Carry on into the next season"
+          hint={
+            f.get('cache.prefetch_next')
+              ? "At a season's last episode, downloads the next season's first. Off, it stops at the finale."
+              : "Works with Download ahead while watching, which is off. At a season's last episode, downloads the next season's first."
+          }
+          keywords="prefetch sequel season finale"
+        >
+          <Switch on={f.get('cache.prefetch_sequel')} onChange={(v) => f.set('cache.prefetch_sequel', String(v))} />
         </Row>
         <Row
           label="Download queue while watching"

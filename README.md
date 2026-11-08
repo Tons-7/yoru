@@ -29,6 +29,9 @@ a browser player and one config file.
 - **Plays anywhere.** In the browser, so a phone or TV on your network works
   like the laptop, or in mpv and VLC with Anime4K upscaling. **Cast** sends an
   episode to a Chromecast or Google TV.
+- **Smooth motion.** Optional frame generation in the browser player, with or
+  without Anime4K, made on the watching device's graphics card; the sound is
+  held back to match.
 - **Sends each device what it can play.** HEVC, 10-bit, AV1 and E-AC-3 go as
   they are where the device decodes them, converted only where it can't.
 - **Careful with a phone's data.** On mobile data it asks first, with the

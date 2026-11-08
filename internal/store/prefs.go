@@ -101,6 +101,12 @@ var Defaults = map[string]string{
 
 	"cache.prefetch_count": "1",
 
+	"cache.prefetch_sequel": "false",
+
+	"playback.smooth":      "false",
+	"playback.smooth_rate": "auto",
+	"playback.smooth_held": "false",
+
 	"cache.prefetch_full": "true",
 
 	"downloads.while_watching": "pause",

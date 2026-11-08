@@ -1,0 +1,284 @@
+import { useCallback } from 'react'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { api } from '../lib/api'
+import { bytes, cx } from '../lib/format'
+import { useDismiss, useModalFocus } from '../lib/hooks'
+import {
+  HIGHEST_FPS,
+  rateFps,
+  topFps,
+  useKnownScreenHz,
+  type DeviceSmooth,
+  type SmoothFiles,
+  type SmoothRate,
+  type SmoothState,
+} from '../player/smooth'
+import { formatFps, useScreenHz } from '../player/rates'
+import { Segmented } from './ui'
+
+const DEVICE_CHOICES: ReadonlyArray<{ value: DeviceSmooth; label: string }> = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'off', label: 'Off' },
+  { value: 'on', label: 'On' },
+]
+
+const DEVICE_HINTS: Record<DeviceSmooth, string> = {
+  auto: 'Follows Settings on a computer; off on phones and tablets.',
+  off: 'Never on this device.',
+  on: 'Always on this device, whatever Settings says.',
+}
+
+function rateChoices(screenHz: number): Array<{ value: SmoothRate; label: string }> {
+  const seen = new Set<number>()
+  const fixed: Array<{ value: SmoothRate; label: string }> = []
+  for (const tier of ['high', 'mid', 'low'] as const) {
+    const fps = Math.round(rateFps(tier, screenHz))
+    if (!fps || seen.has(fps)) continue
+    seen.add(fps)
+    fixed.push({ value: tier, label: String(fps) })
+  }
+  return [{ value: 'auto', label: 'Auto' }, ...fixed.reverse()]
+}
+
+function shownRate(rate: SmoothRate, screenHz: number): SmoothRate {
+  const fps = Math.round(rateFps(rate, screenHz))
+  if (!fps) return rate === 'auto' || !screenHz ? rate : 'auto'
+  return rateChoices(screenHz).find((c) => c.label === String(fps))?.value ?? rate
+}
+
+function rateHint(rate: SmoothRate, screenHz: number): string {
+  const fps = Math.round(rateFps(rate, screenHz))
+  if (!fps) {
+    return `As smooth as this screen and graphics card allow, up to ${Math.round(topFps(screenHz))} frames a second. Fewer in fast scenes.`
+  }
+  return `${fps} frames a second, an even fit for this ${screenHz} Hz screen.`
+}
+
+function FilesRow() {
+  const status = useQuery({
+    queryKey: ['smooth-files'],
+    queryFn: () => api.get<SmoothFiles>('/api/smooth'),
+    staleTime: 0,
+    refetchInterval: (q) => {
+      const stage = q.state.data?.progress?.stage
+      return stage && stage !== 'done' && stage !== 'failed' ? 1000 : false
+    },
+  })
+  const install = useMutation({
+    mutationFn: () => api.post('/api/setup/install/flyhigh'),
+    onSettled: () => void status.refetch(),
+  })
+  const s = status.data
+  if (status.isError) {
+    return <p className="text-xs text-amber-300">Couldn't ask the PC whether smooth motion is installed.</p>
+  }
+  if (!s) return null
+  if (s.ready) return <p className="text-xs text-base-500">Installed on the PC: FlyHigh {s.version}.</p>
+
+  const p = s.progress
+  const busy = install.isPending || (!!p && p.stage !== 'done' && p.stage !== 'failed')
+  const outdated = !!s.version && s.version !== s.wanted
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2.5">
+      <p className="min-w-0 flex-1 basis-48 text-xs leading-snug text-base-300">
+        {busy
+          ? `Downloading FlyHigh ${s.wanted} to the PC${p?.total ? `: ${bytes(p.bytes)} of ${bytes(p.total)}` : '…'}`
+          : p?.stage === 'failed'
+            ? `The download failed: ${p.error ?? 'unknown error'}`
+            : outdated
+              ? `The PC has FlyHigh ${s.version}; this Yoru needs ${s.wanted} (about 2 MB).`
+              : 'Needs FlyHigh on the PC first, about 2 MB.'}
+        {!s.canInstall && !busy && ' Add it on the PC, from this menu or Settings › About › Programs Yoru uses.'}
+      </p>
+      {s.canInstall && (
+        <button
+          onClick={() => install.mutate()}
+          disabled={busy}
+          className="tap rounded-md bg-accent-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-400 disabled:opacity-60"
+        >
+          {busy ? 'Downloading' : p?.stage === 'failed' ? 'Try again' : outdated ? 'Update' : 'Download'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function SwitchCard({
+  label,
+  hint,
+  on,
+  onChange,
+  dim = false,
+}: {
+  label: string
+  hint: string
+  on: boolean
+  onChange: (on: boolean) => void
+  dim?: boolean
+}) {
+  return (
+    <button
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={() => onChange(!on)}
+      className={cx(
+        'flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors',
+        on ? 'border-accent-500/50 bg-accent-500/10 text-white' : 'border-base-800 bg-base-950/40 text-base-300 hover:bg-base-850',
+        dim && 'opacity-60',
+      )}
+    >
+      <span className="min-w-0">
+        <span className="block font-medium">{label}</span>
+        <span className="mt-0.5 block text-xs leading-snug text-base-500">{hint}</span>
+      </span>
+      <span className={cx('relative h-5 w-9 shrink-0 rounded-full transition-colors', on ? 'bg-accent-500' : 'bg-base-700')}>
+        <span className={cx('absolute top-0.5 size-4 rounded-full bg-white transition-all', on ? 'left-[1.125rem]' : 'left-0.5')} />
+      </span>
+    </button>
+  )
+}
+
+export function SmoothDialog({
+  open,
+  on,
+  held,
+  stopped,
+  onClose,
+  onChange,
+  onHeld,
+  rate,
+  onRate,
+  device,
+  onDevice,
+  anime4k,
+  episodeFps,
+  running,
+}: {
+  open: boolean
+  on: boolean
+  held: boolean
+  stopped: boolean
+  onClose: () => void
+  onChange: (on: boolean) => void
+  onHeld: (on: boolean) => void
+  rate: SmoothRate
+  onRate: (rate: SmoothRate) => void
+  device: DeviceSmooth
+  onDevice: (choice: DeviceSmooth) => void
+  anime4k: string | null
+  episodeFps: number
+  running: SmoothState
+}) {
+  const close = useCallback(() => onClose(), [onClose])
+  const panel = useDismiss<HTMLDivElement>(close, open)
+  useModalFocus(panel, open)
+  const known = useKnownScreenHz()
+  const measured = useScreenHz(open && !known)
+  const screenHz = known || measured
+
+  if (!open) return null
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+
+      <div
+        ref={panel}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Smooth motion"
+        className="animate-fade-in relative max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl border border-base-800 bg-base-900 p-4 shadow-2xl scrollbar-thin"
+      >
+        <div className="mb-3 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold text-white">Smooth motion</h2>
+            <p className="mt-0.5 text-xs text-base-500">
+              For this episode only. Your saved defaults in Settings › Sound and picture are not changed.
+            </p>
+          </div>
+          <button
+            onClick={close}
+            aria-label="Close"
+            className="tap relative grid size-9 shrink-0 place-items-center rounded-md text-base-400 hover:bg-base-800 hover:text-base-100"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <FilesRow />
+          <SwitchCard
+            label={on && !stopped ? 'On' : 'Off'}
+            hint={
+              stopped && on
+                ? 'Turned off for this episode: this device was falling behind. Switch it on to try again.'
+                : on && running === 'unsupported'
+                  ? "Can't run in this browser: it has no WebGPU."
+                  : on && running === 'failed'
+                    ? "Couldn't start on this device's graphics card. Switch it off and on to try again."
+                    : on && running === 'off'
+                      ? 'Paused while the picture is in picture-in-picture or on AirPlay.'
+                      : "Frames between the episode's own, made on this device's graphics card."
+            }
+            on={on && !stopped}
+            onChange={onChange}
+          />
+          <div
+            className={cx(
+              'flex flex-wrap items-center justify-between gap-2 rounded-lg border border-base-850 px-3 py-2.5',
+              !on && 'opacity-60',
+            )}
+          >
+            <div className="min-w-0 flex-1 basis-48">
+              <p className="text-sm font-medium text-base-200">Frame rate</p>
+              <p className="mt-0.5 text-xs leading-snug text-base-500">{rateHint(rate, screenHz)}</p>
+            </div>
+            <Segmented
+              size="sm"
+              label="Frame rate"
+              value={shownRate(rate, screenHz)}
+              onChange={onRate}
+              options={rateChoices(screenHz)}
+            />
+          </div>
+          <p className="px-1 text-xs text-base-500">
+            {episodeFps ? `This episode: ${formatFps(episodeFps)} fps` : "This episode's own rate shows once it's open"}
+            {screenHz ? ` · This screen: ${screenHz} Hz` : ''}
+            {` · At most ${HIGHEST_FPS} fps, so most of what you see stays the episode's own drawing.`}
+          </p>
+          <SwitchCard
+            label="Smooth held drawings"
+            hint="Anime is often drawn on twos, each drawing held for two frames. On, those drawings move smoothly too; big steps can look softer."
+            on={held}
+            onChange={onHeld}
+            dim={!on}
+          />
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-base-850 px-3 py-2.5">
+          <div className="min-w-0 flex-1 basis-40">
+            <p className="text-sm text-base-200">On this device</p>
+            <p className="text-xs text-base-500">{DEVICE_HINTS[device]}</p>
+          </div>
+          <Segmented size="sm" label="On this device" value={device} onChange={onDevice} options={DEVICE_CHOICES} />
+        </div>
+
+        <div className="mt-3 space-y-1.5 text-xs leading-snug text-base-500">
+          <p>
+            {anime4k
+              ? `Anime4K is on (${anime4k}) on this device, so both run: each real frame is sharpened first, then the frames between are made.`
+              : 'Anime4K is off on this device. It has its own menu, Sharper picture; with both on, each real frame is sharpened first.'}
+          </p>
+          <p>The sound is held back by the same fraction of a second as the picture, so the two stay in step.</p>
+          <p>Off in picture-in-picture. If this device can't keep up, it turns itself off and says so.</p>
+          <p>
+            On a laptop with two graphics chips, Yoru's own window uses the stronger one. Another browser may pick the
+            weaker one; set it to High performance in Windows' graphics settings.
+          </p>
+          <p className="text-base-600">Frame generation by FlyHigh Engine (Apache 2.0); its model is under CC BY-NC 4.0.</p>
+        </div>
+      </div>
+    </div>
+  )
+}

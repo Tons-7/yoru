@@ -453,6 +453,7 @@ export interface StreamInfo {
     transfer?: string
     fieldOrder?: string
     dvProfile?: number
+    fps?: number
   }
   audio?: AudioTrack[]
   audioTrack?: number

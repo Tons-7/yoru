@@ -28,7 +28,6 @@ func prefetchStore(t *testing.T) *store.Store {
 	return store.New(conn)
 }
 
-// Resolving the next episode is a search, so it has its own switch, not the download one.
 func TestPrepareIsOnByDefaultAndNotTheDownloadSwitch(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -37,11 +36,10 @@ func TestPrepareIsOnByDefaultAndNotTheDownloadSwitch(t *testing.T) {
 	if !p.prepareWanted() {
 		t.Error("resolving the next episode should be on out of the box")
 	}
-	if p.ahead() != 0 {
+	if n, _ := p.ahead(); n != 0 {
 		t.Error("downloading the next episode should stay opt-in")
 	}
 
-	// Turning the download off must not take the resolve with it.
 	if err := st.SetSetting(ctx, "cache.prefetch_next", "false"); err != nil {
 		t.Fatal(err)
 	}
@@ -65,22 +63,49 @@ func TestDownloadAheadCount(t *testing.T) {
 	if err := st.SetSetting(ctx, "cache.prefetch_next", "true"); err != nil {
 		t.Fatal(err)
 	}
-	if n := p.ahead(); n != 1 {
-		t.Errorf("on with no count = %d, want the next one", n)
+	if n, sequels := p.ahead(); n != 1 || sequels {
+		t.Errorf("on with no count = %d (sequels %v), want the next one within the season", n, sequels)
 	}
 	for set, want := range map[string]int{"2": 2, "5": 2, "0": 1} {
 		if err := st.SetSetting(ctx, "cache.prefetch_count", set); err != nil {
 			t.Fatal(err)
 		}
-		if n := p.ahead(); n != want {
+		if n, _ := p.ahead(); n != want {
 			t.Errorf("count %s = %d, want %d", set, n, want)
 		}
+	}
+	if err := st.SetSetting(ctx, "cache.prefetch_sequel", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if _, sequels := p.ahead(); !sequels {
+		t.Error("its switch does not let it carry on into the next season")
 	}
 	if err := st.SetSetting(ctx, "cache.prefetch_next", "false"); err != nil {
 		t.Fatal(err)
 	}
-	if n := p.ahead(); n != 0 {
+	if n, _ := p.ahead(); n != 0 {
 		t.Errorf("off = %d", n)
+	}
+}
+
+func TestDownloadAheadStopsAtTheFinale(t *testing.T) {
+	pick := func(anime, ep int) store.Pick { return store.Pick{AnimeID: anime, Episode: ep} }
+	cases := []struct {
+		name     string
+		picks    []store.Pick
+		fromList int
+		want     int
+	}{
+		{"mid-season", []store.Pick{pick(1, 6), pick(1, 7)}, 0, 2},
+		{"the finale's next is the sequel", []store.Pick{pick(2, 1)}, 0, 0},
+		{"the last but one stops before the sequel", []store.Pick{pick(1, 12), pick(2, 1)}, 0, 1},
+		{"Up next is the viewer's own choice", []store.Pick{pick(7, 3)}, 1, 1},
+		{"after Up next, its show's own finale", []store.Pick{pick(7, 3), pick(7, 4), pick(8, 1)}, 1, 2},
+	}
+	for _, c := range cases {
+		if got := withinShow(c.picks, c.fromList, 1); len(got) != c.want {
+			t.Errorf("%s: kept %v, want %d", c.name, got, c.want)
+		}
 	}
 }
 
@@ -101,7 +126,6 @@ func TestPreparedReleaseOutlastsAnEpisode(t *testing.T) {
 	}
 }
 
-// An episode already in the library plays with no torrent, so resolving one is a wasted indexer search.
 func TestPrepareSkipsAnEpisodeAlreadyInTheLibrary(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -122,14 +146,12 @@ func TestPrepareSkipsAnEpisodeAlreadyInTheLibrary(t *testing.T) {
 		t.Fatalf("the library file was not recorded: %+v %v", f, err)
 	}
 
-	// A nil finder: reaching the search at all is a panic, which is the point.
 	p := NewPrefetcher(st, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := p.prepare(ctx, 42, 7, 1, score.DefaultPreferences()); err != nil {
 		t.Errorf("preparing an episode already on disk should be a no-op, got %v", err)
 	}
 }
 
-// A start waits for the same episode's resolve in flight, or the losing search leaves a torrent.
 func TestAwaitPrepareWaitsForAResolveInFlight(t *testing.T) {
 	p := NewPrefetcher(prefetchStore(t), nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
@@ -147,7 +169,6 @@ func TestAwaitPrepareWaitsForAResolveInFlight(t *testing.T) {
 		released <- time.Now()
 	}()
 
-	// Still running: the caller is held.
 	select {
 	case <-released:
 		t.Fatal("returned while the resolve was still running")
@@ -162,7 +183,6 @@ func TestAwaitPrepareWaitsForAResolveInFlight(t *testing.T) {
 		t.Error("released before the resolve finished")
 	}
 
-	// Nothing running for another episode, so nothing to wait for.
 	start := time.Now()
 	p.AwaitPrepare(context.Background(), 7, 4)
 	if time.Since(start) > time.Second {
@@ -170,7 +190,6 @@ func TestAwaitPrepareWaitsForAResolveInFlight(t *testing.T) {
 	}
 }
 
-// A cancelled request must not sit on the wait.
 func TestAwaitPrepareGivesUpWithTheRequest(t *testing.T) {
 	p := NewPrefetcher(prefetchStore(t), nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
@@ -191,20 +210,15 @@ func TestAwaitPrepareGivesUpWithTheRequest(t *testing.T) {
 	}
 }
 
-// "Nobody subbed this yet" won't change soon, so a pause stops each visit re-searching.
 func TestPrepareBacksOffAfterAFailure(t *testing.T) {
 	st := prefetchStore(t)
 	p := NewPrefetcher(st, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	prefs := score.DefaultPreferences()
 
-	// No torrent client, so every attempt fails immediately... except that it
-	// returns before starting anything. Record a failure by hand instead.
 	p.mu.Lock()
 	p.attempted[prepareKey(5, 2)] = time.Now()
 	p.mu.Unlock()
 
-	// PrepareTarget must not start work while the pause is in force; with no
-	// engine it would return early anyway, so assert on the bookkeeping.
 	p.PrepareTarget(5, 2, 1, prefs)
 	p.mu.Lock()
 	_, running := p.running[prepareKey(5, 2)]
@@ -213,7 +227,6 @@ func TestPrepareBacksOffAfterAFailure(t *testing.T) {
 		t.Error("retried a failed resolve immediately")
 	}
 
-	// An attempt from long enough ago is not a reason to skip.
 	p.mu.Lock()
 	p.attempted[prepareKey(5, 2)] = time.Now().Add(-prepareRetry - time.Minute)
 	stale := time.Since(p.attempted[prepareKey(5, 2)]) >= prepareRetry

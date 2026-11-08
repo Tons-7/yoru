@@ -178,6 +178,9 @@ func TestWindowModeFlag(t *testing.T) {
 			t.Errorf("%s also sizes the picture-in-picture window, which then opens off screen", arg)
 		}
 	}
+	if !has(full, "--force-high-performance-gpu") || !has(max, "--force-high-performance-gpu") {
+		t.Error("the window may land on a laptop's integrated graphics, where WebGPU is far slower")
+	}
 
 	var got bool
 	old := showWindow

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -40,6 +41,9 @@ import { attachVideo, detachVideo } from '../lib/miniplayer'
 import { actionFor, keyHint, keyScope, useKeymap, type KeyAction } from '../lib/keymap'
 import { getSleep, noteInput, setSleep, useSleep, type Sleep } from '../lib/watching'
 import { useAnime4K, type UpscaleTier } from './anime4k'
+import { audioDelayed, releaseAudio, watchAudioDelay } from './audioDelay'
+import { rateLabel, smoothLive, useKnownScreenHz, type SmoothRate, type SmoothState } from './smooth'
+import { formatFps } from './rates'
 import { useTouchGestures } from './gestures'
 import { castImpossible, episodeKey, isBrave, useCast, type CastPhase, type CastSdk, type QueuedMedia } from './cast'
 import { useAirPlay } from './airplay'
@@ -213,6 +217,7 @@ export interface PlaybackSettings {
   autoNext: { on: boolean; caption: string; onChange: (on: boolean) => void }
   autoplay: { on: boolean; caption: string; onChange: (on: boolean) => void }
   upscale?: { value: string; onOpen: () => void }
+  smooth?: { value: string; onOpen: () => void }
 }
 
 export interface PlayerControls {
@@ -253,6 +258,7 @@ export interface PlayerProps {
   keptDelay?: number
   onKeepDelay?: (delay: number) => void
   upscale?: { enabled: boolean; mode: string; tier?: UpscaleTier; onSlow?: () => void }
+  smooth?: { enabled: boolean; held: boolean; rate: SmoothRate; onSlow?: () => void; onState?: (state: SmoothState) => void }
   sound?: { options: SoundOptions; onChange: (next: SoundOptions) => void }
   title: string
   subtitle?: string
@@ -301,6 +307,7 @@ export function Player({
   subRaised = false,
   onSubRaised,
   upscale,
+  smooth,
   sound,
   title,
   subtitle,
@@ -567,9 +574,18 @@ export function Player({
     blobs.current = live
   }, [extraTracks])
   useEffect(() => () => blobs.current.forEach((url) => URL.revokeObjectURL(url)), [])
+  const [soundLag, setSoundLag] = useState(0)
+  useEffect(() => {
+    if (!video) return
+    const unwatch = watchAudioDelay(video, setSoundLag)
+    return () => {
+      unwatch()
+      releaseAudio(video)
+    }
+  }, [video])
   const subLook = useMemo(
-    () => ({ scale: subScale, delay: subDelay, preset: lookPreset, raised: subRaised }),
-    [subScale, subDelay, lookPreset, subRaised],
+    () => ({ scale: subScale, delay: subDelay + soundLag / 1000, preset: lookPreset, raised: subRaised }),
+    [subScale, subDelay, soundLag, lookPreset, subRaised],
   )
   const subtitlesReady = useSubtitles(video, subtitleStream, track, fonts, pip.active, subLook, (problem) =>
     showNotice(problem, 6000),
@@ -604,7 +620,7 @@ export function Player({
     if (r.source === 'aniskip' && r.id) onSkipVote?.(r.id, true)
   })
 
-  const upscaleState = useAnime4K({
+  const picture = useAnime4K({
     video,
     canvas,
     enabled: !!upscale?.enabled && !pip.active,
@@ -612,9 +628,19 @@ export function Player({
     tier: upscale?.tier ?? 'full',
     onSlow: upscale?.onSlow,
     source: playlist,
+    smooth: smooth && {
+      ...smooth,
+      enabled: smooth.enabled && !pip.active && !videoPip.active && !systemFullscreen && !airplay.active,
+    },
   })
-  const painted = useFreshFrames(video, upscaleState === 'on')
-  const showUpscaled = upscaleState === 'on' && painted
+  const knownScreenHz = useKnownScreenHz()
+  const upscaleState = picture.upscale
+  const smoothState = picture.smooth
+  const tellSmoothState = useEffectEvent((state: SmoothState) => smooth?.onState?.(state))
+  useEffect(() => tellSmoothState(smoothState), [smoothState])
+  const drawn = upscaleState === 'on' || smoothState === 'on'
+  const painted = useFreshFrames(video, drawn)
+  const showUpscaled = drawn && painted
 
   const trackList = (stream?.subtitles ?? [])
     .map((s) => `${s.index}:${s.language ?? ''}:${s.title ?? ''}`)
@@ -1123,6 +1149,16 @@ export function Player({
         unsupported: 'Needs WebGPU, which this browser lacks',
         failed: 'Stopped, the graphics device was lost',
       }[upscaleState]
+  const smoothInfo = !smooth?.enabled
+    ? 'Off'
+    : {
+        off: 'Off',
+        starting: 'Starting',
+        on: `On · ${rateLabel(smooth.rate, knownScreenHz)}${smooth.held ? ' · held drawings smoothed' : ''}`,
+        unsupported: 'Needs WebGPU, which this browser lacks',
+        failed: "Stopped, it couldn't start on this graphics device",
+        missing: 'Not ready on the PC yet: being installed or updated, or not installed',
+      }[smoothState]
   const holdFast = useCallback(
     (on: boolean) => {
       if (!video || fast.current === on) return
@@ -1458,7 +1494,7 @@ export function Player({
         !controlsVisible && 'cursor-none',
       )}
     >
-      {upscale?.enabled && (
+      {(upscale?.enabled || smooth?.enabled) && (
         <canvas
           ref={setCanvas}
           {...surface}
@@ -1831,6 +1867,17 @@ export function Player({
                   : 'Anime4K stopped (the graphics device was lost); playing without it.'}
               </p>
             )}
+            {(smoothState === 'unsupported' || smoothState === 'failed' || smoothState === 'missing') && (
+              <p className="mt-1.5 inline-block rounded bg-black/60 px-2 py-0.5 text-xs text-amber-300">
+                {
+                  {
+                    unsupported: "Smooth motion needs WebGPU, which this browser doesn't have; playing without it.",
+                    failed: "Smooth motion couldn't start on this graphics device; playing without it.",
+                    missing: "Smooth motion isn't ready on the PC yet; playing without it. Smooth motion in the menu says why.",
+                  }[smoothState]
+                }
+              </p>
+            )}
           </div>
           {!wide && !pip.active && (
             <div className={cx('flex shrink-0 items-center gap-1', controlsVisible && 'pointer-events-auto')}>
@@ -1868,6 +1915,7 @@ export function Player({
           audioTrack={audioTrack}
           subtitles={subtitlesInfo}
           anime4k={anime4kInfo}
+          smooth={smoothInfo}
           onClose={() => setInfoOpen(false)}
         />
       )}
@@ -2798,6 +2846,17 @@ function PlayerMenu({
                   next
                 />
               )}
+              {playback?.smooth && (
+                <MenuItem
+                  label="Smooth motion"
+                  value={playback.smooth.value}
+                  onClick={() => {
+                    close()
+                    playback.smooth?.onOpen()
+                  }}
+                  next
+                />
+              )}
               <div aria-hidden className="my-1 border-t border-line" />
               {playback && <MenuItem label="Skipping" value={skipSummary(playback)} onClick={() => setView('skipping')} next />}
               {playback && (
@@ -2936,6 +2995,7 @@ function PlaybackInfo({
   audioTrack,
   subtitles,
   anime4k,
+  smooth,
   onClose,
 }: {
   stream?: StreamInfo
@@ -2944,6 +3004,7 @@ function PlaybackInfo({
   audioTrack: number
   subtitles: string
   anime4k: string
+  smooth: string
   onClose: () => void
 }) {
   useNow(1000)
@@ -3024,7 +3085,16 @@ function PlaybackInfo({
         : `${Math.round(health.percent ?? 0)}% on disk · ${speed(health.mbps, unit)} from ${health.peers} peer${health.peers === 1 ? '' : 's'}`,
     ])
   }
+  if (v?.fps) rows.push(['Frame rate', `${formatFps(v.fps)} fps`])
   rows.push(['Anime4K', anime4k])
+  const held = video ? Math.round(audioDelayed(video)) : 0
+  const shown = video ? smoothLive(video)?.shown : undefined
+  rows.push([
+    'Smooth motion',
+    [smooth, shown ? `${shown} frames a second on screen` : '', held ? `sound held back ${held} ms to match` : '']
+      .filter(Boolean)
+      .join(' · '),
+  ])
   rows.push(['Subtitles', subtitles])
 
   const copy = async () => {

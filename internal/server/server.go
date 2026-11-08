@@ -125,7 +125,7 @@ type Server struct {
 	rising      risingCache
 	refreshing  atomic.Bool
 	scanning    atomic.Bool
-	rescan      atomic.Bool // asked for while scanning: the running scan goes round once more
+	rescan      atomic.Bool
 }
 
 type Deps struct {
@@ -150,7 +150,7 @@ type Deps struct {
 	Prefetch   *library.Prefetcher
 	Player     library.Player
 	Indexer    indexer.Source
-	Sites      *indexer.Sites // the holder behind Indexer, swapped when the release sites are edited
+	Sites      *indexer.Sites
 	Push       *push.Sender
 	Finder     *library.Finder
 	Deps       *deps.Manager
@@ -159,8 +159,8 @@ type Deps struct {
 	Engine     *torrent.Client
 	Presence   *library.Presence
 	Relaunch   func()
-	Exit       func() // ends Yoru, from Exit Yoru in the app
-	ShowWindow func() // brings up Yoru's window, for a second launch
+	Exit       func()
+	ShowWindow func()
 	Token      string
 	Log        *slog.Logger
 }
@@ -211,6 +211,7 @@ func New(d Deps) *Server {
 		jimakuFiles:  map[string]jimakuListing{},
 	}
 	s.downloader.WhenArrived(s.watchedArrived)
+	s.refreshFlyHigh()
 	return s
 }
 
@@ -297,6 +298,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sites/test", hostOnly(s.testSite))
 	mux.HandleFunc("GET /api/setup", s.setup)
 	mux.HandleFunc("POST /api/setup/install/{name}", hostOnly(s.installComponent))
+	mux.HandleFunc("GET /api/smooth", s.smoothStatus)
+	mux.HandleFunc("GET /api/smooth/{file}", s.smoothFile)
 	mux.HandleFunc("POST /api/setup/data-dir", hostOnly(s.setDataDir))
 	mux.HandleFunc("GET /api/update", s.updateStatus)
 	mux.HandleFunc("GET /api/update/since", s.updatedSince)

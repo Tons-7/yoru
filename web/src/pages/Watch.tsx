@@ -41,6 +41,18 @@ import { SaveToDevice } from '../components/SaveToDevice'
 import { toast } from '../lib/toast'
 import { saveNextAfter } from '../lib/offline'
 import { Anime4KDialog } from '../components/Anime4KDialog'
+import { SmoothDialog } from '../components/SmoothDialog'
+import {
+  rateLabel,
+  useKnownScreenHz,
+  asSmoothRate,
+  deviceSmooth,
+  forgetSmoothFailure,
+  setDeviceSmooth,
+  smoothHere,
+  type SmoothRate,
+  type SmoothState,
+} from '../player/smooth'
 import { EpisodeList } from '../components/EpisodeList'
 import { isUnaired } from '../lib/episodes'
 import { ReleasePicker } from '../components/ReleasePicker'
@@ -699,6 +711,25 @@ export function Watch({
   const [tuning, setTuning] = useState(false)
   useEffect(() => setUpscale(null), [id, ep])
 
+  const [smoothDevice, setSmoothDevice] = useState(deviceSmooth)
+  const [smoothEpisode, setSmoothEpisode] = useState<{ enabled?: boolean; rate?: SmoothRate; held?: boolean }>({})
+  const [smoothStopped, setSmoothStopped] = useState(false)
+  const [smoothOpen, setSmoothOpen] = useState(false)
+  const screenHz = useKnownScreenHz()
+  useEffect(() => {
+    setSmoothStopped(false)
+    setSmoothEpisode({})
+  }, [id, ep])
+  const smoothOn = smoothEpisode.enabled ?? smoothHere(smoothDevice, flag('playback.smooth'))
+  const [smoothRunning, setSmoothRunning] = useState<SmoothState>('off')
+  const smoothing = {
+    enabled: smoothOn && !smoothStopped,
+    held: smoothEpisode.held ?? flag('playback.smooth_held'),
+    rate: smoothEpisode.rate ?? asSmoothRate(effective['playback.smooth_rate']),
+    onSlow: () => setSmoothStopped(true),
+    onState: setSmoothRunning,
+  }
+
   const [deviceChoice, setDeviceChoice] = useState(deviceUpscale)
   const [settled, setSettled] = useState(autoTier)
   const [steppedTo, setSteppedTo] = useState<AutoTier | null>(null)
@@ -840,6 +871,27 @@ export function Watch({
             setTuning(true)
           },
         },
+    smooth: playingInMpv
+      ? undefined
+      : {
+          value: !smoothOn
+            ? 'Off'
+            : smoothStopped
+              ? 'Off for this episode'
+              : {
+                  on: `On · ${rateLabel(smoothing.rate, screenHz)}`,
+                  starting: 'Starting',
+                  missing: 'Not ready on the PC',
+                  failed: "Couldn't start",
+                  unsupported: 'Not supported here',
+                  off: 'Paused here',
+                }[smoothRunning],
+          onOpen: () => {
+            playerControls.current?.settings(false)
+            setAvSheet(false)
+            setSmoothOpen(true)
+          },
+        },
   }
   const p = playbackSettings
   const playbackRows = (
@@ -851,6 +903,9 @@ export function Watch({
       <SwitchRow label="Start playing when opened" caption={p.autoplay.caption} on={p.autoplay.on} onChange={p.autoplay.onChange} />
       {p.upscale && (
         <ActionRow label="Sharper picture (Anime4K)" caption={wide ? 'This device' : 'This phone'} value={p.upscale.value} onClick={p.upscale.onOpen} />
+      )}
+      {p.smooth && (
+        <ActionRow label="Smooth motion" caption={wide ? 'This device' : 'This phone'} value={p.smooth.value} onClick={p.smooth.onOpen} />
       )}
     </>
   )
@@ -876,6 +931,34 @@ export function Watch({
         setSteppedTo(null)
         setUpscale(null)
       }}
+    />
+  )
+  const smoothDialog = (
+    <SmoothDialog
+      open={smoothOpen}
+      on={smoothOn}
+      held={smoothing.held}
+      stopped={smoothStopped}
+      onClose={() => setSmoothOpen(false)}
+      onChange={(enabled) => {
+        if (enabled) forgetSmoothFailure()
+        setSmoothEpisode((e) => ({ ...e, enabled }))
+        setSmoothStopped(false)
+      }}
+      onHeld={(held) => setSmoothEpisode((e) => ({ ...e, held }))}
+      rate={smoothing.rate}
+      onRate={(rate) => setSmoothEpisode((e) => ({ ...e, rate }))}
+      device={smoothDevice}
+      onDevice={(choice) => {
+        forgetSmoothFailure()
+        setDeviceSmooth(choice)
+        setSmoothDevice(choice)
+        setSmoothEpisode((e) => ({ rate: e.rate, held: e.held }))
+        setSmoothStopped(false)
+      }}
+      anime4k={upscaling.enabled ? upscaling.tier : null}
+      episodeFps={opened?.video?.fps ?? 0}
+      running={smoothRunning}
     />
   )
   const episodesSection = (
@@ -975,6 +1058,7 @@ export function Watch({
                   subRaised={flag('subtitle.raise')}
                   onSubRaised={setSubRaised}
                   upscale={upscaling}
+                  smooth={smoothing}
                   sound={soundProp}
                   title={showTitle}
                   subtitle={episodeLabel}
@@ -1095,6 +1179,7 @@ export function Watch({
                       />
                     ) : null}
                     {anime4kDialog}
+                    {smoothDialog}
                   </>}
                 />
               )}
@@ -1303,6 +1388,9 @@ export function Watch({
                     : `Anime4K dropped to ${steppedTo}: this device was falling behind.`}
                 </p>
               )}
+              {smoothOn && smoothStopped && (
+                <p className="text-xs text-base-400">Smooth motion turned itself off for this episode: this device was falling behind.</p>
+              )}
 
               {download.isError && (
                 <p className="text-xs text-recap">{(download.error as Error).message}</p>
@@ -1321,6 +1409,7 @@ export function Watch({
       </div>
 
       {!playerShown && anime4kDialog}
+      {!playerShown && smoothDialog}
       <Sheet open={avSheet} onClose={() => setAvSheet(false)} title="Audio & subtitles">
         <div className="-mx-4 sm:-mx-5">
           <PanelGroup title="Audio" note="This show">
