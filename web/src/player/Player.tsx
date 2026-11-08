@@ -42,7 +42,15 @@ import { actionFor, keyHint, keyScope, useKeymap, type KeyAction } from '../lib/
 import { getSleep, noteInput, setSleep, useSleep, type Sleep } from '../lib/watching'
 import { useAnime4K, type UpscaleTier } from './anime4k'
 import { audioDelayed, releaseAudio, watchAudioDelay } from './audioDelay'
-import { rateLabel, smoothLive, useKnownScreenHz, type SmoothRate, type SmoothState } from './smooth'
+import {
+  rateLabel,
+  smoothLive,
+  useKnownScreenHz,
+  useKnownSourceHz,
+  useRunningFps,
+  type SmoothRate,
+  type SmoothState,
+} from './smooth'
 import { formatFps } from './rates'
 import { useTouchGestures } from './gestures'
 import { castImpossible, episodeKey, isBrave, useCast, type CastPhase, type CastSdk, type QueuedMedia } from './cast'
@@ -634,6 +642,8 @@ export function Player({
     },
   })
   const knownScreenHz = useKnownScreenHz()
+  const knownSourceHz = useKnownSourceHz()
+  const runningFps = useRunningFps()
   const upscaleState = picture.upscale
   const smoothState = picture.smooth
   const tellSmoothState = useEffectEvent((state: SmoothState) => smooth?.onState?.(state))
@@ -1154,7 +1164,7 @@ export function Player({
     : {
         off: 'Off',
         starting: 'Starting',
-        on: `On · ${rateLabel(smooth.rate, knownScreenHz)}${smooth.held ? ' · held drawings smoothed' : ''}`,
+        on: `On · ${rateLabel(smooth.rate, knownScreenHz, knownSourceHz, runningFps)}${smooth.held ? ' · held drawings smoothed' : ''}`,
         unsupported: 'Needs WebGPU, which this browser lacks',
         failed: "Stopped, it couldn't start on this graphics device",
         missing: 'Not ready on the PC yet: being installed or updated, or not installed',

@@ -45,6 +45,8 @@ import { SmoothDialog } from '../components/SmoothDialog'
 import {
   rateLabel,
   useKnownScreenHz,
+  useKnownSourceHz,
+  useRunningFps,
   asSmoothRate,
   deviceSmooth,
   forgetSmoothFailure,
@@ -716,6 +718,8 @@ export function Watch({
   const [smoothStopped, setSmoothStopped] = useState(false)
   const [smoothOpen, setSmoothOpen] = useState(false)
   const screenHz = useKnownScreenHz()
+  const playingHz = useKnownSourceHz()
+  const runningFps = useRunningFps()
   useEffect(() => {
     setSmoothStopped(false)
     setSmoothEpisode({})
@@ -879,7 +883,7 @@ export function Watch({
             : smoothStopped
               ? 'Off for this episode'
               : {
-                  on: `On · ${rateLabel(smoothing.rate, screenHz)}`,
+                  on: `On · ${rateLabel(smoothing.rate, screenHz, playingHz || opened?.video?.fps || 0, runningFps)}`,
                   starting: 'Starting',
                   missing: 'Not ready on the PC',
                   failed: "Couldn't start",

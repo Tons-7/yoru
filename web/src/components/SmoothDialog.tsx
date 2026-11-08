@@ -4,9 +4,11 @@ import { api } from '../lib/api'
 import { bytes, cx } from '../lib/format'
 import { useDismiss, useModalFocus } from '../lib/hooks'
 import {
+  rateFactor,
   rateFps,
-  topFps,
   useKnownScreenHz,
+  useKnownSourceHz,
+  useRunningFps,
   type DeviceSmooth,
   type SmoothFiles,
   type SmoothRate,
@@ -27,28 +29,29 @@ const DEVICE_HINTS: Record<DeviceSmooth, string> = {
   on: 'Always on this device.',
 }
 
-function rateChoices(screenHz: number): Array<{ value: SmoothRate; label: string }> {
+function rateChoices(screenHz: number, sourceHz: number): Array<{ value: SmoothRate; label: string }> {
   const seen = new Set<number>()
   const fixed: Array<{ value: SmoothRate; label: string }> = []
   for (const tier of ['high', 'mid', 'low'] as const) {
-    const fps = Math.round(rateFps(tier, screenHz))
-    if (!fps || seen.has(fps)) continue
+    const fps = Math.round(rateFps(tier, screenHz, sourceHz))
+    if (seen.has(fps)) continue
     seen.add(fps)
     fixed.push({ value: tier, label: String(fps) })
   }
   return [{ value: 'auto', label: 'Auto' }, ...fixed.reverse()]
 }
 
-function shownRate(rate: SmoothRate, screenHz: number): SmoothRate {
-  const fps = Math.round(rateFps(rate, screenHz))
-  if (!fps) return rate === 'auto' || !screenHz ? rate : 'auto'
-  return rateChoices(screenHz).find((c) => c.label === String(fps))?.value ?? rate
+function shownRate(rate: SmoothRate, screenHz: number, sourceHz: number): SmoothRate {
+  if (rate === 'auto') return rate
+  const fps = String(Math.round(rateFps(rate, screenHz, sourceHz)))
+  return rateChoices(screenHz, sourceHz).find((c) => c.value !== 'auto' && c.label === fps)?.value ?? rate
 }
 
-function rateHint(rate: SmoothRate, screenHz: number): string {
-  const fps = Math.round(rateFps(rate, screenHz))
-  if (!fps) return `As smooth as this device allows, up to ${Math.round(topFps(screenHz))} fps.`
-  return `${fps} fps, an even fit for this screen.`
+function rateHint(rate: SmoothRate, screenHz: number, sourceHz: number, runningFps: number): string {
+  const fps = Math.round(rateFps(rate, screenHz, sourceHz))
+  if (rate === 'auto' && runningFps && runningFps < fps) return `${runningFps} fps for now, so this device keeps up.`
+  if (rate === 'auto') return `${fps} fps, the best fit for this screen.`
+  return `${fps} fps, ${rateFactor(rate, screenHz, sourceHz)}× the episode's frame rate.`
 }
 
 function FilesRow() {
@@ -173,6 +176,9 @@ export function SmoothDialog({
   const known = useKnownScreenHz()
   const measured = useScreenHz(open && !known)
   const screenHz = known || measured
+  const playing = useKnownSourceHz()
+  const runningFps = useRunningFps()
+  const sourceHz = playing || episodeFps
 
   if (!open) return null
 
@@ -229,14 +235,14 @@ export function SmoothDialog({
           >
             <div className="min-w-0 flex-1 basis-48">
               <p className="text-sm font-medium text-base-200">Frame rate</p>
-              <p className="mt-0.5 text-xs leading-snug text-base-500">{rateHint(rate, screenHz)}</p>
+              <p className="mt-0.5 text-xs leading-snug text-base-500">{rateHint(rate, screenHz, sourceHz, runningFps)}</p>
             </div>
             <Segmented
               size="sm"
               label="Frame rate"
-              value={shownRate(rate, screenHz)}
+              value={shownRate(rate, screenHz, sourceHz)}
               onChange={onRate}
-              options={rateChoices(screenHz)}
+              options={rateChoices(screenHz, sourceHz)}
             />
           </div>
           <p className="px-1 text-xs text-base-500">

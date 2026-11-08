@@ -1026,7 +1026,7 @@ function SoundTab() {
         </Row>
         <Row
           label="Frame rate"
-          hint="Fitted to each screen, at most 120 fps."
+          hint="Even steps of each episode's frame rate, at most 120 fps."
           keywords="smooth motion frame generation fps"
         >
           <ValueMenu

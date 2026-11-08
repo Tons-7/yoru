@@ -41,55 +41,66 @@ export const asSmoothRate = (v: string | undefined): SmoothRate =>
   SMOOTH_RATES.includes(v as SmoothRate) ? (v as SmoothRate) : 'auto'
 export const RATE_NAMES: Record<SmoothRate, string> = { auto: 'Auto', high: 'Highest', mid: 'Middle', low: 'Lowest' }
 
-const SPLITS = [1, 2, 3, 4, 5]
-const LOWEST_FPS = 48
 export const HIGHEST_FPS = 120
-const OFFERED = 3
+export const ANIME_FPS = 24000 / 1001
+const MAX_FACTOR = 6
 
-export function ratesFor(screenHz: number): number[] {
-  if (!screenHz) return []
-  return SPLITS.map((s) => screenHz / s)
-    .filter((fps) => fps >= LOWEST_FPS && fps <= HIGHEST_FPS)
-    .slice(0, OFFERED)
+export function factorsFor(screenHz: number, sourceHz: number): number[] {
+  const source = sourceHz || ANIME_FPS
+  const ceiling = Math.min(HIGHEST_FPS, screenHz || HIGHEST_FPS) + 0.5
+  const out: number[] = []
+  for (let n = MAX_FACTOR; n >= 2; n--) if (n * source <= ceiling) out.push(n)
+  return out.length ? out : [1]
 }
 
-let knownScreenHz = 0
-const screenWatchers = new Set<() => void>()
-export const lastScreenHz = () => knownScreenHz
-function tellScreenHz(hz: number) {
-  if (hz === knownScreenHz) return
-  knownScreenHz = hz
-  for (const watcher of screenWatchers) watcher()
+function bestFit(screenHz: number, sourceHz: number): number {
+  const factors = factorsFor(screenHz, sourceHz)
+  if (!screenHz) return factors[0]
+  const even = factors.find((n) => {
+    const ticks = screenHz / (n * (sourceHz || ANIME_FPS))
+    return Math.abs(ticks - Math.round(ticks)) < 0.1
+  })
+  return even ?? factors[0]
 }
-export function useKnownScreenHz(): number {
-  return useSyncExternalStore(
-    (watcher) => {
-      screenWatchers.add(watcher)
-      return () => screenWatchers.delete(watcher)
+
+export function rateFactor(rate: SmoothRate, screenHz: number, sourceHz: number, stepsDown = 0): number {
+  const factors = factorsFor(screenHz, sourceHz)
+  if (rate === 'auto') return factors[Math.min(factors.length - 1, factors.indexOf(bestFit(screenHz, sourceHz)) + stepsDown)]
+  if (rate === 'high') return factors[0]
+  if (rate === 'low') return factors[factors.length - 1]
+  return factors[Math.floor(factors.length / 2)]
+}
+
+export function rateFps(rate: SmoothRate, screenHz: number, sourceHz: number): number {
+  return rateFactor(rate, screenHz, sourceHz) * (sourceHz || ANIME_FPS)
+}
+
+function knownValue() {
+  let value = 0
+  const watchers = new Set<() => void>()
+  return {
+    get: () => value,
+    tell: (next: number) => {
+      if (next === value) return
+      value = next
+      for (const watcher of watchers) watcher()
     },
-    () => knownScreenHz,
-  )
+    subscribe: (watcher: () => void) => {
+      watchers.add(watcher)
+      return () => watchers.delete(watcher)
+    },
+  }
 }
+const knownScreen = knownValue()
+const knownSource = knownValue()
+const knownRunning = knownValue()
+export const lastScreenHz = knownScreen.get
+export const useKnownScreenHz = (): number => useSyncExternalStore(knownScreen.subscribe, knownScreen.get)
+export const useKnownSourceHz = (): number => useSyncExternalStore(knownSource.subscribe, knownSource.get)
+export const useRunningFps = (): number => useSyncExternalStore(knownRunning.subscribe, knownRunning.get)
 
-export function rateFps(rate: SmoothRate, screenHz: number): number {
-  const offered = ratesFor(screenHz)
-  if (rate === 'auto' || !offered.length) return 0
-  const at = { high: 0, mid: 1, low: 2 }[rate]
-  return offered[Math.min(at, offered.length - 1)]
-}
-
-export function topFps(screenHz: number): number {
-  return ratesFor(screenHz)[0] ?? (screenHz ? Math.min(screenHz, HIGHEST_FPS) : HIGHEST_FPS)
-}
-
-export function rateLabel(rate: SmoothRate, screenHz: number): string {
-  const fps = rateFps(rate, screenHz)
-  return fps ? `${Math.round(fps)} fps` : RATE_NAMES[rate]
-}
-
-const pacerMode = (rate: SmoothRate, screenHz: number) => {
-  const fps = rateFps(rate, screenHz)
-  return fps ? { target: fps } : 'auto'
+export function rateLabel(rate: SmoothRate, screenHz: number, sourceHz: number, runningFps = 0): string {
+  return `${runningFps || Math.round(rateFps(rate, screenHz, sourceHz))} fps`
 }
 
 const canvasOwners = new WeakMap<HTMLCanvasElement, object>()
@@ -240,6 +251,7 @@ const SLOW_WINDOWS = 3
 const SLOW_WINDOW_MS = 2000
 const SLOW_DROPS_PER_SECOND = 5
 const SLOW_LAG_MS = 220
+const RECOVER_WINDOWS = 15
 
 type Frame = { source: number } | { output: number }
 interface Request {
@@ -334,6 +346,7 @@ async function start({
   undo: Array<() => void>
   release: () => void
 }) {
+  knownSource.tell(0)
   const native = { width: video.videoWidth, height: video.videoHeight }
   let upscaleInput: GPUTexture | undefined
   let pipelines: Anime4KPipeline[] = []
@@ -359,8 +372,8 @@ async function start({
     { mode: 'video', cadence: held, held_frames: { mean: 0.0033, max: 0.06 }, inputs: INPUTS, outputs: OUTPUTS },
   )
   undo.push(() => stream.free())
-  const base: { mode: ReturnType<typeof pacerMode>; lookahead: boolean; fps_limit: number } = {
-    mode: 'auto',
+  const base: { mode: { factor: number }; lookahead: boolean; fps_limit: number } = {
+    mode: { factor: rateFactor(rate, lastScreenHz(), 0) },
     lookahead: true,
     fps_limit: HIGHEST_FPS,
   }
@@ -625,27 +638,38 @@ async function start({
     return (c.drops ?? 0) - (c.drops_stall_exempt ?? 0) - (c.drops_settle_exempt ?? 0)
   }
   let screenHz = 0
+  let sourceHz = 0
   let checkedAt = 0
   let shownCount = 0
   let shownSince = 0
   let pace = rate
+  let stepsDown = 0
+  let cleanWindows = 0
   const applyPace = (now: number) => {
-    const fixed = rateFps(pace, screenHz)
-    if (fixed) canvas.dataset.target = String(Math.round(fixed))
-    else delete canvas.dataset.target
-    base.mode = pacerMode(pace, screenHz)
-    base.fps_limit = topFps(screenHz)
+    const factor = rateFactor(pace, screenHz, sourceHz, stepsDown)
+    const fps = Math.round(factor * (sourceHz || ANIME_FPS))
+    canvas.dataset.target = String(fps)
+    knownRunning.tell(fps)
+    if (factor === base.mode.factor) return
+    base.mode = { factor }
     pacer.setOptions(now, { ...base, playback_rate: video.playbackRate })
   }
   const settleScreen = (now: number) => {
     if (now - checkedAt < (screenHz ? 2000 : 250)) return
     checkedAt = now
-    const r = pacer.report() as { display_ready?: boolean; display?: { display_hz?: number } }
-    if (!r.display_ready || !r.display?.display_hz) return
-    const hz = nearestRate(r.display.display_hz)
-    if (hz === screenHz) return
+    const r = pacer.report() as {
+      display_ready?: boolean
+      display?: { display_hz?: number }
+      source_ready?: boolean
+      source_hz?: number
+    }
+    const hz = r.display_ready && r.display?.display_hz ? nearestRate(r.display.display_hz) : screenHz
+    const fps = r.source_ready && r.source_hz ? Math.round(r.source_hz * 1000) / 1000 : sourceHz
+    if (hz === screenHz && fps === sourceHz) return
     screenHz = hz
-    tellScreenHz(screenHz)
+    sourceHz = fps
+    knownScreen.tell(screenHz)
+    if (sourceHz) knownSource.tell(sourceHz)
     applyPace(now)
   }
   const countShown = (now: number) => {
@@ -660,6 +684,7 @@ async function start({
   undo.push(() => {
     if (!ownsCanvas(canvas, token)) return
     live.delete(video)
+    knownRunning.tell(0)
     delete canvas.dataset.shown
     delete canvas.dataset.target
   })
@@ -684,12 +709,28 @@ async function start({
     const perSecond = lastDrops < 0 ? 0 : ((drops - lastDrops) * 1000) / (now - windowStart)
     lastDrops = drops
     windowStart = now
+    if (video.paused) return
     const struggling = perSecond > SLOW_DROPS_PER_SECOND || lag > SLOW_LAG_MS
-    slowWindows = !video.paused && struggling ? slowWindows + 1 : 0
-    if (slowWindows >= SLOW_WINDOWS) {
-      slowFired = true
-      onSlow()
+    slowWindows = struggling ? slowWindows + 1 : 0
+    cleanWindows = struggling ? 0 : cleanWindows + 1
+    if (stepsDown > 0 && cleanWindows >= RECOVER_WINDOWS) {
+      stepsDown--
+      cleanWindows = 0
+      lastDrops = -1
+      applyPace(now)
+      return
     }
+    if (slowWindows < SLOW_WINDOWS) return
+    slowWindows = 0
+    const factor = rateFactor(pace, screenHz, sourceHz, stepsDown)
+    if (pace === 'auto' && rateFactor(pace, screenHz, sourceHz, stepsDown + 1) < factor) {
+      stepsDown++
+      lastDrops = -1
+      applyPace(now)
+      return
+    }
+    slowFired = true
+    onSlow()
   }
 
   const restart = () => {
@@ -733,7 +774,9 @@ async function start({
     setRate: (next: SmoothRate) => {
       if (run.stopped || next === pace) return
       pace = next
-      if (screenHz) applyPace(performance.now())
+      stepsDown = 0
+      cleanWindows = 0
+      applyPace(performance.now())
     },
   }
 }
