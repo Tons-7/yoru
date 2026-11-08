@@ -99,7 +99,6 @@ export function Anime4KDialog({
           </span>
         </button>
 
-        {/* Clickable while off: picking a mode is how you turn it on. */}
         <div
           role="radiogroup"
           aria-label="Upscaling mode"
@@ -140,8 +139,8 @@ export function Anime4KDialog({
         </div>
 
         <p className="mt-3 text-xs text-base-600">
-          Network size in Settings → Playback is for mpv; in the browser, Light, Balanced and Full
-          above take its place.
+          Size in mpv, under Settings › Sound and picture, is for mpv; in the browser, Light, Balanced and
+          Full above take its place.
         </p>
       </div>
     </div>

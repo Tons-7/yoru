@@ -975,7 +975,7 @@ function SoundTab() {
         </Row>
       </Section>
 
-      <Section title="Picture">
+      <Section title="Anime4K" keywords="upscale sharpen">
         <Row
           label="Anime4K upscaling"
           hint="Sharpens the picture. Needs mpv or a browser with WebGPU; phones keep it off unless turned on there."
@@ -984,9 +984,9 @@ function SoundTab() {
           <Switch on={f.get('playback.anime4k')} onChange={(v) => f.set('playback.anime4k', String(v))} />
         </Row>
         <Row
-          label="Anime4K mode"
+          label="Mode"
           hint={ANIME4K_MODES.find((m) => m.id === f.value('playback.anime4k_mode'))?.hint}
-          keywords="upscale"
+          keywords="anime4k upscale"
         >
           <ValueMenu
             value={f.value('playback.anime4k_mode')}
@@ -995,11 +995,11 @@ function SoundTab() {
           />
         </Row>
         <Row
-          label="Anime4K size"
+          label="Size in mpv"
           hint={`mpv only; each step up roughly doubles GPU cost. ${
             ANIME4K_SIZES.find((s) => s.id === f.value('playback.anime4k_size'))?.hint ?? ''
           }`}
-          keywords="upscale gpu"
+          keywords="anime4k upscale gpu"
         >
           <ValueMenu
             value={f.value('playback.anime4k_size')}
@@ -1007,17 +1007,24 @@ function SoundTab() {
             options={ANIME4K_SIZES.map((s) => ({ value: s.id, label: s.id }))}
           />
         </Row>
+      </Section>
+
+      <Section
+        title="Smooth motion"
+        hint="Browser player only. Each device can change these from Smooth motion in the player."
+        keywords="frame generation interpolation fps flyhigh 60fps"
+      >
         <Row
           label="Smooth motion"
-          hint="Frames between the episode's own, made on the watching device's graphics card. Computers follow this; phones keep it off unless turned on there. The files come from Setup."
+          hint="Frames between the episode's own, made on the watching device's graphics card. Computers follow this; phones keep it off unless turned on there. Its files come from About › Programs Yoru uses, or the player."
           keywords="frame generation interpolation fps flyhigh 60fps"
         >
           <Switch on={f.get('playback.smooth')} onChange={(v) => f.set('playback.smooth', String(v))} />
         </Row>
         <Row
-          label="Smooth motion frame rate"
+          label="Frame rate"
           hint="Each device turns this into an even fit for its own screen, never above 120 frames a second. On a 240 Hz screen: Highest 120, Middle 80, Lowest 60; on a 60 Hz screen all three are 60."
-          keywords="frame generation fps"
+          keywords="smooth motion frame generation fps"
         >
           <ValueMenu
             value={f.value('playback.smooth_rate') || 'auto'}
@@ -1028,10 +1035,13 @@ function SoundTab() {
         <Row
           label="Smooth held drawings"
           hint="Anime is often drawn on twos. On, those held drawings move smoothly too; big steps can look softer."
-          keywords="frame generation cadence twos"
+          keywords="smooth motion frame generation cadence twos"
         >
           <Switch on={f.get('playback.smooth_held')} onChange={(v) => f.set('playback.smooth_held', String(v))} />
         </Row>
+      </Section>
+
+      <Section title="Picture">
         <Row
           label="Soften flashing"
           hint="Dims sudden bright flashes, on every device and in mpv. Not a guarantee against photosensitive epilepsy. Episodes are converted while it's on."
