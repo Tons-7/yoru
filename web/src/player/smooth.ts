@@ -564,7 +564,7 @@ async function start({
     lag = median
     if (!audioFollows) return
     const want = Math.round(Math.min(300, Math.max(0, median)))
-    if (Math.abs(want - delayed) < 8) return
+    if (Math.abs(want - delayed) < 15) return
     delayed = want
     delayAudio(video, want)
       .then((ok) => {

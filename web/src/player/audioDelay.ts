@@ -1,8 +1,22 @@
 const MAX_SECONDS = 0.5
+const FADE_SECONDS = 0.06
+const GLIDE_LIMIT = 0.05
+const GLIDE_RATE = 0.002
+
+interface Line {
+  delay: DelayNode
+  gain: GainNode
+}
+interface Route {
+  lines: [Line, Line]
+  active: 0 | 1
+  fadeUntil: number
+  pending: number
+}
 
 const contexts = new WeakMap<HTMLMediaElement, AudioContext>()
-const routes = new WeakMap<HTMLMediaElement, DelayNode>()
-const routing = new WeakMap<HTMLMediaElement, Promise<DelayNode | null>>()
+const routes = new WeakMap<HTMLMediaElement, Route>()
+const routing = new WeakMap<HTMLMediaElement, Promise<Route | null>>()
 const wanted = new WeakMap<HTMLMediaElement, number>()
 const watchers = new WeakMap<HTMLMediaElement, Set<(ms: number) => void>>()
 const blocked = new WeakSet<HTMLMediaElement>()
@@ -36,7 +50,7 @@ function contextFor(video: HTMLMediaElement) {
   return context
 }
 
-async function route(video: HTMLMediaElement): Promise<DelayNode | null> {
+async function route(video: HTMLMediaElement): Promise<Route | null> {
   const context = contextFor(video)
   if (context.state !== 'running') {
     await Promise.race([context.resume().catch(() => {}), new Promise((r) => setTimeout(r, 300))])
@@ -48,13 +62,20 @@ async function route(video: HTMLMediaElement): Promise<DelayNode | null> {
   const out = context.destination
   if (out.maxChannelCount > out.channelCount) out.channelCount = out.maxChannelCount
   out.channelInterpretation = 'speakers'
-  const delay = context.createDelay(MAX_SECONDS)
-  context.createMediaElementSource(video).connect(delay).connect(out)
-  routes.set(video, delay)
-  return delay
+  const source = context.createMediaElementSource(video)
+  const line = (on: boolean): Line => {
+    const delay = context.createDelay(MAX_SECONDS)
+    const gain = context.createGain()
+    gain.gain.value = on ? 1 : 0
+    source.connect(delay).connect(gain).connect(out)
+    return { delay, gain }
+  }
+  const made: Route = { lines: [line(true), line(false)], active: 0, fadeUntil: 0, pending: 0 }
+  routes.set(video, made)
+  return made
 }
 
-function routed(video: HTMLMediaElement): Promise<DelayNode | null> {
+function routed(video: HTMLMediaElement): Promise<Route | null> {
   const known = routes.get(video)
   if (known) return Promise.resolve(known)
   if (blocked.has(video)) return Promise.resolve(null)
@@ -66,9 +87,54 @@ function routed(video: HTMLMediaElement): Promise<DelayNode | null> {
   return pending
 }
 
-function apply(video: HTMLMediaElement, delay: DelayNode) {
+function apply(video: HTMLMediaElement, path: Route) {
   const seconds = wanted.get(video) ?? 0
-  delay.delayTime.setTargetAtTime(seconds, delay.context.currentTime, 0.08)
+  const outgoing = path.lines[path.active]
+  const context = outgoing.delay.context
+  const now = context.currentTime
+  const running = context.state === 'running'
+  if (running && now < path.fadeUntil) {
+    if (!path.pending) {
+      path.pending = window.setTimeout(() => {
+        path.pending = 0
+        if (routes.get(video) === path) apply(video, path)
+      }, (path.fadeUntil - now) * 1000 + 10)
+    }
+    return
+  }
+  const held = outgoing.delay.delayTime
+  const change = Math.abs(held.value - seconds)
+  if (change < 0.001) {
+    tell(video, seconds * 1000)
+    return
+  }
+  if (running && change <= GLIDE_LIMIT) {
+    for (const line of path.lines) {
+      const param = line.delay.delayTime
+      param.cancelScheduledValues(now)
+      param.setValueAtTime(param.value, now)
+      param.linearRampToValueAtTime(seconds, now + change / GLIDE_RATE)
+    }
+    tell(video, seconds * 1000)
+    return
+  }
+  const next = path.active === 0 ? 1 : 0
+  const incoming = path.lines[next]
+  const end = now + FADE_SECONDS
+  incoming.delay.delayTime.cancelScheduledValues(now)
+  incoming.delay.delayTime.setValueAtTime(seconds, now)
+  for (const [line, to] of [
+    [outgoing, 0],
+    [incoming, 1],
+  ] as const) {
+    line.gain.gain.cancelScheduledValues(now)
+    line.gain.gain.setValueAtTime(line.gain.gain.value, now)
+    line.gain.gain.linearRampToValueAtTime(to, end)
+  }
+  outgoing.delay.delayTime.cancelScheduledValues(now)
+  outgoing.delay.delayTime.setValueAtTime(seconds, end + 0.01)
+  path.active = next
+  path.fadeUntil = end + 0.01
   tell(video, seconds * 1000)
 }
 
@@ -84,9 +150,9 @@ export async function delayAudio(video: HTMLMediaElement, ms: number): Promise<b
     tell(video, 0)
     return true
   }
-  const delay = await routed(video)
-  if (!delay) return false
-  apply(video, delay)
+  const path = await routed(video)
+  if (!path) return false
+  apply(video, path)
   return true
 }
 
@@ -94,6 +160,8 @@ export function releaseAudio(video: HTMLMediaElement) {
   const context = contexts.get(video)
   const wake = wakers.get(video)
   if (wake) video.removeEventListener('play', wake)
+  const path = routes.get(video)
+  if (path?.pending) clearTimeout(path.pending)
   contexts.delete(video)
   routes.delete(video)
   wanted.delete(video)
@@ -102,8 +170,8 @@ export function releaseAudio(video: HTMLMediaElement) {
 }
 
 export function audioDelayed(video: HTMLMediaElement): number {
-  const delay = routes.get(video)
-  return delay ? delay.delayTime.value * 1000 : 0
+  const path = routes.get(video)
+  return path ? path.lines[path.active].delay.delayTime.value * 1000 : 0
 }
 
 function tell(video: HTMLMediaElement, ms: number) {
