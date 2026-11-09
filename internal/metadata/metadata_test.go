@@ -20,7 +20,6 @@ func testClient(t *testing.T, name string, h http.HandlerFunc) *Client {
 	return c
 }
 
-// ani.zip emits both airDate and airdate, and keys specials "S1".."Sn" among episodes.
 const anizipJSON = `{
   "titles": {"en": "Frieren", "x-jat": "Sousou no Frieren"},
   "mappings": {"mal_id": 52991, "anidb_id": 17617, "thetvdb_id": 424536},
@@ -45,7 +44,6 @@ func TestEpisodesSkipsSpecials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Specials do not belong in a season's episode list.
 	if len(got.Episodes) != 2 {
 		t.Fatalf("got %d episodes, want 2", len(got.Episodes))
 	}
@@ -102,7 +100,6 @@ func TestEpisodesEmptyResponse(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 
-	// A show with no entry is a normal outcome, not a failure.
 	got, err := c.Episodes(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("a 404 should not be an error: %v", err)
@@ -112,7 +109,6 @@ func TestEpisodesEmptyResponse(t *testing.T) {
 	}
 }
 
-// The dataset is an array of shows, each with nested mappings and an array of episode objects.
 const fillerJSON = `[
   {"slug":"naruto","title":"Naruto","mappings":{"anilist_id":20,"mal_id":20},
    "episodes":[
@@ -134,7 +130,6 @@ func TestFillersParsesAllCategories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The unmapped show cannot be joined to anything.
 	if len(got) != 4 {
 		t.Fatalf("got %d entries, want 4", len(got))
 	}
@@ -155,7 +150,6 @@ func TestFillersParsesAllCategories(t *testing.T) {
 	}
 }
 
-// A missing bulk dataset is a broken URL, not a successful load of nothing.
 func TestFillersTreatsMissingFileAsError(t *testing.T) {
 	c := testClient(t, "filler", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -202,7 +196,6 @@ func TestSkips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A zero-length interval is unusable.
 	if len(got) != 2 {
 		t.Fatalf("got %d skips, want 2", len(got))
 	}
@@ -221,13 +214,11 @@ func TestSkipsNotFound(t *testing.T) {
 		t.Fatalf("got %d skips, err %v", len(got), err)
 	}
 
-	// Without a MAL id there is nothing to query.
 	if got, _ := c.Skips(context.Background(), 0, 1, 1440); got != nil {
 		t.Error("querying without a mal id should do nothing")
 	}
 }
 
-// Recap exists in no filler dataset, so this is the only source for it.
 func TestFlagsReadsRecap(t *testing.T) {
 	c := testClient(t, "tenrai", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"data":[
@@ -241,7 +232,6 @@ func TestFlagsReadsRecap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Only episodes carrying a flag are worth storing.
 	if len(got) != 2 {
 		t.Fatalf("got %d flagged episodes, want 2", len(got))
 	}
@@ -252,14 +242,11 @@ func TestFlagsReadsRecap(t *testing.T) {
 			recap = f
 		}
 	}
-	// An episode can be filler and a recap at once.
 	if !recap.Filler || !recap.Recap {
 		t.Fatalf("episode 26 = %+v", recap)
 	}
 }
 
-// The same crawl names the episodes and scores them; a field in an unexpected shape must not cost the flags,
-// and a thread off MyAnimeList is dropped.
 func TestListingReadsTitlesAndDates(t *testing.T) {
 	c := testClient(t, "tenrai", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"data":[
@@ -284,7 +271,6 @@ func TestListingReadsTitlesAndDates(t *testing.T) {
 	if first.Runtime != 23 || first.AirDate != 1386547200 {
 		t.Errorf("runtime %d, air date %d", first.Runtime, first.AirDate)
 	}
-	// "Episode 2" is the placeholder for an episode nobody named.
 	if second := got.Episodes[1]; second.Number != 2 || second.TitleEN != "" || second.AirDate != 0 {
 		t.Errorf("episode 2 = %+v", second)
 	}
@@ -312,64 +298,36 @@ func TestParseDate(t *testing.T) {
 	}
 }
 
-// Jikan 504s for days at a time, so the flags fetch leads with Tenrai.
-func TestFlagsFallsBackWhenThePrimaryIsDown(t *testing.T) {
-	jikan := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `{"data":[{"mal_id":7,"filler":true,"recap":false}],
-		  "pagination":{"last_visible_page":1,"has_next_page":false}}`)
-	}))
-	t.Cleanup(jikan.Close)
-
-	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestFlagsDownIsAnError(t *testing.T) {
+	c := testClient(t, "tenrai", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gateway timeout", http.StatusGatewayTimeout)
-	}))
-	t.Cleanup(dead.Close)
-
-	c := New()
-	c.SetURL("tenrai", dead.URL)
-	c.SetURL("jikan", jikan.URL)
-
-	got, err := c.Flags(context.Background(), 20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].Episode != 7 {
-		t.Fatalf("got %+v, want the fallback's episode 7", got)
+	})
+	if _, err := c.Flags(context.Background(), 20); err == nil || errors.Is(err, ErrNotListed) {
+		t.Fatalf("err = %v, want a failure that is not ErrNotListed", err)
 	}
 }
 
-// A mirror that has not caught up answers 404; the other may list the show, and
-// when neither does the answer is "not yet", not a permanent "no flags".
-func TestFlagsTriesTheOtherHostWhenOneHasNothing(t *testing.T) {
-	var jikanListed bool
-	jikan := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !jikanListed {
-			io.WriteString(w, `{"data":[],"pagination":{"has_next_page":false}}`)
+func TestFlagsNotListedUntilListed(t *testing.T) {
+	var listed bool
+	c := testClient(t, "tenrai", func(w http.ResponseWriter, r *http.Request) {
+		if !listed {
+			http.NotFound(w, r)
 			return
 		}
 		io.WriteString(w, `{"data":[{"mal_id":3,"filler":false,"recap":true}],
 		  "pagination":{"has_next_page":false}}`)
-	}))
-	t.Cleanup(jikan.Close)
-	missing := httptest.NewServer(http.NotFoundHandler())
-	t.Cleanup(missing.Close)
-
-	c := New()
-	c.SetURL("tenrai", missing.URL)
-	c.SetURL("jikan", jikan.URL)
+	})
 
 	if _, err := c.Flags(context.Background(), 20); !errors.Is(err, ErrNotListed) {
 		t.Fatalf("err = %v, want ErrNotListed", err)
 	}
-	jikanListed = true
+	listed = true
 	got, err := c.Flags(context.Background(), 20)
 	if err != nil || len(got) != 1 || !got[0].Recap {
-		t.Fatalf("got %+v, %v; want jikan's recap", got, err)
+		t.Fatalf("got %+v, %v; want the recap", got, err)
 	}
 }
 
-// The site's rows carry their classification in the row class and the episode
-// number in its id, so neither depends on the cell layout holding still.
 func TestFillerSiteEpisodesParsesRows(t *testing.T) {
 	c := testClient(t, "fillershow", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `
@@ -396,7 +354,6 @@ func TestFillerSiteEpisodesParsesRows(t *testing.T) {
 	}
 }
 
-// Titles differ in punctuation and bracket the romanisation; both halves resolve to one show.
 func TestFillerSiteShowsMatchesEitherTitle(t *testing.T) {
 	c := testClient(t, "fillersite", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `

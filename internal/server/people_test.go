@@ -14,8 +14,6 @@ import (
 	"yoru/internal/store"
 )
 
-// peopleHarness answers the person and character pages from stand-ins, Jikan down, with a list holding one
-// show (MAL 1575, Yoru's 100) the viewer completed.
 func peopleHarness(t *testing.T, person, character string) *harness {
 	t.Helper()
 	answer := func(body string) string {
@@ -26,8 +24,6 @@ func peopleHarness(t *testing.T, person, character string) *harness {
 	meta := metadata.New()
 	meta.SetURL("tenrai-person", answer(person))
 	meta.SetURL("tenrai-character", answer(character))
-	meta.SetURL("jikan-person", "http://127.0.0.1:9")
-	meta.SetURL("jikan-character", "http://127.0.0.1:9")
 	h := newHarness(t, config.Config{}, nil, func(d *Deps) {
 		d.Enricher = library.NewEnricher(d.Store, meta, slog.New(slog.DiscardHandler))
 	})
@@ -49,8 +45,6 @@ const personJSON = `{"data":{"mal_id":86,"name":"Fukuyama, Jun","given_name":"�
 "anime":[{"position":"Theme Song Performance","anime":{"mal_id":1575,"title":"Code Geass"}},
  {"position":"Inserted Song Performance","anime":{"mal_id":1575,"title":"Code Geass"}}]}}`
 
-// A voice actor's page: one card a character however many shows they're in, the viewer's own show first and
-// as Yoru names it; their credits one row a show.
 func TestAVoiceActorsRolesComeByCharacter(t *testing.T) {
 	h := peopleHarness(t, personJSON, `{}`)
 	code, body := h.call(t, "GET", "/api/person/86", "")
@@ -74,7 +68,6 @@ func TestAVoiceActorsRolesComeByCharacter(t *testing.T) {
 	}
 }
 
-// A character's page: the shows they're in (the viewer's first) and their voices, Japanese first.
 func TestACharactersPage(t *testing.T) {
 	h := peopleHarness(t, `{}`, `{"data":{"mal_id":417,"name":"Lamperouge, Lelouch","name_kanji":"ルルーシュ","about":"A prince.",
 "anime":[{"role":"Main","anime":{"mal_id":2904,"title":"Code Geass R2"}},{"role":"Main","anime":{"mal_id":1575,"title":"Code Geass"}}],

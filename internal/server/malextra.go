@@ -4,23 +4,24 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"yoru/internal/store"
 )
 
-// MyAnimeList's own API has no favourites; Jikan reads the public profile.
-var jikanBase = "https://api.jikan.moe/v4"
+var malSite = "https://myanimelist.net"
 
-// malFavouritesImport pulls the favourites off the connected MAL profile, once.
-// One-way by nature, so it is a button rather than part of the sync.
+var favouriteAnime = regexp.MustCompile(`href="(?:https://myanimelist\.net)?/anime/(\d+)/`)
+
 func (s *Server) malFavouritesImport(w http.ResponseWriter, r *http.Request) {
 	name, _ := s.store.Setting(r.Context(), "mal.user_name")
 	if name == "" {
@@ -28,9 +29,10 @@ func (s *Server) malFavouritesImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ids, err := jikanFavourites(r.Context(), jikanBase, name)
+	ids, err := profileFavourites(r.Context(), malSite, name)
 	if err != nil {
-		s.fail(w, "mal favourites", err)
+		s.log.Error("mal favourites", "err", err)
+		send(w, http.StatusBadGateway, map[string]any{"error": "Couldn't read your MyAnimeList profile. Try again later."})
 		return
 	}
 
@@ -68,11 +70,10 @@ func (s *Server) malFavouritesImport(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func jikanFavourites(ctx context.Context, base, user string) ([]int, error) {
+func profileFavourites(ctx context.Context, site, user string) ([]int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		base+"/users/"+url.PathEscape(user)+"/favorites", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, site+"/profile/"+url.PathEscape(user), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -83,27 +84,33 @@ func jikanFavourites(ctx context.Context, base, user string) ([]int, error) {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("jikan: HTTP %d", res.StatusCode)
+		return nil, fmt.Errorf("myanimelist profile: HTTP %d", res.StatusCode)
 	}
-
-	var body struct {
-		Data struct {
-			Anime []struct {
-				MalID int `json:"mal_id"`
-			} `json:"anime"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(&body); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	if err != nil {
 		return nil, err
 	}
-	ids := make([]int, 0, len(body.Data.Anime))
-	for _, a := range body.Data.Anime {
-		ids = append(ids, a.MalID)
+
+	page := string(raw)
+	if !strings.Contains(page, `class="user-profile"`) {
+		return nil, errors.New("myanimelist sent something other than the profile page")
+	}
+	_, block, found := strings.Cut(page, `id="anime_favorites"`)
+	if !found {
+		return nil, nil
+	}
+	block, _, _ = strings.Cut(block, `_favorites"`)
+	var ids []int
+	seen := map[int]bool{}
+	for _, m := range favouriteAnime.FindAllStringSubmatch(block, -1) {
+		if id, _ := strconv.Atoi(m[1]); id > 0 && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
 	}
 	return ids, nil
 }
 
-// malExport is the list MyAnimeList lets a user download, gzipped or not.
 type malExport struct {
 	Anime []struct {
 		ID        int    `xml:"series_animedb_id"`
@@ -128,7 +135,6 @@ func looksLikeXML(b []byte) bool {
 	return bytes.HasPrefix(bytes.TrimLeft(b, "\xef\xbb\xbf \t\r\n"), []byte("<"))
 }
 
-// malEntries turns a MAL export into library entries; unplaceable ids are counted, not guessed.
 func (s *Server) malEntries(ctx context.Context, raw []byte) ([]store.ExportEntry, int, error) {
 	if isGzip(raw) {
 		zr, err := gzip.NewReader(bytes.NewReader(raw))

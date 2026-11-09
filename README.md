@@ -273,10 +273,10 @@ as that license requires.
 Where Yoru's anime information comes from (Yoru isn't affiliated with any of them):
 
 - [AniList](https://anilist.co): show details, lists and schedules
-- MyAnimeList, through [Jikan](https://jikan.moe) and [Tenrai](https://tenrai.org): episode
-  titles, filler and recap flags, cast and staff
-- [TheTVDB](https://thetvdb.com) and [AniDB](https://anidb.net), through ani.zip: episode numbering
-  and pictures
+- MyAnimeList, through [Tenrai](https://tenrai.org): missing English episode titles, filler
+  and recap flags, cast and staff
+- [TheTVDB](https://thetvdb.com) and [AniDB](https://anidb.net), through ani.zip: episode titles,
+  numbering and pictures
 - [AniSkip](https://aniskip.com): opening and ending times, and where you share yours
 - [SeaDex](https://seadex.moe): the best release of a show
 - [TRaSH Guides](https://trash-guides.info), under the MIT License: release group grades

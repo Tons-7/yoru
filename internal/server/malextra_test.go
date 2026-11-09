@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"yoru/internal/config"
@@ -107,17 +108,23 @@ func TestMALFavouritesImport(t *testing.T) {
 	h := malHarness(t)
 	h.store.SetSetting(t.Context(), "mal.user_name", "tons")
 
-	jikan := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/users/tons/favorites" {
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/profile/tons" {
 			http.NotFound(w, r)
 			return
 		}
-		w.Write([]byte(`{"data":{"anime":[{"mal_id":52991,"title":"Frieren"},{"mal_id":999999,"title":"Unknown"}]}}`))
+		w.Write([]byte(`<div class="user-profile"><a href="https://myanimelist.net/anime/5114/Fullmetal">recently watched</a></div>
+			<ul class="favorites-list anime" id="anime_favorites">
+			<li><a href="https://myanimelist.net/anime/52991/Sousou_no_Frieren"><img></a>
+			<a href="https://myanimelist.net/anime/52991/Sousou_no_Frieren">Frieren</a></li>
+			<li><a href="https://myanimelist.net/anime/999999/Unknown">Unknown</a></li></ul>
+			<ul class="favorites-list manga" id="manga_favorites">
+			<li><a href="https://myanimelist.net/anime/21/One_Piece">One Piece</a></li></ul>`))
 	}))
-	t.Cleanup(jikan.Close)
-	was := jikanBase
-	jikanBase = jikan.URL
-	t.Cleanup(func() { jikanBase = was })
+	t.Cleanup(site.Close)
+	was := malSite
+	malSite = site.URL
+	t.Cleanup(func() { malSite = was })
 
 	rec := postLibrary(t, h, "/api/mal/favourites/import", "")
 	if rec.Code != http.StatusOK {
@@ -132,11 +139,28 @@ func TestMALFavouritesImport(t *testing.T) {
 		t.Error("the matched favourite was not set")
 	}
 
-	// A second run changes nothing.
 	rec = postLibrary(t, h, "/api/mal/favourites/import", "")
 	json.Unmarshal(rec.Body.Bytes(), &rep)
 	if rep["favourited"] != 0 {
 		t.Errorf("favourited %d again", rep["favourited"])
+	}
+}
+
+func TestMALFavouritesRefuseAPageThatIsNotAProfile(t *testing.T) {
+	h := malHarness(t)
+	h.store.SetSetting(t.Context(), "mal.user_name", "tons")
+
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html><title>Just a moment...</title></html>`))
+	}))
+	t.Cleanup(site.Close)
+	was := malSite
+	malSite = site.URL
+	t.Cleanup(func() { malSite = was })
+
+	rec := postLibrary(t, h, "/api/mal/favourites/import", "")
+	if rec.Code == http.StatusOK || !strings.Contains(rec.Body.String(), "Couldn't read your MyAnimeList profile") {
+		t.Fatalf("status = %d: %s; a page that is not a profile must say so, not read as no favourites", rec.Code, rec.Body.String())
 	}
 }
 

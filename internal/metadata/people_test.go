@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// The cast keeps each voice actor's MyAnimeList id, which their page opens by.
 func TestCastVoicesKeepTheirIDs(t *testing.T) {
 	c := testClient(t, "characters", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"data":[{"character":{"mal_id":417,"name":"Lelouch"},"role":"Main","favorites":5,
@@ -19,10 +18,8 @@ func TestCastVoicesKeepTheirIDs(t *testing.T) {
 	}
 }
 
-// Neither source knowing a person is said as such, not as a failure to retry.
 func TestNoSuchPerson(t *testing.T) {
 	c := testClient(t, "tenrai-person", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"data":{}}`) })
-	c.SetURL("jikan-person", c.url("tenrai-person", ""))
 	if _, err := c.PersonPage(context.Background(), 1); err != ErrNoPerson {
 		t.Fatalf("err = %v, want ErrNoPerson", err)
 	}

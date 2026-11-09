@@ -195,7 +195,7 @@ func (s *Store) SaveFlags(ctx context.Context, malID int, flags []metadata.Episo
 
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO filler (mal_id, number, kind, source, recap, recap_source)
-			VALUES (?,?,?,'jikan',?, 'jikan')
+			VALUES (?,?,?,'mal',?, 'mal')
 			ON CONFLICT(mal_id, number) DO UPDATE SET
 			    recap=excluded.recap,
 			    recap_source=excluded.recap_source,
@@ -752,6 +752,76 @@ func (s *Store) StillGaps(ctx context.Context, animeID int) (map[int]bool, error
 		missing[number] = true
 	}
 	return missing, rows.Err()
+}
+
+func (s *Store) TitlesDue(ctx context.Context, animeID int) bool {
+	now := time.Now()
+	var missing, recent int
+	if err := s.r.QueryRowContext(ctx, `
+		SELECT count(*), coalesce(sum(air_date >= ?), 0) FROM episode
+		WHERE anime_id = ? AND is_special = 0 AND number IS NOT NULL
+		  AND (title_en IS NULL OR title_en = '')
+		  AND air_date IS NOT NULL AND air_date <= ?`,
+		now.Add(-titlesRecent).Unix(), animeID, now.Unix()).Scan(&missing, &recent); err != nil || missing == 0 {
+		return false
+	}
+	at, err := s.SourceRefreshedAt(ctx, titlesKey(animeID))
+	if err != nil {
+		return false
+	}
+	if recent > 0 {
+		return now.Sub(at) >= titlesRetry
+	}
+	return now.Sub(at) >= titlesRetryOld
+}
+
+func (s *Store) MarkTitlesTried(ctx context.Context, animeID, count int) error {
+	return s.MarkSource(ctx, titlesKey(animeID), count)
+}
+
+const (
+	titlesRecent    = 30 * 24 * time.Hour
+	titlesRetry     = 12 * time.Hour
+	titlesRetryOld  = 30 * 24 * time.Hour
+	titlesDateSlack = 10 * 24 * time.Hour
+)
+
+func titlesKey(animeID int) string {
+	return "titles:" + strconv.Itoa(animeID)
+}
+
+func (s *Store) FillEnglishTitles(ctx context.Context, animeID int, eps []metadata.Episode) (int, error) {
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.PrepareContext(ctx, `
+		UPDATE episode SET title_en = ?
+		WHERE anime_id = ? AND ep_key = ? AND is_special = 0 AND (title_en IS NULL OR title_en = '')
+		  AND air_date IS NOT NULL AND abs(air_date - ?) <= ?`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	slack := int64(titlesDateSlack / time.Second)
+	var filled int
+	for _, e := range eps {
+		title := strings.TrimSpace(e.TitleEN)
+		if e.Number <= 0 || title == "" || e.AirDate == 0 {
+			continue
+		}
+		res, err := stmt.ExecContext(ctx, title, animeID, strconv.Itoa(e.Number), e.AirDate, slack)
+		if err != nil {
+			return 0, err
+		}
+		if n, err := res.RowsAffected(); err == nil {
+			filled += int(n)
+		}
+	}
+	return filled, tx.Commit()
 }
 
 func (s *Store) SetEpisodeStills(ctx context.Context, animeID int, stills map[int]string) (int, error) {

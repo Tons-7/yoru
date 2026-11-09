@@ -99,10 +99,12 @@ func (s *Server) episodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	titlesPending := false
 	if s.enricher != nil {
 		if _, err := s.enricher.Episodes(r.Context(), id); err != nil {
 			s.log.Warn("fetch episodes", "anime", id, "err", err)
 		}
+		titlesPending = s.enricher.TitlesPending(r.Context(), id)
 	}
 
 	eps, err := s.store.Episodes(r.Context(), id)
@@ -124,7 +126,7 @@ func (s *Server) episodes(w http.ResponseWriter, r *http.Request) {
 		s.deriveEpisodesAsync(id)
 	}
 
-	send(w, http.StatusOK, map[string]any{"items": eps, "count": len(eps)})
+	send(w, http.StatusOK, map[string]any{"items": eps, "count": len(eps), "titlesPending": titlesPending})
 }
 
 func (s *Server) deriveEpisodesAsync(animeID int) {

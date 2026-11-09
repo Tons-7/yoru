@@ -13,14 +13,12 @@ import (
 	"yoru/internal/store"
 )
 
-// random draws from the corpus, which has titles AniList lacks; a genre filter goes to AniList.
 func (s *Server) random(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	year, _ := strconv.Atoi(q.Get("year"))
 	format := q.Get("format")
 	genres := csv(q.Get("genres"))
 
-	// A few candidates, for ids gone upstream; an empty corpus (still seeding) falls through to AniList.
 	if len(genres) == 0 {
 		ids, err := s.store.RandomIDs(r.Context(), format, year, 5)
 		if err != nil {
@@ -47,8 +45,6 @@ func (s *Server) random(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusNotFound, map[string]any{"error": "no anime matched"})
 }
 
-// characters serves a show's cast. Kept off the detail payload: it is a second
-// upstream call, and the page is useful long before the cast arrives.
 func (s *Server) characters(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil || id == 0 {
@@ -62,7 +58,6 @@ func (s *Server) characters(w http.ResponseWriter, r *http.Request) {
 
 	cast, err := s.enricher.Characters(r.Context(), id)
 	if err != nil {
-		// A show never mapped to MAL has no cast to find, which can't fail the page.
 		s.log.Warn("characters", "anime", id, "err", err)
 		send(w, http.StatusOK, map[string]any{"items": []any{}})
 		return
@@ -70,8 +65,6 @@ func (s *Server) characters(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"items": cast, "count": len(cast)})
 }
 
-// extra serves a show's themes, key staff and trailer. Two upstream requests,
-// so it is kept off the detail payload the same way the cast is.
 func (s *Server) extra(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil || id == 0 {
@@ -85,7 +78,6 @@ func (s *Server) extra(w http.ResponseWriter, r *http.Request) {
 
 	out, err := s.enricher.Extra(r.Context(), id)
 	if err != nil {
-		// A show never mapped to MAL has none of this, which can't fail the page.
 		s.log.Warn("anime extra", "anime", id, "err", err)
 		send(w, http.StatusOK, metadata.Extra{})
 		return
@@ -93,8 +85,6 @@ func (s *Server) extra(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, out)
 }
 
-// anime serves the detail page. It resolves against whichever catalogue the id
-// belongs to, so a MyAnimeList-only show opens the same way an AniList one does.
 func (s *Server) anime(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil || id == 0 {
@@ -112,8 +102,6 @@ func (s *Server) anime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Progress and list status live locally and are what the page's controls
-	// bind to, so they travel with the record rather than needing a second call.
 	if entry, err := s.store.ListEntry(r.Context(), id); err == nil && entry.AnimeID != 0 {
 		body["listStatus"] = entry.Status
 		body["progress"] = entry.Progress
@@ -128,8 +116,6 @@ func (s *Server) anime(w http.ResponseWriter, r *http.Request) {
 		body["notify"] = f
 	}
 
-	// An episode left part way is what "continue" should mean, ahead of the
-	// tracker's count — which a jump to the end can have advanced already.
 	if p, ok, err := s.store.LastInProgress(r.Context(), id); err == nil && ok {
 		if episode, err := strconv.Atoi(p.EpKey); err == nil {
 			body["resume"] = map[string]any{
@@ -140,10 +126,8 @@ func (s *Server) anime(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, body)
 }
 
-// Jikan queues requests and can stall for a minute; past this the corpus record stands in.
-const jikanWait = 8 * time.Second
+const malWait = 8 * time.Second
 
-// animeCard resolves a corpus id in its catalogue; down means the lookup failed, worth a retry.
 func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, down bool) {
 	titles := s.store.TitleMode(r.Context(), 0)
 
@@ -154,8 +138,8 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 	progress, listed := onList[id]
 
 	if malID := store.MALIDOf(id); malID > 0 {
-		jikan, cancel := context.WithTimeout(r.Context(), jikanWait)
-		detail, err := s.enricher.Anime(jikan, malID)
+		wait, cancel := context.WithTimeout(r.Context(), malWait)
+		detail, err := s.enricher.Anime(wait, malID)
 		cancel()
 		if err == nil {
 			var english *string
@@ -174,9 +158,7 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 			}, true, false
 		}
 
-		// Jikan is unreliable for exactly the MAL-only titles; dropping them would
-		// bias the random draw toward AniList, so the corpus record stands in.
-		s.log.Warn("jikan lookup failed, using corpus record", "mal", malID, "err", err)
+		s.log.Warn("myanimelist lookup failed, using corpus record", "mal", malID, "err", err)
 
 		rec, recErr := s.store.CorpusRecord(r.Context(), id)
 		if recErr != nil || rec.AnimeID == 0 {
@@ -195,7 +177,6 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 		}, true, false
 	}
 
-	// A finished show checked within the day is served as AniList gave it, unasked; anything else is asked.
 	m, fresh := anilist.Media{}, false
 	if s.importer != nil {
 		m, fresh = s.importer.Finished(r.Context(), id)
@@ -215,8 +196,6 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 		}
 		m = media[0]
 
-		// Keep the local record current: facts like the adult flag decide which
-		// trackers are searched, and a stub row created elsewhere never had them.
 		if s.importer != nil {
 			if _, err := s.importer.Save(r.Context(), media); err != nil {
 				s.log.Warn("save anime", "anime", id, "err", err)
@@ -246,7 +225,6 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 	return body, true, false
 }
 
-// savedAnime is Yoru's row of a show, for when AniList is unreachable and no answer was saved.
 func (s *Server) savedAnime(ctx context.Context, id int) (anilist.Media, bool) {
 	a, at, ok, err := s.store.AnimeRecord(ctx, id)
 	if err != nil || !ok {
@@ -256,8 +234,6 @@ func (s *Server) savedAnime(ctx context.Context, id int) (anilist.Media, bool) {
 	return library.FromRecord(a), true
 }
 
-// syncable reports which trackers can hold a list entry for this show. A MAL-only
-// title has no AniList entry, and many AniList entries lack a MAL id, so sync is one-way.
 func syncable(anilist, mal bool) map[string]bool {
 	return map[string]bool{"anilist": anilist, "mal": mal}
 }

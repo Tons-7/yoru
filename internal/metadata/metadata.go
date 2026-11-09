@@ -1,4 +1,3 @@
-// Package metadata fetches what AniList lacks: episode titles and stills, filler flags, op/ed timestamps.
 package metadata
 
 import (
@@ -17,19 +16,12 @@ import (
 )
 
 const (
-	AniZipURL  = "https://api.ani.zip/mappings?anilist_id=%d"
-	AniSkipURL = "https://api.aniskip.com/v2/skip-times/%d/%d?types=op&types=ed&types=mixed-op&types=mixed-ed&types=recap&episodeLength=%d"
-	FillerURL  = "https://github.com/AniraTeam/AniFiller/releases/latest/download/anifiller.min.json"
-	JikanURL   = "https://api.jikan.moe/v4/anime/%d/episodes?page=%d"
-	// Tenrai mirrors the same catalogue behind a Jikan-compatible schema; Jikan
-	// 504s for days at a time, so relying on one host leaves recap empty.
-	TenraiURL = "https://api.tenrai.org/v1/anime/%d/episodes?page=%d"
-	// Cast comes from the same catalogue. MAL records it per show, not per
-	// episode, so this is who is in the series rather than who is in tonight's.
+	AniZipURL     = "https://api.ani.zip/mappings?anilist_id=%d"
+	AniSkipURL    = "https://api.aniskip.com/v2/skip-times/%d/%d?types=op&types=ed&types=mixed-op&types=mixed-ed&types=recap&episodeLength=%d"
+	FillerURL     = "https://github.com/AniraTeam/AniFiller/releases/latest/download/anifiller.min.json"
+	TenraiURL     = "https://api.tenrai.org/v1/anime/%d/episodes?page=%d"
 	CharactersURL = "https://api.tenrai.org/v1/anime/%d/characters"
 
-	// The site the filler dataset is built from. Its releases lag badly on
-	// airing shows, so it is read only to fill episodes the dataset has no row for.
 	FillerSiteIndexURL = "https://www.animefillerlist.com/shows"
 	FillerSiteShowURL  = "https://www.animefillerlist.com/shows/%s"
 )
@@ -46,7 +38,6 @@ func New() *Client {
 	}
 }
 
-// SetURL redirects a source, for tests.
 func (c *Client) SetURL(name, url string) { c.urls[name] = url }
 
 func (c *Client) url(name, fallback string) string {
@@ -57,7 +48,6 @@ func (c *Client) url(name, fallback string) string {
 }
 
 type Episode struct {
-	// Number is the entry's own 1..N; TvdbNumber, TheTVDB's in-season one, is an alias some groups use.
 	Number     int
 	TvdbNumber int
 	Absolute   int
@@ -71,8 +61,6 @@ type Episode struct {
 	AniDBID    int
 }
 
-// anizipEpisode mirrors one entry of the episodes map, reading both spellings of renamed fields. airdate is
-// AniDB's day, named so the decoder, which matches keys case-insensitively, can't take it for airDate.
 type anizipEpisode struct {
 	Episode        string            `json:"episode"`
 	EpisodeNumber  int               `json:"episodeNumber"`
@@ -97,7 +85,6 @@ func (e anizipEpisode) overview() string {
 	return e.Summary
 }
 
-// airTime prefers the broadcast instant; the plain dates are a Japanese day read as UTC midnight, hours off.
 func (e anizipEpisode) airTime() int64 {
 	for _, s := range []string{e.AirDateUTC, e.AirDate, e.AniDBAirDate} {
 		if t := parseDate(s); t != 0 {
@@ -131,7 +118,6 @@ type Mapping struct {
 	Episodes []Episode
 }
 
-// Episodes fetches per-episode data, skipping specials keyed "S1".."Sn".
 func (c *Client) Episodes(ctx context.Context, anilistID int) (Mapping, error) {
 	url := c.url("anizip", fmt.Sprintf(AniZipURL, anilistID))
 
@@ -155,7 +141,6 @@ func (c *Client) Episodes(ctx context.Context, anilistID int) (Mapping, error) {
 		if strings.HasPrefix(strings.ToUpper(key), "S") {
 			continue
 		}
-		// The map key is the entry's own numbering; episodeNumber is TVDB's.
 		number, _ := strconv.Atoi(key)
 		if number == 0 {
 			number = ep.EpisodeNumber
@@ -163,7 +148,6 @@ func (c *Client) Episodes(ctx context.Context, anilistID int) (Mapping, error) {
 		if number == 0 {
 			continue
 		}
-		// TheTVDB's season 0 is its specials, a numbering no release uses.
 		tvdb := ep.EpisodeNumber
 		if ep.SeasonNumber == 0 {
 			tvdb = 0
@@ -205,8 +189,6 @@ type aniskipResponse struct {
 	} `json:"results"`
 }
 
-// Skips returns opening and ending markers. episodeLength is the player's own
-// duration: passing it lets the service match the right cut of the episode.
 func (c *Client) Skips(ctx context.Context, malID, episode, episodeLength int) ([]SkipTime, error) {
 	if malID == 0 || episode == 0 {
 		return nil, nil
@@ -261,8 +243,6 @@ type fillerShow struct {
 	} `json:"episodes"`
 }
 
-// Fillers loads the published dataset rather than scraping. Most shows are not
-// in it at all, which is correct: a series with no filler has no entry.
 func (c *Client) Fillers(ctx context.Context) ([]Filler, error) {
 	body, err := c.getStrict(ctx, c.url("filler", FillerURL))
 	if err != nil {
@@ -297,14 +277,11 @@ func (c *Client) Fillers(ctx context.Context) ([]Filler, error) {
 	return out, nil
 }
 
-// Rows carry their classification in the row's own class, and the episode
-// number in its id, so neither depends on the cell layout holding still.
 var (
 	fillerRow    = regexp.MustCompile(`(?i)<tr class="([a-z_ ]+)"[^>]*id="eps-(\d+)"`)
 	fillerShowRe = regexp.MustCompile(`(?i)<a href="/shows/([a-z0-9-]+)"[^>]*>([^<]+)</a>`)
 )
 
-// FillerSiteShows maps a normalised show title to the site's slug for it.
 func (c *Client) FillerSiteShows(ctx context.Context) (map[string]string, error) {
 	body, err := c.get(ctx, c.url("fillersite", FillerSiteIndexURL))
 	if err != nil {
@@ -314,8 +291,6 @@ func (c *Client) FillerSiteShows(ctx context.Context) (map[string]string, error)
 	out := map[string]string{}
 	for _, m := range fillerShowRe.FindAllStringSubmatch(string(body), -1) {
 		slug, title := m[1], html.UnescapeString(m[2])
-		// Titles often carry the romanisation in brackets — "A Certain Magical
-		// Index (Toaru Majutsu No Index)" — and either half may be what we hold.
 		for part := range strings.SplitSeq(strings.NewReplacer("(", "|", ")", "").Replace(title), "|") {
 			if key := NormaliseTitle(part); key != "" {
 				if _, taken := out[key]; !taken {
@@ -330,7 +305,6 @@ func (c *Client) FillerSiteShows(ctx context.Context) (map[string]string, error)
 	return out, nil
 }
 
-// FillerSiteEpisodes reads one show's classifications straight from the site.
 func (c *Client) FillerSiteEpisodes(ctx context.Context, slug string) ([]Filler, error) {
 	if slug == "" {
 		return nil, nil
@@ -352,15 +326,12 @@ func (c *Client) FillerSiteEpisodes(ctx context.Context, slug string) ([]Filler,
 		if err != nil || number == 0 {
 			continue
 		}
-		// The class is "manga_canon odd" or "filler even"; only the first word is the classification.
 		kind := strings.ReplaceAll(strings.Fields(m[1])[0], "_", "-")
 		out = append(out, Filler{Episode: number, Kind: normaliseKind(kind)})
 	}
 	return out, nil
 }
 
-// NormaliseTitle reduces a title to the letters and digits in it, so spelling
-// and punctuation cannot keep two names for the same show apart.
 func NormaliseTitle(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
@@ -371,7 +342,6 @@ func NormaliseTitle(s string) string {
 	return b.String()
 }
 
-// The dataset tells manga from anime canon and marks mixed episodes, which a boolean would lose.
 func normaliseKind(kind string) string {
 	switch k := strings.ToLower(strings.TrimSpace(kind)); k {
 	case "manga-canon", "manga canon", "manga":
@@ -395,16 +365,13 @@ type EpisodeFlags struct {
 	Recap   bool
 }
 
-// Voice is one performance, Japanese or English only, so a card can follow sub vs dub.
 type Voice struct {
-	// ID is the person's on MyAnimeList, which their page opens by.
 	ID       int    `json:"id,omitempty"`
 	Name     string `json:"name"`
 	Image    string `json:"image,omitempty"`
 	Language string `json:"language"`
 }
 
-// Character is one member of a show's cast, with whoever voiced them.
 type Character struct {
 	ID        int     `json:"id"`
 	Name      string  `json:"name"`
@@ -442,8 +409,6 @@ type charactersResponse struct {
 	} `json:"data"`
 }
 
-// Characters returns a show's cast, most-loved first: a long-running show lists
-// thousands of one-scene parts, so the ordering is what makes the list usable.
 func (c *Client) Characters(ctx context.Context, malID int) ([]Character, error) {
 	if malID == 0 {
 		return nil, nil
@@ -469,7 +434,6 @@ func (c *Client) Characters(ctx context.Context, malID int) ([]Character, error)
 			Favorites: entry.Favorites,
 		}
 
-		// Japanese first: the original performance, and the fallback when nothing was dubbed.
 		for _, want := range []string{"Japanese", "English"} {
 			for _, va := range entry.VoiceActors {
 				if va.Language != want {
@@ -491,12 +455,11 @@ func (c *Client) Characters(ctx context.Context, malID int) ([]Character, error)
 	return out, nil
 }
 
-type jikanResponse struct {
+type malEpisodes struct {
 	Data []struct {
-		MalID  int  `json:"mal_id"`
-		Filler bool `json:"filler"`
-		Recap  bool `json:"recap"`
-		// Tenrai adds the length in seconds and a synopsis; Jikan's list has neither.
+		MalID    int     `json:"mal_id"`
+		Filler   bool    `json:"filler"`
+		Recap    bool    `json:"recap"`
 		Title    string  `json:"title"`
 		TitleJA  string  `json:"title_japanese"`
 		Aired    *string `json:"aired"`
@@ -511,30 +474,25 @@ type jikanResponse struct {
 	} `json:"pagination"`
 }
 
-// ErrNotListed: no source lists the show's episodes yet.
 var ErrNotListed = errors.New("episode flags: episodes not listed yet")
 
-// Flags fetches per-episode filler and recap flags, the only recap source; lazily, as Jikan pages slowly.
 func (c *Client) Flags(ctx context.Context, malID int) ([]EpisodeFlags, error) {
 	listing, err := c.Listing(ctx, malID)
 	return listing.Flags, err
 }
 
-// Listing is a show's episodes as MyAnimeList lists them: titles and dates, and which are filler or recap.
 type Listing struct {
 	Episodes []Episode
 	Flags    []EpisodeFlags
 	Scores   []EpisodeScore
 }
 
-// EpisodeScore is how MyAnimeList's members rate one episode (1 to 5), and where they talk about it.
 type EpisodeScore struct {
 	Episode int
 	Score   float64
 	Forum   string
 }
 
-// placeholder is the title MyAnimeList gives an episode nobody has named.
 var placeholder = regexp.MustCompile(`(?i)^episode\s*\d+$`)
 
 func (c *Client) Listing(ctx context.Context, malID int) (Listing, error) {
@@ -543,48 +501,19 @@ func (c *Client) Listing(ctx context.Context, malID int) (Listing, error) {
 		return out, nil
 	}
 
-	// Tenrai first, Jikan (often 504s) as fallback; whichever answers page one serves the rest.
-	hosts := []struct{ name, pattern string }{
-		{"tenrai", TenraiURL},
-		{"jikan", JikanURL},
-	}
-	host := -1
-
-	fetch := func(h, page int) (jikanResponse, error) {
-		var res jikanResponse
-		body, err := c.get(ctx, c.url(hosts[h].name, fmt.Sprintf(hosts[h].pattern, malID, page)))
-		if err != nil {
-			return res, err
-		}
-		if err := json.Unmarshal(body, &res); err != nil {
-			return res, fmt.Errorf("episode flags: %w", err)
-		}
-		return res, nil
-	}
-
 	for page := 1; page <= 20; page++ {
-		var res jikanResponse
-		var err error
-
-		if host >= 0 {
-			res, err = fetch(host, page)
-		} else {
-			// A mirror that has not caught up answers 404 or nothing; the other may have the episodes.
-			for i := range hosts {
-				res, err = fetch(i, page)
-				if err == nil && len(res.Data) > 0 {
-					host = i
-					break
-				}
-			}
-			if err == nil && len(res.Data) == 0 {
-				return out, ErrNotListed
-			}
-		}
+		body, err := c.get(ctx, c.url("tenrai", fmt.Sprintf(TenraiURL, malID, page)))
 		if err != nil {
 			return out, err
 		}
+		var res malEpisodes
+		if err := json.Unmarshal(body, &res); err != nil {
+			return out, fmt.Errorf("episode flags: %w", err)
+		}
 		if len(res.Data) == 0 {
+			if page == 1 {
+				return out, ErrNotListed
+			}
 			break
 		}
 
@@ -596,7 +525,6 @@ func (c *Client) Listing(ctx context.Context, malID int) (Listing, error) {
 			if ep.Filler || ep.Recap {
 				out.Flags = append(out.Flags, EpisodeFlags{Episode: number, Filler: ep.Filler, Recap: ep.Recap})
 			}
-			// Only MyAnimeList's own forum: the link goes straight into the page.
 			if !strings.HasPrefix(ep.Forum, "https://myanimelist.net/") {
 				ep.Forum = ""
 			}
@@ -616,7 +544,6 @@ func (c *Client) Listing(ctx context.Context, malID int) (Listing, error) {
 		if !res.Pagination.HasNextPage {
 			break
 		}
-		// Faster paging silently returns empty pages, truncating long-running shows.
 		select {
 		case <-ctx.Done():
 			return out, ctx.Err()
@@ -640,7 +567,6 @@ func (c *Client) get(ctx context.Context, url string) ([]byte, error) {
 	}
 	defer res.Body.Close()
 
-	// A per-anime 404 just means no entry exists, not a failure.
 	if res.StatusCode == http.StatusNotFound {
 		return []byte("{}"), nil
 	}
@@ -650,8 +576,6 @@ func (c *Client) get(ctx context.Context, url string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(res.Body, 32<<20))
 }
 
-// getStrict treats a 404 as an error. For a bulk dataset a missing file is a
-// broken URL, and swallowing it reports a successful load of nothing.
 func (c *Client) getStrict(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

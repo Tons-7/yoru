@@ -11,35 +11,27 @@ import (
 const (
 	TenraiFullURL  = "https://api.tenrai.org/v1/anime/%d/full"
 	TenraiStaffURL = "https://api.tenrai.org/v1/anime/%d/staff"
-	JikanFullURL   = "https://api.jikan.moe/v4/anime/%d/full"
-	JikanStaffURL  = "https://api.jikan.moe/v4/anime/%d/staff"
 )
 
-// Theme is one opening or ending, shipped upstream as a single line
-// (`1: "Yuusha (勇者)" by YOASOBI (eps 1-16)`), taken apart here so it can be laid out.
 type Theme struct {
 	Title    string `json:"title"`
 	Artist   string `json:"artist,omitempty"`
 	Episodes string `json:"episodes,omitempty"`
 }
 
-// Credit is one person and what they did.
 type Credit struct {
-	// ID is the person's on MyAnimeList, which their page opens by.
 	ID    int    `json:"id,omitempty"`
 	Name  string `json:"name"`
 	Role  string `json:"role"`
 	Image string `json:"image,omitempty"`
 }
 
-// Extra is what a show has beyond its episodes and cast.
 type Extra struct {
-	Openings []Theme  `json:"openings,omitempty"`
-	Endings  []Theme  `json:"endings,omitempty"`
-	Staff    []Credit `json:"staff,omitempty"`
-	Trailer  string   `json:"trailer,omitempty"`
-	// StaffMissing: the staff request failed, so the answer is partial and worth asking again soon.
-	StaffMissing bool `json:"-"`
+	Openings     []Theme  `json:"openings,omitempty"`
+	Endings      []Theme  `json:"endings,omitempty"`
+	Staff        []Credit `json:"staff,omitempty"`
+	Trailer      string   `json:"trailer,omitempty"`
+	StaffMissing bool     `json:"-"`
 }
 
 type fullResponse struct {
@@ -70,7 +62,6 @@ type staffResponse struct {
 	} `json:"data"`
 }
 
-// The roles people read a staff list for, in reading order.
 var keyRoles = []string{
 	"Original Creator",
 	"Director",
@@ -81,8 +72,6 @@ var keyRoles = []string{
 	"Art Director",
 }
 
-// A position carries its scope in brackets — "Storyboard (eps 1, 11, 21)" — and
-// the scope is what makes it a minor credit rather than a defining one.
 var roleScope = regexp.MustCompile(`\s*\([^)]*\)\s*$`)
 
 var (
@@ -90,8 +79,6 @@ var (
 	themeEps   = regexp.MustCompile(`\s*\(eps?\s+([^)]*)\)\s*$`)
 )
 
-// Titles contain quotes of their own (`"Step - Step" by Ziggy`), so the split is
-// taken at the last `" by`, not the first; anything else is kept whole.
 func parseTheme(line string) Theme {
 	rest := strings.TrimSpace(themeIndex.ReplaceAllString(strings.TrimSpace(line), ""))
 
@@ -116,14 +103,13 @@ func parseTheme(line string) Theme {
 	return out
 }
 
-// Extra reads themes, key staff and trailer: two requests, so asked for apart from the details.
 func (c *Client) Extra(ctx context.Context, malID int) (Extra, error) {
 	if malID == 0 {
 		return Extra{}, nil
 	}
 
 	var full fullResponse
-	_, err := c.fromHosts(ctx, []host{{"tenrai-full", TenraiFullURL}, {"jikan-full", JikanFullURL}}, malID,
+	err := c.record(ctx, "tenrai-full", TenraiFullURL, malID,
 		func(body []byte) bool {
 			full = fullResponse{}
 			return json.Unmarshal(body, &full) == nil && full.Data.MalID != 0
@@ -143,9 +129,8 @@ func (c *Client) Extra(ctx context.Context, malID int) (Extra, error) {
 		out.Endings = append(out.Endings, parseTheme(line))
 	}
 
-	// Staff is the second request and the lesser half: a show without credits is still worth its themes.
 	var staff staffResponse
-	_, err = c.fromHosts(ctx, []host{{"tenrai-staff", TenraiStaffURL}, {"jikan-staff", JikanStaffURL}}, malID,
+	err = c.record(ctx, "tenrai-staff", TenraiStaffURL, malID,
 		func(body []byte) bool {
 			staff = staffResponse{}
 			return json.Unmarshal(body, &staff) == nil && len(staff.Data) > 0
@@ -155,8 +140,6 @@ func (c *Client) Extra(ctx context.Context, malID int) (Extra, error) {
 		return out, nil
 	}
 
-	// Grouped by role so the list reads in a fixed order; each role keeps only
-	// its first couple, since a long-running show credits many for one job.
 	const perRole = 2
 	seen := map[string]bool{}
 	for _, role := range keyRoles {

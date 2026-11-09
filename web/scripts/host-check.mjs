@@ -1,5 +1,3 @@
-// The host PC: This computer's rows, proxied devices, a full drive, Download all's confirm, credits, offline.
-// Never presses "Start Yoru when I sign in": that writes the real startup list.
 import { chromium } from 'playwright'
 import { connect } from 'node:net'
 
@@ -26,8 +24,6 @@ for (let i = 0; i < 60; i++) {
   await sleep(1000)
 }
 
-// A proxy on this machine: from loopback, but for someone else. Every way of saying so gets 401; the named one
-// last, as Settings shows the last request a proxy passed on.
 const bare = await new Promise((done) => {
   const { hostname, port } = new URL(BASE)
   const sock = connect(Number(port), hostname, () => sock.write(`GET /api/access HTTP/1.0\r\nHost: ${hostname}:${port}\r\n\r\n`))
@@ -44,7 +40,6 @@ let own = await (await fetch(`${BASE}/api/access`)).json()
 check(own.host === true && own.proxy?.client === '203.0.113.4' && !own.proxy?.site,
   'the host is still the host, learns who came through, and takes no address from a request without the token',
   JSON.stringify(own.proxy))
-// The address goes into a link carrying the token, so only a paired device's request gives it.
 await fetch(`${BASE}/api/health`, { headers: { ...viaProxy, 'X-Forwarded-Host': 'yoru.example.com', Authorization: `Bearer ${own.token}` } })
 own = await (await fetch(`${BASE}/api/access`)).json()
 check(own.proxy?.site === 'https://yoru.example.com', "and learns the proxy's address from a paired device", JSON.stringify(own.proxy))
@@ -57,7 +52,6 @@ page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 const section = (title) => page.locator('section', { has: page.getByRole('heading', { name: title, exact: true }) })
 const row = (label) => page.locator('[data-row]', { has: page.getByText(label, { exact: true }) })
 
-// This computer: sign-in shown as it stands, the two stay-awake switches saved both ways.
 await page.goto(`${BASE}/settings?tab=Computer`, { waitUntil: 'domcontentloaded' })
 const computer = section('This computer')
 check(await until(() => computer.isVisible()), 'This computer has a tab of its own')
@@ -77,23 +71,20 @@ for (const [label, key] of [['Stay awake while another device watches', 'power.a
 check(await computer.getByText(/The screen still turns off/).isVisible(), 'staying awake still lets the screen turn off')
 await computer.screenshot({ path: `${SHOTS}/host-this-computer.png` })
 
-// Devices: the proxy row, with the link that pairs through it.
 await page.goto(`${BASE}/settings?tab=Devices`, { waitUntil: 'domcontentloaded' })
 check(await until(() => row('Behind a proxy').isVisible()), 'Devices says devices come through a proxy')
 check(await row('Behind a proxy').getByText(/from 203\.0\.113\.4/).isVisible(), 'and from where')
 check(await row('Behind a proxy').getByText(/^https:\/\/yoru\.example\.com\/\?token=/).isVisible(), 'with the link to pair through it')
 await row('Behind a proxy').screenshot({ path: `${SHOTS}/host-proxy-row.png` })
 
-// About: every source named with what it gives, TheTVDB linked as its terms ask.
 await page.goto(`${BASE}/settings?tab=About`, { waitUntil: 'domcontentloaded' })
 const data = section('Data')
 check(await until(() => data.isVisible()), 'About has the Data section')
-for (const name of ['AniList', 'TheTVDB and AniDB, through ani.zip', 'AniSkip', 'SeaDex', 'MyAnimeList, through Jikan and Tenrai']) {
+for (const name of ['AniList', 'TheTVDB and AniDB, through ani.zip', 'AniSkip', 'SeaDex', 'MyAnimeList, through Tenrai']) {
   check(await data.getByText(name, { exact: true }).isVisible(), `credits ${name}`)
 }
 check((await data.getByRole('link', { name: 'thetvdb.com' }).getAttribute('href')) === 'https://thetvdb.com', 'links thetvdb.com')
 
-// Downloads: free space in the header, a full drive in words on the row, the queue saying it waits for room.
 const GB = 1 << 30
 await page.route('**/api/cache', (route) => route.fulfill({ json: { bytes: 0, budget: 5 * GB, freeBytes: 1.5 * GB, drive: 'D:' } }))
 await page.route('**/api/downloads', (route) => route.fulfill({ json: { count: 2, items: [
@@ -119,7 +110,6 @@ await page.screenshot({ path: `${SHOTS}/host-downloads.png` })
 await page.unroute('**/api/downloads')
 await page.unroute('**/api/download/queue')
 
-// Download all asks first when the show won't fit, and Cancel queues nothing.
 const posted = []
 await page.route('**/api/download/episodes', (route) => {
   posted.push(route.request().postData())
@@ -140,7 +130,6 @@ if (await until(() => all.isVisible(), 30_000)) {
 }
 await page.unroute('**/api/cache')
 
-// The installed app's worker: pages still load through it, and a page that can't load says why, then recovers.
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
 await page.evaluate(async () => {
   await navigator.serviceWorker.register('/sw.js')

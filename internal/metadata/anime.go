@@ -8,44 +8,25 @@ import (
 	"time"
 )
 
-type host struct{ name, pattern string }
+const requestWait = 4 * time.Second
 
-// hostWait bounds one host's answer, so a stalled first host still leaves the caller's budget for the next.
-const hostWait = 4 * time.Second
+var errNoRecord = errors.New("metadata: no such record")
 
-// errNoRecord: every host answered, and none had the record.
-var errNoRecord = errors.New("metadata: no host has the record")
-
-// fromHosts returns the first body found accepts; a host without the record passes to the next.
-func (c *Client) fromHosts(ctx context.Context, hosts []host, malID int, found func([]byte) bool) ([]byte, error) {
-	var err error
-	empty := 0
-	for _, h := range hosts {
-		hctx, cancel := context.WithTimeout(ctx, hostWait)
-		body, gerr := c.get(hctx, c.url(h.name, fmt.Sprintf(h.pattern, malID)))
-		cancel()
-		switch {
-		case gerr != nil:
-			err = gerr
-		case found(body):
-			return body, nil
-		default:
-			empty++
-		}
+func (c *Client) record(ctx context.Context, name, pattern string, malID int, found func([]byte) bool) error {
+	rctx, cancel := context.WithTimeout(ctx, requestWait)
+	defer cancel()
+	body, err := c.get(rctx, c.url(name, fmt.Sprintf(pattern, malID)))
+	if err != nil {
+		return err
 	}
-	if empty == len(hosts) {
-		return nil, errNoRecord
+	if !found(body) {
+		return errNoRecord
 	}
-	return nil, err
+	return nil
 }
 
-const (
-	JikanAnimeURL  = "https://api.jikan.moe/v4/anime/%d"
-	TenraiAnimeURL = "https://api.tenrai.org/v1/anime/%d"
-)
+const TenraiAnimeURL = "https://api.tenrai.org/v1/anime/%d"
 
-// AnimeDetail is the subset of Jikan's record Yoru shows for anime on MyAnimeList but not AniList, where there
-// is no AniList entry to read.
 type AnimeDetail struct {
 	MalID       int      `json:"malId"`
 	Romaji      string   `json:"romaji"`
@@ -70,7 +51,7 @@ type AnimeDetail struct {
 	URL         string   `json:"url"`
 }
 
-type jikanAnime struct {
+type malAnime struct {
 	Data struct {
 		MalID  int `json:"mal_id"`
 		URL    string
@@ -109,16 +90,12 @@ type jikanAnime struct {
 	} `json:"data"`
 }
 
-// Anime fetches a show AniList never catalogued; Tenrai leads, as Jikan often 504s on these.
 func (c *Client) Anime(ctx context.Context, malID int) (AnimeDetail, error) {
 	if malID <= 0 {
 		return AnimeDetail{}, fmt.Errorf("metadata: invalid mal id %d", malID)
 	}
 
-	hosts := []host{{"tenrai-anime", TenraiAnimeURL}, {"jikan-anime", JikanAnimeURL}}
-
-	// Retried across both: a second try at the same host often lands, as the first warmed its cache.
-	var res jikanAnime
+	var res malAnime
 	var err error
 	for attempt := range 3 {
 		if attempt > 0 {
@@ -128,8 +105,8 @@ func (c *Client) Anime(ctx context.Context, malID int) (AnimeDetail, error) {
 			case <-time.After(time.Duration(attempt) * time.Second):
 			}
 		}
-		_, err = c.fromHosts(ctx, hosts, malID, func(body []byte) bool {
-			res = jikanAnime{}
+		err = c.record(ctx, "tenrai-anime", TenraiAnimeURL, malID, func(body []byte) bool {
+			res = malAnime{}
 			return json.Unmarshal(body, &res) == nil && res.Data.MalID != 0
 		})
 		if err == nil || errors.Is(err, errNoRecord) {

@@ -3428,8 +3428,8 @@ function AboutTab() {
 
 const SOURCES: ReadonlyArray<{ name: string; gives: string; site?: string }> = [
   { name: 'AniList', gives: 'Show details, lists and schedules' },
-  { name: 'MyAnimeList, through Jikan and Tenrai', gives: 'Episode titles, filler and recap flags, cast and staff' },
-  { name: 'TheTVDB and AniDB, through ani.zip', gives: 'Episode numbering and pictures', site: 'https://thetvdb.com' },
+  { name: 'MyAnimeList, through Tenrai', gives: 'Missing English episode titles, filler and recap flags, cast and staff' },
+  { name: 'TheTVDB and AniDB, through ani.zip', gives: 'Episode titles, numbering and pictures', site: 'https://thetvdb.com' },
   { name: 'AniSkip', gives: 'Opening and ending times' },
   { name: 'SeaDex', gives: 'The best release of a show' },
   { name: 'TRaSH Guides', gives: 'Release group grades (MIT License)' },
