@@ -81,6 +81,14 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 			Present: s.hasFlyHigh(),
 			Version: versions["flyhigh"],
 		},
+		{
+			Name: "cloudflared", Label: "Watch together",
+			Purpose: "Cloudflare's tunnel, so friends anywhere can join your watch-together room. No account or " +
+				"router setup. Runs only while a room is open.",
+			Size:    "52 MB",
+			Present: s.hasBinary("cloudflared"),
+			Version: versions["cloudflared"],
+		},
 	}
 
 	for i := range components {

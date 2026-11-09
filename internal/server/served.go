@@ -1,19 +1,19 @@
 package server
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"strconv"
 
 	"yoru/internal/anilist"
 )
 
-// Where a response's AniList data came from: live, or a saved copy and its age.
 const (
 	headerLive  = "X-Yoru-Live"
 	headerSaved = "X-Yoru-Saved"
 )
 
-// served lets page reads fall back to saved answers and says so in a header.
 func served(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -52,6 +52,10 @@ func (w *servedWriter) Write(b []byte) (int, error) {
 }
 
 func (w *servedWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *servedWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(w.ResponseWriter).Hijack()
+}
 
 func (w *servedWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {

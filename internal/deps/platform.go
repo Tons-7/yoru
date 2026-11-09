@@ -24,6 +24,8 @@ func componentFilesFor(name, goos string) []string {
 			return []string{"mpv.exe", "mpv.com"}
 		}
 		return []string{"mpv"}
+	case "cloudflared":
+		return []string{"cloudflared" + ext}
 	}
 	return nil
 }
@@ -45,7 +47,7 @@ func ffmpegLinuxURLFor(goarch string) (string, error) {
 }
 
 func ManualCommand(name string) string {
-	if runtime.GOOS == "windows" || name == "anime4k" || name == "flyhigh" {
+	if runtime.GOOS == "windows" || name == "anime4k" || name == "flyhigh" || name == "cloudflared" {
 		return ""
 	}
 	if name == "ffmpeg" && runtime.GOOS == "linux" {

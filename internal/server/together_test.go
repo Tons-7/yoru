@@ -3,14 +3,16 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"golang.org/x/net/websocket"
+
 	"yoru/internal/config"
 )
 
-// A room as createTogether makes it, without the HTTPS a real one needs.
 func openRoom(t *testing.T, h *harness) (*togetherRoom, *togetherMember) {
 	t.Helper()
 	room := &togetherRoom{code: "abc123", secret: "key", created: time.Now(), wait: true,
@@ -28,15 +30,74 @@ func act(t *testing.T, h *harness, member, token, body string) (int, map[string]
 		fmt.Sprintf(`{"member":%q,"token":%q,%s}`, member, token, body))
 }
 
-func TestWatchTogetherNeedsHTTPS(t *testing.T) {
+func TestWatchTogetherNeedsTheTunnel(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	code, body := h.call(t, "POST", "/api/together", `{"animeId":7,"episode":1,"infoHash":"h"}`)
-	if code != http.StatusConflict || body["needs"] != "https" {
-		t.Fatalf("no HTTPS: %d %v, want it to say what's missing", code, body)
+	if code != http.StatusConflict || body["needs"] != "cloudflared" {
+		t.Fatalf("no tunnel: %d %v, want it to say what's missing", code, body)
 	}
 }
 
-// Two left blank, or the same name twice: numbered, so the feed tells them apart.
+func TestRoomPortServesOnlyTheRoom(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	openRoom(t, h)
+	base, err := h.server.roomAddress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]int{
+		"/api/together/abc123?k=key": http.StatusOK,
+		"/together/abc123?k=key":     http.StatusOK,
+		"/api/library":               http.StatusNotFound,
+		"/api/settings":              http.StatusNotFound,
+		"/":                          http.StatusNotFound,
+	} {
+		res, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != want {
+			t.Errorf("%s answered %d, want %d", path, res.StatusCode, want)
+		}
+	}
+
+	ws, err := websocket.Dial(strings.Replace(base, "http", "ws", 1)+"/api/together/abc123/socket?k=key&m=host&t=ht", "",
+		"https://friend.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	ws.SetDeadline(time.Now().Add(5 * time.Second))
+	var msg string
+	if err := websocket.Message.Receive(ws, &msg); err != nil || !strings.Contains(msg, `"type":"room"`) {
+		t.Fatalf("first message %q, %v; want the room", msg, err)
+	}
+
+	if _, err := websocket.Dial(strings.Replace(base, "http", "ws", 1)+"/api/together/abc123/socket?k=wrong&m=host&t=ht", "",
+		"https://friend.example"); err == nil {
+		t.Fatal("a wrong key opened the room's socket")
+	}
+}
+
+func TestRoomSocketThroughTheMainPort(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	openRoom(t, h)
+	srv := httptest.NewServer(h.handler)
+	t.Cleanup(srv.Close)
+	ws, err := websocket.Dial(strings.Replace(srv.URL, "http", "ws", 1)+"/api/together/abc123/socket?k=key&m=host&t=ht", "",
+		srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	ws.SetDeadline(time.Now().Add(5 * time.Second))
+	var msg string
+	if err := websocket.Message.Receive(ws, &msg); err != nil || !strings.Contains(msg, `"type":"room"`) {
+		t.Fatalf("first message %q, %v; want the room", msg, err)
+	}
+}
+
 func TestWatchTogetherNamesAreUnique(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	room, _ := openRoom(t, h)
@@ -54,8 +115,6 @@ func TestWatchTogetherNamesAreUnique(t *testing.T) {
 	}
 }
 
-// The room's rules: asked before someone joins when it says so; a play held until everyone's ready; a slow
-// connection holds it; pause, chat and reactions reach everyone; a stranger's key or token gets nothing.
 func TestAWatchTogetherRoom(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	room, host := openRoom(t, h)
@@ -118,8 +177,6 @@ func TestAWatchTogetherRoom(t *testing.T) {
 	}
 }
 
-// Only the host starts without everyone; the host leaving hands the room on; seats left a while are cleared,
-// so a room isn't full of people who closed their tab.
 func TestAWatchTogetherRoomKeepsAHostAndRoom(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	room, _ := openRoom(t, h)

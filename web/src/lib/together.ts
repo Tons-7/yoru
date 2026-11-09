@@ -1,18 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { readKey, writeKey } from './storage'
 
-// Watch together: the room lives on the host's Yoru; this page talks to it directly, its own plays video.
-
 export interface TogetherLink {
-  /** The host's Yoru, as "https://name:port". */
   base: string
   code: string
   key: string
-  /** The link as shared, for showing and copying. */
   href: string
 }
 
-/** A room link from pasted text, as createTogether makes it. */
 export function parseTogether(text: string): TogetherLink | null {
   const m = /(https?:\/\/[^\s/]+)\/together\/([a-z0-9]{6})\?k=([A-Za-z0-9_-]+)/.exec(text)
   return m ? { base: m[1], code: m[2], key: m[3], href: m[0] } : null
@@ -45,7 +40,6 @@ export interface RoomView {
   members: RoomMember[]
 }
 
-/** A line in the room's feed: a message, a reaction, or what someone did. */
 export interface RoomLine {
   id: number
   kind: 'chat' | 'react' | 'event'
@@ -56,7 +50,6 @@ export interface RoomLine {
 export interface Seat {
   member: string
   token: string
-  /** The host's, kept so a reload still has the invite to share. */
   invite?: string
 }
 
@@ -77,7 +70,6 @@ export async function joinRoom(link: TogetherLink, name: string): Promise<Seat &
 
 const seatKey = (link: TogetherLink) => `yoru.together.${link.code}`
 
-/** The seat this browser holds in a room, kept for the visit so a reload rejoins it. */
 export function savedSeat(link: TogetherLink): Seat | null {
   try {
     return JSON.parse(sessionStorage.getItem(seatKey(link)) ?? 'null') as Seat | null
@@ -91,13 +83,12 @@ export function saveSeat(link: TogetherLink, seat: Seat | null) {
     if (seat) sessionStorage.setItem(seatKey(link), JSON.stringify(seat))
     else sessionStorage.removeItem(seatKey(link))
   } catch {
-    // For this visit only.
+    return
   }
 }
 
 const OVERLAY_KEY = 'yoru.together.overlay'
 
-/** Messages shown over the picture, chosen per device; on unless turned off. */
 export function overlayOn(): boolean {
   return readKey(OVERLAY_KEY) !== 'off'
 }
@@ -115,14 +106,12 @@ const REASONS: Record<string, (by: string) => string> = {
   episode: (by) => `${by} moved on to the next episode`,
 }
 
-/** The room's live line: what it is now, its feed, and a way to act in it. */
 export function useRoom(link: TogetherLink | null, seat: Seat | null) {
   const [view, setView] = useState<RoomView | null>(null)
   const [status, setStatus] = useState<RoomStatus>('connecting')
   const [lines, setLines] = useState<RoomLine[]>([])
   const [knocks, setKnocks] = useState<Array<{ member: string; name: string }>>([])
   const [waitingFor, setWaitingFor] = useState<string[]>([])
-  // The host's clock less this one's, from the times its events carry.
   const offset = useRef(0)
   const lineId = useRef(0)
   const push = useCallback((line: Omit<RoomLine, 'id'>) => {
@@ -131,9 +120,17 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
 
   useEffect(() => {
     if (!link || !seat) return
-    const url = `${link.base}/api/together/${link.code}/events?k=${encodeURIComponent(link.key)}&m=${seat.member}&t=${encodeURIComponent(seat.token)}`
-    const source = new EventSource(url)
-    source.onmessage = (e) => {
+    const url = `${link.base.replace(/^http/, 'ws')}/api/together/${link.code}/socket?k=${encodeURIComponent(link.key)}&m=${seat.member}&t=${encodeURIComponent(seat.token)}`
+    let socket: WebSocket | null = null
+    let stopped = false
+    let retry: ReturnType<typeof setTimeout> | undefined
+    let wait = 1000
+    let heard = false
+    let silent = 0
+    const onMessage = (e: MessageEvent) => {
+      heard = true
+      silent = 0
+      wait = 1000
       const event = JSON.parse(e.data as string) as Record<string, unknown>
       if (typeof event.now === 'number') offset.current = event.now - Date.now()
       switch (event.type) {
@@ -142,7 +139,8 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
           break
         case 'refused':
           setStatus('refused')
-          source.close()
+          stopped = true
+          socket?.close()
           break
         case 'room':
           setView(event as unknown as RoomView)
@@ -164,10 +162,42 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
           break
       }
     }
-    source.onerror = () => {
-      if (source.readyState === EventSource.CLOSED) setStatus((s) => (s === 'refused' ? s : 'ended'))
+    const connect = () => {
+      const ws = new WebSocket(url)
+      socket = ws
+      heard = false
+      ws.onmessage = onMessage
+      ws.onclose = () => {
+        if (stopped) return
+        if (!heard) silent++
+        roomInfo(link)
+          .then(() => {
+            if (stopped) return
+            if (silent >= 3) {
+              setStatus('ended')
+              return
+            }
+            setStatus((s) => (s === 'in' ? 'connecting' : s))
+            retry = setTimeout(connect, wait)
+            wait = Math.min(wait * 2, 10000)
+          })
+          .catch((err: unknown) => {
+            if (stopped) return
+            if (err instanceof TypeError) {
+              retry = setTimeout(connect, wait)
+              wait = Math.min(wait * 2, 10000)
+              return
+            }
+            setStatus((s) => (s === 'refused' ? s : 'ended'))
+          })
+      }
     }
-    return () => source.close()
+    connect()
+    return () => {
+      stopped = true
+      clearTimeout(retry)
+      socket?.close()
+    }
   }, [link, seat, push])
 
   const act = useCallback(
@@ -193,7 +223,6 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
   const me = view?.members.find((m) => m.id === seat?.member)
   return {
     view, status, lines, knocks, waitingFor, act, answerKnock, me,
-    /** Where the room's episode is now, by the host's clock. */
     position: () => {
       const st = view?.state
       if (!st) return 0
@@ -204,12 +233,10 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
 
 export type Room = ReturnType<typeof useRoom>
 
-/** Keeps this page's video with the room: presses out, the room's applied, readiness, drift evened out. */
 export function useTogetherSync(video: HTMLVideoElement | null, room: Room | null) {
   const roomRef = useRef(room)
   roomRef.current = room
   const ready = useRef<boolean | null>(null)
-  // A press is what differs from the room; what matches it is the room's own state being applied here.
   const playingRoom = () => !!roomRef.current?.view?.state.playing
   const atRoom = (t: number) => Math.abs(t - (roomRef.current?.position() ?? t)) < 1
 
@@ -259,7 +286,6 @@ export function useTogetherSync(video: HTMLVideoElement | null, room: Room | nul
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video, !!room])
 
-  // The room forgets readiness on a reconnect or a new episode; said again if this page is loaded.
   const roomSaysReady = room?.me?.ready
   useEffect(() => {
     if (!video || roomSaysReady !== false || ready.current !== true) return
@@ -270,7 +296,6 @@ export function useTogetherSync(video: HTMLVideoElement | null, room: Room | nul
     }
   }, [video, roomSaysReady])
 
-  // A little faster or slower until level; a jump past two seconds.
   useEffect(() => {
     if (!video || !room) return
     const id = window.setInterval(() => {

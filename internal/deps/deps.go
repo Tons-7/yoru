@@ -49,6 +49,7 @@ var components = []component{
 	{name: "mpv", files: componentFiles("mpv"), resolve: resolveMpv},
 	{name: "anime4k", glob: "*.glsl", into: "shaders", resolve: resolveAnime4K},
 	{name: "flyhigh", files: FlyHighFiles, from: []string{"pkg", "models"}, into: FlyHighDir, resolve: resolveFlyHigh},
+	{name: "cloudflared", files: componentFiles("cloudflared"), resolve: resolveCloudflared},
 }
 
 type Stage string

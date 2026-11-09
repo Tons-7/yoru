@@ -35,7 +35,7 @@ import {
   useTrackers,
   type Season,
 } from '../lib/queries'
-import { joinRoom, overlayOn, parseTogether, saveSeat, savedSeat, useRoom, useTogetherSync } from '../lib/together'
+import { joinRoom, overlayOn, parseTogether, roomInfo, saveSeat, savedSeat, useRoom, useTogetherSync } from '../lib/together'
 import { JoinCard, TogetherPanel, TogetherToasts } from '../components/Together'
 import { SaveToDevice } from '../components/SaveToDevice'
 import { toast } from '../lib/toast'
@@ -272,15 +272,20 @@ export function Watch({
   }, [inRoom, playedHash, id, ep])
 
   const [naming, setNaming] = useState(false)
+  const getTunnel = useMutation({
+    mutationFn: () => api.post('/api/setup/install/cloudflared'),
+    onSuccess: () => toast('Downloading. Open the room again once it finishes.', 'info'),
+  })
   const startTogether = useMutation({
     mutationFn: (name: string) =>
-      api.post<{ link: string; member: string; token: string }>('/api/together', {
+      api.post<{ link: string; member: string; token: string; homeOnly?: boolean }>('/api/together', {
         name, animeId: id, episode: ep, infoHash: play.data?.infoHash, title: showTitleRef.current,
         position: currentVideo()?.currentTime ?? 0, playing: !(currentVideo()?.paused ?? true),
       }),
     onSuccess: (r) => {
       const shared = parseTogether(r.link)
       if (!shared) return
+      if (r.homeOnly) toast('This link works only on your home network.', 'info')
       const href = `${window.location.origin}/together/${shared.code}?k=${shared.key}`
       const here = { ...shared, base: window.location.origin, href }
       const s = { member: r.member, token: r.token, invite: r.link }
@@ -292,13 +297,30 @@ export function Watch({
     },
   })
   const watchHere = `/watch/${id}/${ep}${together ? `?together=${encodeURIComponent(together.href)}` : ''}`
-  const leaveTogether = () => {
-    void room.act('leave').catch(() => {})
+  const dropRoom = () => {
     if (together) saveSeat(together, null)
     setTogether(null)
     setSeat(null)
     setInvite(undefined)
+    if (!mini) routerNavigate(`/watch/${id}/${ep}`, { replace: true })
   }
+  const leaveTogether = () => {
+    void room.act('leave').catch(() => {})
+    dropRoom()
+  }
+  useEffect(() => {
+    if (!together || seat) return
+    let live = true
+    roomInfo(together).catch((err: Error) => {
+      if (!live || err instanceof TypeError) return
+      toast(err.message, 'info')
+      dropRoom()
+    })
+    return () => {
+      live = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [together?.code, !!seat])
 
   const source = playingInMpv ? undefined : play.data?.streamUrl
   const soundOptions = useMemo<SoundOptions>(
@@ -1337,10 +1359,14 @@ export function Watch({
               {startTogether.isError && (
                 <p className="flex flex-wrap items-center gap-2 text-sm text-recap">
                   {(startTogether.error as Error).message}
-                  {startTogether.error instanceof ApiError && (startTogether.error.body as { needs?: string })?.needs === 'https' && (
-                    <LinkButton to="/settings?tab=Devices" size="sm">
-                      Set up HTTPS
-                    </LinkButton>
+                  {startTogether.error instanceof ApiError && (startTogether.error.body as { needs?: string })?.needs === 'cloudflared' && (
+                    <Button
+                      size="sm"
+                      disabled={getTunnel.isPending || getTunnel.isSuccess}
+                      onClick={() => getTunnel.mutate()}
+                    >
+                      {getTunnel.isSuccess ? 'Downloading' : 'Download (52 MB)'}
+                    </Button>
                   )}
                 </p>
               )}
@@ -1363,6 +1389,7 @@ export function Watch({
                     saveSeat(together, kept)
                     setSeat(kept)
                   }}
+                  onCancel={dropRoom}
                 />
               )}
               {together && seat && (

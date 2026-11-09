@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"yoru/internal/store"
 	"yoru/internal/torrent"
 	"yoru/internal/transcode"
+	"yoru/internal/tunnel"
 	"yoru/internal/update"
 	"yoru/web"
 )
@@ -103,8 +105,13 @@ type Server struct {
 	pairMu sync.Mutex
 	pairs  map[string]*pairing
 
-	togetherMu sync.Mutex
-	rooms      map[string]*togetherRoom
+	togetherMu    sync.Mutex
+	rooms         map[string]*togetherRoom
+	tunnel        *tunnel.Tunnel
+	roomMu        sync.Mutex
+	roomLn        net.Listener
+	tunnelWatched bool
+	roomsOpening  int
 
 	tvMu         sync.Mutex
 	tvOpens      map[string]*tvOpen
@@ -257,13 +264,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/anime/from-mal", s.animeFromMal)
 	mux.HandleFunc("GET /api/anime/{id}/characters", s.characters)
 	mux.HandleFunc("POST /api/together", hostOnly(s.createTogether))
-	mux.HandleFunc("GET /api/together/{code}", s.togetherInfo)
-	mux.HandleFunc("POST /api/together/{code}/join", s.joinTogether)
-	mux.HandleFunc("GET /api/together/{code}/events", s.togetherEvents)
-	mux.HandleFunc("POST /api/together/{code}/act", s.togetherAct)
-	mux.HandleFunc("OPTIONS /api/together/{code}/{rest...}", s.togetherOptions)
-	mux.HandleFunc("OPTIONS /api/together/{code}", s.togetherOptions)
-	mux.HandleFunc("GET /together/{code}", s.togetherPage)
+	s.roomRoutes(mux)
 	mux.HandleFunc("GET /api/person/{id}", s.person)
 	mux.HandleFunc("GET /api/character/{id}", s.character)
 	mux.HandleFunc("GET /api/anime/{id}/extra", s.extra)

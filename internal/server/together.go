@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -12,7 +13,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"golang.org/x/net/websocket"
+
 	"yoru/internal/config"
+	"yoru/internal/tunnel"
 )
 
 const (
@@ -186,6 +190,58 @@ func togetherCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 }
 
+func (s *Server) roomRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/together/{code}", s.togetherInfo)
+	mux.HandleFunc("POST /api/together/{code}/join", s.joinTogether)
+	mux.HandleFunc("GET /api/together/{code}/events", s.togetherEvents)
+	mux.HandleFunc("GET /api/together/{code}/socket", s.togetherSocket)
+	mux.HandleFunc("POST /api/together/{code}/act", s.togetherAct)
+	mux.HandleFunc("OPTIONS /api/together/{code}/{rest...}", s.togetherOptions)
+	mux.HandleFunc("OPTIONS /api/together/{code}", s.togetherOptions)
+	mux.HandleFunc("GET /together/{code}", s.togetherPage)
+}
+
+func (s *Server) SetTunnel(t *tunnel.Tunnel) { s.tunnel = t }
+
+func (s *Server) roomAddress() (string, error) {
+	s.roomMu.Lock()
+	defer s.roomMu.Unlock()
+	if s.roomLn == nil {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return "", err
+		}
+		mux := http.NewServeMux()
+		s.roomRoutes(mux)
+		go (&http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}).Serve(ln)
+		s.roomLn = ln
+	}
+	return "http://" + s.roomLn.Addr().String(), nil
+}
+
+func (s *Server) closeTunnelWhenEmpty() {
+	s.togetherMu.Lock()
+	defer s.togetherMu.Unlock()
+	if s.tunnelWatched {
+		return
+	}
+	s.tunnelWatched = true
+	go func() {
+		for {
+			time.Sleep(time.Minute)
+			s.togetherMu.Lock()
+			s.expireRooms()
+			if len(s.rooms) == 0 && s.roomsOpening == 0 {
+				s.tunnel.Close()
+				s.tunnelWatched = false
+				s.togetherMu.Unlock()
+				return
+			}
+			s.togetherMu.Unlock()
+		}
+	}()
+}
+
 func (s *Server) togetherOptions(w http.ResponseWriter, _ *http.Request) {
 	togetherCORS(w)
 	w.WriteHeader(http.StatusNoContent)
@@ -204,23 +260,46 @@ func (s *Server) createTogether(w http.ResponseWriter, req *http.Request) {
 	if !decode(w, req, &body) {
 		return
 	}
-	base := ""
-	if names := s.httpsNames(); len(names) > 0 {
-		base = fmt.Sprintf("https://%s:%s", names[0], s.port())
-	} else if config.Env("TOGETHER_LOCAL") != "" {
-		base = requestOrigin(req)
-	}
-	if base == "" {
-		send(w, http.StatusConflict, map[string]any{"error": "Friends reach the room over the internet: set up HTTPS " +
-			"under Settings, Devices first.", "needs": "https"})
-		return
-	}
 	if body.AnimeID == 0 || body.Episode <= 0 {
 		send(w, http.StatusBadRequest, map[string]any{"error": "Start the episode first."})
 		return
 	}
 	if body.InfoHash == "" {
 		send(w, http.StatusBadRequest, map[string]any{"error": "Watch together needs a torrent release, so friends can fetch the same one; this is a file of yours."})
+		return
+	}
+	base, homeOnly := "", false
+	switch {
+	case config.Env("TOGETHER_LOCAL") != "":
+		base = requestOrigin(req)
+	case s.tunnel != nil && s.hasBinary("cloudflared"):
+		target, err := s.roomAddress()
+		if err != nil {
+			s.fail(w, "watch together room port", err)
+			return
+		}
+		s.togetherMu.Lock()
+		s.roomsOpening++
+		s.togetherMu.Unlock()
+		defer func() {
+			s.togetherMu.Lock()
+			s.roomsOpening--
+			s.togetherMu.Unlock()
+		}()
+		s.closeTunnelWhenEmpty()
+		url, err := s.tunnel.Open(req.Context(), target)
+		if err != nil {
+			s.log.Warn("watch together tunnel", "err", err)
+			send(w, http.StatusBadGateway, map[string]any{"error": "Couldn't open the room to the internet: " + err.Error()})
+			return
+		}
+		base = url
+	case len(s.httpsNames()) > 0:
+		base, homeOnly = fmt.Sprintf("https://%s:%s", s.httpsNames()[0], s.port()), true
+	}
+	if base == "" {
+		send(w, http.StatusConflict, map[string]any{"error": "Friends join through the Watch together download.",
+			"needs": "cloudflared"})
 		return
 	}
 	room := &togetherRoom{
@@ -237,7 +316,8 @@ func (s *Server) createTogether(w http.ResponseWriter, req *http.Request) {
 	s.togetherMu.Unlock()
 	link := fmt.Sprintf("%s/together/%s?k=%s", base, room.code, room.secret)
 	s.log.Info("watch together room opened", "room", room.code, "anime", body.AnimeID, "episode", body.Episode)
-	send(w, http.StatusOK, map[string]any{"code": room.code, "link": link, "member": host.ID, "token": host.token})
+	send(w, http.StatusOK, map[string]any{"code": room.code, "link": link, "member": host.ID, "token": host.token,
+		"homeOnly": homeOnly})
 }
 
 func (s *Server) expireRooms() {
@@ -322,18 +402,67 @@ func (s *Server) joinTogether(w http.ResponseWriter, req *http.Request) {
 	send(w, http.StatusOK, map[string]any{"member": m.ID, "token": m.token, "admitted": m.Admitted})
 }
 
-func (s *Server) togetherEvents(w http.ResponseWriter, req *http.Request) {
-	togetherCORS(w)
+func (s *Server) enterRoom(w http.ResponseWriter, req *http.Request) (*togetherRoom, *togetherMember) {
 	room := s.togetherRoom(w, req)
 	if room == nil {
-		return
+		return nil, nil
 	}
 	q := req.URL.Query()
 	room.mu.Lock()
+	defer room.mu.Unlock()
 	m := room.member(q.Get("m"), q.Get("t"))
 	if m == nil {
-		room.mu.Unlock()
 		send(w, http.StatusForbidden, map[string]any{"error": "Not in this room."})
+		return nil, nil
+	}
+	return room, m
+}
+
+func (s *Server) togetherEvents(w http.ResponseWriter, req *http.Request) {
+	togetherCORS(w)
+	room, m := s.enterRoom(w, req)
+	if room == nil {
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	flusher, _ := w.(http.Flusher)
+	followRoom(room, m, req.Context().Done(), func(raw []byte) bool {
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
+			return false
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return true
+	})
+}
+
+func (s *Server) togetherSocket(w http.ResponseWriter, req *http.Request) {
+	room, m := s.enterRoom(w, req)
+	if room == nil {
+		return
+	}
+	websocket.Server{
+		Handshake: func(*websocket.Config, *http.Request) error { return nil },
+		Handler: func(ws *websocket.Conn) {
+			defer ws.Close()
+			closed := make(chan struct{})
+			go func() {
+				defer close(closed)
+				var discard string
+				for websocket.Message.Receive(ws, &discard) == nil {
+				}
+			}()
+			followRoom(room, m, closed, func(raw []byte) bool { return websocket.Message.Send(ws, string(raw)) == nil })
+		},
+	}.ServeHTTP(w, req)
+}
+
+func followRoom(room *togetherRoom, m *togetherMember, done <-chan struct{}, write func([]byte) bool) {
+	room.mu.Lock()
+	if !slices.Contains(room.members, m) {
+		room.mu.Unlock()
 		return
 	}
 	m.streams++
@@ -343,18 +472,6 @@ func (s *Server) togetherEvents(w http.ResponseWriter, req *http.Request) {
 	}
 	room.mu.Unlock()
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-store")
-	flusher, _ := w.(http.Flusher)
-	write := func(raw []byte) bool {
-		if _, err := fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
-			return false
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
-		return true
-	}
 	tick := time.NewTicker(15 * time.Second)
 	defer tick.Stop()
 	defer func() {
@@ -377,7 +494,7 @@ func (s *Server) togetherEvents(w http.ResponseWriter, req *http.Request) {
 	}
 	for {
 		select {
-		case <-req.Context().Done():
+		case <-done:
 			return
 		case raw := <-m.events:
 			if !write(raw) {
