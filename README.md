@@ -287,6 +287,12 @@ Where Yoru's anime information comes from (Yoru isn't affiliated with any of the
   the links between sites' ids
 - nattadasu's [animeApi](https://github.com/nattadasu/animeApi): the links between sites' ids
 
+Programs Yoru downloads when you turn on what needs them (not bundled):
+
+- [FlyHigh Engine](https://github.com/getflyhigh/flyhigh-engine): smooth motion. Code under the
+  Apache License 2.0, model weights under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/);
+  Yoru fetches an unmodified copy of its web release
+
 ## Layout
 
 ```
