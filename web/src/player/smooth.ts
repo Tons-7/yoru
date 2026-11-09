@@ -4,7 +4,7 @@ import type { FhEngine, FhModel, FhPacer, FhStream } from './flyhigh_web'
 import { api, fetchAuthed } from '../lib/api'
 import { readKey, writeKey } from '../lib/storage'
 import { delayAudio } from './audioDelay'
-import { nearestRate } from './rates'
+import { nearestRate, nearestVideoRate } from './rates'
 
 type Lib = typeof import('./flyhigh_web')
 
@@ -135,35 +135,49 @@ export const RATE_NAMES: Record<SmoothRate, string> = { auto: 'Auto', high: 'Hig
 export const HIGHEST_FPS = 120
 export const ANIME_FPS = 24000 / 1001
 const MAX_FACTOR = 6
+const LOWEST_TIMES = 1.9
+const FIT = 0.002
 
-export function factorsFor(screenHz: number, sourceHz: number): number[] {
+type PaceMode = { factor: number } | { target: number }
+interface Pace {
+  mode: PaceMode
+  fps: number
+}
+
+const sameMode = (a: PaceMode, b: PaceMode): boolean =>
+  'factor' in a ? 'factor' in b && a.factor === b.factor : 'target' in b && a.target === b.target
+
+function pacesFor(screenHz: number, sourceHz: number): Pace[] {
   const source = sourceHz || ANIME_FPS
-  const ceiling = Math.min(HIGHEST_FPS, screenHz || HIGHEST_FPS) + 0.5
-  const out: number[] = []
-  for (let n = MAX_FACTOR; n >= 2; n--) if (n * source <= ceiling) out.push(n)
-  return out.length ? out : [1]
+  const out: Pace[] = []
+  if (!screenHz) {
+    for (let n = MAX_FACTOR; n >= 2; n--) if (n * source <= HIGHEST_FPS + 0.5) out.push({ mode: { factor: n }, fps: n * source })
+    return out
+  }
+  for (let k = 1; screenHz / k >= source * LOWEST_TIMES; k++) {
+    const fps = screenHz / k
+    if (fps > HIGHEST_FPS + 0.5) continue
+    const n = Math.round(fps / source)
+    const fits = n >= 2 && Math.abs(n * source * k - screenHz) <= screenHz * FIT
+    out.push(fits ? { mode: { factor: n }, fps: n * source } : { mode: { target: fps }, fps })
+  }
+  return out.length ? out : [{ mode: { factor: 1 }, fps: source }]
 }
 
-function bestFit(screenHz: number, sourceHz: number): number {
-  const factors = factorsFor(screenHz, sourceHz)
-  if (!screenHz) return factors[0]
-  const even = factors.find((n) => {
-    const ticks = screenHz / (n * (sourceHz || ANIME_FPS))
-    return Math.abs(ticks - Math.round(ticks)) < 0.1
-  })
-  return even ?? factors[0]
-}
-
-export function rateFactor(rate: SmoothRate, screenHz: number, sourceHz: number, stepsDown = 0): number {
-  const factors = factorsFor(screenHz, sourceHz)
-  if (rate === 'auto') return factors[Math.min(factors.length - 1, factors.indexOf(bestFit(screenHz, sourceHz)) + stepsDown)]
-  if (rate === 'high') return factors[0]
-  if (rate === 'low') return factors[factors.length - 1]
-  return factors[Math.floor(factors.length / 2)]
+function ratePace(rate: SmoothRate, screenHz: number, sourceHz: number, stepsDown = 0): Pace {
+  const paces = pacesFor(screenHz, sourceHz)
+  if (rate === 'auto') return paces[Math.min(paces.length - 1, stepsDown)]
+  if (rate === 'high') return paces[0]
+  if (rate === 'low') return paces[paces.length - 1]
+  return paces[Math.floor(paces.length / 2)]
 }
 
 export function rateFps(rate: SmoothRate, screenHz: number, sourceHz: number): number {
-  return rateFactor(rate, screenHz, sourceHz) * (sourceHz || ANIME_FPS)
+  return ratePace(rate, screenHz, sourceHz).fps
+}
+
+export function timesEpisode(fps: number, sourceHz: number): number {
+  return Math.round((fps / (sourceHz || ANIME_FPS)) * 10) / 10
 }
 
 function knownValue() {
@@ -342,6 +356,9 @@ const SLOW_WINDOWS = 3
 const SLOW_WINDOW_MS = 2000
 const SLOW_DROPS_PER_SECOND = 5
 const SLOW_LAG_MS = 220
+const MIN_OWED = 20
+const STARVED_SHARE = 0.3
+const MIN_SOURCE_FPS = 12
 const RECOVER_WINDOWS = 15
 
 type Frame = { source: number } | { output: number }
@@ -466,8 +483,8 @@ async function start({
     { mode: 'video', cadence: held, held_frames: { mean: 0.0033, max: 0.06 }, inputs: INPUTS, outputs: OUTPUTS },
   )
   undo.push(() => stream.free())
-  const base: { mode: { factor: number }; lookahead: boolean; fps_limit: number } = {
-    mode: { factor: rateFactor(rate, lastScreenHz(), 0) },
+  const base: { mode: PaceMode; lookahead: boolean; fps_limit: number } = {
+    mode: ratePace(rate, lastScreenHz(), 0).mode,
     lookahead: true,
     fps_limit: HIGHEST_FPS,
   }
@@ -724,15 +741,13 @@ async function start({
   let raf = 0
   let last = 0
   let windowStart = 0
-  let lastDrops = -1
+  let lastCounts: Record<string, number> | null = null
   let slowWindows = 0
   let slowFired = false
-  const chargedDrops = () => {
-    const c = (pacer.report() as { counters?: Record<string, number> }).counters ?? {}
-    return (c.drops ?? 0) - (c.drops_stall_exempt ?? 0) - (c.drops_settle_exempt ?? 0)
-  }
+  const counts = () => (pacer.report() as { counters?: Record<string, number> }).counters ?? {}
   let screenHz = 0
   let sourceHz = 0
+  let rawSource = 0
   let checkedAt = 0
   let shownCount = 0
   let shownSince = 0
@@ -740,12 +755,12 @@ async function start({
   let stepsDown = 0
   let cleanWindows = 0
   const applyPace = (now: number) => {
-    const factor = rateFactor(pace, screenHz, sourceHz, stepsDown)
-    const fps = Math.round(factor * (sourceHz || ANIME_FPS))
+    const next = ratePace(pace, screenHz, sourceHz, stepsDown)
+    const fps = Math.round(next.fps)
     canvas.dataset.target = String(fps)
     knownRunning.tell(fps)
-    if (factor === base.mode.factor) return
-    base.mode = { factor }
+    if (sameMode(next.mode, base.mode)) return
+    base.mode = next.mode
     pacer.setOptions(now, { ...base, playback_rate: video.playbackRate })
   }
   const settleScreen = (now: number) => {
@@ -758,7 +773,10 @@ async function start({
       source_hz?: number
     }
     const hz = r.display_ready && r.display?.display_hz ? nearestRate(r.display.display_hz) : screenHz
-    const fps = r.source_ready && r.source_hz ? Math.round(r.source_hz * 1000) / 1000 : sourceHz
+    const raw = r.source_ready && (r.source_hz ?? 0) >= MIN_SOURCE_FPS ? (r.source_hz ?? 0) : 0
+    const steady = raw > 0 && rawSource > 0 && Math.abs(raw - rawSource) / raw < 0.03
+    rawSource = raw
+    const fps = (raw ? nearestVideoRate(raw) || (steady ? Math.round(raw * 1000) / 1000 : 0) : 0) || sourceHz
     if (hz === screenHz && fps === sourceHz) return
     screenHz = hz
     sourceHz = fps
@@ -799,27 +817,36 @@ async function start({
 
     if (!windowStart) windowStart = now
     if (now - windowStart < SLOW_WINDOW_MS || slowFired) return
-    const drops = chargedDrops()
-    const perSecond = lastDrops < 0 ? 0 : ((drops - lastDrops) * 1000) / (now - windowStart)
-    lastDrops = drops
+    const counted = counts()
+    const before = lastCounts
+    lastCounts = counted
+    const seconds = (now - windowStart) / 1000
     windowStart = now
-    if (video.paused) return
-    const struggling = perSecond > SLOW_DROPS_PER_SECOND || lag > SLOW_LAG_MS
+    if (video.paused || !before) return
+    const delta = (key: string) => (counted[key] ?? 0) - (before[key] ?? 0)
+    const charged = delta('drops') - delta('drops_stall_exempt') - delta('drops_settle_exempt') + delta('pairs_skipped_gpu')
+    const sources = delta('sources')
+    const arrival = sources / seconds
+    const output = 'factor' in base.mode ? Math.min(base.mode.factor * arrival, HIGHEST_FPS) : base.mode.target
+    const moving = sources > 0 ? (sources - delta('holds') - delta('cuts')) / sources : 0
+    const owed = Math.max(0, output - arrival) * seconds * moving
+    const starved = owed >= MIN_OWED && delta('presented_mids') < owed * STARVED_SHARE
+    const struggling = charged / seconds > SLOW_DROPS_PER_SECOND || lag > SLOW_LAG_MS || starved
     slowWindows = struggling ? slowWindows + 1 : 0
     cleanWindows = struggling ? 0 : cleanWindows + 1
     if (stepsDown > 0 && cleanWindows >= RECOVER_WINDOWS) {
       stepsDown--
       cleanWindows = 0
-      lastDrops = -1
+      lastCounts = null
       applyPace(now)
       return
     }
     if (slowWindows < SLOW_WINDOWS) return
     slowWindows = 0
-    const factor = rateFactor(pace, screenHz, sourceHz, stepsDown)
-    if (pace === 'auto' && rateFactor(pace, screenHz, sourceHz, stepsDown + 1) < factor) {
+    const current = ratePace(pace, screenHz, sourceHz, stepsDown)
+    if (pace === 'auto' && ratePace(pace, screenHz, sourceHz, stepsDown + 1).fps < current.fps) {
       stepsDown++
-      lastDrops = -1
+      lastCounts = null
       applyPace(now)
       return
     }
@@ -836,7 +863,7 @@ async function start({
     pts.clear()
     outPts.clear()
     offsets.length = 0
-    lastDrops = -1
+    lastCounts = null
     lag = 0
   }
   const speed = () => pacer.setOptions(performance.now(), { ...base, playback_rate: video.playbackRate })

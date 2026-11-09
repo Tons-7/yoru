@@ -7,6 +7,13 @@ export function nearestRate(hz: number): number {
   return Math.abs(near - hz) / hz < 0.04 ? near : Math.round(hz)
 }
 
+const VIDEO_RATES = [24000 / 1001, 24, 25, 30000 / 1001, 30, 48000 / 1001, 48, 50, 60000 / 1001, 60]
+
+export function nearestVideoRate(fps: number): number {
+  const near = VIDEO_RATES.reduce((a, b) => (Math.abs(b - fps) < Math.abs(a - fps) ? b : a))
+  return Math.abs(near - fps) / near < 0.015 ? Math.round(near * 1000) / 1000 : 0
+}
+
 export function useScreenHz(active: boolean): number {
   const [hz, setHz] = useState(0)
   useEffect(() => {

@@ -4,8 +4,8 @@ import { api } from '../lib/api'
 import { bytes, cx } from '../lib/format'
 import { useDismiss, useModalFocus } from '../lib/hooks'
 import {
-  rateFactor,
   rateFps,
+  timesEpisode,
   useKnownScreenHz,
   useKnownSourceHz,
   useRunningFps,
@@ -51,7 +51,7 @@ function rateHint(rate: SmoothRate, screenHz: number, sourceHz: number, runningF
   const fps = Math.round(rateFps(rate, screenHz, sourceHz))
   if (rate === 'auto' && runningFps && runningFps < fps) return `${runningFps} fps for now, so this device keeps up.`
   if (rate === 'auto') return `${fps} fps, the best fit for this screen.`
-  return `${fps} fps, ${rateFactor(rate, screenHz, sourceHz)}× the episode's frame rate.`
+  return `${fps} fps, ${timesEpisode(fps, sourceHz)}× the episode's frame rate.`
 }
 
 function FilesRow() {
