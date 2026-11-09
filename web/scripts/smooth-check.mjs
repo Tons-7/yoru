@@ -64,10 +64,13 @@ const tap = () => {
     const r = connect.call(this, dest, ...rest)
     if (dest instanceof AudioDestinationNode && !this.__tapped) {
       this.__tapped = true
-      const a = this.context.createAnalyser()
-      a.fftSize = 2048
-      connect.call(this, a)
-      window.__analyser = a
+      if (!this.context.__analyser) {
+        const a = this.context.createAnalyser()
+        a.fftSize = 2048
+        this.context.__analyser = a
+        window.__analyser = a
+      }
+      connect.call(this, this.context.__analyser)
     }
     return r
   }

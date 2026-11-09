@@ -1,4 +1,4 @@
-import { copyFileSync, linkSync, mkdirSync, readdirSync, symlinkSync } from 'node:fs'
+import { copyFileSync, linkSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -19,7 +19,14 @@ export function linkBin(from, to, only = null) {
       continue
     }
     if (WRITTEN_BY_YORU.has(entry.name)) {
-      copyFileSync(src, dst)
+      let versions
+      try {
+        versions = JSON.parse(readFileSync(src, 'utf8').replace(/^﻿/, ''))
+      } catch (err) {
+        throw new Error(`cannot read ${src} to leave out what the tests install: ${err.message}`)
+      }
+      for (const name of INSTALLED_BY_TESTS) delete versions[name]
+      writeFileSync(dst, JSON.stringify(versions, null, 4))
       continue
     }
     try {

@@ -166,8 +166,8 @@ func resolveMpv(ctx context.Context, m *Manager) (Release, error) {
 }
 
 const (
-	FlyHighVersion = "0.3.1"
-	flyhighDigest  = "dd21571404a1dbc2315678d9b3058fa0f5ba04384caec14a2e207e237787000b"
+	FlyHighVersion = "0.3.4"
+	flyhighDigest  = "d596e3eb3f169770864471d56ea31b8053fac83748b7eb5e642743e09c67edbc"
 	FlyHighDir     = "flyhigh"
 )
 

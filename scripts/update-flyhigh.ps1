@@ -32,8 +32,9 @@ $file = Join-Path $dir $asset
 $got = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
 if ($got -ne $sum) { throw "checksum mismatch: downloaded $got, GitHub says $sum" }
 
-gh release view $tag -R $fork *> $null
-if ($LASTEXITCODE -ne 0) {
+$forkTags = gh release list -R $fork --limit 1000 --json tagName --jq '.[].tagName'
+if ($LASTEXITCODE -ne 0) { throw "could not list the releases of $fork" }
+if ($forkTags -notcontains $tag) {
   $notes = "Unmodified copy of the $tag web package from $upstream, kept so Yoru can always fetch the version it is pinned to. Code: Apache-2.0. Model weights: CC BY-NC 4.0 (see models/WEIGHTS_LICENSE.md inside)."
   gh release create $tag -R $fork --title "$tag (web package, unmodified)" --notes $notes $file
   if ($LASTEXITCODE -ne 0) { throw "could not create the $tag release on $fork" }

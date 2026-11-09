@@ -2,7 +2,17 @@ import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { Anime4KPipeline } from 'anime4k-webgpu'
 import { readKey, writeKey } from '../lib/storage'
 import { api } from '../lib/api'
-import { claimCanvas, presentSmooth, SmoothMissing, type SmoothFiles, type SmoothRate, type SmoothState } from './smooth'
+import {
+  claimCanvas,
+  prepareSmooth,
+  presentSmooth,
+  recording,
+  smoothDevice,
+  SmoothMissing,
+  type SmoothFiles,
+  type SmoothRate,
+  type SmoothState,
+} from './smooth'
 
 export function webgpuAvailable(): boolean {
   return typeof navigator !== 'undefined' && 'gpu' in navigator
@@ -101,14 +111,106 @@ struct Out { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
 @fragment fn main(@location(0) uv: vec2f) -> @location(0) vec4f { return textureSample(tex, samp, uv); }
 `
 
+const pickMode = (mode: string | undefined): Mode => {
+  const key = mode?.toUpperCase() as Mode
+  return ['A', 'B', 'C', 'A+A', 'B+B', 'C+A'].includes(key) ? key : 'A'
+}
+
+async function newDevice(): Promise<GPUDevice> {
+  const adapter = await navigator.gpu.requestAdapter()
+  if (!adapter) throw new Error('WebGPU not supported')
+  return adapter.requestDevice()
+}
+
+const SPARE_MS = 60_000
+let spare: { device: Promise<GPUDevice | null>; lost: boolean; timer: number } | null = null
+
+function takeSpare(): Promise<GPUDevice | null> {
+  const held = spare
+  spare = null
+  if (!held) return Promise.resolve(null)
+  clearTimeout(held.timer)
+  return held.device.then((device) => (device && !held.lost ? device : null))
+}
+
+export function releaseSpare() {
+  void takeSpare().then((device) => device?.destroy())
+}
+
+const warmed = new WeakMap<GPUDevice, Set<string>>()
+const heldWarm: unknown[] = []
+
+function compilingAside(device: GPUDevice): GPUDevice {
+  const stand = { getBindGroupLayout: () => ({}) }
+  return new Proxy(device, {
+    get(target, prop) {
+      if (prop === 'createComputePipeline') {
+        return (d: GPUComputePipelineDescriptor) => {
+          heldWarm.push(target.createComputePipelineAsync(d).catch(() => null))
+          return stand
+        }
+      }
+      if (prop === 'createRenderPipeline') {
+        return (d: GPURenderPipelineDescriptor) => {
+          heldWarm.push(target.createRenderPipelineAsync(d).catch(() => null))
+          return stand
+        }
+      }
+      if (prop === 'createBindGroup') return () => ({})
+      const v = Reflect.get(target, prop, target)
+      return typeof v === 'function' ? v.bind(target) : v
+    },
+  })
+}
+
+function warmUp(lib: Lib, device: GPUDevice, mode: Mode, tier: UpscaleTier) {
+  const key = `${mode}/${tier}`
+  const done = warmed.get(device) ?? new Set<string>()
+  if (done.has(key)) return
+  done.add(key)
+  warmed.set(device, done)
+  const native = { width: 320, height: 180 }
+  const target = { width: 480, height: 270 }
+  const scratch = recording(device)
+  const input = scratch.device.createTexture({
+    size: [native.width, native.height, 1],
+    format: 'rgba16float',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+  })
+  try {
+    chain(lib, compilingAside(scratch.device), input, native, target, mode, tier)
+  } catch {
+    done.delete(key)
+  } finally {
+    scratch.release()
+  }
+}
+
+export function prepareAnime4K(mode: string, tier: UpscaleTier, shared: boolean) {
+  if (!webgpuAvailable()) return
+  const picked = pickMode(mode)
+  if (shared) releaseSpare()
+  if (!shared && !spare) {
+    const held: { device: Promise<GPUDevice | null>; lost: boolean; timer: number } = {
+      device: newDevice().catch(() => null),
+      lost: false,
+      timer: window.setTimeout(() => spare === held && releaseSpare(), SPARE_MS),
+    }
+    void held.device.then((device) => device?.lost.then(() => (held.lost = true)))
+    spare = held
+  }
+  const device = shared ? smoothDevice() : (spare?.device ?? Promise.resolve(null))
+  void Promise.all([import('anime4k-webgpu'), device])
+    .then(([lib, gpu]) => gpu && warmUp(lib, gpu, picked, tier))
+    .catch(() => {})
+}
+
 async function present(
   video: HTMLVideoElement,
   canvas: HTMLCanvasElement,
   build: (device: GPUDevice, input: GPUTexture) => Anime4KPipeline[],
 ) {
-  const adapter = await navigator.gpu.requestAdapter()
-  if (!adapter) throw new Error('WebGPU not supported')
-  const device = await adapter.requestDevice()
+  const device = (await takeSpare()) ?? (await newDevice())
   try {
     return presentOn(device, video, canvas, build)
   } catch (err) {
@@ -230,6 +332,14 @@ export function useAnime4K({
   useEffect(() => live.current?.setRate(pace), [pace])
   const [filesLanded, setFilesLanded] = useState(0)
   const retry = smoothing ? filesLanded : 0
+  useEffect(() => {
+    if (!webgpuAvailable()) return
+    if (!enabled) releaseSpare()
+    if (video && !video.paused && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return
+    if (smoothing) prepareSmooth()
+    if (enabled) prepareAnime4K(mode, tier, smoothing)
+  }, [video, smoothing, enabled, retry, mode, tier])
+  useEffect(() => () => releaseSpare(), [])
 
   const [generation, setGeneration] = useState(0)
   useEffect(() => {
@@ -275,8 +385,7 @@ export function useAnime4K({
         canvas.setAttribute('width', String(target.width))
         canvas.setAttribute('height', String(target.height))
 
-        const key = mode?.toUpperCase() as Mode
-        const picked: Mode = ['A', 'B', 'C', 'A+A', 'B+B', 'C+A'].includes(key) ? key : 'A'
+        const picked = pickMode(mode)
         build = (gpu, inputTexture, shared) => {
           if (!shared) {
             void gpu.lost.then(() => {
@@ -284,6 +393,7 @@ export function useAnime4K({
             })
           }
           const pipelines = chain(lib, gpu, inputTexture, native, target, picked, tier)
+          heldWarm.length = 0
           if (!shared) timeFrames(gpu, pipelines[pipelines.length - 1], () => !cancelled && slow())
           return pipelines
         }

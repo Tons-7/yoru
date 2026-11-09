@@ -31,6 +31,14 @@ export class FhEngine {
      */
     info(): any;
     /**
+     * `{ code, entry }`: the WGSL and entry point of a kernel exactly as this device compiles it, or null for a name
+     * that is not a kernel. Hand them to `device.createComputePipelineAsync({ layout: 'auto', compute: { module:
+     * device.createShaderModule({ code }), entryPoint: entry } })` all at once: the browser compiles them in parallel
+     * off the thread that composites the page (a cold site: about 0.5 s for a stream's kernels instead of about 2 s
+     * one by one), and `precompile` and `stream` then find them in its cache.
+     */
+    kernelSource(name: string): any;
+    /**
      * A model from its three files: `graph.json` text, the manifest text and the weight bytes.
      */
     loadModel(graph: string, manifest: string, weights: Uint8Array): FhModel;
@@ -38,7 +46,7 @@ export class FhEngine {
      * Compiles the named kernels not compiled yet and returns how many; unknown names are skipped. Chrome compiles in
      * the process that composites the page and caches per site: a stream's worth at once freezes the video for about a
      * second on a new site. Pass a few names per animation frame (awaiting `device.queue.onSubmittedWorkDone()`
-     * between) before `stream`, which then finds them compiled.
+     * between) before `stream`, which then finds them compiled; `kernelSource` first makes that a cache hit.
      */
     precompile(names: string[]): number;
     report(): any;
@@ -312,6 +320,7 @@ export interface InitOutput {
     readonly fhengine_create: (a: any) => any;
     readonly fhengine_device: (a: number) => [number, number, number];
     readonly fhengine_info: (a: number) => [number, number, number];
+    readonly fhengine_kernelSource: (a: number, b: number, c: number) => [number, number, number];
     readonly fhengine_loadModel: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number];
     readonly fhengine_precompile: (a: number, b: number, c: number) => number;
     readonly fhengine_report: (a: number) => [number, number, number];
@@ -379,9 +388,9 @@ export interface InitOutput {
     readonly fhstream_writeMask: (a: number, b: number, c: number) => [number, number];
     readonly wasm_bindgen_42694e960ec4e618___convert__closures_____invoke___js_sys_f59ae7d0bedcb30e___Function_fn_wasm_bindgen_42694e960ec4e618___JsValue_____wasm_bindgen_42694e960ec4e618___sys__Undefined___js_sys_f59ae7d0bedcb30e___Function_fn_wasm_bindgen_42694e960ec4e618___JsValue_____wasm_bindgen_42694e960ec4e618___sys__Undefined_______true_: (a: number, b: number, c: any, d: any) => void;
     readonly wasm_bindgen_42694e960ec4e618___convert__closures_____invoke___wasm_bindgen_42694e960ec4e618___sys__JsNullable_wgpu_9dd11b04e7018978___backend__webgpu__webgpu_sys__gen_GpuAdapter__GpuAdapter___core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_42694e960ec4e618___JsError___true_: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen_42694e960ec4e618___convert__closures_____invoke___wasm_bindgen_42694e960ec4e618___sys__JsNullable_wgpu_9dd11b04e7018978___backend__webgpu__webgpu_sys__gen_GpuAdapter__GpuAdapter___core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_42694e960ec4e618___JsError___true__73: (a: number, b: number, c: any) => [number, number];
     readonly wasm_bindgen_42694e960ec4e618___convert__closures_____invoke___wasm_bindgen_42694e960ec4e618___sys__JsNullable_wgpu_9dd11b04e7018978___backend__webgpu__webgpu_sys__gen_GpuAdapter__GpuAdapter___core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_42694e960ec4e618___JsError___true__74: (a: number, b: number, c: any) => [number, number];
     readonly wasm_bindgen_42694e960ec4e618___convert__closures_____invoke___wasm_bindgen_42694e960ec4e618___sys__JsNullable_wgpu_9dd11b04e7018978___backend__webgpu__webgpu_sys__gen_GpuAdapter__GpuAdapter___core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_42694e960ec4e618___JsError___true__75: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen_42694e960ec4e618___convert__closures_____invoke___wasm_bindgen_42694e960ec4e618___sys__JsNullable_wgpu_9dd11b04e7018978___backend__webgpu__webgpu_sys__gen_GpuAdapter__GpuAdapter___core_37ee0ce0c4cd57d5___result__Result_____wasm_bindgen_42694e960ec4e618___JsError___true__76: (a: number, b: number, c: any) => [number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

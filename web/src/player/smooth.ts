@@ -20,6 +20,97 @@ export class SmoothMissing extends Error {}
 
 export type DeviceSmooth = 'auto' | 'off' | 'on'
 const DEVICE_KEY = 'yoru.smooth'
+const KERNELS_KEY = 'yoru.smooth.kernels'
+
+const COMPILE_AHEAD_MS = 3000
+const REMEMBERED_KERNELS = 300
+
+function rememberedKernels(): string[] {
+  try {
+    const names: unknown = JSON.parse(readKey(KERNELS_KEY) ?? '[]')
+    return Array.isArray(names) ? names.filter((n): n is string => typeof n === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function compiledKernels(engine: FhEngine): string[] {
+  try {
+    return engine.compiledKernels()
+  } catch {
+    return []
+  }
+}
+
+const badKernels = new Set<string>()
+const aheadNames = new WeakMap<FhEngine, Set<string>>()
+const aheadKept = new WeakMap<FhEngine, unknown[]>()
+const aheadJob = new WeakMap<FhEngine, Promise<void>>()
+
+function sourceOf(engine: FhEngine, name: string): { code: string; entry: string } | null {
+  try {
+    return engine.kernelSource(name) as { code: string; entry: string } | null
+  } catch {
+    return null
+  }
+}
+
+async function compileAhead(engine: FhEngine, device: GPUDevice) {
+  const have = new Set(compiledKernels(engine))
+  const done = aheadNames.get(engine) ?? new Set<string>()
+  aheadNames.set(engine, done)
+  const kept = aheadKept.get(engine) ?? []
+  aheadKept.set(engine, kept)
+  const jobs: Promise<unknown>[] = []
+  for (const name of rememberedKernels()) {
+    if (have.has(name) || done.has(name) || badKernels.has(name)) continue
+    done.add(name)
+    const source = sourceOf(engine, name)
+    if (!source) {
+      badKernels.add(name)
+      continue
+    }
+    device.pushErrorScope('validation')
+    const module = device.createShaderModule({ code: source.code })
+    const invalid = device.popErrorScope().then((err) => {
+      if (err) badKernels.add(name)
+    })
+    const job = device
+      .createComputePipelineAsync({ layout: 'auto', compute: { module, entryPoint: source.entry } })
+      .then((pipeline) => kept.push(pipeline))
+      .catch(() => badKernels.add(name))
+    jobs.push(invalid, job)
+  }
+  if (jobs.length) await Promise.race([Promise.allSettled(jobs), new Promise((r) => setTimeout(r, COMPILE_AHEAD_MS))])
+}
+
+function compiledAhead(engine: FhEngine, device: GPUDevice): Promise<void> {
+  const job = (aheadJob.get(engine) ?? Promise.resolve()).then(() => compileAhead(engine, device))
+  aheadJob.set(engine, job)
+  return job
+}
+
+const releaseAhead = (engine: FhEngine) => aheadKept.get(engine)?.splice(0)
+
+export function prepareSmooth() {
+  if (!('gpu' in navigator)) return
+  void smoothEngine()
+    .then(({ engine, device }) => compiledAhead(engine, device))
+    .catch(() => {})
+}
+
+export function smoothDevice(): Promise<GPUDevice | null> {
+  if (!('gpu' in navigator)) return Promise.resolve(null)
+  return smoothEngine()
+    .then(({ device }) => device)
+    .catch(() => null)
+}
+
+function rememberKernels(engine: FhEngine) {
+  const names = new Set([...compiledKernels(engine), ...rememberedKernels()])
+  for (const bad of badKernels) names.delete(bad)
+  writeKey(KERNELS_KEY, JSON.stringify([...names].slice(0, REMEMBERED_KERNELS)))
+}
 
 export function deviceSmooth(): DeviceSmooth {
   const v = readKey(DEVICE_KEY)
@@ -200,7 +291,7 @@ async function load(): Promise<Engine> {
   return { engine, model, device }
 }
 
-function recording(device: GPUDevice) {
+export function recording(device: GPUDevice) {
   const made: Array<GPUTexture | GPUBuffer> = []
   const proxy = new Proxy(device, {
     get(target, prop) {
@@ -366,6 +457,9 @@ async function start({
   canvas.setAttribute('width', String(size.width))
   canvas.setAttribute('height', String(size.height))
 
+  undo.push(() => releaseAhead(engine))
+  await compiledAhead(engine, device)
+  if (run.stopped) throw new Error('stopped while starting')
   const stream: FhStream = engine.stream(
     model,
     { width: size.width, height: size.height },
@@ -755,6 +849,9 @@ async function start({
 
   stream.warmUp()
   await device.queue.onSubmittedWorkDone()
+  releaseAhead(engine)
+  rememberKernels(engine)
+  undo.push(() => rememberKernels(engine))
   if (run.stopped) throw new Error('stopped while starting')
 
   handle = video.requestVideoFrameCallback(onFrame)
