@@ -64,11 +64,16 @@ var smoothTypes = map[string]string{
 	".js":   "text/javascript; charset=utf-8",
 	".wasm": "application/wasm",
 	".json": "application/json",
-	".bin":  "application/octet-stream",
+	".bin":  "application/x-flyhigh-weights",
 }
+
+var smoothAliases = map[string]string{"flyhighfg.weights": "flyhighfg.bin"}
 
 func (s *Server) smoothFile(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("file")
+	if real, ok := smoothAliases[name]; ok {
+		name = real
+	}
 	if !slices.Contains(deps.FlyHighFiles, name) {
 		send(w, http.StatusNotFound, map[string]any{"error": "not a smooth motion file"})
 		return

@@ -20,11 +20,8 @@ import (
 const (
 	Endpoint = "https://graphql.anilist.co"
 
-	// Their WAF wants the site as the referer; without it every call is refused.
 	Referer = "https://anilist.co/"
 
-	// AniList has been capped at 30/min since November 2022. The documented 90
-	// has never been restored, so this is the real ceiling, not a safety margin.
 	requestsPerMinute = 30
 	burst             = 5
 	maxRetries        = 3
@@ -34,7 +31,7 @@ type Client struct {
 	http    *http.Client
 	limiter *rate.Limiter
 	log     *slog.Logger
-	// Set by login and logout while requests are in flight.
+
 	tokenMu   sync.RWMutex
 	token     string
 	endpoint  string
@@ -47,12 +44,11 @@ type Client struct {
 	pausedUntil time.Time
 	downUntil   time.Time
 	archive     Archive
-	// The login AniList last refused, and when: public reads skip it a while instead of costing two requests.
+
 	refusedToken string
 	refusedAt    time.Time
 }
 
-// How long a refused login is skipped for public reads before it is tried again.
 const refusedFor = 10 * time.Minute
 
 func (c *Client) noteRefused(token string) {
@@ -69,12 +65,10 @@ func (c *Client) loginRefused(token string) bool {
 
 type Option func(*Client)
 
-// WithEndpoint redirects the client, for tests and for pointing at a mirror.
 func WithEndpoint(url string) Option {
 	return func(c *Client) { c.endpoint = url }
 }
 
-// WithoutRateLimit removes the pacing. Only safe against a local server.
 func WithoutRateLimit() Option {
 	return func(c *Client) { c.limiter = rate.NewLimiter(rate.Inf, 1) }
 }
@@ -112,7 +106,6 @@ type anonymousKey struct{}
 
 type tokenKey struct{}
 
-// bearerFor is the token a request carries: none for one queryAnonymous makes, a login's own for ViewerWith.
 func (c *Client) bearerFor(ctx context.Context) string {
 	if ctx.Value(anonymousKey{}) != nil {
 		return ""
@@ -123,7 +116,6 @@ func (c *Client) bearerFor(ctx context.Context) string {
 	return c.bearer()
 }
 
-// GraphQLError carries AniList's errors; Validation holds a mutation's per-field rejections.
 type GraphQLError struct {
 	Message    string              `json:"message"`
 	Status     int                 `json:"status"`
@@ -140,8 +132,6 @@ func (e Errors) Error() string {
 	return "anilist: " + strings.Join(msgs, "; ")
 }
 
-// Unauthorized reports whether re-authentication is required: 400 "Invalid
-// token" is malformed, 401 is absent or expired. A 403 means the API is down.
 func (e Errors) Unauthorized() bool {
 	for _, err := range e {
 		if err.Status == 401 || (err.Status == 400 && strings.Contains(err.Message, "Invalid token")) {
@@ -156,20 +146,16 @@ type response struct {
 	Errors Errors          `json:"errors"`
 }
 
-// queryAnonymous withholds the token: the only way to see titles AniList hides from the account.
 func (c *Client) queryAnonymous(ctx context.Context, query string, vars map[string]any, out any) error {
 	if c.bearer() == "" {
 		return errors.New("anilist: already anonymous")
 	}
-	// The same client, so a 429 pauses both; the cache key carries the token, so answers cannot cross.
+
 	return c.Query(context.WithValue(ctx, anonymousKey{}, true), query, vars, out)
 }
 
-// Query executes a document and unmarshals the data field into out. Reads are
-// served from a short-lived response cache; see cache.go for why.
 func (c *Client) Query(ctx context.Context, query string, vars map[string]any, out any) error {
-	// A login AniList refuses (expired, revoked) makes it refuse public reads too: those go without it, so
-	// browsing works until the user reconnects. Sync still sees the refusal and asks for that.
+
 	token := c.bearer()
 	public := token != "" && !isMutation(query) && ctx.Value(anonymousKey{}) == nil && ctx.Value(tokenKey{}) == nil
 	triedAnonymous := false
@@ -177,7 +163,7 @@ func (c *Client) Query(ctx context.Context, query string, vars map[string]any, o
 		if c.queryAnonymous(ctx, query, vars, out) == nil {
 			return nil
 		}
-		// A read that needs the login: tried with it, so the caller sees AniList's own answer.
+
 		triedAnonymous = true
 	}
 	err := c.query(ctx, query, vars, out)
@@ -207,13 +193,14 @@ func (c *Client) query(ctx context.Context, query string, vars map[string]any, o
 	}
 
 	saved := archiveKey(body, c.bearerFor(ctx) != "")
-	// Failed moments ago: serve the saved answer rather than wait on retries.
+
 	if c.isDown() && c.fromArchive(ctx, saved, out) {
 		return nil
 	}
+	if c.savedFirst(ctx, query, body, key, saved, out) {
+		return nil
+	}
 
-	// Another caller is already asking for exactly this. Wait for it and take
-	// its answer rather than spending a second request from the same budget.
 	wait, mine := c.cache.enter(key)
 	if !mine {
 		select {
@@ -228,14 +215,62 @@ func (c *Client) query(ctx context.Context, query string, vars map[string]any, o
 		if c.isDown() && c.fromArchive(ctx, saved, out) {
 			return nil
 		}
-		// It failed, and the reason is worth reproducing rather than reporting second-hand.
+
 		return c.fetch(ctx, query, body, key, saved, out)
 	}
 	defer c.cache.done(key, wait)
 	return c.fetch(ctx, query, body, key, saved, out)
 }
 
-// fetch asks AniList, falling back to the saved answer only if it is unreachable.
+const refreshWait = 2 * time.Minute
+
+type liveFirstKey struct{}
+
+func LiveFirst(ctx context.Context) context.Context {
+	return context.WithValue(ctx, liveFirstKey{}, true)
+}
+
+func (c *Client) savedFirst(ctx context.Context, query string, body []byte, key, saved string, out any) bool {
+	served, archive := servedFrom(ctx), c.archiver()
+	if served == nil || archive == nil || !keepsAnswers(ctx) || ctx.Value(liveFirstKey{}) != nil || c.cache.refused(key) {
+		return false
+	}
+	data, at, ok := archive.LoadAnswer(ctx, saved)
+	if !ok || decodeInto(data, out) != nil {
+		return false
+	}
+	if expires := at.Add(cacheTTL); time.Now().Before(expires) {
+		c.cache.putUntil(key, data, expires)
+		served.noteLive()
+		return true
+	}
+	served.noteRefreshing()
+	wait, mine := c.cache.enter(key)
+	if !mine {
+		return true
+	}
+	behind, cancel := context.WithTimeout(Background(context.WithoutCancel(ctx)), refreshWait)
+	go func() {
+		defer cancel()
+		defer c.cache.done(key, wait)
+		var fresh json.RawMessage
+		if err := c.execute(behind, query, body, &fresh); err != nil {
+			if unreachable(behind, err) {
+				c.markDown()
+			} else {
+				c.cache.noteFailed(key)
+			}
+			c.log.Debug("refresh a saved anilist answer", "err", err)
+			return
+		}
+		c.cache.put(key, fresh)
+		if err := archive.SaveAnswer(behind, saved, fresh); err != nil {
+			c.log.Debug("save anilist answer", "err", err)
+		}
+	}()
+	return true
+}
+
 func (c *Client) fetch(ctx context.Context, query string, body []byte, key, saved string, out any) error {
 	var data json.RawMessage
 	if err := c.execute(ctx, query, body, &data); err != nil {
@@ -250,10 +285,10 @@ func (c *Client) fetch(ctx context.Context, query string, body []byte, key, save
 		return err
 	}
 	c.cache.put(key, data)
-	// Only what pages read is kept: background batches never ask twice.
+
 	if served := servedFrom(ctx); served != nil {
 		served.noteLive()
-		if archive := c.archiver(); archive != nil {
+		if archive := c.archiver(); archive != nil && keepsAnswers(ctx) {
 			go func() {
 				if err := archive.SaveAnswer(context.WithoutCancel(ctx), saved, data); err != nil {
 					c.log.Debug("save anilist answer", "err", err)
@@ -264,8 +299,6 @@ func (c *Client) fetch(ctx context.Context, query string, body []byte, key, save
 	return decodeInto(data, out)
 }
 
-// QueryFresh skips the response cache, for state this client also changes:
-// a cached answer from before a mutation reads as the user undoing it.
 func (c *Client) QueryFresh(ctx context.Context, query string, vars map[string]any, out any) error {
 	body, err := json.Marshal(map[string]any{"query": query, "variables": vars})
 	if err != nil {
@@ -285,7 +318,6 @@ func (c *Client) execute(ctx context.Context, query string, body []byte, out any
 	return c.run(ctx, body, out, true)
 }
 
-// MutateOnce is for a mutation unsafe to repeat, like a toggle: a failure is returned, not retried.
 func (c *Client) MutateOnce(ctx context.Context, query string, vars map[string]any, out any) error {
 	body, err := json.Marshal(map[string]any{"query": query, "variables": vars})
 	if err != nil {
@@ -296,15 +328,12 @@ func (c *Client) MutateOnce(ctx context.Context, query string, vars map[string]a
 
 type backgroundKey struct{}
 
-// Background marks ctx as a job nobody is waiting on, whose requests let a person's go first.
 func Background(ctx context.Context) context.Context {
 	return context.WithValue(ctx, backgroundKey{}, true)
 }
 
-// yieldMax bounds how long a background request stands aside, so a busy evening cannot starve it.
 const yieldMax = 30 * time.Second
 
-// yield holds a background request back while the budget is short, keeping the reserve for clicks.
 func (c *Client) yield(ctx context.Context) error {
 	if ctx.Value(backgroundKey{}) == nil || c.limiter.Limit() == rate.Inf {
 		return nil
@@ -351,8 +380,6 @@ func (c *Client) run(ctx context.Context, body []byte, out any, repeatable bool)
 			c.log.Warn("anilist rate limited", "wait", wait)
 			continue
 
-		// 403 means the API is temporarily disabled rather than a permissions
-		// problem, so it is worth retrying. A 5xx may have been applied.
 		case res.StatusCode == http.StatusForbidden || res.StatusCode >= 500:
 			if (repeatable || res.StatusCode == http.StatusForbidden) && attempt < maxRetries {
 				c.sleep(ctx, backoff(attempt))
@@ -360,7 +387,6 @@ func (c *Client) run(ctx context.Context, body []byte, out any, repeatable bool)
 			}
 		}
 
-		// This response already succeeded, so hold back the next caller rather than the current one.
 		if remaining(res) == 0 {
 			c.log.Debug("anilist quota exhausted, pausing subsequent requests")
 			c.pauseFor(time.Minute)
@@ -370,8 +396,7 @@ func (c *Client) run(ctx context.Context, body []byte, out any, repeatable bool)
 		if err := json.Unmarshal(raw, &parsed); err != nil {
 			return fmt.Errorf("anilist: decode response (HTTP %d): %w", res.StatusCode, err)
 		}
-		// The HTTP status is derived from the error array, and a partial
-		// response can arrive alongside a non-200. Errors decide, not the code.
+
 		if len(parsed.Errors) > 0 {
 			return parsed.Errors
 		}
@@ -389,7 +414,7 @@ func (c *Client) post(ctx context.Context, body []byte) (*http.Response, []byte,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	// AniList's edge answers 403 "API temporarily disabled" to any request without one, whatever the agent.
+
 	req.Header.Set("Referer", Referer)
 	if token := c.bearerFor(ctx); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -412,7 +437,6 @@ func (c *Client) sleep(ctx context.Context, d time.Duration) {
 	}
 }
 
-// The quota is per account, so a pause holds every goroutine, not just the one that saw the 429.
 func (c *Client) pauseFor(d time.Duration) {
 	until := time.Now().Add(d)
 	c.mu.Lock()
@@ -438,8 +462,6 @@ func (c *Client) awaitPause(ctx context.Context) error {
 	}
 }
 
-// AniList fires two kinds of 429: the quota limiter sends Retry-After, the burst
-// limiter sends no headers at all — so never assume a header is present.
 func retryAfter(res *http.Response) time.Duration {
 	if v, err := strconv.Atoi(res.Header.Get("Retry-After")); err == nil && v > 0 {
 		return time.Duration(v)*time.Second + 500*time.Millisecond
@@ -464,7 +486,6 @@ func backoff(attempt int) time.Duration {
 	return time.Duration(1<<attempt) * time.Second
 }
 
-// NotFound reports AniList saying the thing asked about doesn't exist.
 func (e Errors) NotFound() bool {
 	for _, err := range e {
 		if err.Status == 404 {

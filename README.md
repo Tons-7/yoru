@@ -42,6 +42,8 @@ a browser player and one config file.
   subtitle files, and Japanese subtitles from Jimaku.
 - **Knows 34,000+ anime**, including the ~11,700 that exist on MyAnimeList but
   not AniList.
+- **Opens without waiting.** Shows and lists you've seen open from Yoru's own
+  copy and refresh in the background; a mark in the top bar says when.
 - **Marks filler and recap episodes**, so a rewatch can skip them.
 - **Skips openings and endings**, with a Skip button or automatically, per show;
   recaps and previews too. The times come from the file's chapters, AniSkip or
@@ -49,6 +51,9 @@ a browser player and one config file.
 - **Watches like a TV service:** autoplay asks *Still watching?*, a sleep timer,
   spoiler-free titles for episodes you haven't reached, and a finale leads on to
   the next season.
+- **Watch together.** Open a room and friends with their own Yoru join from a
+  link, anywhere, with no router setup: everyone plays, pauses and jumps in
+  step, with chat. The host picks what plays and friends can suggest.
 - **Follows airing shows:** alerts you when a new episode can actually be
   played, and of delays and new seasons, and can download them, waiting a few
   hours for your preferred group. Alerts reach a phone even with Yoru closed.

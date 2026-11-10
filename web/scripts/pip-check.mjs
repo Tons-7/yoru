@@ -124,6 +124,30 @@ if (pip) {
     await page.evaluate(() => !!document.querySelector('video')),
     'the player is back in the page',
   )
+  await page.evaluate(() => document.querySelector('video').play())
+  const drawn = await page.evaluate(async () => {
+    const seen = []
+    for (let i = 0; i < 6; i++) {
+      await new Promise((r) => setTimeout(r, 900))
+      const all = [...document.querySelectorAll('canvas.JASSUB')]
+      const c = all[all.length - 1]
+      if (!c) {
+        seen.push(-1)
+        continue
+      }
+      const probe = document.createElement('canvas')
+      probe.width = 320
+      probe.height = 180
+      const ctx = probe.getContext('2d', { willReadFrequently: true })
+      ctx.drawImage(c, 0, 0, 320, 180)
+      const d = ctx.getImageData(0, 0, 320, 180).data
+      let inked = 0
+      for (let p = 3; p < d.length; p += 4) if (d[p] > 20) inked++
+      seen.push(inked)
+    }
+    return seen
+  })
+  check(drawn.some((n) => n > 0), 'back from the window by its button, subtitles are drawn again', drawn.join(','))
 }
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))

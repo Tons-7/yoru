@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// MAL's statuses, which do not match AniList's.
 const (
 	StatusWatching    = "watching"
 	StatusCompleted   = "completed"
@@ -36,7 +35,6 @@ var toAniList = map[string]string{
 	StatusPlanToWatch: "PLANNING",
 }
 
-// Status maps a Yoru status to MAL's; rewatching is only a flag there, so it reports as watching.
 func Status(status string) string {
 	if s, ok := fromAniList[strings.ToUpper(status)]; ok {
 		return s
@@ -49,22 +47,19 @@ func StatusToAniList(status string) string {
 }
 
 type Entry struct {
-	AnimeID  int
-	Title    string
-	Episodes int
-	Status   string
-	Score    int
-	Watched  int
-	// Rewatching is MAL's flag on a "watching" entry; it has no separate status.
+	AnimeID    int
+	Title      string
+	Episodes   int
+	Status     string
+	Score      int
+	Watched    int
 	Rewatching bool
 	Rewatched  int
 	Updated    time.Time
 }
 
-// LocalScore is the entry's score on Yoru's 0-100 scale; MAL rates 0-10.
 func (e Entry) LocalScore() int { return e.Score * 10 }
 
-// MALScore converts a 0-100 score to MAL's 0-10, rounding to nearest.
 func MALScore(score int) int {
 	if score <= 0 {
 		return 0
@@ -72,8 +67,6 @@ func MALScore(score int) int {
 	return min(10, (score+5)/10)
 }
 
-// ListStatus is the entry's status in AniList's vocabulary, which Yoru stores: a rewatch is REPEATING there,
-// while MAL says watching + is_rewatching.
 func (e Entry) ListStatus() string {
 	if e.Rewatching && strings.EqualFold(e.Status, StatusWatching) {
 		return "REPEATING"
@@ -89,9 +82,8 @@ type listPage struct {
 			NumEpisodes int    `json:"num_episodes"`
 		} `json:"node"`
 		ListStatus struct {
-			Status string `json:"status"`
-			Score  int    `json:"score"`
-			// Reads use num_episodes_watched, writes num_watched_episodes; mixing them fails silently.
+			Status             string    `json:"status"`
+			Score              int       `json:"score"`
 			NumEpisodesWatched int       `json:"num_episodes_watched"`
 			IsRewatching       bool      `json:"is_rewatching"`
 			NumTimesRewatched  int       `json:"num_times_rewatched"`
@@ -103,7 +95,6 @@ type listPage struct {
 	} `json:"paging"`
 }
 
-// List pulls the user's whole list, following MAL's paging links rather than offsets.
 func (c *Client) List(ctx context.Context) ([]Entry, error) {
 	q := url.Values{
 		"fields": {"list_status{status,score,num_episodes_watched,is_rewatching,num_times_rewatched,updated_at},num_episodes"},
@@ -137,7 +128,6 @@ func (c *Client) List(ctx context.Context) ([]Entry, error) {
 	return out, nil
 }
 
-// SetProgress sends score (0-100) and rewatch count only when non-zero, so a local row can't wipe the site's.
 func (c *Client) SetProgress(ctx context.Context, animeID, watched int, status string, rewatched, score int, clearScore bool) error {
 	if animeID <= 0 {
 		return fmt.Errorf("mal: invalid anime id %d", animeID)
@@ -159,7 +149,6 @@ func (c *Client) SetProgress(ctx context.Context, animeID, watched int, status s
 	return c.do(ctx, "PATCH", endpoint, form, nil)
 }
 
-// DeleteEntry takes an anime off the user's MAL list; one already gone (404) counts as done.
 func (c *Client) DeleteEntry(ctx context.Context, animeID int) error {
 	err := c.do(ctx, http.MethodDelete, fmt.Sprintf("%s/anime/%d/my_list_status", c.api, animeID), nil, nil)
 	var e *Error
@@ -170,8 +159,9 @@ func (c *Client) DeleteEntry(ctx context.Context, animeID int) error {
 }
 
 type viewer struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID      int    `json:"id"`
+	Name    string `json:"name"`
+	Picture string `json:"picture"`
 }
 
 func (c *Client) Viewer(ctx context.Context) (viewer, error) {

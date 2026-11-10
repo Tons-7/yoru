@@ -896,6 +896,7 @@ export function useAutoSkip(
 export function useDocumentPiP(container: HTMLElement | null) {
   const [active, setActive] = useState(false)
   const [win, setWin] = useState<Window | null>(null)
+  const comeBack = useRef<(() => void) | null>(null)
   const supported =
     typeof window !== 'undefined' && 'documentPictureInPicture' in window
 
@@ -910,8 +911,8 @@ export function useDocumentPiP(container: HTMLElement | null) {
     }).documentPictureInPicture
 
     if (dpip.window) {
+      comeBack.current?.()
       dpip.window.close()
-      setActive(false)
       return
     }
 
@@ -967,7 +968,9 @@ export function useDocumentPiP(container: HTMLElement | null) {
       settle = pip.setTimeout(() => container.style.removeProperty('opacity'), pipSettleMs)
     })
 
-    pip.addEventListener('pagehide', () => {
+    const back = () => {
+      if (comeBack.current !== back) return
+      comeBack.current = null
       pip.clearTimeout(settle)
       container.style.removeProperty('opacity')
       container.style.removeProperty('height')
@@ -975,7 +978,9 @@ export function useDocumentPiP(container: HTMLElement | null) {
       setActive(false)
       setWin(null)
       setFloating(false)
-    })
+    }
+    comeBack.current = back
+    pip.addEventListener('pagehide', back)
   }
 
   useEffect(() => {

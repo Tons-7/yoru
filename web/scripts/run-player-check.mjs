@@ -1,5 +1,3 @@
-// Builds, then runs a browser check (player-check.mjs by default) on a throwaway Yoru, and tears it down.
-// Env: PORT=4399 (own scratch), YORU_ANIME=id, SKIP_BUILD=1, KEEP=1, BIN_ONLY=a,b|none, ANILIST_LIVE=1.
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, openSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -12,7 +10,6 @@ const webDir = resolve(scriptDir, '..')
 const repo = resolve(webDir, '..')
 
 const PORT = process.env.PORT ?? '4399'
-// Which browser check to drive against the instance.
 const CHECK = process.argv[2] ?? process.env.CHECK ?? 'player-check.mjs'
 const ANIME = process.env.YORU_ANIME ?? '127230'
 const SKIP_BUILD = process.env.SKIP_BUILD === '1'
@@ -23,29 +20,23 @@ const exe = (name) => (process.platform === 'win32' ? `${name}.exe` : name)
 const ffmpeg = join(repo, 'bin', exe('ffmpeg'))
 const DEFAULT_PORT = PORT === '4399'
 const scratch = join(tmpdir(), DEFAULT_PORT ? 'yoru-e2e' : `yoru-e2e-${PORT}`)
-// Off the real app's 4240 and the other scripts' 4341–4347.
 const PEER_PORT = DEFAULT_PORT ? 4341 : Number(PORT) - 60
 const root = join(scratch, 'root')
 const appdata = join(scratch, 'appdata')
 const isolated = {
   YORU_ROOT: root,
-  // APPDATA too, so nothing of this user's own is read.
   LOCALAPPDATA: appdata,
   APPDATA: appdata,
   YORU_NO_WINDOW: '1',
-  // Never GitHub: a release check's 70 instances spent the network's hourly allowance, and the real app's.
   YORU_UPDATE_API: process.env.YORU_UPDATE_API ?? 'http://127.0.0.1:9',
 }
 const lib = join(scratch, 'lib')
 const shots = join(scratch, 'shots')
 const serverLog = join(scratch, 'server.log')
-// The binary lives outside the scratch wiped each run, so SKIP_BUILD has something to reuse.
-// YORU_BIN_DIR: a build of its own, while another run still has the shared binary open.
 const binCache = process.env.YORU_BIN_DIR ?? join(tmpdir(), 'yoru-e2e-bin')
 const yoruExe = join(binCache, exe('yoru'))
 
 let server
-// AniList answers come through a caching proxy (see anilist-cache.mjs) unless ANILIST_LIVE=1.
 let anilist
 const ANILIST_PORT = Number(PORT) + 1000
 
@@ -55,7 +46,6 @@ const run = (cmd, args, opts = {}) => {
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} exited ${r.status ?? r.signal}`)
 }
 
-// Yoru also finds a program on PATH, so BIN_ONLY hides any copy installed there.
 function binOnlyPath() {
   if (!process.env.BIN_ONLY) return {}
   const keep = process.env.BIN_ONLY.split(',')
@@ -74,12 +64,9 @@ function killTree(child) {
       process.kill(-child.pid, 'SIGKILL')
     }
   } catch {
-    // Already gone.
   }
 }
 
-// A test episode: 180s (30 six-second segments) of colour bars, a tone, and an
-// ASS track with a cue every few seconds so the subtitle checks have content.
 function makeEpisode() {
   const cues = []
   for (let t = 2; t < 178; t += 5) {
@@ -102,7 +89,6 @@ ${cues.join('\n')}
 `
   const assPath = join(scratch, 'subs.ass')
   writeFileSync(assPath, ass)
-  // Named chapters, the way a real release marks its opening and ending.
   const chapters = join(scratch, 'chapters.ini')
   writeFileSync(
     chapters,
@@ -113,7 +99,6 @@ ${cues.join('\n')}
   )
 
   const out = join(lib, 'Yoru Test Show - 01.mkv')
-  // Two audio tracks (low tone Japanese, high English) for the sub/dub switch to choose between.
   run(ffmpeg, [
     '-y', '-hide_banner', '-loglevel', 'error',
     '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=24:duration=180',
@@ -137,8 +122,6 @@ ${cues.join('\n')}
   return out
 }
 
-// Episode 7: episode 3's markers, a line at the top in Comic Sans MS throughout, and 23 fonts attached, as a
-// MultiSub release carries, for subs-start-check.
 function makeFontEpisode() {
   const dir = process.env.WINDIR ? join(process.env.WINDIR, 'Fonts') : ''
   const fonts = ['arial', 'arialbd', 'ariali', 'arialbi', 'verdana', 'verdanab', 'verdanai', 'verdanaz', 'trebuc',
@@ -161,7 +144,6 @@ function makeFontEpisode() {
   ])
 }
 
-// Episodes 5 (HEVC 10-bit, 5.1 AC-3) and 6 (Hi10P, AAC), as the best releases come, for decode-check.
 function makeHevcEpisode() {
   const source = ['-y', '-hide_banner', '-loglevel', 'error',
     '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=24:duration=180',
@@ -179,7 +161,6 @@ function makeHevcEpisode() {
   ])
 }
 
-// Episode 4's subtitles are PGS pictures (a white box, 5 s to 175 s), written here: ffmpeg can't encode PGS.
 function makePictureEpisode() {
   const seg = (type, seconds, data) => {
     const head = Buffer.alloc(13)
@@ -197,7 +178,6 @@ function makePictureEpisode() {
     const wds = Buffer.from([1, 0, ...u16(x), ...u16(y), ...u16(w), ...u16(h)])
     const parts = [seg(0x16, seconds, pcs), seg(0x17, seconds, wds)]
     if (show) {
-      // Palette entry 1: white (Y 235, Cr 128, Cb 128), opaque. Each line: w pixels of it, then end of line.
       parts.push(seg(0x14, seconds, Buffer.from([0, 0, 1, 235, 128, 128, 255])))
       const line = [0, 0xc0 | (w >> 8), w & 255, 1, 0, 0]
       const rle = Buffer.from(Array.from({ length: h }, () => line).flat())
@@ -222,7 +202,6 @@ function makePictureEpisode() {
   ])
 }
 
-// Episode 3's subtitles: cue i is a block at x = 40 + 12i from 2i to 2i+1.9s, readable against the clock.
 function makeMarkerEpisode() {
   const cues = []
   for (let i = 0; i < 90; i++) {
@@ -250,7 +229,6 @@ ${cues.join('\n')}
   )
   run(ffmpeg, [
     '-y', '-hide_banner', '-loglevel', 'error',
-    // Not a flat colour: the scanner ignores files under 20 MB as not episodes.
     '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=24:duration=180',
     '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=180',
     '-i', assPath,
@@ -268,7 +246,6 @@ async function waitForServer() {
       const res = await fetch(`${URL}/api/setup`)
       if (res.ok) return
     } catch {
-      // Not up yet.
     }
     if (server.exitCode !== null) {
       throw new Error(`server exited early (code ${server.exitCode}); see ${serverLog}`)
@@ -282,12 +259,9 @@ try {
   if (!existsSync(ffmpeg)) throw new Error(`ffmpeg not found at ${ffmpeg}; build/download deps first`)
 
   stage(`scratch instance at ${scratch}`)
-  rmSync(scratch, { recursive: true, force: true })
+  rmSync(scratch, { recursive: true, force: true, maxRetries: 60, retryDelay: 500 })
   for (const d of [scratch, root, appdata, lib, shots]) mkdirSync(d, { recursive: true })
-  // BIN_ONLY=a,b links only those (someone who skipped the rest); none links nothing.
   linkBin(join(repo, 'bin'), join(root, 'bin'), process.env.BIN_ONLY ? process.env.BIN_ONLY.split(',') : null)
-  // A port nothing listens on, so searches fail fast and the first-run nudge stays off; e2e-swarm answers
-  // there when a check starts it. The peer port is off the app's own.
   writeFileSync(
     join(root, 'config.toml'),
     `addr = "127.0.0.1:${PORT}"\n${process.env.YORU_EXTRA_CONFIG ?? ''}\n[torrent]\nlisten_port = ${PEER_PORT}\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:${Number(PORT) + 2000}"\n`,
@@ -295,11 +269,9 @@ try {
 
   if (!SKIP_BUILD) {
     stage('building web (vite)')
-    // One string under shell:true, so a .cmd shim runs without the args-with-shell warning.
     run('npm run build', [], { cwd: webDir, shell: true })
     stage('building server (go)')
     mkdirSync(binCache, { recursive: true })
-    // As released: on Windows a windowed app with no console, which must still log to the redirected output.
     const gui = process.platform === 'win32' ? ['-ldflags', '-H windowsgui'] : []
     run('go', ['build', ...gui, '-o', yoruExe, './cmd/yoru'], { cwd: repo })
   }
@@ -318,7 +290,6 @@ try {
   const logFd = openSync(serverLog, 'w')
   server = spawn(yoruExe, [], {
     cwd: root,
-    // No app window: Playwright is the browser, and the window's profile blocks cleanup.
     env: { ...process.env, ...isolated, ...upstream, ...binOnlyPath() },
     stdio: ['ignore', logFd, logFd],
     detached: process.platform !== 'win32',
@@ -346,7 +317,6 @@ try {
   if (KEEP) {
     console.log(`\nscratch kept at ${scratch} (server log: ${serverLog})`)
   } else {
-    // Windows holds the killed server's files a moment; a failed cleanup can't change the verdict.
     try {
       rmSync(scratch, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
     } catch (err) {

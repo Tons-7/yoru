@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// AniList allows only 30 requests/min app-wide. Airing times live in the data,
-// so cached lists go stale only when the schedule is amended, not when one passes.
 const (
 	cacheTTL     = 10 * time.Minute
 	cacheEntries = 250
@@ -24,8 +22,8 @@ type responseCache struct {
 	mu      sync.Mutex
 	entries map[string]cached
 
-	// Identical queries in flight share one request; opening the app fires several at once.
 	inflight map[string]chan struct{}
+	failed   map[string]bool
 }
 
 func newResponseCache() *responseCache {
@@ -35,13 +33,10 @@ func newResponseCache() *responseCache {
 	}
 }
 
-// Every document here is a compile-time constant, so reading the operation off the front is reliable.
 func isMutation(query string) bool {
 	return strings.HasPrefix(strings.TrimSpace(query), "mutation")
 }
 
-// The key covers the account too: AniList hides adult titles from accounts
-// that have not opted in, so the same query differs with and without a token.
 func cacheKey(query string, body []byte, token string) string {
 	sum := sha256.New()
 	sum.Write([]byte(query))
@@ -64,9 +59,27 @@ func (c *responseCache) get(key string) ([]byte, bool) {
 }
 
 func (c *responseCache) put(key string, body []byte) {
+	c.putUntil(key, body, time.Now().Add(cacheTTL))
+}
+
+func (c *responseCache) noteFailed(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.failed == nil || len(c.failed) > cacheEntries {
+		c.failed = map[string]bool{}
+	}
+	c.failed[key] = true
+}
 
+func (c *responseCache) refused(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failed[key]
+}
+
+func (c *responseCache) putUntil(key string, body []byte, expires time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if len(c.entries) >= cacheEntries {
 		now := time.Now()
 		for k, e := range c.entries {
@@ -74,7 +87,7 @@ func (c *responseCache) put(key string, body []byte) {
 				delete(c.entries, k)
 			}
 		}
-		// Still full, so drop arbitrary entries: losing one costs a request.
+
 		for k := range c.entries {
 			if len(c.entries) < cacheEntries {
 				break
@@ -82,10 +95,10 @@ func (c *responseCache) put(key string, body []byte) {
 			delete(c.entries, k)
 		}
 	}
-	c.entries[key] = cached{body: body, expires: time.Now().Add(cacheTTL)}
+	delete(c.failed, key)
+	c.entries[key] = cached{body: body, expires: expires}
 }
 
-// enter says whether this caller makes the request; if not, the channel closes when the one in flight is done.
 func (c *responseCache) enter(key string) (chan struct{}, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

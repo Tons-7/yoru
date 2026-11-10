@@ -4,10 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
-// AnimeRecord is the saved row, for when AniList is down. Stubs don't count.
 func (s *Store) AnimeRecord(ctx context.Context, id int) (Anime, time.Time, bool, error) {
 	var (
 		a      Anime
@@ -38,23 +38,30 @@ func (s *Store) AnimeRecord(ctx context.Context, id int) (Anime, time.Time, bool
 	return a, time.Unix(synced, 0), true, nil
 }
 
-// FinishedMedia is AniList's saved answer for a finished or cancelled show, if fetched since then.
-func (s *Store) FinishedMedia(ctx context.Context, id int, since time.Time) (string, bool) {
-	var media string
-	err := s.r.QueryRowContext(ctx, `
-		SELECT media FROM anime
-		WHERE id = ? AND media IS NOT NULL AND status IN ('FINISHED', 'CANCELLED') AND synced_at >= ?`,
-		id, since.Unix()).Scan(&media)
-	return media, err == nil
+type KeptMedia struct {
+	Media        string
+	Status       string
+	SyncedAt     time.Time
+	NextAiringAt int64
 }
 
-// How long an airing show may go unchecked; once its next episode airs, it is due.
+func (s *Store) KeptMedia(ctx context.Context, id int) (KeptMedia, bool) {
+	var (
+		k      KeptMedia
+		synced int64
+	)
+	err := s.r.QueryRowContext(ctx, `
+		SELECT media, coalesce(status, ''), synced_at, coalesce(next_airing_at, 0) FROM anime
+		WHERE id = ? AND media IS NOT NULL AND synced_at > 0`, id).Scan(&k.Media, &k.Status, &synced, &k.NextAiringAt)
+	k.SyncedAt = time.Unix(synced, 0)
+	return k, err == nil
+}
+
 const (
 	airingMaxAge   = 6 * time.Hour
 	upcomingMaxAge = 24 * time.Hour
 )
 
-// StaleAiring lists airing or announced shows due a refresh, just-aired first.
 func (s *Store) StaleAiring(ctx context.Context, now time.Time, limit int) ([]int, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT id FROM anime
@@ -80,4 +87,22 @@ func (s *Store) StaleAiring(ctx context.Context, now time.Time, limit int) ([]in
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+func (s *Store) MarkSynced(ctx context.Context, ids []int, at time.Time) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, at.Unix())
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	_, err := s.w.ExecContext(ctx, `
+		UPDATE anime SET synced_at = ?1
+		WHERE synced_at < ?1
+		  AND NOT (next_airing_at IS NOT NULL AND next_airing_at <= ?1 AND synced_at < next_airing_at)
+		  AND id IN (`+marks+`)`, args...)
+	return err
 }

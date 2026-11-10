@@ -21,8 +21,6 @@ func (s *Server) malLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The verifier has to survive the round trip to MyAnimeList and back, and
-	// MAL only supports the plain challenge method, so it is a secret at rest.
 	verifier, state := mal.Verifier(), randomHex()
 	err := s.store.SetSettings(r.Context(), map[string]string{
 		"mal.verifier.token": verifier,
@@ -55,7 +53,6 @@ func (s *Server) malCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no code returned", http.StatusBadRequest)
 		return
 	}
-	// Both are single use; clearing them now stops a replayed callback.
 	s.store.SetSettings(ctx, map[string]string{"mal.state": "", "mal.verifier.token": ""})
 
 	token, err := s.mal.Exchange(ctx, code, verifier, s.cfg.MALRedirectURI())
@@ -72,8 +69,6 @@ func (s *Server) malCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Another account than before: what the old one was told says nothing about this one, and kept, the
-	// first pull would read the new account's list as edits and lists the old one had would never be sent.
 	if was, _ := s.store.Setting(ctx, "mal.user_name"); was != "" && !strings.EqualFold(was, viewer.Name) {
 		if err := s.store.ForgetPushed(ctx, "mal"); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -81,18 +76,16 @@ func (s *Server) malCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		s.log.Info("myanimelist account changed", "from", was, "to", viewer.Name)
 	}
-	if err := s.saveMALToken(ctx, token, viewer.Name); err != nil {
+	if err := s.saveMALToken(ctx, token, viewer.Name, viewer.Picture); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	s.log.Info("myanimelist connected", "user", viewer.Name)
 
-	// Seeding what MAL already holds keeps the first sync from replaying the whole list back at it.
 	go func() {
 		if s.malSync == nil {
 			return
 		}
-		// The request is over by the time this runs, so its context is not the one to inherit.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		if _, err := s.malSync.Pull(ctx); err != nil {
@@ -103,12 +96,12 @@ func (s *Server) malCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings?connected=mal", http.StatusFound)
 }
 
-func (s *Server) saveMALToken(ctx context.Context, t mal.Token, name string) error {
+func (s *Server) saveMALToken(ctx context.Context, t mal.Token, name, picture string) error {
 	values := map[string]string{
-		"mal.token":         t.Access,
-		"mal.refresh.token": t.Refresh,
-		"mal.expires_at":    strconv.FormatInt(t.Expires.Unix(), 10),
-		// A new login is the reconnect the flag asked for.
+		"mal.token":                 t.Access,
+		"mal.refresh.token":         t.Refresh,
+		"mal.expires_at":            strconv.FormatInt(t.Expires.Unix(), 10),
+		"mal.avatar":                picture,
 		library.MALAuthErrorSetting: "",
 	}
 	if name != "" {
@@ -117,8 +110,6 @@ func (s *Server) saveMALToken(ctx context.Context, t mal.Token, name string) err
 	return s.store.SetSettings(ctx, values)
 }
 
-// malLogout forgets the account, leaving the client credentials so it can
-// reconnect. MAL has no revocation endpoint, so the grant remains until removed.
 func (s *Server) malLogout(w http.ResponseWriter, r *http.Request) {
 	clear := func() error {
 		err := s.store.SetSettings(r.Context(), map[string]string{
@@ -126,6 +117,7 @@ func (s *Server) malLogout(w http.ResponseWriter, r *http.Request) {
 			"mal.refresh.token":         "",
 			"mal.expires_at":            "",
 			"mal.user_name":             "",
+			"mal.avatar":                "",
 			"mal.state":                 "",
 			"mal.verifier.token":        "",
 			library.MALAuthErrorSetting: "",

@@ -1,4 +1,3 @@
-// Package library turns tracker and indexer answers into what the store keeps; no SQL, no HTTP.
 package library
 
 import (
@@ -6,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"time"
 
 	"yoru/internal/anilist"
 	"yoru/internal/store"
@@ -17,7 +17,6 @@ type Importer struct {
 	log    *slog.Logger
 	recent recentIDs
 
-	// OnNewTitles runs when Remember adds anime the corpus lacked, to rebuild the matcher's index.
 	OnNewTitles func()
 }
 
@@ -25,13 +24,12 @@ func NewImporter(s *store.Store, al *anilist.Client, log *slog.Logger) *Importer
 	return &Importer{store: s, al: al, log: log}
 }
 
-// Run mirrors the whole list, remote winning; the mode decides whether local-only entries survive.
 func (i *Importer) Run(ctx context.Context, userID int, mode store.ImportMode) (store.ImportResult, error) {
 	entries, err := i.al.List(ctx, userID)
 	if err != nil {
 		return store.ImportResult{}, err
 	}
-	// A saved answer would stamp old rows as fresh, and in replace mode drop entries added since.
+
 	if anilist.UsedSaved(ctx) {
 		return store.ImportResult{}, errors.New("AniList isn't answering; the list wasn't imported")
 	}
@@ -47,13 +45,13 @@ func (i *Importer) Run(ctx context.Context, userID int, mode store.ImportMode) (
 	if err != nil {
 		return store.ImportResult{}, err
 	}
+	i.checked(ctx, anime)
 	i.log.Info("list imported", "mode", mode, "entries", res.Entries, "removed", res.Removed)
 	return res, nil
 }
 
-// Hydrate fills in anime the graph references but nobody imported, else rows with an id and no title.
 func (i *Importer) Hydrate(ctx context.Context, ids []int) (int, error) {
-	// MediaByIDs takes one page and silently drops the rest, so this goes in chunks.
+
 	const perPage = 50
 
 	var saved int
@@ -69,7 +67,7 @@ func (i *Importer) Hydrate(ctx context.Context, ids []int) (int, error) {
 		if err != nil && !incomplete {
 			return saved, err
 		}
-		// An old answer is neither new data nor proof an id is gone.
+
 		if anilist.UsedSaved(ctx) {
 			return saved, nil
 		}
@@ -79,8 +77,6 @@ func (i *Importer) Hydrate(ctx context.Context, ids []int) (int, error) {
 		}
 		saved += n
 
-		// An id AniList does not return is not coming back, and asking again on
-		// every page view costs a request from a 30-per-minute budget.
 		returned := make(map[int]bool, len(media))
 		for _, m := range media {
 			returned[m.ID] = true
@@ -98,9 +94,8 @@ func (i *Importer) Hydrate(ctx context.Context, ids []int) (int, error) {
 	return saved, nil
 }
 
-// Save stores media the caller has, so viewing a page keeps the record current without a refetch.
 func (i *Importer) Save(ctx context.Context, media []anilist.Media) (int, error) {
-	// A saved answer stamped synced-now would pass for current.
+
 	if len(media) == 0 || anilist.UsedSaved(ctx) {
 		return 0, nil
 	}
@@ -111,7 +106,18 @@ func (i *Importer) Save(ctx context.Context, media []anilist.Media) (int, error)
 	if _, err := i.store.ImportList(ctx, rows, nil, store.ImportMerge); err != nil {
 		return 0, err
 	}
+	i.checked(ctx, rows)
 	return len(rows), nil
+}
+
+func (i *Importer) checked(ctx context.Context, rows []store.Anime) {
+	ids := make([]int, len(rows))
+	for n, a := range rows {
+		ids[n] = a.ID
+	}
+	if err := i.store.MarkSynced(ctx, ids, time.Now()); err != nil {
+		i.log.Warn("mark shows checked", "count", len(ids), "err", err)
+	}
 }
 
 func toAnime(m anilist.Media) store.Anime {
@@ -143,14 +149,16 @@ func toAnime(m anilist.Media) store.Anime {
 		a.NextEpisode = &m.NextAiring.Episode
 		a.NextAiringAt = &m.NextAiring.AiringAt
 	}
-	// Finished shows only, the ones served from it; no trending count, or every fetch rewrites the row.
-	if m.Status != nil && (*m.Status == "FINISHED" || *m.Status == "CANCELLED") {
-		kept := m
-		kept.Trending = nil
-		if b, err := json.Marshal(kept); err == nil {
-			media := string(b)
-			a.Media = &media
-		}
+	kept := m
+	kept.Trending = nil
+	if kept.NextAiring != nil {
+		next := *kept.NextAiring
+		next.TimeUntilAiring = 0
+		kept.NextAiring = &next
+	}
+	if b, err := json.Marshal(kept); err == nil {
+		media := string(b)
+		a.Media = &media
 	}
 	return a
 }

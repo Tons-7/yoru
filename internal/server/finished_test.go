@@ -14,9 +14,7 @@ import (
 	"yoru/internal/config"
 )
 
-// A finished show checked within the day opens from its saved answer, unasked and with its studio links;
-// an airing one, or a finished one unchecked for over a day, is asked live.
-func TestFinishedShowsOpenFromTheirSavedAnswer(t *testing.T) {
+func TestShowsOpenFromTheirSavedAnswerAndRefreshBehind(t *testing.T) {
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Variables struct {
@@ -27,8 +25,15 @@ func TestFinishedShowsOpenFromTheirSavedAnswer(t *testing.T) {
 		json.Unmarshal(body, &req)
 		var media []string
 		for _, id := range req.Variables.IDs {
-			media = append(media, fmt.Sprintf(`{"id":%d,"status":"FINISHED","title":{"romaji":"Live %d"},
-				"studios":{"nodes":[{"id":7,"name":"Madhouse"}]}}`, id, id))
+			if id == 11 {
+				continue
+			}
+			status := "FINISHED"
+			if id == 6 {
+				status = "RELEASING"
+			}
+			media = append(media, fmt.Sprintf(`{"id":%d,"status":%q,"title":{"romaji":"Live %d"},
+				"studios":{"nodes":[{"id":7,"name":"Madhouse"}]}}`, id, status, id))
 		}
 		fmt.Fprintf(w, `{"data":{"Page":{"media":[%s]}}}`, strings.Join(media, ","))
 	})
@@ -46,35 +51,92 @@ func TestFinishedShowsOpenFromTheirSavedAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	open := func(id int) map[string]any {
+	open := func(id int) (title string, refreshing bool, m map[string]any) {
 		t.Helper()
 		res, body := h.do(t, "GET", fmt.Sprintf("/api/anime/%d", id))
 		if res.StatusCode != http.StatusOK {
 			t.Fatalf("anime %d: HTTP %d %v", id, res.StatusCode, body)
 		}
-		return body["anime"].(map[string]any)
+		m = body["anime"].(map[string]any)
+		title, _ = m["title"].(map[string]any)["romaji"].(string)
+		return title, res.Header.Get(headerRefreshing) != "", m
+	}
+	age := func(id int, by time.Duration) {
+		t.Helper()
+		if _, err := h.db.W.ExecContext(ctx, `UPDATE anime SET synced_at = synced_at - ? WHERE id = ?`, int64(by.Seconds()), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refreshed := func(id int) {
+		t.Helper()
+		want := fmt.Sprintf("Live %d", id)
+		for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+			if title, refreshing, _ := open(id); title == want && !refreshing {
+				return
+			}
+		}
+		t.Fatalf("show %d never changed to AniList's new answer", id)
 	}
 
-	m := open(5)
+	for _, id := range []int{5, 6} {
+		title, refreshing, m := open(id)
+		studio := m["studios"].(map[string]any)["nodes"].([]any)[0].(map[string]any)
+		if title != fmt.Sprintf("Saved %d", id) || refreshing || studio["id"] != float64(7) {
+			t.Fatalf("show %d just saved: %q, refreshing %v; want the saved answer with its studio id, and no refresh", id, title, refreshing)
+		}
+	}
 	if h.calls != 0 {
-		t.Fatalf("a finished show checked today asked AniList %d times", h.calls)
-	}
-	studio := m["studios"].(map[string]any)["nodes"].([]any)[0].(map[string]any)
-	if m["title"].(map[string]any)["romaji"] != "Saved 5" || studio["id"] != float64(7) {
-		t.Fatalf("served %v, want the saved answer with its studio id", m)
+		t.Fatalf("shows saved moments ago asked AniList %d times", h.calls)
 	}
 
-	open(6)
-	if h.calls != 1 {
-		t.Fatalf("an airing show was not asked live: %d calls", h.calls)
+	age(5, 6*24*time.Hour)
+	if _, refreshing, _ := open(5); refreshing || h.calls != 0 {
+		t.Fatalf("a finished show six days old: refreshing %v, %d calls; want it to stand", refreshing, h.calls)
 	}
 
-	// Unchecked for over a day: asked again, and the live answer is what shows.
-	if _, err := h.db.W.ExecContext(ctx, `UPDATE anime SET synced_at = synced_at - ? WHERE id = 8`,
-		int64((25 * time.Hour).Seconds())); err != nil {
+	age(6, 15*time.Minute)
+	if title, refreshing, _ := open(6); title != "Saved 6" || !refreshing {
+		t.Fatalf("an airing show 15 minutes old: %q, refreshing %v; want the saved answer at once, marked as refreshing", title, refreshing)
+	}
+	refreshed(6)
+	age(6, 15*time.Minute)
+	if _, refreshing, _ := open(6); !refreshing {
+		t.Fatal("an airing show 15 minutes old again: not marked as refreshing")
+	}
+	refreshed(6)
+
+	age(8, 8*24*time.Hour)
+	if title, refreshing, _ := open(8); title != "Saved 8" || !refreshing {
+		t.Fatalf("a finished show eight days old: %q, refreshing %v; want the saved answer at once, marked as refreshing", title, refreshing)
+	}
+	refreshed(8)
+
+	if title, refreshing, _ := open(9); title != "Live 9" || refreshing {
+		t.Fatalf("a show never seen: %q, refreshing %v; want AniList's answer, waited for", title, refreshing)
+	}
+
+	if _, err := h.server.importer.Save(ctx, []anilist.Media{show(11, "FINISHED")}); err != nil {
 		t.Fatal(err)
 	}
-	if m := open(8); h.calls != 2 || m["title"].(map[string]any)["romaji"] != "Live 8" {
-		t.Fatalf("a day-old finished show: %d calls, title %v; want it asked live", h.calls, m["title"])
+	age(11, 8*24*time.Hour)
+	if title, refreshing, _ := open(11); title != "Saved 11" || !refreshing {
+		t.Fatalf("an old show AniList no longer returns: %q, refreshing %v", title, refreshing)
+	}
+	gaveUp := false
+	for end := time.Now().Add(3 * time.Second); time.Now().Before(end) && !gaveUp; time.Sleep(20 * time.Millisecond) {
+		_, refreshing, _ := open(11)
+		gaveUp = !refreshing
+	}
+	if !gaveUp {
+		t.Fatal("a show AniList no longer returns stays marked as refreshing on every view")
+	}
+	asked := h.calls
+	for range 5 {
+		if title, refreshing, _ := open(11); title != "Saved 11" || refreshing {
+			t.Fatalf("after giving up: %q, refreshing %v; want the saved answer, quietly", title, refreshing)
+		}
+	}
+	if h.calls != asked {
+		t.Errorf("AniList was asked %d more times for a show it just failed to return", h.calls-asked)
 	}
 }

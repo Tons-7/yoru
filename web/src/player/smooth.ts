@@ -285,7 +285,7 @@ async function load(): Promise<Engine> {
     engineLib(),
     file('graph.json').then((r) => r.text()),
     file('flyhighfg.json').then((r) => r.text()),
-    file('flyhighfg.bin').then((r) => r.arrayBuffer()),
+    file('flyhighfg.weights').then((r) => r.arrayBuffer()),
   ])
   let engine: FhEngine
   let device: GPUDevice
@@ -357,8 +357,11 @@ const SLOW_WINDOW_MS = 2000
 const SLOW_DROPS_PER_SECOND = 5
 const SLOW_LAG_MS = 220
 const MIN_OWED = 20
-const STARVED_SHARE = 0.3
+const STARVED_SHARE = 0.6
 const MIN_SOURCE_FPS = 12
+const CRAWL_FPS = 10
+const SAMPLE_EVERY = 30
+const SAMPLE_RETRIES = 8
 const RECOVER_WINDOWS = 15
 
 type Frame = { source: number } | { output: number }
@@ -613,15 +616,38 @@ async function start({
     return promise.finally(() => pending--)
   }
 
-  let pushes = 0
-  let mids = 0
+  const costSampler = () => {
+    let left = 0
+    let misses = 0
+    return {
+      due: () => {
+        if (left > 0) {
+          left--
+          return false
+        }
+        left = SAMPLE_EVERY - 1
+        return true
+      },
+      landed: (ok: boolean) => {
+        misses = ok ? 0 : misses + 1
+        if (!ok && misses <= SAMPLE_RETRIES) left = 0
+      },
+    }
+  }
+  const pairs = costSampler()
+  const mids = costSampler()
   const cost = (stage: 'pair' | 'mid', ms: Promise<number | null> | undefined) => {
-    if (!ms) return
+    const from = stage === 'pair' ? pairs : mids
+    if (!ms) {
+      from.landed(false)
+      return
+    }
     nudge(ms)
       .then((v) => {
-        if (v !== null && !run.stopped) pacer.costSample(performance.now(), stage, v)
+        if (run.stopped) return
+        from.landed(v !== null && pacer.costSample(performance.now(), stage, v))
       })
-      .catch(() => {})
+      .catch(() => from.landed(false))
   }
 
   const pts = new Map<number, number>()
@@ -638,7 +664,7 @@ async function start({
       nextOut = (nextOut + 1) % OUTPUTS
       let written = false
       try {
-        if (r.probe || mids++ % 30 === 0) {
+        if (r.probe || mids.due()) {
           const g = stream.generateTimed(r.t, out) as { written: boolean; cost?: Promise<number | null> }
           cost('mid', g.cost)
           written = g.written
@@ -714,7 +740,7 @@ async function start({
       }
       generate(now, pacer.sourceFrame(now, { id: slot, ptsMs: at, kind, motion }) as Request[])
       let p: { statsPending?: boolean; cost?: Promise<number | null> }
-      if (pushes++ % 30 === 0) {
+      if (pairs.due()) {
         p = stream.pushTimed(slot, at)
         cost('pair', p.cost)
       } else {
@@ -831,7 +857,9 @@ async function start({
     const moving = sources > 0 ? (sources - delta('holds') - delta('cuts')) / sources : 0
     const owed = Math.max(0, output - arrival) * seconds * moving
     const starved = owed >= MIN_OWED && delta('presented_mids') < owed * STARVED_SHARE
-    const struggling = charged / seconds > SLOW_DROPS_PER_SECOND || lag > SLOW_LAG_MS || starved
+    const crawling = counted.ticks !== undefined && seconds < (2 * SLOW_WINDOW_MS) / 1000 && delta('ticks') / seconds < CRAWL_FPS
+    const struggling = charged / seconds > SLOW_DROPS_PER_SECOND || lag > SLOW_LAG_MS || starved || crawling
+
     slowWindows = struggling ? slowWindows + 1 : 0
     cleanWindows = struggling ? 0 : cleanWindows + 1
     if (stepsDown > 0 && cleanWindows >= RECOVER_WINDOWS) {

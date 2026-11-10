@@ -2,13 +2,15 @@ import { deviceActivity, IDLE, pcActivity, useDoneFlash, type Activity } from '.
 import { sortDownloads, totalSpeed } from '../lib/downloads'
 import { speed } from '../lib/format'
 import { savedKey, useSaved } from '../lib/offline'
+import { useProfile } from '../lib/profile'
 import { useDownloadQueue, useDownloads, usePrefs, useSetPref, useSpeedUnit, useTrackers } from '../lib/queries'
 
 export function useAccount() {
   const trackers = useTrackers().data?.trackers ?? []
   const signedIn = trackers.filter((t) => t.connected)
+  const name = useProfile().data?.name
   return {
-    user: signedIn.find((t) => t.user)?.user,
+    user: name || signedIn.find((t) => t.user)?.user,
     signedIn,
     attention: trackers.some((t) => t.reconnect),
   }

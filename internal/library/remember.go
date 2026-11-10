@@ -11,7 +11,6 @@ import (
 	"yoru/internal/store"
 )
 
-// Not rewritten within the client's cache window: nothing newer can arrive.
 const rememberEvery = 10 * time.Minute
 
 type recentIDs struct {
@@ -19,7 +18,6 @@ type recentIDs struct {
 	seen map[int]time.Time
 }
 
-// fresh returns the ids not written within rememberEvery, and marks them written.
 func (r *recentIDs) fresh(media []anilist.Media, now time.Time) []anilist.Media {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -37,8 +35,6 @@ func (r *recentIDs) fresh(media []anilist.Media, now time.Time) []anilist.Media 
 	return out
 }
 
-// Remember saves every show AniList returns, adding unknown ones to the corpus
-// so a new show is matchable at once. Saved answers are never written back.
 func (i *Importer) Remember(ctx context.Context, media []anilist.Media) {
 	if anilist.UsedSaved(ctx) {
 		return
@@ -79,7 +75,6 @@ func (i *Importer) remember(ctx context.Context, media []anilist.Media) {
 	}
 }
 
-// Refresh re-reads airing shows that are due, opened or not.
 func (i *Importer) Refresh(ctx context.Context, limit int) (int, error) {
 	ids, err := i.store.StaleAiring(ctx, time.Now(), limit)
 	if err != nil || len(ids) == 0 {
@@ -88,23 +83,39 @@ func (i *Importer) Refresh(ctx context.Context, limit int) (int, error) {
 	return i.Hydrate(ctx, ids)
 }
 
-// A finished show moves little (its score, an editor's fix): its answer stands a day, then it's asked again.
-const FinishedFreshFor = 24 * time.Hour
+const (
+	FinishedFreshFor = 7 * 24 * time.Hour
+	AiringFreshFor   = 10 * time.Minute
+	UpcomingFreshFor = 6 * time.Hour
+)
 
-// Finished is AniList's answer for a finished show, saved within FinishedFreshFor; false means ask AniList.
-func (i *Importer) Finished(ctx context.Context, id int) (anilist.Media, bool) {
-	raw, ok := i.store.FinishedMedia(ctx, id, time.Now().Add(-FinishedFreshFor))
+func (i *Importer) Kept(ctx context.Context, id int) (m anilist.Media, at time.Time, fresh, ok bool) {
+	k, ok := i.store.KeptMedia(ctx, id)
 	if !ok {
-		return anilist.Media{}, false
+		return anilist.Media{}, time.Time{}, false, false
 	}
-	var m anilist.Media
-	if err := json.Unmarshal([]byte(raw), &m); err != nil || m.ID != id {
-		return anilist.Media{}, false
+	if err := json.Unmarshal([]byte(k.Media), &m); err != nil || m.ID != id {
+		return anilist.Media{}, time.Time{}, false, false
 	}
-	return m, true
+	now := time.Now()
+	if m.NextAiring != nil {
+		if m.NextAiring.TimeUntilAiring = m.NextAiring.AiringAt - int(now.Unix()); m.NextAiring.TimeUntilAiring <= 0 {
+			m.NextAiring = nil
+		}
+	}
+	age := now.Sub(k.SyncedAt)
+	switch k.Status {
+	case "FINISHED", "CANCELLED":
+		fresh = age < FinishedFreshFor
+	case "RELEASING":
+		aired := k.NextAiringAt > 0 && k.NextAiringAt <= now.Unix() && k.SyncedAt.Unix() < k.NextAiringAt
+		fresh = age < AiringFreshFor && !aired
+	default:
+		fresh = age < UpcomingFreshFor
+	}
+	return m, k.SyncedAt, fresh, true
 }
 
-// FromRecord rebuilds AniList's shape from a saved row. Studio ids aren't kept.
 func FromRecord(a store.Anime) anilist.Media {
 	m := anilist.Media{
 		ID: a.ID, IDMal: a.MalID,
@@ -138,7 +149,7 @@ func FromRecord(a store.Anime) anilist.Media {
 	if a.TrailerID != nil {
 		m.Trailer = &anilist.Trailer{ID: a.TrailerID, Site: a.TrailerSite}
 	}
-	// A past broadcast time says nothing about the next.
+
 	if a.NextEpisode != nil && a.NextAiringAt != nil && *a.NextAiringAt > int(time.Now().Unix()) {
 		until := *a.NextAiringAt - int(time.Now().Unix())
 		m.NextAiring = &anilist.Airing{
@@ -148,7 +159,6 @@ func FromRecord(a store.Anime) anilist.Media {
 	return m
 }
 
-// parseDate reads FuzzyDate.String's YYYY-MM-DD back, zero parts unknown.
 func parseDate(s string) anilist.FuzzyDate {
 	var y, mo, d int
 	if n, _ := fmt.Sscanf(s, "%d-%d-%d", &y, &mo, &d); n == 0 || y == 0 {

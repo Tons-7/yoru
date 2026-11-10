@@ -1,3 +1,5 @@
+import { markRefreshing } from './freshness'
+
 export const TOKEN_KEY = 'yoru.token'
 
 function readToken(): string {
@@ -71,7 +73,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (res.status === 204) return undefined as T
-  return (await res.json()) as T
+  const data = (await res.json()) as T
+  if (res.headers.has('X-Yoru-Refreshing')) markRefreshing(data)
+  return data
 }
 
 export const api = {

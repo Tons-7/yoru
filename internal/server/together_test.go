@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -115,6 +116,93 @@ func TestWatchTogetherNamesAreUnique(t *testing.T) {
 	}
 }
 
+func TestWatchTogetherPicksAndAudio(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	room, _ := openRoom(t, h)
+	room.title = "First Show"
+	if code, _ := h.call(t, "POST", "/api/together/abc123/join?k=key", `{"name":"Alex"}`); code != http.StatusOK {
+		t.Fatalf("join answered %d", code)
+	}
+	alex := room.members[1]
+
+	change := `"type":"episode","animeId":9,"episode":3,"infoHash":"NEW","title":"Second Show","audio":"dub"`
+	if code, _ := act(t, h, alex.ID, alex.token, change); code != http.StatusForbidden || room.state.AnimeID != 7 {
+		t.Fatalf("a friend changed the room's show: %d, state %+v", code, room.state)
+	}
+	if code, _ := act(t, h, alex.ID, alex.token, `"type":"audio","audio":"dub"`); code != http.StatusForbidden {
+		t.Errorf("a friend changed the room's audio: %d", code)
+	}
+
+	if code, _ := act(t, h, alex.ID, alex.token, `"type":"suggest","animeId":7,"episode":1`); code != http.StatusConflict {
+		t.Errorf("suggesting what's playing answered %d", code)
+	}
+	act(t, h, alex.ID, alex.token, `"type":"suggest","animeId":8,"episode":1,"title":"Dropped Idea"`)
+	if code, _ := act(t, h, alex.ID, alex.token, `"type":"suggest","animeId":9,"episode":3,"title":"Second Show"`); code != http.StatusOK {
+		t.Fatalf("suggest answered %d", code)
+	}
+	if len(room.picks) != 1 || room.picks[0].Title != "Second Show" || room.picks[0].By != "Alex" {
+		t.Fatalf("picks = %+v, want Alex's latest only", room.picks)
+	}
+
+	if code, _ := act(t, h, "host", "ht", change); code != http.StatusOK {
+		t.Fatalf("the host's change answered %d", code)
+	}
+	st := room.state
+	if st.AnimeID != 9 || st.Episode != 3 || st.InfoHash != "new" || st.Audio != "dub" || room.title != "Second Show" {
+		t.Fatalf("state = %+v, title %q", st, room.title)
+	}
+	if len(room.picks) != 0 {
+		t.Errorf("the played suggestion is still listed: %+v", room.picks)
+	}
+
+	act(t, h, "host", "ht", `"type":"audio","audio":"sub"`)
+	if room.state.Audio != "sub" {
+		t.Errorf("audio = %q after the host picked sub", room.state.Audio)
+	}
+
+	act(t, h, alex.ID, alex.token, `"type":"suggest","animeId":10,"episode":1,"title":"Third"`)
+	pick := room.picks[0].ID
+	if act(t, h, "host", "ht", fmt.Sprintf(`"type":"unsuggest","pick":%d`, pick)); len(room.picks) != 0 {
+		t.Errorf("the host couldn't dismiss a suggestion: %+v", room.picks)
+	}
+
+	act(t, h, "host", "ht", `"type":"settings","anyone":true`)
+	if code, _ := act(t, h, alex.ID, alex.token, `"type":"episode","animeId":9,"episode":4,"infoHash":"next"`); code != http.StatusOK ||
+		room.state.Episode != 4 || room.state.Audio != "sub" {
+		t.Fatalf("with anyone allowed, a friend's change: %d, state %+v", code, room.state)
+	}
+}
+
+func TestSomeoneBrowsingDoesNotHoldTheRoom(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	room, _ := openRoom(t, h)
+	if code, _ := h.call(t, "POST", "/api/together/abc123/join?k=key", `{"name":"Alex"}`); code != http.StatusOK {
+		t.Fatalf("join answered %d", code)
+	}
+	alex := room.members[1]
+	alex.Connected = true
+
+	act(t, h, "host", "ht", `"type":"ready","ready":true`)
+	act(t, h, "host", "ht", `"type":"play"`)
+	if !room.state.Waiting {
+		t.Fatalf("state = %+v, want the play held for Alex", room.state)
+	}
+	act(t, h, alex.ID, alex.token, `"type":"browsing","browsing":true`)
+	if !room.state.Playing || room.state.Waiting || !alex.Browsing {
+		t.Fatalf("state = %+v, want playing once Alex is only browsing", room.state)
+	}
+	if names := room.notReady(); len(names) != 0 {
+		t.Errorf("still waited for %v", names)
+	}
+
+	act(t, h, "host", "ht", `"type":"pause","position":5`)
+	act(t, h, alex.ID, alex.token, `"type":"browsing","browsing":false`)
+	act(t, h, "host", "ht", `"type":"play"`)
+	if !room.state.Waiting {
+		t.Fatalf("state = %+v, want Alex waited for again once back at the player", room.state)
+	}
+}
+
 func TestAWatchTogetherRoom(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	room, host := openRoom(t, h)
@@ -210,5 +298,128 @@ func TestAWatchTogetherRoomFills(t *testing.T) {
 	}
 	if code, _ := h.call(t, "POST", "/api/together/abc123/join?k=key", `{"name":"One more"}`); code != http.StatusConflict {
 		t.Errorf("a full room let one more in: %d", code)
+	}
+}
+
+func lastView(t *testing.T, m *togetherMember) map[string]bool {
+	t.Helper()
+	var view map[string]any
+	for len(m.events) > 0 {
+		var event map[string]any
+		if err := json.Unmarshal(<-m.events, &event); err == nil && event["type"] == "room" {
+			view = event
+		}
+	}
+	if view == nil {
+		t.Fatalf("no member list was sent")
+	}
+	ready := map[string]bool{}
+	for _, raw := range view["members"].([]any) {
+		member := raw.(map[string]any)
+		ready[member["name"].(string)] = member["ready"].(bool)
+	}
+	return ready
+}
+
+func TestEveryStatusChangeReachesTheRoom(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	room, host := openRoom(t, h)
+	if code, _ := h.call(t, "POST", "/api/together/abc123/join?k=key", `{"name":"Alex"}`); code != http.StatusOK {
+		t.Fatalf("join answered %d", code)
+	}
+	alex := room.members[1]
+	alex.Connected = true
+	act(t, h, "host", "ht", `"type":"ready","ready":true`)
+	act(t, h, alex.ID, alex.token, `"type":"ready","ready":true`)
+	act(t, h, "host", "ht", `"type":"play"`)
+	if !room.state.Playing {
+		t.Fatalf("state = %+v, want playing with everyone ready", room.state)
+	}
+	lastView(t, host)
+
+	act(t, h, alex.ID, alex.token, `"type":"ready","ready":false`)
+	if got := lastView(t, host); got["Alex"] || !room.state.Waiting {
+		t.Fatalf("Alex buffering: the room was told %v, state %+v", got, room.state)
+	}
+	act(t, h, alex.ID, alex.token, `"type":"ready","ready":true`)
+	if got := lastView(t, host); !got["Alex"] || !room.state.Playing {
+		t.Fatalf("Alex ready again: the room was told %v, state %+v", got, room.state)
+	}
+	act(t, h, "host", "ht", `"type":"pause","position":40`)
+	act(t, h, "host", "ht", `"type":"play"`)
+	for len(host.events) > 0 {
+		if raw := <-host.events; strings.Contains(string(raw), `"type":"room"`) {
+			t.Fatalf("a pause and a play with nobody's status changed resent the whole member list: %s", raw)
+		}
+	}
+	act(t, h, "host", "ht", `"type":"seek","position":90`)
+	if got := lastView(t, host); got["Alex"] || got["Tons"] {
+		t.Fatalf("after a jump the room was told %v, want everyone loading", got)
+	}
+	act(t, h, "host", "ht", `"type":"audio","audio":"dub"`)
+	act(t, h, "host", "ht", `"type":"ready","ready":true`)
+	act(t, h, "host", "ht", `"type":"audio","audio":"sub"`)
+	if got := lastView(t, host); got["Tons"] {
+		t.Fatalf("after an audio switch the room was told %v, want everyone loading", got)
+	}
+	act(t, h, "host", "ht", `"type":"episode","animeId":7,"episode":2,"infoHash":"two"`)
+	lastView(t, host)
+	act(t, h, "host", "ht", `"type":"episode","animeId":7,"episode":3,"infoHash":"three"`)
+	lastView(t, host)
+}
+
+func TestASilentSocketIsMarkedAway(t *testing.T) {
+	tick, silence := roomTick, roomSilence
+	roomTick, roomSilence = 20*time.Millisecond, 150*time.Millisecond
+	t.Cleanup(func() { roomTick, roomSilence = tick, silence })
+	h := newHarness(t, config.Config{}, nil)
+	room, host := openRoom(t, h)
+	host.Connected = false
+	srv := httptest.NewServer(h.handler)
+	t.Cleanup(srv.Close)
+	dial := func() *websocket.Conn {
+		ws, err := websocket.Dial(strings.Replace(srv.URL, "http", "ws", 1)+"/api/together/abc123/socket?k=key&m=host&t=ht", "", srv.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { ws.Close() })
+		return ws
+	}
+	connected := func() bool {
+		room.mu.Lock()
+		defer room.mu.Unlock()
+		return host.Connected
+	}
+	settle := func(want bool, within time.Duration) bool {
+		for end := time.Now().Add(within); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+			if connected() == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	old := dial()
+	if !settle(true, time.Second) {
+		t.Fatal("the socket never counted as connected")
+	}
+	time.Sleep(3 * roomSilence)
+	if !connected() {
+		t.Fatal("a socket that never answers was dropped; older apps don't answer ticks and must stay")
+	}
+	old.Close()
+	if !settle(false, time.Second) {
+		t.Fatal("a closed socket still counts as connected")
+	}
+
+	ws := dial()
+	if err := websocket.Message.Send(ws, "1"); err != nil {
+		t.Fatal(err)
+	}
+	if !settle(true, time.Second) {
+		t.Fatal("the second socket never counted as connected")
+	}
+	if !settle(false, 10*roomSilence) {
+		t.Fatal("a socket that answered once and then went silent still counts as connected")
 	}
 }

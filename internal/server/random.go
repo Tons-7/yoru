@@ -5,7 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"yoru/internal/anilist"
 	"yoru/internal/library"
@@ -177,11 +180,17 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 		}, true, false
 	}
 
-	m, fresh := anilist.Media{}, false
+	m, kept := anilist.Media{}, false
 	if s.importer != nil {
-		m, fresh = s.importer.Finished(r.Context(), id)
+		var (
+			at    time.Time
+			fresh bool
+		)
+		if m, at, fresh, kept = s.importer.Kept(r.Context(), id); kept && !fresh {
+			s.refreshShow(r.Context(), id, at)
+		}
 	}
-	if !fresh {
+	if !kept {
 		media, err := s.anilist.MediaByIDs(r.Context(), []int{id})
 		failed := err != nil && !errors.Is(err, anilist.ErrIncomplete)
 		if failed {
@@ -223,6 +232,54 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 		body["delay"] = map[string]any{"episode": d.Episode, "wasAt": d.WasAt, "nowAt": d.NowAt}
 	}
 	return body, true, false
+}
+
+const (
+	showRefreshWait  = 2 * time.Minute
+	showRefreshAgain = 10 * time.Minute
+)
+
+type showRefreshes struct {
+	flight singleflight.Group
+	mu     sync.Mutex
+	missed map[int]time.Time
+}
+
+func (r *showRefreshes) justMissed(id int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return time.Since(r.missed[id]) < showRefreshAgain
+}
+
+func (r *showRefreshes) miss(id int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.missed == nil || len(r.missed) > 500 {
+		r.missed = map[int]time.Time{}
+	}
+	r.missed[id] = time.Now()
+}
+
+func (s *Server) refreshShow(ctx context.Context, id int, at time.Time) {
+	if s.anilist.Down() {
+		anilist.NoteSaved(ctx, at)
+		return
+	}
+	if s.showRefresh.justMissed(id) {
+		return
+	}
+	anilist.NoteRefreshing(ctx)
+	go s.showRefresh.flight.Do(strconv.Itoa(id), func() (any, error) {
+		behind, cancel := context.WithTimeout(anilist.Background(context.Background()), showRefreshWait)
+		defer cancel()
+		if _, err := s.importer.Hydrate(behind, []int{id}); err != nil {
+			s.log.Debug("refresh a saved show", "anime", id, "err", err)
+		}
+		if _, _, fresh, _ := s.importer.Kept(behind, id); !fresh && !s.anilist.Down() {
+			s.showRefresh.miss(id)
+		}
+		return nil, nil
+	})
 }
 
 func (s *Server) savedAnime(ctx context.Context, id int) (anilist.Media, bool) {

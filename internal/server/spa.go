@@ -8,10 +8,9 @@ import (
 	"time"
 )
 
-// spa serves the built app. Anything that is not a real file falls back to
-// index.html, because client-side routes exist only in the browser.
 func spa(assets fs.FS) http.Handler {
 	files := http.FileServer(http.FS(assets))
+	packed := &packedFiles{assets: assets}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
@@ -21,8 +20,6 @@ func spa(assets fs.FS) http.Handler {
 
 		info, err := fs.Stat(assets, name)
 		if err != nil || info.IsDir() {
-			// A missing asset is a broken build, not a client-side route: serving
-			// index.html would hand HTML to a module worker and fail silently.
 			if strings.HasPrefix(name, "assets/") {
 				http.NotFound(w, r)
 				return
@@ -31,17 +28,18 @@ func spa(assets fs.FS) http.Handler {
 			return
 		}
 
-		// Hashed assets/ cache hard; index.html never, or a new build loads the old bundle.
-		if strings.HasPrefix(name, "assets/") {
+		hashed := strings.HasPrefix(name, "assets/")
+		if hashed {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
-		// The alerts worker: a stale copy would keep old alert handling for a day.
 		if name == "sw.js" {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
-		// Go doesn't know this extension, and a plain-text manifest blocks installing the app.
 		if strings.HasSuffix(name, ".webmanifest") {
 			w.Header().Set("Content-Type", "application/manifest+json")
+		}
+		if hashed && packed.serve(w, r, name) {
+			return
 		}
 		files.ServeHTTP(w, r)
 	})
@@ -59,7 +57,6 @@ func serveIndex(w http.ResponseWriter, r *http.Request, assets fs.FS) {
 	http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(string(page)))
 }
 
-// apiOnly answers when no frontend was built in, saying "run npm build" instead of a bare 404.
 func apiOnly() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusNotFound, map[string]any{

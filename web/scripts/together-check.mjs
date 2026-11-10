@@ -30,6 +30,15 @@ const shot = async (page, name) => {
 }
 
 check(await prepareLocalEpisode({ base: BASE, lib: process.env.YORU_LIB, anime: ANIME }), 'test episode ready')
+const PICTURE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+const pictured = await fetch(`${BASE}/api/profile/avatar`, {
+  method: 'PUT',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ image: PICTURE }),
+})
+check(pictured.ok, 'the profile takes a picture', String(pictured.status))
+const loaded = (page, selector) =>
+  until(() => page.locator(selector).first().evaluate((img) => img.complete && img.naturalWidth > 0))
 const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] })
 const errors = []
 
@@ -60,9 +69,13 @@ try {
   await host.getByRole('button', { name: 'Watch together' }).click()
   check(await until(() => host.getByText(/Left empty, you're Host/).isVisible()), 'opening a room asks the host\'s name first')
   await shot(host, 'host-name')
-  await host.getByRole('textbox', { name: 'Your name' }).fill('Tons')
+  const nameBox = host.getByRole('textbox', { name: 'Your name' })
+  check((await nameBox.getAttribute('autocomplete')) === 'off', "the name box keeps the browser's old entries out")
+  await nameBox.fill('Tons')
   await host.getByRole('button', { name: 'Open room' }).click()
   const room = await (await opened).json()
+  check(await until(async () => (await (await fetch(`${BASE}/api/profile`)).json()).name === 'Tons'), 'the name given is remembered as the Yoru name')
+
   check(typeof room.link === 'string' && room.link.includes('/together/'), 'the host opens a room with a link to share', room.link)
   check(await until(() => host.getByRole('button', { name: 'Copy link' }).isVisible()), 'the room shows, with the invite')
   await shot(host, 'host-alone')
@@ -89,6 +102,8 @@ try {
   check(await until(() => friend.getByText('2 watching').isVisible()), 'the friend is in')
   check(await until(() => host.getByText('Alex', { exact: true }).isVisible()), 'and the host sees them')
   check(await until(() => friend.getByText('Tons', { exact: true }).isVisible()), 'and they see the host by the name given')
+  check(await loaded(friend, 'section[aria-label="Watch together"] img'), "with the host's picture")
+  check(await loaded(host, 'header img[src^="/api/profile/avatar"]'), "which is in the host's own top bar too")
   await video(friend).waitFor({ timeout: 30_000 })
 
   await until(async () => !(await paused(friend)), 20_000)
@@ -103,17 +118,121 @@ try {
   const drift = Math.abs((await at(host)) - (await at(friend)))
   check(drift < 1, 'and they stay together', `${drift.toFixed(2)} s apart`)
 
+  const statusOf = (page, who) =>
+    page.locator('section[aria-label="Watch together"] li', { hasText: who }).first().locator('[data-status]').textContent()
+  const turns = async (page, who, word, ms = 4000) => {
+    const from = Date.now()
+    return (await until(async () => (await statusOf(page, who)) === word, ms)) ? Date.now() - from : -1
+  }
+  let took = await turns(host, 'Alex', 'Ready')
+  check(took >= 0, 'the host sees the friend as Ready while both play', `${took} ms`)
+  await friend.evaluate(() => document.querySelector('video').dispatchEvent(new Event('waiting')))
+  took = await turns(host, 'Alex', 'Loading')
+  check(took >= 0 && took < 1500, 'a friend who stalls turns to Loading for the host at once', `${took} ms`)
+  await friend.evaluate(() => document.querySelector('video').dispatchEvent(new Event('canplay')))
+  took = await turns(host, 'Alex', 'Ready')
+  check(took >= 0 && took < 1500, 'and back to Ready once they can play', `${took} ms`)
+  check(await until(async () => !(await paused(host)) && !(await paused(friend)), 8000), 'and the room plays on')
+  await host.evaluate(() => (document.querySelector('video').currentTime = 60))
+  check(await until(async () => (await at(friend)) >= 60 && (await at(host)) >= 60), 'a jump while playing moves everyone, and is not snapped back', `host ${(await at(host)).toFixed(1)}, friend ${(await at(friend)).toFixed(1)}`)
+  took = await turns(friend, 'Tons', 'Ready', 8000)
+  const both = await turns(host, 'Alex', 'Ready', 8000)
+  check(took >= 0 && both >= 0, 'after a jump, both show Ready again on both screens', `${took} ms, ${both} ms`)
   await friend.getByRole('textbox', { name: 'Message' }).fill('this opening')
   await friend.getByRole('button', { name: 'Send' }).click()
   check(await until(() => host.locator('[aria-label="Room messages"]').getByText('this opening').isVisible()), 'chat reaches the host')
+  if (process.env.MESSAGE_SHOT) await host.screenshot({ path: process.env.MESSAGE_SHOT }).catch(() => {})
   await friend.getByRole('button', { name: 'React 😂' }).click()
   check(await until(() => host.locator('[aria-label="Room messages"]').getByText('😂').isVisible()), 'and reactions')
   await shot(friend, 'friend-room')
 
+  const hostPanel = host.locator('section[aria-label="Watch together"]')
+  const friendPanel = friend.locator('section[aria-label="Watch together"]')
+  check(await until(() => hostPanel.getByText(/Episode 1 · Japanese audio/).isVisible()), 'the room says what is playing, and in which audio')
+  check(await until(() => hostPanel.getByRole('button', { name: 'Change what we watch' }).isVisible()), 'the host may change what the room watches')
+  check(await until(() => friendPanel.getByRole('button', { name: 'Suggest something' }).isVisible()), 'a friend may suggest instead')
+
+  await friend.getByRole('link', { name: /^Episode 2\b/ }).first().click()
+  check(await until(() => friend.getByRole('heading', { name: "You're in a room" }).isVisible()), "a friend opening another episode is told they're in a room")
+  check(new URL(friend.url()).pathname === `/watch/${ANIME}/2` && (await at(host)) > 0, 'without moving the room')
+  await friend.screenshot({ path: SHOTS ? join(SHOTS, 'friend-stray.png') : undefined }).catch(() => {})
+  await friend.getByRole('button', { name: /^Suggest this/ }).click()
+  check(await until(async () => new URL(friend.url()).pathname === `/watch/${ANIME}/1`), 'suggesting it brings them back to the room', friend.url())
+  check(await until(() => hostPanel.getByText(/Suggested by Alex/).isVisible()), 'and the host sees the suggestion')
+  check(await until(() => hostPanel.getByRole('button', { name: 'Play for everyone' }).isVisible()), 'with a way to play it for everyone')
+  check(await until(() => host.locator('[aria-label="Room messages"]').getByText(/Alex suggests .*episode 2/).isVisible()), 'and it is in the feed')
+  check(await until(() => friendPanel.getByRole('button', { name: 'Take back' }).isVisible()), 'the friend can take it back')
+  await shot(host, 'host-suggestion')
+  await hostPanel.getByRole('button', { name: 'Dismiss' }).click()
+  check(await until(async () => !(await friendPanel.getByText(/Suggested by/).isVisible())), 'dismissed by the host, it goes for everyone')
+
+  await host.getByRole('switch', { name: "Anyone can change what's playing" }).click()
+  check(await until(() => friendPanel.getByRole('button', { name: 'Change what we watch' }).isVisible()), 'with anyone allowed, the friend may change it too')
+  await host.getByRole('switch', { name: "Anyone can change what's playing" }).click()
+  check(await until(() => friendPanel.getByRole('button', { name: 'Suggest something' }).isVisible()), 'and not once it is off again')
+
+  await friend.getByRole('link', { name: 'Home', exact: true }).first().click()
+  const bubble = friend.getByRole('button', { name: /^Watch together room/ })
+  check(await until(() => bubble.isVisible()), 'leaving the episode page, a room bubble stays on screen')
+  const place = async () => {
+    const b = await bubble.boundingBox()
+    const view = friend.viewportSize()
+    return `${b.y + b.height / 2 < view.height / 2 ? 't' : 'b'}${b.x + b.width / 2 < view.width / 2 ? 'l' : 'r'}`
+  }
+  check((await place()) === 'tl', 'at the top left to begin with', await place())
+  const mini = friend.getByRole('button', { name: 'Close the player' })
+  if (await until(() => mini.isVisible(), 4000)) await mini.click()
+  check(await until(async () => !(await friend.locator('video').count())), 'closing the miniplayer closes the video')
+  check(await bubble.isVisible(), 'and keeps the room')
+  check(await until(() => hostPanel.getByText('Browsing', { exact: true }).isVisible()), 'the host sees the friend as browsing')
+
+  await hostPanel.getByRole('textbox', { name: 'Message' }).fill('still there?')
+  await hostPanel.getByRole('button', { name: 'Send' }).click()
+  const popped = friend.getByText('still there?')
+  check(await until(() => popped.isVisible()), 'a message pops up next to the bubble')
+  const beside = await until(async () => {
+    const b = await bubble.boundingBox()
+    const m = await popped.boundingBox()
+    return m.x > b.x + b.width - 4 && Math.abs(m.y - b.y) < 80
+  })
+  check(beside, 'to its right, level with it')
+  check(await until(async () => /1 new message$/.test((await bubble.getAttribute('aria-label')) ?? '')), 'and the bubble counts it as unread', (await bubble.getAttribute('aria-label')) ?? '')
+  if (process.env.BUBBLE_SHOT) await friend.screenshot({ path: process.env.BUBBLE_SHOT }).catch(() => {})
+
+  await bubble.click()
+  check(await until(async () => /watching$/.test((await bubble.getAttribute('aria-label')) ?? '')), 'opening the card clears the count')
+  const card = friend.getByRole('region', { name: 'Watch together room' })
+  check(await until(() => card.getByRole('button', { name: 'Open room' }).isVisible()), 'the bubble opens a small room card')
+  await card.getByRole('textbox', { name: 'Message' }).fill('browsing, back soon')
+  await card.getByRole('button', { name: 'Send' }).click()
+  check(await until(() => host.locator('[aria-label="Room messages"]').getByText('browsing, back soon').isVisible()), 'chat from the card reaches the room')
+  if (process.env.BUBBLE_SHOT) await friend.screenshot({ path: process.env.BUBBLE_SHOT.replace('.png', '-card.png') }).catch(() => {})
+  await friend.keyboard.press('Escape')
+
+  const from = await bubble.boundingBox()
+  await friend.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+  await friend.mouse.down()
+  await friend.mouse.move(120, friend.viewportSize().height - 160, { steps: 8 })
+  await friend.mouse.up()
+  check(await until(async () => (await place()) === 'bl'), 'dragged, it settles in the nearest corner', await place())
+  await friend.reload({ waitUntil: 'domcontentloaded' })
+  check(await until(() => bubble.isVisible()), 'a reload keeps the room and its bubble')
+  check(await until(async () => (await place()) === 'bl'), 'where it was put', await place())
+
+  await bubble.click()
+  await card.getByRole('button', { name: 'Open room' }).click()
+  check(await until(async () => new URL(friend.url()).pathname === `/watch/${ANIME}/1`), 'Open room goes back to the episode', friend.url())
+  check(await until(() => friendPanel.getByText('3 watching').or(friendPanel.getByText('2 watching')).first().isVisible()), 'with the full room panel')
+  check(await until(async () => !(await bubble.isVisible())), 'where the bubble steps aside')
+  check(await until(async () => !(await hostPanel.getByText('Browsing', { exact: true }).isVisible())), 'and the friend is no longer browsing')
+
   await host.getByRole('switch', { name: 'Ask before someone joins' }).click()
   const third = await viewer('third', 390)
   await third.goto(`${FRIEND}/open?url=${encodeURIComponent(room.link)}`, { waitUntil: 'domcontentloaded' })
-  await third.getByRole('textbox', { name: 'Your name' }).waitFor()
+  const thirdName = third.getByRole('textbox', { name: 'Your name' })
+  await thirdName.waitFor()
+  check(await until(async () => (await thirdName.inputValue()) === 'Alex'), 'the name box starts with the name used last time on that Yoru', await thirdName.inputValue())
+  await thirdName.fill('')
   await third.getByRole('button', { name: 'Join', exact: true }).click()
   check(await until(() => third.getByText(/Waiting for the host to let you in/).isVisible()), 'with asking on, a third waits')
   check(await until(() => host.getByText('Friend wants to join').isVisible()), 'and the host is asked, a blank name as Friend')
@@ -141,6 +260,9 @@ try {
 
   await friend.getByRole('button', { name: 'Leave room' }).click()
   check(await until(() => host.getByText('2 watching').isVisible()), 'someone leaving leaves the rest watching')
+  const gone = Date.now()
+  await third.close()
+  check(await until(async () => (await statusOf(host, 'Friend')) === 'Away', 5000), 'a closed tab shows as Away for the host', `${Date.now() - gone} ms`)
   check(errors.length === 0, 'no page errors', errors.join(' | '))
 } finally {
   await browser.close()

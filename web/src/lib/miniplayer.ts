@@ -81,13 +81,31 @@ export function togglePlay() {
 export type Corner = 'tl' | 'tr' | 'bl' | 'br'
 const CORNER_KEY = 'yoru.mini.corner'
 
-function savedCorner(): Corner {
-  const c = readKey(CORNER_KEY)
-  return c === 'tl' || c === 'tr' || c === 'bl' ? c : 'br'
+function savedCorner(key: string, fallback: Corner): Corner {
+  const c = readKey(key)
+  return c === 'tl' || c === 'tr' || c === 'bl' || c === 'br' ? c : fallback
 }
 
-export function useDockDrag(on: boolean) {
-  const [corner, setCorner] = useState<Corner>(savedCorner)
+let miniAt: Corner | null = null
+
+export function tellMiniCorner(next: Corner | null) {
+  if (miniAt === next) return
+  miniAt = next
+  emit()
+}
+
+export function useMiniCorner(): Corner | null {
+  return useSyncExternalStore(
+    (l) => {
+      listeners.add(l)
+      return () => listeners.delete(l)
+    },
+    () => miniAt,
+  )
+}
+
+export function useDockDrag(on: boolean, key = CORNER_KEY, fallback: Corner = 'br') {
+  const [corner, setCorner] = useState<Corner>(() => savedCorner(key, fallback))
   const [drops, setDrops] = useState(0)
   const ref = useRef<HTMLDivElement>(null)
   const from = useRef<DOMRect | null>(null)
@@ -143,7 +161,7 @@ export function useDockDrag(on: boolean) {
       from.current = r
       setCorner(next)
       setDrops((n) => n + 1)
-      writeKey(CORNER_KEY, next)
+      writeKey(key, next)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)

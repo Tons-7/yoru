@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { cx } from '../lib/format'
-import { setOverlay, type Room, type RoomLine } from '../lib/together'
+import { memberState, memberStatus, setOverlay, useRoomToasts, type Room, type RoomLine, type RoomPick } from '../lib/together'
+import { toast } from '../lib/toast'
 import { Badge, Button, Switch, TextInput } from './ui'
 
 const REACTIONS = ['😂', '😮', '❤️', '👏']
+
+const orSay = (did: Promise<unknown>) =>
+  void did.catch((e: unknown) => toast(e instanceof Error ? e.message : "That didn't reach the room."))
 
 export function TogetherPanel({
   room,
@@ -11,12 +15,20 @@ export function TogetherPanel({
   onLeave,
   overlay,
   onOverlay,
+  canPick,
+  unshared,
+  onBrowse,
+  onPlayPick,
 }: {
   room: Room
   invite?: string
   onLeave: () => void
   overlay: boolean
   onOverlay: (on: boolean) => void
+  canPick: boolean
+  unshared: boolean
+  onBrowse: () => void
+  onPlayPick: (pick: RoomPick) => void
 }) {
   const [text, setText] = useState('')
   const [copied, setCopied] = useState(false)
@@ -40,9 +52,12 @@ export function TogetherPanel({
     atEnd.current = true
     void room.act('chat', { text: t }).catch(() => {})
   }
-  const status = (m: (typeof view.members)[number]) => (!m.connected ? 'Away' : m.ready ? 'Ready' : 'Loading')
   const waiting = room.waitingFor.length > 0 && view.state.waiting
   const copy = (link: string) => void navigator.clipboard.writeText(link).then(() => setCopied(true), () => {})
+  const picks = view.picks ?? []
+  const playing = [view.title, `Episode ${view.state.episode}`, view.state.audio === 'dub' ? 'English dub' : 'Japanese audio']
+    .filter(Boolean)
+    .join(' · ')
 
   return (
     <section className="surface overflow-hidden" aria-label="Watch together">
@@ -58,13 +73,69 @@ export function TogetherPanel({
         </Button>
       </header>
 
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-line px-4 py-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-base-400">Now playing</p>
+          <p className="truncate text-sm text-base-100" title={playing}>
+            {playing}
+          </p>
+        </div>
+        <div className="text-right">
+          <Button size="sm" variant="secondary" onClick={onBrowse}>
+            {canPick ? 'Change what we watch' : 'Suggest something'}
+          </Button>
+          <p className="mt-1 text-xs text-base-500">
+            {canPick ? 'Play any episode and everyone follows.' : 'Open an episode to suggest it to the host.'}
+          </p>
+        </div>
+      </div>
+
+      {unshared && (
+        <p role="status" className="border-b border-line bg-amber-500/10 px-4 py-2.5 text-sm text-amber-200">
+          This episode is a file of yours, so the room can't follow. Choose a torrent release.
+        </p>
+      )}
+
+      {picks.length > 0 && (
+        <div className="space-y-2 border-b border-line px-4 py-3">
+          <h3 className="text-xs font-medium text-base-400">Suggestions</h3>
+          <ul className="space-y-2">
+            {picks.map((p) => (
+              <li key={p.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-accent-500/10 px-3 py-2 text-sm">
+                <span className="flex min-w-0 items-center gap-2.5 text-base-100">
+                  <RoomAvatar name={p.by} src={room.avatarOf(p.member)} />
+                  <span className="min-w-0">
+                    <span className="block truncate">
+                      {p.title} · Episode {p.episode}
+                    </span>
+                    <span className="block text-xs text-base-400">Suggested by {p.member === room.me?.id ? 'you' : p.by}</span>
+                  </span>
+                </span>
+                <span className="flex gap-2">
+                  {(host || p.member === room.me?.id) && (
+                    <Button size="sm" onClick={() => void room.act('unsuggest', { pick: p.id }).catch(() => {})}>
+                      {p.member === room.me?.id ? 'Take back' : 'Dismiss'}
+                    </Button>
+                  )}
+                  {canPick && (
+                    <Button size="sm" variant="primary" onClick={() => onPlayPick(p)}>
+                      Play for everyone
+                    </Button>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {(waiting || room.knocks.length > 0) && (
         <div className="space-y-2 border-b border-line px-4 py-3">
           {waiting && (
             <div role="status" className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
               <span>Waiting for {room.waitingFor.length === 1 ? room.waitingFor[0] : `${room.waitingFor.length} people`} to load</span>
               {host && (
-                <Button size="sm" variant="secondary" onClick={() => void room.act('start')}>
+                <Button size="sm" variant="secondary" onClick={() => orSay(room.act('start'))}>
                   Start anyway
                 </Button>
               )}
@@ -73,7 +144,7 @@ export function TogetherPanel({
           {room.knocks.map((k) => (
             <div key={k.member} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-accent-500/10 px-3 py-2 text-sm">
               <span className="flex items-center gap-2.5 text-base-100">
-                <Avatar name={k.name} />
+                <RoomAvatar name={k.name} />
                 {k.name} wants to join
               </span>
               <span className="flex gap-2">
@@ -111,14 +182,20 @@ export function TogetherPanel({
             <ul>
               {view.members.map((m) => (
                 <li key={m.id} className="flex min-h-11 items-center gap-3">
-                  <Avatar name={m.name} state={!m.connected ? 'away' : m.ready ? 'ready' : 'loading'} />
+                  <RoomAvatar name={m.name} src={room.avatarOf(m.id)} state={memberState(m)} />
                   <span className="min-w-0 flex-1 truncate text-sm text-base-100">
                     {m.name}
                     {m.id === room.me?.id && <span className="text-base-500"> (you)</span>}
                   </span>
                   {m.host && <Badge tone="accent">Host</Badge>}
-                  <span className={cx('w-14 text-right text-xs', !m.connected ? 'text-base-500' : m.ready ? 'text-emerald-300' : 'text-amber-300')}>
-                    {status(m)}
+                  <span
+                    data-status
+                    className={cx(
+                      'w-16 text-right text-xs',
+                      memberState(m) === 'away' ? 'text-base-500' : m.ready ? 'text-emerald-300' : 'text-amber-300',
+                    )}
+                  >
+                    {memberStatus(m)}
                   </span>
                 </li>
               ))}
@@ -134,13 +211,19 @@ export function TogetherPanel({
                     label="Ask before someone joins"
                     hint="You let each person in."
                     on={view.ask}
-                    onChange={(on) => void room.act('settings', { ask: on })}
+                    onChange={(on) => orSay(room.act('settings', { ask: on }))}
                   />
                   <SettingRow
                     label="Wait for everyone"
                     hint="Play holds while anyone is still loading."
                     on={view.wait}
-                    onChange={(on) => void room.act('settings', { wait: on })}
+                    onChange={(on) => orSay(room.act('settings', { wait: on }))}
+                  />
+                  <SettingRow
+                    label="Anyone can change what's playing"
+                    hint="Off: friends suggest, you decide."
+                    on={!!view.anyone}
+                    onChange={(on) => orSay(room.act('settings', { anyone: on }))}
                   />
                 </>
               )}
@@ -173,7 +256,7 @@ export function TogetherPanel({
                 No messages yet. Pauses and jumps show up here too.
               </li>
             ) : (
-              room.lines.map((l) => <Line key={l.id} line={l} mine={l.from === room.me?.name} />)
+              room.lines.map((l) => <Line key={l.id} line={l} mine={l.from === room.me?.name} src={room.avatarOf(l.member)} />)
             )}
           </ol>
 
@@ -229,10 +312,15 @@ function SettingRow({ label, hint, on, onChange }: { label: string; hint: string
   )
 }
 
-function Avatar({ name, state }: { name: string; state?: 'ready' | 'loading' | 'away' }) {
+export function RoomAvatar({ name, src, state }: { name: string; src?: string; state?: 'ready' | 'loading' | 'away' }) {
+  const [broken, setBroken] = useState('')
   return (
     <span aria-hidden className="relative grid size-8 shrink-0 place-items-center rounded-full bg-base-700 text-xs font-semibold text-base-100 uppercase">
-      {[...name.trim()][0] ?? '?'}
+      {src && broken !== src ? (
+        <img src={src} alt="" draggable={false} onError={() => setBroken(src)} className="size-8 rounded-full object-cover" />
+      ) : (
+        ([...name.trim()][0] ?? '?')
+      )}
       {state && (
         <span
           className={cx(
@@ -245,16 +333,64 @@ function Avatar({ name, state }: { name: string; state?: 'ready' | 'loading' | '
   )
 }
 
-function Line({ line, mine }: { line: RoomLine; mine: boolean }) {
+export function Line({ line, mine, src }: { line: RoomLine; mine: boolean; src?: string }) {
   if (line.kind === 'event') return <li className="text-center text-xs text-base-500">{line.text}</li>
   return (
     <li className="flex items-start gap-2.5">
-      <Avatar name={line.from ?? '?'} />
+      <RoomAvatar name={line.from ?? '?'} src={src} />
       <span className="min-w-0 pt-1">
         <span className={cx('mr-1.5 text-xs font-semibold', mine ? 'text-accent-300' : 'text-base-300')}>{line.from}</span>
         {line.kind === 'react' ? <span className="text-xl leading-none">{line.text}</span> : <span className="break-words text-base-100">{line.text}</span>}
       </span>
     </li>
+  )
+}
+
+export function StrayCard({
+  roomTitle,
+  roomEpisode,
+  title,
+  episode,
+  busy,
+  error,
+  onSuggest,
+  onBack,
+  onLeave,
+}: {
+  roomTitle: string
+  roomEpisode: number
+  title: string
+  episode: number
+  busy: boolean
+  error: string
+  onSuggest: () => void
+  onBack: () => void
+  onLeave: () => void
+}) {
+  return (
+    <div className="grid aspect-video place-items-center bg-base-900 p-4 text-center sm:rounded-xl">
+      <div className="max-w-md space-y-3">
+        <h2 className="text-base font-semibold text-white">You're in a room</h2>
+        <p className="text-sm text-base-300">
+          The room is watching {roomTitle || 'something else'}, episode {roomEpisode}. The host changes what's playing.
+        </p>
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button variant="primary" onClick={onSuggest} disabled={busy}>
+            {busy ? 'Suggesting…' : `Suggest ${title ? 'this' : 'this episode'} to the room`}
+          </Button>
+          <Button variant="secondary" onClick={onBack}>
+            Back to the room
+          </Button>
+        </div>
+        <p className="text-xs text-base-500">
+          {title ? `${title} · Episode ${episode}` : `Episode ${episode}`}
+        </p>
+        {error && <p className="text-xs text-recap">{error}</p>}
+        <Button size="sm" variant="ghost" onClick={onLeave} className="text-red-300 hover:text-red-200">
+          Leave the room and watch this
+        </Button>
+      </div>
+    </div>
   )
 }
 
@@ -267,15 +403,18 @@ export function JoinCard({
   name: suggested,
   host = false,
   onJoin,
+  onName,
   onCancel,
 }: {
   title: string
   name: string
   host?: boolean
   onJoin: (name: string) => Promise<unknown>
+  onName?: (name: string) => void
   onCancel?: () => void
 }) {
-  const [name, setName] = useState(suggested)
+  const [typed, setTyped] = useState<string | null>(null)
+  const name = typed ?? suggested
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const fallback = host ? 'Host' : 'Friend'
@@ -284,6 +423,7 @@ export function JoinCard({
     setError('')
     try {
       await onJoin(name.trim() || fallback)
+      if (name.trim()) onName?.(name.trim())
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setBusy(false)
@@ -313,9 +453,10 @@ export function JoinCard({
           <TextInput
             id="together-name"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => setTyped(e.target.value)}
             placeholder={fallback}
             maxLength={32}
+            autoComplete="off"
             autoFocus
             className="min-w-0 flex-1 sm:max-w-xs"
           />
@@ -337,40 +478,42 @@ export function JoinCard({
   )
 }
 
-export function TogetherToasts({ room, on }: { room: Room; on: boolean }) {
-  const [shown, setShown] = useState<RoomLine | null>(null)
-  const [extra, setExtra] = useState(0)
-  const seen = useRef(room.lines.length ? room.lines[room.lines.length - 1].id : 0)
-  const timer = useRef(0)
-  useEffect(() => () => window.clearTimeout(timer.current), [])
-  useEffect(() => {
-    const fresh = room.lines.filter((l) => l.id > seen.current)
-    if (fresh.length === 0) return
-    seen.current = fresh[fresh.length - 1].id
-    const worth = fresh.filter((l) => l.kind !== 'event' || /paused|jumped/.test(l.text))
-    if (!on || worth.length === 0) return
-    const last = worth[worth.length - 1]
-    setShown(last)
-    setExtra(worth.length - 1)
-    window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(() => setShown(null), last.kind === 'react' ? 1500 : 3000)
-  }, [room.lines, on])
+export function RoomToast({ room, line }: { room: Room; line: RoomLine }) {
+  if (line.kind === 'event') {
+    return (
+      <span className="animate-enter rounded-full bg-base-950/85 px-3 py-1 text-xs text-white/85 ring-1 ring-white/10 backdrop-blur-sm motion-reduce:animate-none">
+        {line.text}
+      </span>
+    )
+  }
+  return (
+    <span className="flex max-w-full animate-enter items-start gap-2 rounded-xl bg-base-950/90 py-1.5 pr-3 pl-1.5 text-left ring-1 ring-white/10 backdrop-blur-sm motion-reduce:animate-none">
+      <RoomAvatar name={line.from ?? '?'} src={room.avatarOf(line.member)} />
+      <span className="min-w-0">
+        <span className="block truncate text-xs font-semibold text-accent-300">{line.from}</span>
+        {line.kind === 'react' ? (
+          <span className="block text-2xl leading-tight">{line.text}</span>
+        ) : (
+          <span className="line-clamp-4 text-sm leading-snug break-words text-white">{line.text}</span>
+        )}
+      </span>
+    </span>
+  )
+}
 
+export function TogetherToasts({ room, on }: { room: Room; on: boolean }) {
+  const shown = useRoomToasts(room, on)
   const waiting = room.view?.state.waiting && room.waitingFor.length > 0
   return (
-    <div aria-hidden className="pointer-events-none absolute bottom-20 left-4 z-10 flex max-w-[60%] flex-col items-start gap-1.5">
+    <div aria-hidden className="pointer-events-none absolute top-16 right-3 z-10 flex w-72 max-w-[70%] flex-col items-end gap-1.5 sm:top-4 sm:right-4">
       {waiting && (
         <span className="rounded-full bg-base-950/75 px-3 py-1 text-xs text-amber-200 backdrop-blur-sm">
           Waiting for {room.waitingFor.length === 1 ? room.waitingFor[0] : `${room.waitingFor.length} people`}…
         </span>
       )}
-      {on && shown && (
-        <span className="animate-enter rounded-xl bg-base-950/70 px-3 py-1.5 text-sm text-white backdrop-blur-sm motion-reduce:animate-none">
-          {shown.from && <span className="font-medium">{shown.from} </span>}
-          {shown.kind === 'react' ? <span className="text-lg">{shown.text}</span> : shown.text}
-          {extra > 0 && <span className="ml-2 text-xs text-white/60">+{extra} more</span>}
-        </span>
-      )}
+      {shown.map((line) => (
+        <RoomToast key={line.id} room={room} line={line} />
+      ))}
     </div>
   )
 }

@@ -63,6 +63,11 @@ func TestSmoothMotionServesOnlyItsOwnFiles(t *testing.T) {
 	if rec := get("/api/smooth/flyhigh_web_bg.wasm"); rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/wasm" {
 		t.Errorf("the engine answered %d as %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
+	if rec := get("/api/smooth/flyhighfg.weights"); rec.Code != http.StatusOK ||
+		rec.Header().Get("Content-Type") == "application/octet-stream" {
+		t.Errorf("the model answered %d as %q; download managers grab .bin and octet-stream", rec.Code,
+			rec.Header().Get("Content-Type"))
+	}
 	if rec := get("/api/smooth/versions.json"); rec.Code != http.StatusNotFound {
 		t.Errorf("a file beside the engine was served: %d", rec.Code)
 	}

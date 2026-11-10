@@ -20,11 +20,10 @@ import (
 	"yoru/internal/store"
 )
 
-// fakeCatalogue answers by-id and relations queries from statuses and edges, recording the ids asked.
 type fakeCatalogue struct {
 	mu     sync.Mutex
 	status map[int]string
-	edges  map[int][][2]any // id -> {relationType, node id}
+	edges  map[int][][2]any
 	asked  []int
 }
 
@@ -75,37 +74,62 @@ func catalogueStore(t *testing.T, f *fakeCatalogue) (*store.Store, *db.DB, *anil
 	return store.New(conn), conn, anilist.New(discard(), anilist.WithEndpoint(srv.URL), anilist.WithoutRateLimit())
 }
 
-// Only a finished show keeps AniList's answer: an airing one's countdown would rewrite its row on every fetch.
-func TestOnlyFinishedShowsKeepTheirAnswer(t *testing.T) {
-	f := &fakeCatalogue{status: map[int]string{1: "FINISHED", 4: "RELEASING"}}
+func TestEveryShowKeepsItsAnswerAndKnowsWhenItIsOld(t *testing.T) {
+	f := &fakeCatalogue{status: map[int]string{1: "FINISHED", 4: "RELEASING", 5: "NOT_YET_RELEASED"}}
 	st, conn, al := catalogueStore(t, f)
 	ctx := context.Background()
 	imp := NewImporter(st, al, discard())
-	if _, err := imp.Hydrate(ctx, []int{1, 4}); err != nil {
+	if _, err := imp.Hydrate(ctx, []int{1, 4, 5}); err != nil {
 		t.Fatal(err)
 	}
-	if m, ok := imp.Finished(ctx, 1); !ok || m.ID != 1 {
-		t.Error("a finished show doesn't open from its saved answer")
+	for _, id := range []int{1, 4, 5} {
+		if m, _, fresh, ok := imp.Kept(ctx, id); !ok || !fresh || m.ID != id {
+			t.Errorf("show %d just fetched: kept %v, fresh %v", id, ok, fresh)
+		}
 	}
-	if _, ok := imp.Finished(ctx, 4); ok {
-		t.Error("an airing show was served from its saved answer")
-	}
-	var kept int
-	if err := conn.R.QueryRowContext(ctx, `SELECT count(*) FROM anime WHERE id = 4 AND media IS NOT NULL`).Scan(&kept); err != nil || kept != 0 {
-		t.Errorf("an airing show kept its answer (%d, %v)", kept, err)
+	if _, _, _, ok := imp.Kept(ctx, 9); ok {
+		t.Error("a show never fetched has a saved answer")
 	}
 
-	// A day on, the answer no longer stands.
-	if _, err := conn.W.ExecContext(ctx, `UPDATE anime SET synced_at = synced_at - ? WHERE id = 1`,
-		int64((25 * time.Hour).Seconds())); err != nil {
+	age := func(id int, by time.Duration) {
+		t.Helper()
+		if _, err := conn.W.ExecContext(ctx, `UPDATE anime SET synced_at = synced_at - ? WHERE id = ?`,
+			int64(by.Seconds()), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	age(1, 6*24*time.Hour)
+	age(4, 5*time.Minute)
+	age(5, 5*time.Hour)
+	for _, id := range []int{1, 4, 5} {
+		if _, _, fresh, ok := imp.Kept(ctx, id); !ok || !fresh {
+			t.Errorf("show %d within its time: kept %v, fresh %v", id, ok, fresh)
+		}
+	}
+	age(1, 2*24*time.Hour)
+	age(4, 10*time.Minute)
+	age(5, 2*time.Hour)
+	for _, id := range []int{1, 4, 5} {
+		if m, at, fresh, ok := imp.Kept(ctx, id); !ok || fresh || m.ID != id || at.IsZero() {
+			t.Errorf("show %d past its time: kept %v, fresh %v; want it kept to show, and marked old", id, ok, fresh)
+		}
+	}
+
+	now := time.Now().Unix()
+	if _, err := conn.W.ExecContext(ctx, `UPDATE anime SET synced_at = ?, next_airing_at = ? WHERE id = 4`, now-120, now+600); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := imp.Finished(ctx, 1); ok {
-		t.Error("a day-old answer was served")
+	if _, _, fresh, _ := imp.Kept(ctx, 4); !fresh {
+		t.Error("an airing show fetched two minutes ago, its episode still ahead, counts as old")
+	}
+	if _, err := conn.W.ExecContext(ctx, `UPDATE anime SET next_airing_at = ? WHERE id = 4`, now-60); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, fresh, _ := imp.Kept(ctx, 4); fresh {
+		t.Error("an airing show whose episode has aired since it was fetched still counts as fresh")
 	}
 }
 
-// A later-found sequel of a show on the list is told once; not off the list, at first discovery, or alerts off.
 func TestANewSeasonOfAShowOnTheListIsAnnounced(t *testing.T) {
 	f := &fakeCatalogue{
 		status: map[int]string{100: "FINISHED", 200: "FINISHED", 900: "NOT_YET_RELEASED", 901: "NOT_YET_RELEASED"},
@@ -141,7 +165,6 @@ func TestANewSeasonOfAShowOnTheListIsAnnounced(t *testing.T) {
 	ing := NewIngester(st, fetch, al, discard())
 	ing.Relations = NewRelations(st, al, discard())
 
-	// The first discovery: nothing it finds is news.
 	ing.Run(ctx, true)
 	served += "900\t0\n901\t0\n"
 	ing.Run(ctx, true)
@@ -163,7 +186,6 @@ func TestANewSeasonOfAShowOnTheListIsAnnounced(t *testing.T) {
 	}
 }
 
-// A new season discovered today that continues a saved show joins that show's seasons the same day.
 func TestANewSeasonJoinsTheSavedShowTheDayItIsFound(t *testing.T) {
 	f := &fakeCatalogue{
 		status: map[int]string{100: "FINISHED", 900: "NOT_YET_RELEASED"},
@@ -174,7 +196,7 @@ func TestANewSeasonJoinsTheSavedShowTheDayItIsFound(t *testing.T) {
 	if _, err := NewImporter(st, al, discard()).Hydrate(ctx, []int{100}); err != nil {
 		t.Fatal(err)
 	}
-	// Show 100 was walked before the sequel existed: a franchise of one.
+
 	if err := st.MarkNoRelations(ctx, 100); err != nil {
 		t.Fatal(err)
 	}
@@ -207,5 +229,41 @@ func TestANewSeasonJoinsTheSavedShowTheDayItIsFound(t *testing.T) {
 	}
 	if !slices.Contains(seasons, 900) {
 		t.Fatalf("seasons of the saved show = %v, want the new one in", seasons)
+	}
+}
+
+func TestASavedAiringShowNeverShowsAPastBroadcastOrSkipsItsCheck(t *testing.T) {
+	st, conn, al := catalogueStore(t, &fakeCatalogue{})
+	ctx := context.Background()
+	imp := NewImporter(st, al, discard())
+	status := "RELEASING"
+	now := int(time.Now().Unix())
+	show := anilist.Media{ID: 3, Status: &status, NextAiring: &anilist.Airing{Episode: 7, AiringAt: now + 3600}}
+	if _, err := imp.Save(ctx, []anilist.Media{show}); err != nil {
+		t.Fatal(err)
+	}
+	if m, _, fresh, ok := imp.Kept(ctx, 3); !ok || !fresh || m.NextAiring == nil || m.NextAiring.TimeUntilAiring < 3500 {
+		t.Fatalf("an episode an hour ahead: kept %v, fresh %v, next %+v", ok, fresh, m.NextAiring)
+	}
+
+	if _, err := conn.W.ExecContext(ctx, `UPDATE anime SET synced_at = ?, next_airing_at = ?,
+		media = replace(media, ?, ?) WHERE id = 3`, now-600, now-60, fmt.Sprint(now+3600), fmt.Sprint(now-60)); err != nil {
+		t.Fatal(err)
+	}
+	m, _, fresh, ok := imp.Kept(ctx, 3)
+	if !ok || fresh || m.NextAiring != nil {
+		t.Fatalf("its episode aired a minute ago: kept %v, fresh %v, next %+v; want it old, with no past broadcast shown", ok, fresh, m.NextAiring)
+	}
+
+	var before, after int64
+	conn.R.QueryRowContext(ctx, `SELECT synced_at FROM anime WHERE id = 3`).Scan(&before)
+	imp.checked(ctx, []store.Anime{{ID: 3}})
+	conn.R.QueryRowContext(ctx, `SELECT synced_at FROM anime WHERE id = 3`).Scan(&after)
+	if after != before {
+		t.Fatalf("a show due its after-airing check was stamped as checked (%d -> %d); the airing job would skip it for hours", before, after)
+	}
+	due, err := st.StaleAiring(ctx, time.Now(), 10)
+	if err != nil || len(due) != 1 || due[0] != 3 {
+		t.Fatalf("due for a check: %v %v; want show 3", due, err)
 	}
 }

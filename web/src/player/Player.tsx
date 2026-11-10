@@ -1166,7 +1166,7 @@ export function Player({
         starting: 'Starting',
         on: `On · ${rateLabel(smooth.rate, knownScreenHz, knownSourceHz, runningFps)}${smooth.held ? ' · held drawings smoothed' : ''}`,
         unsupported: 'Needs WebGPU, which this browser lacks',
-        failed: "Stopped, it couldn't start on this graphics device",
+        failed: "Stopped, it couldn't start",
         missing: 'Not ready on the PC yet: being installed or updated, or not installed',
       }[smoothState]
   const holdFast = useCallback(
@@ -1882,7 +1882,7 @@ export function Player({
                 {
                   {
                     unsupported: "Smooth motion needs WebGPU, which this browser doesn't have; playing without it.",
-                    failed: "Smooth motion couldn't start on this graphics device; playing without it.",
+                    failed: "Smooth motion couldn't start; playing without it.",
                     missing: "Smooth motion isn't ready on the PC yet; playing without it. Smooth motion in the menu says why.",
                   }[smoothState]
                 }

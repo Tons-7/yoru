@@ -25,6 +25,11 @@ const (
 	togetherIdle = 10 * time.Minute
 )
 
+var (
+	roomTick    = 5 * time.Second
+	roomSilence = 20 * time.Second
+)
+
 var togetherReactions = []string{"😂", "😮", "❤️", "👏"}
 
 type togetherState struct {
@@ -35,8 +40,16 @@ type togetherState struct {
 	AnimeID  int    `json:"animeId"`
 	Episode  int    `json:"episode"`
 	InfoHash string `json:"infoHash,omitempty"`
+	Audio    string `json:"audio,omitempty"`
 
 	Waiting bool `json:"waiting"`
+}
+
+func roomAudio(a string) string {
+	if a == "dub" {
+		return "dub"
+	}
+	return "sub"
 }
 
 type togetherMember struct {
@@ -45,7 +58,11 @@ type togetherMember struct {
 	Host      bool   `json:"host,omitempty"`
 	Ready     bool   `json:"ready"`
 	Connected bool   `json:"connected"`
+	Browsing  bool   `json:"browsing,omitempty"`
+	Avatar    string `json:"avatar,omitempty"`
 	Admitted  bool   `json:"-"`
+	portrait  []byte
+	pictured  string
 	token     string
 	streams   int
 	events    chan []byte
@@ -62,8 +79,55 @@ type togetherRoom struct {
 	empty   time.Time
 	ask     bool
 	wait    bool
+	anyone  bool
 	state   togetherState
 	members []*togetherMember
+	picks   []togetherPick
+	picked  int
+	shown   string
+}
+
+type togetherPick struct {
+	ID      int    `json:"id"`
+	Member  string `json:"member"`
+	By      string `json:"by"`
+	AnimeID int    `json:"animeId"`
+	Episode int    `json:"episode"`
+	Title   string `json:"title"`
+}
+
+const togetherPicks = 6
+
+func (r *togetherRoom) canPick(m *togetherMember) bool { return m.Host || r.anyone }
+
+func (m *togetherMember) picture(dataURL string) {
+	if kind, body, ok := parseAvatar(dataURL); ok {
+		m.pictured, m.portrait, m.Avatar = kind, body, versionOf(dataURL)
+	}
+}
+
+func (s *Server) togetherAvatar(w http.ResponseWriter, req *http.Request) {
+	room := s.togetherRoom(w, req)
+	if room == nil {
+		return
+	}
+	room.mu.Lock()
+	var kind string
+	var body []byte
+	for _, m := range room.members {
+		if m.ID == req.PathValue("member") {
+			kind, body = m.pictured, m.portrait
+		}
+	}
+	room.mu.Unlock()
+	if len(body) == 0 {
+		send(w, http.StatusNotFound, map[string]any{"error": "no picture"})
+		return
+	}
+	w.Header().Set("Content-Type", kind)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	w.Write(body)
 }
 
 func nowMillis() int64 { return time.Now().UnixMilli() }
@@ -91,8 +155,25 @@ func (r *togetherRoom) view() map[string]any {
 			members = append(members, m)
 		}
 	}
+	picks := r.picks
+	if picks == nil {
+		picks = []togetherPick{}
+	}
 	return map[string]any{"type": "room", "code": r.code, "title": r.title, "ask": r.ask, "wait": r.wait,
-		"state": r.state, "members": members, "now": nowMillis()}
+		"anyone": r.anyone, "picks": picks, "state": r.state, "members": members, "now": nowMillis()}
+}
+
+func (r *togetherRoom) statuses() string {
+	var b strings.Builder
+	for _, m := range r.members {
+		fmt.Fprintf(&b, "%s:%t%t%t;", m.ID, m.Connected, m.Ready, m.Browsing)
+	}
+	return b.String()
+}
+
+func (r *togetherRoom) sendView() {
+	r.shown = r.statuses()
+	r.send(r.view())
 }
 
 func (r *togetherRoom) send(event map[string]any, to ...*togetherMember) {
@@ -145,19 +226,16 @@ func (r *togetherRoom) tidy() {
 	}
 }
 
+func (m *togetherMember) awaited() bool { return m.Admitted && m.Connected && !m.Browsing && !m.Ready }
+
 func (r *togetherRoom) allReady() bool {
-	for _, m := range r.members {
-		if m.Admitted && m.Connected && !m.Ready {
-			return false
-		}
-	}
-	return true
+	return !slices.ContainsFunc(r.members, (*togetherMember).awaited)
 }
 
 func (r *togetherRoom) notReady() []string {
 	var names []string
 	for _, m := range r.members {
-		if m.Admitted && m.Connected && !m.Ready {
+		if m.awaited() {
 			names = append(names, m.Name)
 		}
 	}
@@ -195,6 +273,7 @@ func (s *Server) roomRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/together/{code}/join", s.joinTogether)
 	mux.HandleFunc("GET /api/together/{code}/events", s.togetherEvents)
 	mux.HandleFunc("GET /api/together/{code}/socket", s.togetherSocket)
+	mux.HandleFunc("GET /api/together/{code}/avatar/{member}", s.togetherAvatar)
 	mux.HandleFunc("POST /api/together/{code}/act", s.togetherAct)
 	mux.HandleFunc("OPTIONS /api/together/{code}/{rest...}", s.togetherOptions)
 	mux.HandleFunc("OPTIONS /api/together/{code}", s.togetherOptions)
@@ -256,6 +335,8 @@ func (s *Server) createTogether(w http.ResponseWriter, req *http.Request) {
 		Position float64 `json:"position"`
 		Playing  bool    `json:"playing"`
 		Name     string  `json:"name"`
+		Audio    string  `json:"audio"`
+		Avatar   string  `json:"avatar"`
 	}
 	if !decode(w, req, &body) {
 		return
@@ -305,10 +386,11 @@ func (s *Server) createTogether(w http.ResponseWriter, req *http.Request) {
 	room := &togetherRoom{
 		code: strings.ToLower(newPairCode()), secret: NewAccessToken(), title: body.Title, created: time.Now(), wait: true,
 		state: togetherState{Playing: body.Playing, Position: body.Position, At: nowMillis(), AnimeID: body.AnimeID,
-			Episode: body.Episode, InfoHash: strings.ToLower(body.InfoHash)},
+			Episode: body.Episode, InfoHash: strings.ToLower(body.InfoHash), Audio: roomAudio(body.Audio)},
 	}
 	host := &togetherMember{ID: randomHex()[:12], Name: cleanName(body.Name, "Host"), Host: true, Admitted: true,
 		token: NewAccessToken(), events: make(chan []byte, 256)}
+	host.picture(body.Avatar)
 	room.members = []*togetherMember{host}
 	s.togetherMu.Lock()
 	s.expireRooms()
@@ -331,15 +413,19 @@ func (s *Server) expireRooms() {
 	}
 }
 
-func cleanName(name, fallback string) string {
+func cleanName(name, fallback string) string { return cleanText(name, fallback, 32) }
+
+func cleanTitle(title, fallback string) string { return cleanText(title, fallback, 160) }
+
+func cleanText(name, fallback string, limit int) string {
 	name = strings.TrimSpace(strings.Map(func(r rune) rune {
 		if r < 32 {
 			return -1
 		}
 		return r
 	}, name))
-	if utf8.RuneCountInString(name) > 32 {
-		name = string([]rune(name)[:32])
+	if utf8.RuneCountInString(name) > limit {
+		name = string([]rune(name)[:limit])
 	}
 	if name == "" {
 		return fallback
@@ -379,7 +465,8 @@ func (s *Server) joinTogether(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var body struct {
-		Name string `json:"name"`
+		Name   string `json:"name"`
+		Avatar string `json:"avatar"`
 	}
 	if !decode(w, req, &body) {
 		return
@@ -393,6 +480,7 @@ func (s *Server) joinTogether(w http.ResponseWriter, req *http.Request) {
 	}
 	m := &togetherMember{ID: randomHex()[:12], Name: uniqueName(room.members, cleanName(body.Name, "Friend")), Admitted: !room.ask,
 		token: NewAccessToken(), events: make(chan []byte, 256), gone: time.Now()}
+	m.picture(body.Avatar)
 	room.members = append(room.members, m)
 	if room.ask {
 		if host := room.host(); host != nil {
@@ -452,6 +540,7 @@ func (s *Server) togetherSocket(w http.ResponseWriter, req *http.Request) {
 				defer close(closed)
 				var discard string
 				for websocket.Message.Receive(ws, &discard) == nil {
+					ws.SetReadDeadline(time.Now().Add(roomSilence))
 				}
 			}()
 			followRoom(room, m, closed, func(raw []byte) bool { return websocket.Message.Send(ws, string(raw)) == nil })
@@ -468,11 +557,11 @@ func followRoom(room *togetherRoom, m *togetherMember, done <-chan struct{}, wri
 	m.streams++
 	m.Connected, room.empty = true, time.Time{}
 	if m.Admitted {
-		room.send(room.view())
+		room.sendView()
 	}
 	room.mu.Unlock()
 
-	tick := time.NewTicker(15 * time.Second)
+	tick := time.NewTicker(roomTick)
 	defer tick.Stop()
 	defer func() {
 		room.mu.Lock()
@@ -482,7 +571,7 @@ func followRoom(room *togetherRoom, m *togetherMember, done <-chan struct{}, wri
 				room.play(false)
 				room.send(map[string]any{"type": "state", "state": room.state})
 			}
-			room.send(room.view())
+			room.sendView()
 			if !slices.ContainsFunc(room.members, func(o *togetherMember) bool { return o.Connected }) {
 				room.empty = time.Now()
 			}
@@ -524,11 +613,16 @@ func (s *Server) togetherAct(w http.ResponseWriter, req *http.Request) {
 		Episode  int     `json:"episode"`
 		InfoHash string  `json:"infoHash"`
 		Text     string  `json:"text"`
+		Title    string  `json:"title"`
+		Audio    string  `json:"audio"`
+		Pick     int     `json:"pick"`
+		Browsing bool    `json:"browsing"`
 
-		Ask   *bool  `json:"ask"`
-		Wait  *bool  `json:"wait"`
-		Admit string `json:"admit"`
-		Allow bool   `json:"allow"`
+		Ask    *bool  `json:"ask"`
+		Wait   *bool  `json:"wait"`
+		Anyone *bool  `json:"anyone"`
+		Admit  string `json:"admit"`
+		Allow  bool   `json:"allow"`
 	}
 	if !decode(w, req, &body) {
 		return
@@ -543,7 +637,11 @@ func (s *Server) togetherAct(w http.ResponseWriter, req *http.Request) {
 	now := nowMillis()
 	st := &room.state
 	state := func(reason string) {
-		room.send(map[string]any{"type": "state", "state": *st, "by": m.Name, "reason": reason, "waitingFor": room.notReady()})
+		room.send(map[string]any{"type": "state", "state": *st, "by": m.Name, "reason": reason, "title": room.title,
+			"waitingFor": room.notReady()})
+		if room.statuses() != room.shown {
+			room.sendView()
+		}
 	}
 	switch body.Type {
 	case "play":
@@ -581,19 +679,95 @@ func (s *Server) togetherAct(w http.ResponseWriter, req *http.Request) {
 			st.Position, st.At, st.Playing, st.Waiting = st.at(now), now, false, true
 			state("buffering")
 		default:
-			room.send(room.view())
+			room.sendView()
+		}
+	case "browsing":
+		if m.Browsing == body.Browsing {
+			break
+		}
+		m.Browsing = body.Browsing
+		if m.Browsing {
+			m.Ready = false
+		}
+		if st.Waiting && room.allReady() {
+			room.play(false)
+			state("ready")
+		} else {
+			room.sendView()
 		}
 	case "episode":
 		if body.AnimeID == 0 || body.Episode <= 0 || body.InfoHash == "" {
 			send(w, http.StatusBadRequest, map[string]any{"error": "Which episode?"})
 			return
 		}
-		*st = togetherState{AnimeID: body.AnimeID, Episode: body.Episode, InfoHash: strings.ToLower(body.InfoHash), At: now}
+		if !room.canPick(m) {
+			send(w, http.StatusForbidden, map[string]any{"error": "Only the host changes what's playing in this room."})
+			return
+		}
+		reason := "episode"
+		if body.AnimeID != st.AnimeID {
+			reason = "show"
+		}
+		audio := st.Audio
+		if body.Audio != "" {
+			audio = roomAudio(body.Audio)
+		}
+		*st = togetherState{AnimeID: body.AnimeID, Episode: body.Episode, InfoHash: strings.ToLower(body.InfoHash),
+			Audio: audio, At: now}
+		if title := cleanTitle(body.Title, ""); title != "" {
+			room.title = title
+		}
 		for _, o := range room.members {
 			o.Ready = false
 		}
+		room.picks = slices.DeleteFunc(room.picks, func(p togetherPick) bool {
+			return p.AnimeID == body.AnimeID && p.Episode == body.Episode
+		})
 		room.play(false)
-		state("episode")
+		room.shown = ""
+		state(reason)
+	case "audio":
+		if !room.canPick(m) {
+			send(w, http.StatusForbidden, map[string]any{"error": "Only the host picks the audio in this room."})
+			return
+		}
+		if next := roomAudio(body.Audio); next != st.Audio {
+			st.Position, st.At = st.at(now), now
+			st.Audio = next
+			for _, o := range room.members {
+				o.Ready = false
+			}
+			state("audio")
+		}
+	case "suggest":
+		if body.AnimeID == 0 || body.Episode <= 0 {
+			send(w, http.StatusBadRequest, map[string]any{"error": "Which episode?"})
+			return
+		}
+		if body.AnimeID == st.AnimeID && body.Episode == st.Episode {
+			send(w, http.StatusConflict, map[string]any{"error": "The room is already watching this."})
+			return
+		}
+		room.picks = slices.DeleteFunc(room.picks, func(p togetherPick) bool {
+			return p.Member == m.ID || p.AnimeID == body.AnimeID && p.Episode == body.Episode
+		})
+		room.picked++
+		pick := togetherPick{ID: room.picked, Member: m.ID, By: m.Name, AnimeID: body.AnimeID, Episode: body.Episode,
+			Title: cleanTitle(body.Title, "Another show")}
+		room.picks = append(room.picks, pick)
+		if len(room.picks) > togetherPicks {
+			room.picks = room.picks[len(room.picks)-togetherPicks:]
+		}
+		room.send(map[string]any{"type": "suggest", "pick": pick})
+		room.sendView()
+	case "unsuggest":
+		before := len(room.picks)
+		room.picks = slices.DeleteFunc(room.picks, func(p togetherPick) bool {
+			return p.ID == body.Pick && (m.Host || p.Member == m.ID)
+		})
+		if len(room.picks) != before {
+			room.sendView()
+		}
 	case "chat", "react":
 		text := strings.TrimSpace(body.Text)
 		if body.Type == "react" && !slices.Contains(togetherReactions, text) || text == "" {
@@ -615,6 +789,9 @@ func (s *Server) togetherAct(w http.ResponseWriter, req *http.Request) {
 		if body.Wait != nil {
 			room.wait = *body.Wait
 		}
+		if body.Anyone != nil {
+			room.anyone = *body.Anyone
+		}
 		if body.Admit != "" {
 			for i, o := range room.members {
 				if o.ID != body.Admit || o.Admitted {
@@ -630,11 +807,11 @@ func (s *Server) togetherAct(w http.ResponseWriter, req *http.Request) {
 				break
 			}
 		}
-		room.send(room.view())
+		room.sendView()
 	case "leave":
 		room.members = slices.DeleteFunc(room.members, func(o *togetherMember) bool { return o == m })
 		room.tidy()
-		room.send(room.view())
+		room.sendView()
 	default:
 		send(w, http.StatusBadRequest, map[string]any{"error": "Unknown action."})
 		return

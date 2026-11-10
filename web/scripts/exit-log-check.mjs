@@ -1,5 +1,3 @@
-// With no console, Yoru's log and its exit are in the app: About saves and copies the log, Playback says what
-// closing the window does, and Exit Yoru asks only when something would stop. Last, as it ends the instance.
 import { readFileSync } from 'node:fs'
 import { chromium } from 'playwright'
 
@@ -18,7 +16,6 @@ const check = (ok, label, detail = '') => {
   if (!ok) failures++
 }
 
-// A Windows host's browser, whose page offers the tray choice.
 const browser = await chromium.launch()
 const context = await browser.newContext({
   viewport: { width: 1280, height: 900 },
@@ -29,7 +26,6 @@ const page = await context.newPage()
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 
-// ---------------------------------------------------------------- the log, in About
 await page.goto(`${BASE}/settings?tab=About`, { waitUntil: 'domcontentloaded' })
 const save = page.getByRole('link', { name: 'Save log' })
 check(await until(() => save.isVisible(), 20_000), 'About offers the log')
@@ -43,16 +39,15 @@ check(await until(() => page.getByRole('button', { name: 'Copied' }).isVisible()
 const clip = await page.evaluate(() => navigator.clipboard.readText()).catch(() => '')
 check(clip.includes('==== This run'), 'the log is on the clipboard', clip.slice(0, 80))
 
-// ---------------------------------------------------------------- closing the window, in Playback
 await page.goto(`${BASE}/settings?tab=Computer`, { waitUntil: 'domcontentloaded' })
 const closing =page.locator('[data-row]', { has: page.getByText('When the window closes', { exact: true }) })
 if (process.platform === 'win32') {
   check(await until(() => closing.isVisible(), 15_000), 'Playback says what closing the window does')
-  check(await closing.getByText('Yoru exits').isVisible(), 'by default Yoru exits with it')
+  check(await until(() => closing.getByText('stop with it').isVisible(), 5000), 'by default Yoru exits with it')
   await closing.getByRole('combobox').click()
   await page.getByRole('option', { name: 'Keep running in the tray', exact: true }).click()
   check(await until(async () => (await prefs())['window.on_close'] === 'tray'), 'keeping it in the tray is saved')
-  check(await until(() => closing.getByText(/tray icon opens or exits it/).isVisible()), 'and says where Yoru then is')
+  check(await until(() => closing.getByText(/tray icon opens or exits Yoru/).isVisible()), 'and says where Yoru then is')
   await closing.getByRole('combobox').click()
   await page.getByRole('option', { name: 'Exit Yoru', exact: true }).click()
   check(await until(async () => (await prefs())['window.on_close'] === 'exit'), 'back to exiting')
@@ -60,11 +55,9 @@ if (process.platform === 'win32') {
   check(!(await closing.isVisible()), 'no tray choice where there is no tray')
 }
 
-// ---------------------------------------------------------------- Exit Yoru, from the profile menu
 const openMenu = () => page.getByRole('button', { name: 'Profile and settings' }).click()
 const exitItem = page.getByRole('menuitem', { name: /^Exit Yoru/ })
 
-// With another device playing (stood in for), the row says so and exiting asks, naming what stops.
 await page.route('**/api/app/activity', (route) =>
   route.fulfill({ json: { watching: [{ device: 'Chrome on Android', title: 'Frieren', episode: 5 }] } }))
 await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
@@ -81,7 +74,6 @@ await page.screenshot({ path: `${process.env.SHOTS ?? '.'}/exit-dialog.png` })
 await dialog.getByRole('button', { name: 'Cancel' }).click()
 check(await until(async () => !(await dialog.isVisible())) && (await alive()), 'Cancel leaves Yoru running')
 
-// Nothing running: no question, Yoru just exits.
 await page.unroute('**/api/app/activity')
 await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
 await openMenu()

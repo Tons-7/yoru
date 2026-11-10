@@ -49,7 +49,6 @@ func browseFilter(q url.Values) anilist.Browse {
 	}
 }
 
-// browse is search with every filter: genres, tags, year, season, format, status, score, episodes.
 func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if studio, _ := strconv.Atoi(q.Get("studio")); studio > 0 {
@@ -71,18 +70,16 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// browseCount measures how many results a browse matches; AniList's own total is a placeholder.
 func (s *Server) browseCount(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := browseFilter(q)
 	key := countKey(q)
 
-	n, err := s.counts.get(key, func() (int, error) {
-		// The page asking is known to have a next one, so its last result plus one exists.
+	n, err := s.counts.get(key, func() (int, bool, error) {
 		known := max(filter.Page, 1)*max(filter.PerPage, 1) + 1
-		return s.anilist.BrowseCount(r.Context(), filter, known)
+		n, err := s.anilist.BrowseCount(r.Context(), filter, known)
+		return n, !anilist.UsedSaved(r.Context()), err
 	})
-	// Busy, or AniList slow or down: 503, which the page asks again; a refusal stays 502, which it doesn't.
 	if errors.Is(err, anilist.ErrBusy) || anilist.Unreachable(r.Context(), err) {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error(), "busy": true})
 		return
@@ -94,7 +91,6 @@ func (s *Server) browseCount(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"count": n, "capped": n >= anilist.BrowseCap})
 }
 
-// countKey is the filter set without paging, which does not change the count.
 func countKey(q url.Values) string {
 	k := url.Values{}
 	for name, v := range q {
@@ -105,7 +101,6 @@ func countKey(q url.Values) string {
 	return k.Encode()
 }
 
-// browseCounts caches counts per filter set; callers asking at once share one measurement.
 type browseCounts struct {
 	mu      sync.Mutex
 	done    map[string]countEntry
@@ -119,7 +114,7 @@ type countEntry struct {
 
 const countTTL = 30 * time.Minute
 
-func (c *browseCounts) get(key string, measure func() (int, error)) (int, error) {
+func (c *browseCounts) get(key string, measure func() (n int, keep bool, err error)) (int, error) {
 	for {
 		c.mu.Lock()
 		if e, ok := c.done[key]; ok && time.Since(e.at) < countTTL {
@@ -140,10 +135,10 @@ func (c *browseCounts) get(key string, measure func() (int, error)) (int, error)
 			continue
 		}
 
-		n, err := measure()
+		n, keep, err := measure()
 		c.mu.Lock()
 		delete(c.running, key)
-		if err == nil {
+		if err == nil && keep {
 			c.done[key] = countEntry{n: n, at: time.Now()}
 		}
 		c.mu.Unlock()
@@ -152,7 +147,6 @@ func (c *browseCounts) get(key string, measure func() (int, error)) (int, error)
 	}
 }
 
-// studios answers the browse filter's studio search.
 func (s *Server) studios(w http.ResponseWriter, r *http.Request) {
 	search := strings.TrimSpace(r.URL.Query().Get("q"))
 	if len(search) < 2 {
@@ -192,14 +186,12 @@ func hasAll(have, want []string) bool {
 	return true
 }
 
-// remember keeps whatever AniList returned, so every show seen is saved.
 func (s *Server) remember(r *http.Request, media []anilist.Media) {
 	if s.importer != nil {
 		s.importer.Remember(r.Context(), media)
 	}
 }
 
-// decorate turns AniList media into cards: the resolved title, and whether it's on the list.
 func (s *Server) decorate(r *http.Request, media []anilist.Media) []discoverItem {
 	s.remember(r, media)
 	onList, err := s.store.ListEntries(r.Context())
@@ -269,7 +261,6 @@ func (s *Server) decorate(r *http.Request, media []anilist.Media) []discoverItem
 	return items
 }
 
-// recommend is "more like this", falling back to a genre match when the community gave none.
 func (s *Server) recommend(w http.ResponseWriter, r *http.Request) {
 	animeID, _ := strconv.Atoi(r.URL.Query().Get("anime"))
 	if animeID <= 0 {
@@ -313,8 +304,6 @@ func (s *Server) recommend(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// vocabulary is fixed for weeks at a time, so it is cached rather than spending
-// a request from a 30-per-minute budget every time a filter panel opens.
 type vocabulary struct {
 	mu      sync.Mutex
 	genres  []string
@@ -331,14 +320,14 @@ func (s *Server) filters(w http.ResponseWriter, r *http.Request) {
 	if stale {
 		fresh, freshTags, err := s.anilist.Vocabulary(r.Context())
 		if err != nil {
-			// A cached copy beats an error page on the filter panel.
+
 			if len(genres) == 0 {
 				s.fail(w, "filters", err)
 				return
 			}
 		} else {
 			genres, tags = fresh, freshTags
-			// Shown, but not cached for a day like a live answer.
+
 			if !anilist.UsedSaved(r.Context()) {
 				s.vocab.mu.Lock()
 				s.vocab.genres, s.vocab.tags, s.vocab.fetched = fresh, freshTags, time.Now()

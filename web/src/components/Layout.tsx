@@ -37,9 +37,12 @@ import {
 import { SearchBox } from './SearchBox'
 import { Shortcuts } from './Shortcuts'
 import { SavedCopyNotice } from './SavedCopyNotice'
+import { CatalogueStatus } from './CatalogueStatus'
 import { menuItems, useDismiss, useMediaQuery, walkMenu } from '../lib/hooks'
 import { useNewSettings } from '../lib/whatsNew'
 import { playingNow } from '../lib/miniplayer'
+import { RoomProvider } from './RoomProvider'
+import { RoomBubble } from './RoomBubble'
 import { useFocus } from '../lib/focus'
 import { Centered, Spinner } from './ui'
 import { useAccount, useDeviceLine, useNoLine, usePcLine, useTitleLanguage, type DownloadsLine } from './you'
@@ -48,6 +51,14 @@ import { Avatar, Chevron, MiniRing } from './YouBits'
 const BAR = 52
 
 export function Layout() {
+  return (
+    <RoomProvider>
+      <Shell />
+    </RoomProvider>
+  )
+}
+
+function Shell() {
   const fullBleed = useMatch('/watch/:animeId/:episode') !== null
   const wide = useMediaQuery('(min-width: 40rem)')
   const focus = useFocus()
@@ -143,6 +154,7 @@ export function Layout() {
       </main>
       {!wide && !focus && !fullBleed && <BottomTabs />}
       {!focus && <ScrollButtons />}
+      {!focus && <RoomBubble />}
     </div>
   )
 }
@@ -309,8 +321,9 @@ function Logo() {
 
 function LogoBar() {
   return (
-    <div className="flex h-16 items-center px-4">
+    <div className="flex h-16 items-center justify-between px-4">
       <Logo />
+      <CatalogueStatus label={false} />
     </div>
   )
 }
@@ -354,7 +367,9 @@ function BackBar({ parent, title, shown, tall }: Back) {
       >
         {title}
       </p>
-      <div className="flex-1 basis-0" />
+      <div className="flex flex-1 basis-0 justify-end pr-3">
+        <CatalogueStatus label={false} />
+      </div>
     </div>
   )
 }
@@ -370,6 +385,7 @@ function DesktopBar() {
       </nav>
       <span aria-hidden className="flex-1 lg:hidden" />
       <SearchBox />
+      <CatalogueStatus />
       <TitleLanguage />
       <DownloadsPanel />
       <NotificationPanel />

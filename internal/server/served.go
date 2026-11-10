@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	headerLive  = "X-Yoru-Live"
-	headerSaved = "X-Yoru-Saved"
+	headerLive       = "X-Yoru-Live"
+	headerSaved      = "X-Yoru-Saved"
+	headerRefreshing = "X-Yoru-Refreshing"
 )
 
 func served(next http.Handler) http.Handler {
@@ -21,7 +22,7 @@ func served(next http.Handler) http.Handler {
 			return
 		}
 		ctx, rec := anilist.WithServed(r.Context())
-		next.ServeHTTP(&servedWriter{ResponseWriter: w, rec: rec}, r.WithContext(ctx))
+		next.ServeHTTP(&servedWriter{ResponseWriter: w, rec: rec, gzip: takesGzip(r)}, r.WithContext(ctx))
 	})
 }
 
@@ -29,6 +30,7 @@ type servedWriter struct {
 	http.ResponseWriter
 	rec   *anilist.Served
 	wrote bool
+	gzip  bool
 }
 
 func (w *servedWriter) WriteHeader(status int) {
@@ -37,6 +39,8 @@ func (w *servedWriter) WriteHeader(status int) {
 		switch live, saved := w.rec.Result(); {
 		case !saved.IsZero():
 			w.Header().Set(headerSaved, strconv.FormatInt(saved.Unix(), 10))
+		case w.rec.Refreshing():
+			w.Header().Set(headerRefreshing, "1")
 		case live:
 			w.Header().Set(headerLive, "1")
 		}

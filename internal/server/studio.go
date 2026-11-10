@@ -11,12 +11,11 @@ import (
 	"yoru/internal/anilist"
 )
 
-// The catalogue cannot filter a studio's works: the list is fetched once, kept, and narrowed and paged here.
 type studioLists struct {
 	mu      sync.Mutex
 	done    map[int]studioList
 	running map[int]chan struct{}
-	// first: what the catalogue's first page held per studio and sort, where later pages start.
+
 	first map[int]firstPage
 }
 
@@ -34,7 +33,6 @@ func (c *studioLists) servedFirst(id int, sort string, n int) {
 	c.mu.Unlock()
 }
 
-// shortfall is how many works fewer than perPage the first page showed, for the same sort.
 func (c *studioLists) shortfall(id int, sort string, perPage int) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -52,10 +50,9 @@ type studioList struct {
 
 const (
 	studioTTL  = 6 * time.Hour
-	studioKeep = 24 // lists kept at once; the oldest goes
+	studioKeep = 24
 )
 
-// get answers from the kept list or fetches it, one fetch for all askers; a list from saved pages is not kept.
 func (c *studioLists) get(ctx context.Context, id int, fetch func() (string, []anilist.Media, error)) (studioList, error) {
 	for {
 		c.mu.Lock()
@@ -114,8 +111,6 @@ func (c *studioLists) evict() {
 	}
 }
 
-// browseStudio lists a studio's works, narrowed by every browse filter, sorted, with an exact count; the
-// first unfiltered page comes straight from the catalogue while the whole list (up to 20 pages) loads.
 func (s *Server) browseStudio(w http.ResponseWriter, r *http.Request, studio int) {
 	b := browseFilter(r.URL.Query())
 	page, perPage := max(b.Page, 1), perPageOf(b.PerPage)
@@ -127,7 +122,7 @@ func (s *Server) browseStudio(w http.ResponseWriter, r *http.Request, studio int
 			return
 		}
 		go s.fillStudio(studio)
-		// The total counts the manga the page dropped; page 2 starts where this one ended.
+
 		s.studioWorks.servedFirst(studio, b.Sort, len(result.Media))
 		send(w, http.StatusOK, map[string]any{
 			"items": s.decorate(r, result.Media), "page": 1, "hasMore": result.HasNextPage, "total": result.Total - result.Dropped,
@@ -158,11 +153,10 @@ func (s *Server) browseStudio(w http.ResponseWriter, r *http.Request, studio int
 	})
 }
 
-// fillStudio loads the whole list in the background, standing aside for clicks on the budget.
 func (s *Server) fillStudio(studio int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	ctx, _ = anilist.WithServed(anilist.Background(ctx))
+	ctx, _ = anilist.WithServed(anilist.LiveFirst(anilist.Background(ctx)))
 	if _, err := s.studioWorks.get(ctx, studio, func() (string, []anilist.Media, error) {
 		return s.anilist.StudioWorks(ctx, studio)
 	}); err != nil {
@@ -170,7 +164,6 @@ func (s *Server) fillStudio(studio int) {
 	}
 }
 
-// perPageOf is the catalogue's own range, so a studio page is the size any other browse page is.
 func perPageOf(n int) int {
 	if n <= 0 {
 		return 30
@@ -178,15 +171,12 @@ func perPageOf(n int) int {
 	return min(n, 50)
 }
 
-// narrows: any filter beyond the sort is set.
 func narrows(b anilist.Browse) bool {
 	return b.Search != "" || len(b.Genres)+len(b.ExcludeGenres)+len(b.Tags)+len(b.Formats)+len(b.Statuses) > 0 ||
 		b.Year > 0 || b.Season != "" || b.MinScore > 0 || b.MinEpisodes > 0 || b.MaxEpisodes > 0 ||
 		b.Country != "" || b.Source != ""
 }
 
-// narrowMedia reads the filters as the catalogue does: every genre and tag named, score strictly above,
-// episode bounds inclusive, adult titles only with Hentai.
 func narrowMedia(works []anilist.Media, b anilist.Browse) []anilist.Media {
 	terms := strings.Fields(strings.ToLower(b.Search))
 	adult := containsFold(b.Genres, "Hentai")
@@ -212,7 +202,6 @@ func narrowMedia(works []anilist.Media, b anilist.Browse) []anilist.Media {
 	return out
 }
 
-// titleHas: every word of the search is in one of the titles or synonyms, case aside.
 func titleHas(m anilist.Media, terms []string) bool {
 	names := append([]string{deref(m.Title.Romaji), deref(m.Title.English), deref(m.Title.Native), deref(m.Title.UserPreferred)}, m.Synonyms...)
 	haystack := strings.ToLower(strings.Join(names, "\n"))
@@ -224,7 +213,6 @@ func titleHas(m anilist.Media, terms []string) bool {
 	return true
 }
 
-// yearOf is the season's year, or the start year for a work the catalogue gives no season.
 func yearOf(m anilist.Media) int {
 	if m.SeasonYear != nil {
 		return *m.SeasonYear
@@ -252,7 +240,6 @@ func hasAny(have, want []string) bool {
 	return false
 }
 
-// sortMedia orders as the catalogue would for the same sort name, unknown values last and ties by id.
 func sortMedia(works []anilist.Media, sort string) {
 	num := func(p *int) int {
 		if p == nil {
@@ -291,7 +278,7 @@ func sortMedia(works []anilist.Media, sort string) {
 		less = desc(date)
 	case "oldest":
 		less = func(a, b anilist.Media) int {
-			// A work with no date sorts after the dated ones, whichever way the dates go.
+
 			da, db := date(a), date(b)
 			if (da == 0) != (db == 0) {
 				return db - da

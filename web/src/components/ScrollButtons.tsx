@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { cx } from '../lib/format'
 import { useMediaQuery } from '../lib/hooks'
-import { useFloating } from '../lib/miniplayer'
+import { useFloating, useMiniCorner } from '../lib/miniplayer'
 
 const EDGE = 24
 const SHOWN_AFTER_SCROLL = 2500
 
 export function ScrollButtons() {
   const floating = useFloating()
+  const overMini = useMiniCorner() === 'br'
   const [place, setPlace] = useState({ long: false, top: true, bottom: false })
   const touch = useMediaQuery('(pointer: coarse)')
   const [moving, setMoving] = useState(false)
@@ -59,7 +60,10 @@ export function ScrollButtons() {
       aria-hidden={!shown || undefined}
       inert={!shown}
       className={cx(
-        'fixed right-4 bottom-4 z-40 flex flex-col overflow-hidden rounded-full bg-base-800/85 shadow-panel ring-1 ring-line backdrop-blur-md transition-opacity duration-300 max-sm:bottom-[calc(4.75rem+env(safe-area-inset-bottom))]',
+        'fixed right-4 z-40 flex flex-col overflow-hidden rounded-full bg-base-800/85 shadow-panel ring-1 ring-line backdrop-blur-md transition-[opacity,bottom] duration-300',
+        overMini
+          ? 'bottom-[17.75rem] max-sm:bottom-[calc(9.75rem+env(safe-area-inset-bottom))]'
+          : 'bottom-4 max-sm:bottom-[calc(4.75rem+env(safe-area-inset-bottom))]',
         shown ? 'opacity-100' : 'pointer-events-none opacity-0',
       )}
     >

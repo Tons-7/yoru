@@ -35,10 +35,18 @@ import {
   useTrackers,
   type Season,
 } from '../lib/queries'
-import { joinRoom, overlayOn, parseTogether, roomInfo, saveSeat, savedSeat, useRoom, useTogetherSync } from '../lib/together'
-import { JoinCard, TogetherPanel, TogetherToasts } from '../components/Together'
+import {
+  joinRoom,
+  overlayOn,
+  parseTogether,
+  roomInfo,
+  useTogetherSync,
+} from '../lib/together'
+import { useRoomSession } from '../lib/roomSession'
+import { JoinCard, StrayCard, TogetherPanel, TogetherToasts } from '../components/Together'
 import { SaveToDevice } from '../components/SaveToDevice'
 import { toast } from '../lib/toast'
+import { avatarForRoom, useRoomName } from '../lib/profile'
 import { saveNextAfter } from '../lib/offline'
 import { Anime4KDialog } from '../components/Anime4KDialog'
 import { SmoothDialog } from '../components/SmoothDialog'
@@ -82,6 +90,7 @@ import { asSubLook, type SubLook } from '../player/subLook'
 import {
   currentVideo,
   minimize,
+  tellMiniCorner,
   togglePlay,
   unminimize,
   useCurrentVideo,
@@ -121,6 +130,11 @@ export function Watch({
     [mini, onGo, routerNavigate],
   )
   const dock = useDockDrag(mini)
+  const miniCorner = mini ? dock.corner : null
+  useEffect(() => {
+    tellMiniCorner(miniCorner)
+    return () => tellMiniCorner(null)
+  }, [miniCorner])
   const floating = useFloating()
   const wide = useMediaQuery('(min-width: 40rem)')
   const side = useMediaQuery('(min-width: 80rem)')
@@ -212,32 +226,50 @@ export function Watch({
   const [picking, setPicking] = useState(false)
   const [inApp, setInApp] = useState(false)
 
-  const [together, setTogether] = useState(() => parseTogether(params.get('together') ?? ''))
-  const [seat, setSeat] = useState(() => (together ? savedSeat(together) : null))
-  const [invite, setInvite] = useState(() => seat?.invite)
+  const session = useRoomSession()
+  const { together, seat, invite, room, inRoom, isHost, canPick } = session
   const linkParam = params.get('together') ?? ''
   const hashParam = params.get('hash')
   useEffect(() => {
     const next = parseTogether(linkParam)
     if (!next || next.code === together?.code) return
-    const kept = savedSeat(next)
-    setTogether(next)
-    setSeat(kept)
-    setInvite(kept?.invite)
+    session.open(next)
     if (hashParam) setHashPick({ key: epKey, hash: hashParam })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkParam])
-  const room = useRoom(together, seat)
-  const inRoom = !!together && !!seat && room.status === 'in'
-  const isHost = !!room.me?.host
   const [toasts, setToasts] = useState(overlayOn)
   const trackers = useTrackers()
   const account = (provider: string) => trackers.data?.trackers.find((t) => t.provider === provider)?.user
   const trackerName = account('anilist') || account('mal') || ''
-  useTogetherSync(useCurrentVideo(), inRoom ? room : null)
+  const roomVideo = useCurrentVideo()
+  const roomState = room.view?.state
+  const roomKey = roomState ? `${roomState.animeId}-${roomState.episode}` : ''
+  const roomPath =
+    roomState && together
+      ? `/watch/${roomState.animeId}/${roomState.episode}?together=${encodeURIComponent(together.href)}`
+      : ''
+  const [ackKey, setAckKey] = useState('')
+  const following = useRef(false)
+  const offRoom = inRoom && !!roomState && (roomState.animeId !== id || roomState.episode !== ep)
+  // eslint-disable-next-line react-hooks/refs
+  const strayed = offRoom && !canPick && roomKey === ackKey && !following.current
+
+  const roomAudio = inRoom ? roomState?.audio : undefined
+  useEffect(() => {
+    if (roomAudio && roomAudio !== (wantAudio === 'dub' ? 'dub' : 'sub')) setAudioPick({ key: id, audio: roomAudio })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomAudio, id])
+  const pickAudio = (a: AudioChoice) => {
+    if (inRoom && !canPick) {
+      toast('The host picks the audio in this room.', 'info')
+      return
+    }
+    if (inRoom) void room.act('audio', { audio: a === 'dub' ? 'dub' : 'sub' }).catch(() => {})
+    setAudio(a)
+  }
 
   const play = useQuery({
-    enabled: id !== 0 && ep > 0 && prefs.isSuccess,
+    enabled: id !== 0 && ep > 0 && prefs.isSuccess && !strayed,
     queryKey: ['play', id, ep, external, allowRaw, wantAudio, infoHash],
     queryFn: ({ signal }) =>
       api.post<PlaySession>('/api/play', {
@@ -251,25 +283,47 @@ export function Watch({
   const playingInMpv = !!play.data && play.data.player !== 'browser'
 
   const showTitleRef = useRef('')
-  const roomState = room.view?.state
-  const following = useRef(false)
   useEffect(() => {
-    if (!inRoom || !together || !roomState || (roomState.animeId === id && roomState.episode === ep)) return
-    following.current = true
-    if (roomState.infoHash) setHashPick({ key: `${roomState.animeId}-${roomState.episode}`, hash: roomState.infoHash })
-    navigate(`/watch/${roomState.animeId}/${roomState.episode}?together=${encodeURIComponent(together.href)}`)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inRoom, roomState?.animeId, roomState?.episode])
-  const playedHash = play.data?.infoHash
-  useEffect(() => {
-    if (!inRoom || !roomState || !playedHash) return
+    if (!inRoom || !together || !roomState) return
     if (roomState.animeId === id && roomState.episode === ep) {
-      following.current = false
+      setAckKey(roomKey)
       return
     }
-    if (!following.current) void room.act('episode', { animeId: id, episode: ep, infoHash: playedHash }).catch(() => {})
+    following.current = true
+    setAckKey(roomKey)
+    if (roomState.infoHash) setHashPick({ key: roomKey, hash: roomState.infoHash })
+    navigate(roomPath)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inRoom, roomKey])
+  useEffect(() => {
+    if (!offRoom) following.current = false
+  }, [offRoom, id, ep])
+  const playedHash = play.data?.infoHash
+  useEffect(() => {
+    if (!inRoom || !roomState || !playedHash || !offRoom || following.current || !canPick) return
+    void room
+      .act('episode', {
+        animeId: id, episode: ep, infoHash: playedHash, title: showTitleRef.current, audio: wantAudio === 'dub' ? 'dub' : 'sub',
+      })
+      .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inRoom, playedHash, id, ep])
+  const unshared = offRoom && canPick && !!play.data && !play.data.infoHash
+
+  const watching = room.view?.members.length ?? 0
+  const roomTitle = room.view?.title ?? ''
+  const atRoom = inRoom && !offRoom
+  useTogetherSync(roomVideo, atRoom ? room : null)
+  const attach = session.attach
+  useEffect(() => (atRoom ? attach() : undefined), [atRoom, attach])
+  const suggest = useMutation({
+    meta: { inline: true },
+    mutationFn: () => room.act('suggest', { animeId: id, episode: ep, title: showTitleRef.current }),
+    onSuccess: () => {
+      toast('Suggested to the room.', 'info')
+      navigate(roomPath)
+    },
+  })
 
   const [naming, setNaming] = useState(false)
   const getTunnel = useMutation({
@@ -277,10 +331,11 @@ export function Watch({
     onSuccess: () => toast('Downloading. Open the room again once it finishes.', 'info'),
   })
   const startTogether = useMutation({
-    mutationFn: (name: string) =>
+    mutationFn: async (name: string) =>
       api.post<{ link: string; member: string; token: string; homeOnly?: boolean }>('/api/together', {
         name, animeId: id, episode: ep, infoHash: play.data?.infoHash, title: showTitleRef.current,
         position: currentVideo()?.currentTime ?? 0, playing: !(currentVideo()?.paused ?? true),
+        audio: wantAudio === 'dub' ? 'dub' : 'sub', avatar: await avatarForRoom(),
       }),
     onSuccess: (r) => {
       const shared = parseTogether(r.link)
@@ -288,26 +343,31 @@ export function Watch({
       if (r.homeOnly) toast('This link works only on your home network.', 'info')
       const href = `${window.location.origin}/together/${shared.code}?k=${shared.key}`
       const here = { ...shared, base: window.location.origin, href }
-      const s = { member: r.member, token: r.token, invite: r.link }
-      saveSeat(here, s)
-      setTogether(here)
-      setSeat(s)
-      setInvite(r.link)
+      session.sit(here, { member: r.member, token: r.token, invite: r.link })
       routerNavigate(`/watch/${id}/${ep}?together=${encodeURIComponent(href)}`, { replace: true })
     },
   })
   const watchHere = `/watch/${id}/${ep}${together ? `?together=${encodeURIComponent(together.href)}` : ''}`
+  const stripLink = () => {
+    if (!mini && linkParam) routerNavigate(`/watch/${id}/${ep}`, { replace: true })
+  }
   const dropRoom = () => {
-    if (together) saveSeat(together, null)
-    setTogether(null)
-    setSeat(null)
-    setInvite(undefined)
-    if (!mini) routerNavigate(`/watch/${id}/${ep}`, { replace: true })
+    session.drop()
+    stripLink()
   }
   const leaveTogether = () => {
-    void room.act('leave').catch(() => {})
-    dropRoom()
+    session.leave()
+    stripLink()
   }
+  const hadRoom = useRef(false)
+  useEffect(() => {
+    if (together) hadRoom.current = true
+    else if (hadRoom.current) {
+      hadRoom.current = false
+      stripLink()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!together])
   useEffect(() => {
     if (!together || seat) return
     let live = true
@@ -354,6 +414,7 @@ export function Watch({
   const access = useAccess()
   const away = access.data ? !!access.data.away : access.isError
   const [stepped, setStepped] = useState<{ source: string; step: string } | null>(null)
+  const roomName = useRoomName(trackerName, access.data?.host)
   const choice = streamChoice(net, away, stepped && stepped.source === source ? stepped.step : undefined)
   const lastPosition = useRef<{ source?: string; at: number }>({ at: 0 })
   const [resumeAt, setResumeAt] = useState<{ source?: string; at: number } | null>(null)
@@ -865,7 +926,7 @@ export function Watch({
           label={c.label}
           caption={c.caption}
           selected={c.value === wantAudio}
-          onClick={() => setAudio(c.value)}
+          onClick={() => pickAudio(c.value)}
         />
       ))}
     </Choices>
@@ -1031,7 +1092,19 @@ export function Watch({
                     : 'sm:rounded-xl max-sm:sticky max-sm:top-0 max-sm:z-30 max-sm:pt-[env(safe-area-inset-top)]',
               )}
             >
-              {play.isError && !streamed ? (
+              {strayed ? (
+                <StrayCard
+                  roomTitle={roomTitle}
+                  roomEpisode={roomState?.episode ?? 0}
+                  title={showTitle}
+                  episode={ep}
+                  busy={suggest.isPending}
+                  error={suggest.isError ? (suggest.error as Error).message : ''}
+                  onSuggest={() => suggest.mutate()}
+                  onBack={() => navigate(roomPath)}
+                  onLeave={leaveTogether}
+                />
+              ) : play.isError && !streamed ? (
                 <NoRelease
                   message={(play.error as Error).message}
                   animeId={id}
@@ -1104,7 +1177,7 @@ export function Watch({
                   mini={mini ? { onExpand: () => routerNavigate(watchHere) } : undefined}
                   overlay={<>
                     {networkNote}
-                    {inRoom && <TogetherToasts room={room} on={toasts} />}
+                    {inRoom && <TogetherToasts room={room} on={toasts && !mini} />}
                     {choice.card && !stream.data && !play.isError ? (
                       <MobileDataCard
                         card={choice.card}
@@ -1374,7 +1447,8 @@ export function Watch({
                 <JoinCard
                   host
                   title={showTitle}
-                  name={trackerName}
+                  name={roomName.name}
+                  onName={roomName.remember}
                   onJoin={(name) => startTogether.mutateAsync(name).catch(() => {}).finally(() => setNaming(false))}
                   onCancel={() => setNaming(false)}
                 />
@@ -1382,18 +1456,27 @@ export function Watch({
               {together && !seat && (
                 <JoinCard
                   title={showTitle}
-                  name={trackerName}
+                  name={roomName.name}
+                  onName={roomName.remember}
                   onJoin={async (name) => {
-                    const s = await joinRoom(together, name)
-                    const kept = { member: s.member, token: s.token }
-                    saveSeat(together, kept)
-                    setSeat(kept)
+                    const s = await joinRoom(together, name, await avatarForRoom())
+                    session.sit(together, { member: s.member, token: s.token })
                   }}
                   onCancel={dropRoom}
                 />
               )}
               {together && seat && (
-                <TogetherPanel room={room} invite={invite} onLeave={leaveTogether} overlay={toasts} onOverlay={setToasts} />
+                <TogetherPanel
+                  room={room}
+                  invite={invite}
+                  onLeave={leaveTogether}
+                  overlay={toasts}
+                  onOverlay={setToasts}
+                  canPick={canPick}
+                  unshared={unshared}
+                  onBrowse={() => routerNavigate('/search')}
+                  onPlayPick={(pick) => together && navigate(`/watch/${pick.animeId}/${pick.episode}?together=${encodeURIComponent(together.href)}`)}
+                />
               )}
 
               {overBudget && (
@@ -1431,7 +1514,13 @@ export function Watch({
             </div>
             )}
             {mini && (
-              <MiniBar title={showTitle} episode={episodeLabel} onExpand={() => routerNavigate(watchHere)} onClose={() => onClose?.()} />
+              <MiniBar
+                title={showTitle}
+                episode={episodeLabel}
+                room={inRoom ? watching : undefined}
+                onExpand={() => routerNavigate(watchHere)}
+                onClose={() => onClose?.()}
+              />
             )}
           </div>
 
@@ -1634,7 +1723,20 @@ const DOCK: Record<Corner, string> = {
   br: 'right-4 bottom-4 max-sm:bottom-[calc(4.5rem+env(safe-area-inset-bottom))]',
 }
 
-function MiniBar({ title, episode, onExpand, onClose }: { title: string; episode: string; onExpand: () => void; onClose: () => void }) {
+function MiniBar({
+  title,
+  episode: plain,
+  room,
+  onExpand,
+  onClose,
+}: {
+  title: string
+  episode: string
+  room?: number
+  onExpand: () => void
+  onClose: () => void
+}) {
+  const episode = room ? `${plain} · Room, ${room} watching` : plain
   const playing = usePlayingNow()
   const button =
     'tap relative grid size-9 shrink-0 place-items-center rounded-full text-base-200 transition-colors hover:bg-base-800 hover:text-white'

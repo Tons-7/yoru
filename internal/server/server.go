@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -91,6 +92,7 @@ type Server struct {
 	latestJobs map[string]time.Time
 
 	counts      browseCounts
+	showRefresh showRefreshes
 	studioWorks studioLists
 
 	systemMu sync.Mutex
@@ -112,6 +114,7 @@ type Server struct {
 	roomLn        net.Listener
 	tunnelWatched bool
 	roomsOpening  int
+	avatars       trackerAvatars
 
 	tvMu         sync.Mutex
 	tvOpens      map[string]*tvOpen
@@ -293,6 +296,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/corpus/refresh", s.corpusRefresh)
 	mux.HandleFunc("GET /api/settings", s.settings)
 	mux.HandleFunc("GET /api/trackers", s.trackers)
+	mux.HandleFunc("GET /api/profile", s.profile)
+	mux.HandleFunc("PUT /api/profile/name", hostOnly(s.setProfileName))
+	mux.HandleFunc("GET /api/profile/avatar", s.profileAvatar)
+	mux.HandleFunc("PUT /api/profile/avatar", hostOnly(s.setProfileAvatar))
+	mux.HandleFunc("DELETE /api/profile/avatar", hostOnly(s.clearProfileAvatar))
 	mux.HandleFunc("POST /api/trackers", hostOnly(s.setTracker))
 	mux.HandleFunc("GET /api/sites", s.sitesList)
 	mux.HandleFunc("PUT /api/sites", hostOnly(s.saveSites))
@@ -620,6 +628,20 @@ func (s *Server) logging(next http.Handler) http.Handler {
 func send(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	if sw, ok := w.(*servedWriter); ok && sw.gzip {
+		var raw bytes.Buffer
+		json.NewEncoder(&raw).Encode(body)
+		if raw.Len() < gzipFrom {
+			w.WriteHeader(status)
+			w.Write(raw.Bytes())
+			return
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+		w.WriteHeader(status)
+		writeGzip(w, raw.Bytes())
+		return
+	}
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)
 }

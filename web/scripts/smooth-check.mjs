@@ -344,7 +344,7 @@ if (gpu && status.ready) {
   check(sought.canvas > sought.video * 1.2, 'after a seek it picks up again', rate(sought))
 
   await s.page.locator('video').evaluate((v) => v.pause())
-  await sleep(800)
+  await sleep(2500)
   const paused = await frames(s.page, 1500)
   check(paused.canvas <= 2, 'paused: the picture holds still', `${paused.canvas.toFixed(1)}/s`)
   await s.page.locator('video').evaluate((v) => v.play())
@@ -466,7 +466,7 @@ if (gpu && status.ready) {
   const gaveUp = await slow.page
     .getByText('Smooth motion turned itself off for this episode')
     .first()
-    .waitFor({ timeout: 45000 })
+    .waitFor({ timeout: 75000 })
     .then(() => true)
     .catch(() => false)
   await slow.page.evaluate(() => (window.__hog = false))

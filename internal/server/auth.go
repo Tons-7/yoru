@@ -13,8 +13,6 @@ import (
 	"yoru/internal/store"
 )
 
-// anilistCreds prefers what was entered in the app, since Yoru ships as a binary;
-// the config file is still read for an install already set up that way.
 func (s *Server) anilistCreds(ctx context.Context) (id, secret string) {
 	id, _ = s.store.Setting(ctx, "anilist.client_id")
 	if id == "" {
@@ -46,7 +44,6 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// AniList forwards state untouched but never validates it.
 	want, _ := s.store.Setting(ctx, "anilist.state")
 	if got := r.URL.Query().Get("state"); want == "" || got != want {
 		http.Error(w, "state mismatch", http.StatusBadRequest)
@@ -75,7 +72,6 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings?connected=anilist", http.StatusFound)
 }
 
-// authToken connects with a token pasted from AniList's pin page, the one-step way on Yoru's own client.
 func (s *Server) authToken(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Token string `json:"token"`
@@ -98,7 +94,6 @@ func (s *Server) authToken(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"connected": true, "user": viewer.Name})
 }
 
-// connectAniList installs a login only once saved: a failure leaves the previous one, or none, in force.
 func (s *Server) connectAniList(ctx context.Context, token anilist.Token) (anilist.Viewer, error) {
 	viewer, err := s.anilist.ViewerWith(ctx, token.AccessToken)
 	if err != nil {
@@ -109,6 +104,7 @@ func (s *Server) connectAniList(ctx context.Context, token anilist.Token) (anili
 		"anilist.expires_at":     strconv.FormatInt(token.ExpiresAt().Unix(), 10),
 		"anilist.user_id":        strconv.Itoa(viewer.ID),
 		"anilist.user_name":      viewer.Name,
+		"anilist.avatar":         viewer.Avatar.Medium,
 		"anilist.score_fmt":      viewer.MediaListOptions.ScoreFormat,
 		library.AuthErrorSetting: "",
 	})
@@ -120,14 +116,13 @@ func (s *Server) connectAniList(ctx context.Context, token anilist.Token) (anili
 	return viewer, nil
 }
 
-// authLogout forgets the account, leaving the client ID so it can reconnect.
-// AniList has no revocation endpoint, so this is local; the grant stays on the account.
 func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 	err := s.store.SetSettings(r.Context(), map[string]string{
 		"anilist.token":          "",
 		"anilist.expires_at":     "",
 		"anilist.user_id":        "",
 		"anilist.user_name":      "",
+		"anilist.avatar":         "",
 		"anilist.score_fmt":      "",
 		"anilist.state":          "",
 		library.AuthErrorSetting: "",
@@ -137,8 +132,6 @@ func (s *Server) authLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The live client keeps its own copy; without this it stays authenticated
-	// until restart, and requests would carry a token the app has forgotten.
 	s.anilist.SetToken("")
 
 	s.log.Info("anilist disconnected")
@@ -153,7 +146,6 @@ func (s *Server) sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Merge is the default: it is the choice that cannot lose anything.
 	mode := store.ImportMode(r.URL.Query().Get("mode"))
 	if mode == "" {
 		mode = store.ImportMerge

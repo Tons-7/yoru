@@ -69,6 +69,9 @@ import {
 import { buttonClass, ControlLabel } from '../lib/ui'
 import { useDebounced, useHeldData, useMediaQuery } from '../lib/hooks'
 import { copyText, PACES } from '../lib/downloads'
+import { useAvatarEdit, useProfile, useRename } from '../lib/profile'
+import { Avatar } from '../components/YouBits'
+import { AvatarEditor } from '../components/AvatarEditor'
 
 const TABS = [
   { id: 'New', label: 'New', summary: '', tile: '' },
@@ -2048,6 +2051,87 @@ function ListPref({
   )
 }
 
+function PictureSection({ host }: { host: boolean }) {
+  const profile = useProfile().data
+  const user = useTrackers().data?.trackers.find((t) => t.connected && t.user)?.user
+  const { upload, remove } = useAvatarEdit()
+  const input = useRef<HTMLInputElement>(null)
+  const [picked, setPicked] = useState<File | null>(null)
+  const own = profile?.avatar === 'own'
+  const from = profile?.avatar === 'anilist' ? 'From AniList. ' : profile?.avatar === 'mal' ? 'From MyAnimeList. ' : ''
+  const failed = upload.isError ? upload.error : remove.isError ? remove.error : null
+  const rename = useRename()
+  const saved = profile?.name ?? ''
+  const [name, setName] = useState(saved)
+  const [shown, setShown] = useState(saved)
+  if (shown !== saved) {
+    setShown(saved)
+    setName(saved)
+  }
+  return (
+    <Section title="Profile" keywords="avatar photo profile image picture name nickname rename">
+      <Row
+        label="Name"
+        hint={host ? 'How you appear in Yoru and to friends in rooms.' : 'Changed on the computer Yoru runs on.'}
+        keywords="name nickname rename display"
+      >
+        <TextInput
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={() => name.trim() !== saved && rename.mutate(name)}
+          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          placeholder={user ?? 'Your name'}
+          aria-label="Name"
+          maxLength={32}
+          autoComplete="off"
+          disabled={!host}
+          className="w-56"
+        />
+        <SaveHint state={rename} />
+      </Row>
+      <Row
+        label="Picture"
+        hint={host ? `${from}Shown in Yoru and to friends in rooms.` : 'Changed on the computer Yoru runs on.'}
+        keywords="avatar photo upload"
+      >
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Avatar name={saved || user} className="size-12" letter="text-xl" />
+          <input
+            ref={input}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (file) setPicked(file)
+            }}
+          />
+          {picked && (
+            <AvatarEditor
+              file={picked}
+              onCancel={() => setPicked(null)}
+              onSave={(image) => {
+                setPicked(null)
+                upload.mutate(image)
+              }}
+            />
+          )}
+          <Button onClick={() => input.current?.click()} disabled={!host || upload.isPending}>
+            {upload.isPending ? 'Saving…' : own ? 'Change' : 'Upload'}
+          </Button>
+          {own && (
+            <Button variant="ghost" onClick={() => remove.mutate()} disabled={!host || remove.isPending}>
+              Remove
+            </Button>
+          )}
+        </div>
+      </Row>
+      {failed && <p className="py-3 text-xs text-recap">{(failed as Error).message}</p>}
+    </Section>
+  )
+}
+
 function AccountsTab() {
   const f = useFlag()
   const trackers = useTrackers()
@@ -2056,6 +2140,7 @@ function AccountsTab() {
 
   return (
     <div className="space-y-4">
+      <PictureSection host={host} />
       {trackers.isPending ? (
         <Skeleton className="h-64 w-full" />
       ) : trackers.isError && !trackers.data ? (

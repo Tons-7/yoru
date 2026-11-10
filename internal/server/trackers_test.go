@@ -75,15 +75,12 @@ func TestTrackerCredentialsAreSavedAndUsed(t *testing.T) {
 		t.Fatalf("entry = %v", entry)
 	}
 
-	// Login can only redirect once credentials exist.
 	login, _ := h.do(t, "GET", "/api/auth/login")
 	if login.StatusCode != http.StatusFound {
 		t.Fatalf("login status = %d, want a redirect once configured", login.StatusCode)
 	}
 }
 
-// The form cannot show a stored secret, so it sends nothing when untouched;
-// treating that as empty used to disconnect the tracker on any unrelated edit.
 func TestOmittedSecretKeepsTheStoredOne(t *testing.T) {
 	h := newHarness(t, config.Config{Addr: "127.0.0.1:4321"}, nil)
 
@@ -119,7 +116,6 @@ func TestEmptySecretClearsIt(t *testing.T) {
 	}
 }
 
-// The secret must never travel back to the browser, whatever the route.
 func TestTrackerSecretIsNeverReturned(t *testing.T) {
 	h := newHarness(t, config.Config{Addr: "127.0.0.1:4321"}, nil)
 
@@ -141,7 +137,6 @@ func TestTrackerSecretIsNeverReturned(t *testing.T) {
 	}
 }
 
-// A token MAL refused reads as "reconnect", and a new login or a logout clears it.
 func TestMALRefusalReadsAsReconnect(t *testing.T) {
 	client := mal.New(slog.New(slog.NewTextHandler(io.Discard, nil)), mal.WithCredentials("id", ""))
 	client.SetToken(mal.Token{Access: "acc", Refresh: "ref"})
@@ -156,7 +151,7 @@ func TestMALRefusalReadsAsReconnect(t *testing.T) {
 		t.Fatalf("entry = %v, want connected but asking for a reconnect", got)
 	}
 
-	if err := h.server.saveMALToken(ctx, mal.Token{Access: "new"}, "tony"); err != nil {
+	if err := h.server.saveMALToken(ctx, mal.Token{Access: "new"}, "tony", ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := trackerByName(t, h, "mal")["reconnect"]; got != false {

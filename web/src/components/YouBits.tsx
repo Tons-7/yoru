@@ -1,8 +1,24 @@
+import { useState } from 'react'
 import type { Activity } from '../lib/activity'
 import { cx } from '../lib/format'
+import { useAvatarUrl } from '../lib/profile'
 
 export function Avatar({ name, className, letter = 'text-sm' }: { name?: string; className?: string; letter?: string }) {
   const initial = name ? Array.from(name.trim())[0]?.toUpperCase() : undefined
+  const picture = useAvatarUrl()
+  const [broken, setBroken] = useState('')
+  if (picture && broken !== picture) {
+    return (
+      <img
+        src={picture}
+        alt=""
+        aria-hidden
+        draggable={false}
+        onError={() => setBroken(picture)}
+        className={cx('shrink-0 rounded-full bg-base-800 object-cover', className)}
+      />
+    )
+  }
   return (
     <span
       aria-hidden
