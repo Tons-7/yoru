@@ -283,18 +283,33 @@ export function Watch({
   const playingInMpv = !!play.data && play.data.player !== 'browser'
 
   const showTitleRef = useRef('')
+  const pageKey = `${id}-${ep}`
+  const withRoom = useRef(false)
+  const cameForRoom = useRef(!!linkParam)
+  const lastRoomKey = useRef('')
+  useEffect(() => {
+    if (linkParam) cameForRoom.current = true
+  }, [linkParam])
   useEffect(() => {
     if (!inRoom || !together || !roomState) return
-    if (roomState.animeId === id && roomState.episode === ep) {
-      setAckKey(roomKey)
+    const moved = lastRoomKey.current !== '' && lastRoomKey.current !== roomKey
+    const arrived = cameForRoom.current
+    lastRoomKey.current = roomKey
+    cameForRoom.current = false
+    setAckKey(roomKey)
+    if (pageKey === roomKey) {
+      withRoom.current = true
+      return
+    }
+    if (!arrived && !(withRoom.current && moved)) {
+      withRoom.current = false
       return
     }
     following.current = true
-    setAckKey(roomKey)
     if (roomState.infoHash) setHashPick({ key: roomKey, hash: roomState.infoHash })
     navigate(roomPath)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inRoom, roomKey])
+  }, [inRoom, roomKey, pageKey])
   useEffect(() => {
     if (!offRoom) following.current = false
   }, [offRoom, id, ep])
@@ -1586,7 +1601,7 @@ function Synopsis({ text, file }: { text?: string; file?: string }) {
 function outDay(unix: number | undefined, now: number): string {
   if (!unix) return 'not out yet'
   const ms = unix * 1000 - now
-  if (ms < 86_400_000) return `out ${relativeTime(unix)}`
+  if (ms < 86_400_000) return `out ${relativeTime(unix, now)}`
   if (ms < 6 * 86_400_000) return `out ${new Date(unix * 1000).toLocaleDateString(undefined, { weekday: 'short' })}`
   return `out ${new Date(unix * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
 }
@@ -1876,7 +1891,7 @@ function NoRelease({
 
         {needsTranscoder ? (
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-            <LinkButton to="/setup" variant="primary">Install the transcoder</LinkButton>
+            <LinkButton to="/setup?step=essentials" variant="primary">Install the transcoder</LinkButton>
             <LinkButton to="/settings?tab=Playback" variant="ghost">Player settings</LinkButton>
           </div>
         ) : (

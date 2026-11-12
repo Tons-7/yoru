@@ -1,7 +1,7 @@
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, openSync } from 'node:fs'
+import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, openSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { delimiter, dirname, join, resolve } from 'node:path'
+import { basename, delimiter, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { linkBin } from './harness-lib.mjs'
 
@@ -19,7 +19,21 @@ const URL = `http://127.0.0.1:${PORT}`
 const exe = (name) => (process.platform === 'win32' ? `${name}.exe` : name)
 const ffmpeg = join(repo, 'bin', exe('ffmpeg'))
 const DEFAULT_PORT = PORT === '4399'
-const scratch = join(tmpdir(), DEFAULT_PORT ? 'yoru-e2e' : `yoru-e2e-${PORT}`)
+const usual = join(tmpdir(), DEFAULT_PORT ? 'yoru-e2e' : `yoru-e2e-${PORT}`)
+const scratch = (() => {
+  for (const old of readdirSync(tmpdir()).filter((n) => n.startsWith(`${basename(usual)}-run-`))) {
+    try {
+      rmSync(join(tmpdir(), old), { recursive: true, force: true })
+    } catch {
+    }
+  }
+  try {
+    rmSync(usual, { recursive: true, force: true, maxRetries: 6, retryDelay: 500 })
+    return usual
+  } catch {
+    return `${usual}-run-${Date.now()}`
+  }
+})()
 const PEER_PORT = DEFAULT_PORT ? 4341 : Number(PORT) - 60
 const root = join(scratch, 'root')
 const appdata = join(scratch, 'appdata')
@@ -259,7 +273,6 @@ try {
   if (!existsSync(ffmpeg)) throw new Error(`ffmpeg not found at ${ffmpeg}; build/download deps first`)
 
   stage(`scratch instance at ${scratch}`)
-  rmSync(scratch, { recursive: true, force: true, maxRetries: 60, retryDelay: 500 })
   for (const d of [scratch, root, appdata, lib, shots]) mkdirSync(d, { recursive: true })
   linkBin(join(repo, 'bin'), join(root, 'bin'), process.env.BIN_ONLY ? process.env.BIN_ONLY.split(',') : null)
   writeFileSync(

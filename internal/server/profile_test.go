@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -71,6 +72,36 @@ func TestProfileName(t *testing.T) {
 	}
 }
 
+func TestTheNameShownFollowsTheChosenSource(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	ctx := context.Background()
+	h.server.store.SetSettings(ctx, map[string]string{"anilist.user_name": "ani", "mal.user_name": "mal"})
+	shows := func(step, from, shown string) {
+		t.Helper()
+		if _, body := h.call(t, "GET", "/api/profile", ""); body["nameFrom"] != from || body["shown"] != shown {
+			t.Fatalf("%s: from %v shown %v, want %s %s", step, body["nameFrom"], body["shown"], from, shown)
+		}
+	}
+	shows("nothing chosen", "anilist", "ani")
+	h.call(t, "PUT", "/api/profile/name", `{"from":"mal"}`)
+	shows("MyAnimeList chosen", "mal", "mal")
+	h.call(t, "PUT", "/api/profile/name", `{"name":"Tons"}`)
+	shows("a name typed", "own", "Tons")
+	h.call(t, "PUT", "/api/profile/name", `{"from":"anilist"}`)
+	shows("back to AniList, the typed name kept for later", "anilist", "ani")
+	if _, body := h.call(t, "GET", "/api/profile", ""); body["name"] != "Tons" {
+		t.Fatalf("the typed name was lost: %v", body)
+	}
+	h.server.store.SetSetting(ctx, "anilist.user_name", "")
+	shows("AniList disconnected", "anilist", "mal")
+	h.call(t, "PUT", "/api/profile/name", `{"name":""}`)
+	h.server.store.SetSetting(ctx, "mal.user_name", "")
+	shows("nothing left", "anilist", "")
+	if code, _ := h.call(t, "PUT", "/api/profile/name", `{"from":"elsewhere"}`); code != http.StatusBadRequest {
+		t.Fatalf("an unknown source answered %d", code)
+	}
+}
+
 func TestRoomMembersCarryTheirPicture(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	room, _ := openRoom(t, h)
@@ -93,5 +124,20 @@ func TestRoomMembersCarryTheirPicture(t *testing.T) {
 	}
 	if rec := fetchPicture(h, "/api/together/abc123/avatar/"+sam.ID+"?k=key"); rec.Code != http.StatusNotFound {
 		t.Errorf("a member without a picture answered %d", rec.Code)
+	}
+}
+
+func TestChoosingAnOwnNameWithNoneTypedKeepsTheAccountName(t *testing.T) {
+	h := newHarness(t, config.Config{}, nil)
+	h.server.store.SetSetting(context.Background(), "anilist.user_name", "ani")
+	if _, body := h.call(t, "PUT", "/api/profile/name", `{"from":"own"}`); body["nameFrom"] == "own" || body["shown"] != "ani" {
+		t.Errorf("picked own with no name: from %v shown %v, want the AniList name kept", body["nameFrom"], body["shown"])
+	}
+	if _, body := h.call(t, "PUT", "/api/profile/name", `{"from":"own","name":"   "}`); body["nameFrom"] == "own" || body["shown"] != "ani" {
+		t.Errorf("an empty own name: from %v shown %v", body["nameFrom"], body["shown"])
+	}
+	h.call(t, "PUT", "/api/profile/name", `{"name":"Tons"}`)
+	if _, body := h.call(t, "PUT", "/api/profile/name", `{"from":"own"}`); body["nameFrom"] != "own" || body["shown"] != "Tons" {
+		t.Errorf("own with a name kept: from %v shown %v", body["nameFrom"], body["shown"])
 	}
 }

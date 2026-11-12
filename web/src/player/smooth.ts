@@ -3,7 +3,7 @@ import type { Anime4KPipeline } from 'anime4k-webgpu'
 import type { FhEngine, FhModel, FhPacer, FhStream } from './flyhigh_web'
 import { api, fetchAuthed } from '../lib/api'
 import { readKey, writeKey } from '../lib/storage'
-import { delayAudio } from './audioDelay'
+import { audioDelayed, delayAudio } from './audioDelay'
 import { nearestRate, nearestVideoRate } from './rates'
 
 type Lib = typeof import('./flyhigh_web')
@@ -348,6 +348,27 @@ const BLIT_VIDEO = BLIT.replace('texture_2d<f32>', 'texture_external').replace(
   'textureSampleBaseClampToEdge(t, s, i.uv)',
 )
 
+const DELAY_KEPT_MS = 1500
+const dropping = new WeakMap<HTMLMediaElement, ReturnType<typeof setTimeout>>()
+
+function keepDelay(video: HTMLMediaElement) {
+  const soon = dropping.get(video)
+  if (soon === undefined) return
+  clearTimeout(soon)
+  dropping.delete(video)
+}
+
+function dropDelaySoon(video: HTMLMediaElement) {
+  keepDelay(video)
+  dropping.set(
+    video,
+    setTimeout(() => {
+      dropping.delete(video)
+      void delayAudio(video, 0).catch(() => {})
+    }, DELAY_KEPT_MS),
+  )
+}
+
 const INPUTS = 12
 const OUTPUTS = 12
 const HISTORY = 8
@@ -395,6 +416,7 @@ export async function presentSmooth({
   const context = canvas.getContext('webgpu')
   if (!context) throw new Error('no WebGPU canvas context')
 
+  keepDelay(video)
   const run = { stopped: false }
   const undo: Array<() => void> = []
   const release = () => {
@@ -410,7 +432,7 @@ export async function presentSmooth({
     if (!run.stopped) {
       run.stopped = true
       release()
-      void delayAudio(video, 0).catch(() => {})
+      dropDelaySoon(video)
     }
     onLost()
   }
@@ -422,6 +444,7 @@ export async function presentSmooth({
   } catch (err) {
     run.stopped = true
     release()
+    dropDelaySoon(video)
     throw err
   }
 }
@@ -686,8 +709,9 @@ async function start({
     }
   }
 
+  keepDelay(video)
   const offsets: number[] = []
-  let delayed = 0
+  let delayed = Math.round(audioDelayed(video))
   let lag = 0
   let audioFollows = true
   const followAudio = (frame: Frame) => {
@@ -921,7 +945,7 @@ async function start({
       if (run.stopped) return
       run.stopped = true
       release()
-      void delayAudio(video, 0).catch(() => {})
+      dropDelaySoon(video)
     },
     setRate: (next: SmoothRate) => {
       if (run.stopped || next === pace) return

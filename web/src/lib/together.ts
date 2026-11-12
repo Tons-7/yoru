@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { jumpMeant } from './seekIntent'
 import { readKey, writeKey } from './storage'
 
 export interface TogetherLink {
@@ -125,15 +126,20 @@ interface Change {
 
 const QUIET_MS = 35_000
 const ACT_MS = 10_000
+const CLOCK_SAMPLES = 12
+const DRIFT_JUMP = 3
+const DRIFT_START = 0.6
+const DRIFT_DONE = 0.15
+const DRIFT_RATE = 0.03
 
-const REASONS: Record<string, (c: Change) => string> = {
-  pause: (c) => `${c.by} paused`,
-  play: (c) => `${c.by} played`,
-  seek: (c) => `${c.by} jumped`,
-  episode: (c) => `${c.by} switched to episode ${c.state.episode}`,
-  show: (c) => `${c.by} switched to ${c.title || 'another show'}, episode ${c.state.episode}`,
-  audio: (c) => `${c.by} switched everyone to ${c.state.audio === 'dub' ? 'the English dub' : 'Japanese audio'}`,
-}
+const REASONS = new Map<string, (c: Change) => string>([
+  ['pause', (c) => `${c.by} paused`],
+  ['play', (c) => `${c.by} played`],
+  ['seek', (c) => `${c.by} jumped`],
+  ['episode', (c) => `${c.by} switched to episode ${c.state.episode}`],
+  ['show', (c) => `${c.by} switched to ${c.title || 'another show'}, episode ${c.state.episode}`],
+  ['audio', (c) => `${c.by} switched everyone to ${c.state.audio === 'dub' ? 'the English dub' : 'Japanese audio'}`],
+])
 
 export function useRoom(link: TogetherLink | null, seat: Seat | null) {
   const [view, setView] = useState<RoomView | null>(null)
@@ -142,6 +148,7 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
   const [knocks, setKnocks] = useState<Array<{ member: string; name: string }>>([])
   const [waitingFor, setWaitingFor] = useState<string[]>([])
   const offset = useRef(0)
+  const clock = useRef<number[]>([])
   const lineId = useRef(0)
   const push = useCallback((line: Omit<RoomLine, 'id'>) => {
     setLines((was) => [...was.slice(-199), { ...line, id: ++lineId.current }])
@@ -149,6 +156,7 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
 
   useEffect(() => {
     if (!link || !seat) return
+    clock.current = []
     const url = `${link.base.replace(/^http/, 'ws')}/api/together/${link.code}/socket?k=${encodeURIComponent(link.key)}&m=${seat.member}&t=${encodeURIComponent(seat.token)}`
     let socket: WebSocket | null = null
     let stopped = false
@@ -163,7 +171,10 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
       silent = 0
       wait = 1000
       const event = JSON.parse(e.data as string) as Record<string, unknown>
-      if (typeof event.now === 'number') offset.current = event.now - Date.now()
+      if (typeof event.now === 'number') {
+        clock.current = [...clock.current.slice(-(CLOCK_SAMPLES - 1)), event.now - Date.now()]
+        offset.current = Math.max(...clock.current)
+      }
       switch (event.type) {
         case 'tick':
           if (socket?.readyState === WebSocket.OPEN) socket.send('1')
@@ -183,9 +194,9 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
         case 'state': {
           setView((was) => (was ? { ...was, state: event.state as RoomState } : was))
           setWaitingFor((event.waitingFor as string[] | undefined) ?? [])
-          const says = REASONS[event.reason as string]
-          if (says && event.by) {
-            push({ kind: 'event', text: says({ by: event.by as string, title: (event.title as string) ?? '', state: event.state as RoomState }) })
+          const says = typeof event.reason === 'string' ? REASONS.get(event.reason) : undefined
+          if (says && typeof event.by === 'string') {
+            push({ kind: 'event', text: says({ by: event.by, title: typeof event.title === 'string' ? event.title : '', state: event.state as RoomState }) })
           }
           break
         }
@@ -372,18 +383,33 @@ export function useTogetherSync(video: HTMLVideoElement | null, room: Room | nul
     }
     const onPlay = () => !playingRoom() && send('play')
     const onPause = () => playingRoom() && !video.ended && send('pause', { position: video.currentTime })
+    let meant = false
+    let snapping = false
+    const onSeeking = () => {
+      meant = jumpMeant(video)
+    }
     const onSeeked = () => {
       const moved = !atRoom(video.currentTime)
-      if (moved) send('seek', { position: video.currentTime })
+      const mine = meant
+      const snapped = snapping
+      meant = false
+      snapping = false
+      if (moved && !mine && !snapped && !playingRoom()) {
+        snapping = true
+        video.currentTime = roomRef.current?.position() ?? video.currentTime
+        return
+      }
+      if (moved && mine) send('seek', { position: video.currentTime })
       ready.current = null
       if (video.readyState >= 3) report(true)
-      else if (!moved) report(false)
+      else if (!(moved && mine)) report(false)
     }
     const onCanPlay = () => !video.seeking && report(true)
     const onWaiting = () => !video.seeking && report(false)
     const onEmptied = () => ready.current && report(false)
     video.addEventListener('play', onPlay)
     video.addEventListener('pause', onPause)
+    video.addEventListener('seeking', onSeeking)
     video.addEventListener('seeked', onSeeked)
     video.addEventListener('canplay', onCanPlay)
     video.addEventListener('playing', onCanPlay)
@@ -394,6 +420,7 @@ export function useTogetherSync(video: HTMLVideoElement | null, room: Room | nul
     return () => {
       video.removeEventListener('play', onPlay)
       video.removeEventListener('pause', onPause)
+      video.removeEventListener('seeking', onSeeking)
       video.removeEventListener('seeked', onSeeked)
       video.removeEventListener('canplay', onCanPlay)
       video.removeEventListener('playing', onCanPlay)
@@ -420,9 +447,9 @@ export function useTogetherSync(video: HTMLVideoElement | null, room: Room | nul
       const st = r?.view?.state
       if (!r || !st?.playing || video.paused || video.seeking) return
       const diff = video.currentTime - r.position()
-      if (Math.abs(diff) > 2) video.currentTime = r.position()
-      else if (Math.abs(diff) > 0.3) video.playbackRate = diff > 0 ? 0.95 : 1.05
-      else if (Math.abs(diff) < 0.1) video.playbackRate = 1
+      if (Math.abs(diff) > DRIFT_JUMP) video.currentTime = r.position()
+      else if (Math.abs(diff) > DRIFT_START) video.playbackRate = diff > 0 ? 1 - DRIFT_RATE : 1 + DRIFT_RATE
+      else if (Math.abs(diff) < DRIFT_DONE) video.playbackRate = 1
     }, 1000)
     return () => {
       window.clearInterval(id)

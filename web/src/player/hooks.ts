@@ -6,10 +6,11 @@ import jassubWasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url'
 import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
 import type { PgsRenderer } from 'libpgs'
 import pgsWorkerUrl from 'libpgs/dist/libpgs.worker.js?url'
-import type { SkipRange, StreamInfo, SubtitleTrack } from '../lib/api'
+import { api, type SkipRange, type StreamInfo, type SubtitleTrack } from '../lib/api'
 import { restyle as restyleASS, type SubLook } from './subLook'
 import { airplayHere } from './airplay'
 import { setFloating } from '../lib/miniplayer'
+import { jump } from '../lib/seekIntent'
 
 const REFUSED_CODEC = new Set<string>(['bufferAddCodecError', 'bufferIncompatibleCodecsError', 'manifestIncompatibleCodecsError'])
 
@@ -340,7 +341,58 @@ export function useSlowLink(video: HTMLVideoElement | null, onSlow?: () => void)
   }, [video, watching])
 }
 
-export function useStallWatchdog(video: HTMLVideoElement | null, hls: RefObject<Hls | null>) {
+const STUCK_SECONDS = 15
+const STUCK_SEEKING_SECONDS = 45
+const STUCK_REBUILDS = 2
+const STUCK_APART_MS = 60_000
+const STUCK_START_MS = 45_000
+
+export function useStallWatchdog(
+  video: HTMLVideoElement | null,
+  hls: RefObject<Hls | null>,
+  streamId?: string,
+  onStuck?: () => void,
+) {
+  const stuck = useEffectEvent(() => onStuck?.())
+  useEffect(() => {
+    if (!video || !streamId) return
+    let at = -1
+    let still = 0
+    let rebuilds = 0
+    let rebuiltAt = 0
+    let asking = false
+    let played = false
+    const since = Date.now()
+    const id = window.setInterval(() => {
+      const t = video.currentTime
+      if (document.visibilityState !== 'visible' || video.paused || video.ended || t !== at) {
+        if (at >= 0 && t > at && !video.seeking) played = true
+        at = t
+        still = 0
+        return
+      }
+      still++
+      if (!played && Date.now() - since < STUCK_START_MS) return
+      if (still < (video.seeking ? STUCK_SEEKING_SECONDS : STUCK_SECONDS) || asking || rebuilds >= STUCK_REBUILDS || Date.now() - rebuiltAt < STUCK_APART_MS) return
+      asking = true
+      api
+        .get<{ complete: boolean; ranges: Array<[number, number]> }>(`/api/stream/${streamId}/loaded`)
+        .then((res) => {
+          const here = res.complete || res.ranges.some(([from, to]) => from <= t + 0.5 && to >= t + 5)
+          if (!here || video.currentTime !== t || video.paused) return
+          rebuilds++
+          rebuiltAt = Date.now()
+          still = 0
+          stuck()
+        })
+        .catch(() => {})
+        .finally(() => {
+          asking = false
+        })
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [video, streamId])
+
   useEffect(() => {
     if (!video) return
 
@@ -858,7 +910,7 @@ export function useAutoSkip(
         if (skipped.current.has(key)) continue
         if (t >= range.start && t < range.end - 0.4) {
           skipped.current.add(key)
-          video.currentTime = range.end
+          jump(video, range.end)
           offer({ range, at: Date.now() })
           return
         }

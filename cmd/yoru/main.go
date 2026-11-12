@@ -85,7 +85,7 @@ func interval(st *store.Store, key string, fallback time.Duration) time.Duration
 func newTorrentEngine(cfg config.Config, log *slog.Logger) (*engine.Engine, error) {
 	upload := cfg.Torrent.UploadLimitBytes
 	if upload == 0 {
-		upload = 4 << 20 // enough to stay unchoked
+		upload = 4 << 20
 	}
 	return engine.New(engine.Options{
 		CacheDir:    cfg.CacheDir,
@@ -700,6 +700,7 @@ func run(log *slog.Logger, out *logSink) error {
 	}()
 	go api.WarmRankings(anilist.Background(ctx))
 	go api.KeepAwake(ctx, power.New(log))
+	go api.AutoUpdate(ctx)
 
 	srv := &http.Server{
 		Handler:           api.Handler(),

@@ -6,7 +6,7 @@ import { freshness } from '../lib/freshness'
 const LABEL = { fresh: 'Up to date', updating: 'Updating', saved: 'Saved copy' }
 const TEXT = { fresh: 'text-emerald-300', updating: 'text-accent-300', saved: 'text-amber-200' }
 
-export function CatalogueStatus({ label = true }: { label?: boolean }) {
+export function CatalogueStatus({ label = true, quiet = false }: { label?: boolean; quiet?: boolean }) {
   const updating = useSyncExternalStore(freshness.subscribe, freshness.updating)
   const savedAt = useSyncExternalStore(catalogueSource.subscribe, catalogueSource.savedAt)
   const state = savedAt != null ? 'saved' : updating ? 'updating' : 'fresh'
@@ -22,7 +22,16 @@ export function CatalogueStatus({ label = true }: { label?: boolean }) {
       ) : (
         <span className={cx('m-0.5 size-2 rounded-full', state === 'fresh' ? 'bg-emerald-400' : 'bg-amber-400')} />
       )}
-      {label && <span className="hidden xl:inline">{LABEL[state]}</span>}
+      {label && (
+        <span
+          className={cx(
+            'hidden overflow-hidden transition-[max-width,opacity] duration-[400ms] xl:inline-block motion-reduce:transition-none',
+            quiet ? 'max-w-0 opacity-0' : 'max-w-24 opacity-100',
+          )}
+        >
+          {LABEL[state]}
+        </span>
+      )}
     </span>
   )
 }

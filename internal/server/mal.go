@@ -22,6 +22,7 @@ func (s *Server) malLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	verifier, state := mal.Verifier(), randomHex()
+	s.rememberBack(r)
 	err := s.store.SetSettings(r.Context(), map[string]string{
 		"mal.verifier.token": verifier,
 		"mal.state":          state,
@@ -93,7 +94,7 @@ func (s *Server) malCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	http.Redirect(w, r, "/settings?connected=mal", http.StatusFound)
+	http.Redirect(w, r, s.afterConnect(ctx, "mal"), http.StatusFound)
 }
 
 func (s *Server) saveMALToken(ctx context.Context, t mal.Token, name, picture string) error {

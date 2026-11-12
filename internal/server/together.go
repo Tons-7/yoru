@@ -379,7 +379,7 @@ func (s *Server) createTogether(w http.ResponseWriter, req *http.Request) {
 		base, homeOnly = fmt.Sprintf("https://%s:%s", s.httpsNames()[0], s.port()), true
 	}
 	if base == "" {
-		send(w, http.StatusConflict, map[string]any{"error": "Friends join through the Watch together download.",
+		send(w, http.StatusConflict, map[string]any{"error": "Hosting a room needs the Watch together download.",
 			"needs": "cloudflared"})
 		return
 	}

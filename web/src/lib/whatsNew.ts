@@ -24,6 +24,7 @@ export const NEW_SETTINGS: NewSetting[] = [
   { label: 'Skip endings', since: '2026.10.30.2' },
   { label: 'Carry on into the next season', since: '2026.11.09' },
   { label: 'Smooth motion', since: '2026.11.09' },
+  { label: 'Update automatically', since: '2026.11.12' },
 ]
 
 export interface Change {
@@ -48,6 +49,13 @@ export const CHANGES: Change[] = [
     now: 'stops at the finale unless Carry on into the next season is on',
     since: '2026.11.09',
   },
+  {
+    what: 'Updates',
+    before: 'downloaded and installed when you pressed Update',
+    now: 'downloaded by themselves, installed when you press Restart to update',
+    since: '2026.11.12',
+  },
+  { what: 'Your name', before: 'your AniList name unless you typed one', now: 'your AniList name, your MyAnimeList name or one you type', since: '2026.11.12' },
 ]
 
 export function newer(a: string, b: string): boolean {

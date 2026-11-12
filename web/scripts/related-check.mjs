@@ -68,6 +68,45 @@ if (await seasons.isVisible().catch(() => false)) {
   check(!/movie|side story/i.test(await seasons.innerText()), 'the seasons rail holds no films')
 }
 
+const track = related.locator('[data-rail-track]')
+const far = chips.nth(Math.min(total - 1, 14))
+await far.scrollIntoViewIfNeeded()
+await page.waitForTimeout(800)
+const left = await track.evaluate((el) => el.scrollLeft)
+const farHref = await far.getAttribute('href')
+check(left > 0, 'the related rail scrolls to a film further in', String(left))
+await far.click()
+check(await until(() => page.url().endsWith(farHref)), 'that film opens', page.url())
+const here = page.locator('[data-rail-track] [aria-current="page"]')
+if (await until(() => here.isVisible(), 10000)) {
+  const inView = await here.evaluate((el) => {
+    const rail = el.closest('[data-rail-track]').getBoundingClientRect()
+    const chip = el.getBoundingClientRect()
+    return chip.left >= rail.left - 1 && chip.right <= rail.right + 1
+  })
+  check(inView, 'the row of its own series opens on the film you are on')
+}
+await page.goBack()
+let back = -1
+check(await until(async () => Math.abs((back = await track.evaluate((el) => el.scrollLeft)) - left) < 4, 15000), 'coming back, the rail is where it was left', `${back} vs ${left}`)
+
+const LONG = Number(process.env.YORU_SEASONS ?? 918)
+const long = await (await fetch(`${BASE}/api/franchise?id=${LONG}`)).json()
+const last = (long.seasons ?? []).at(-1)
+check((long.seasons ?? []).length > 5, 'a show with many seasons', String((long.seasons ?? []).length))
+if (last) {
+  await page.goto(`${BASE}/anime/${last.id}`, { waitUntil: 'domcontentloaded' })
+  const mine = page.locator('[data-rail-track] [aria-current="page"]')
+  check(await until(() => mine.isVisible(), 90000), 'its last season marks itself in the seasons rail')
+  const placed = await mine.evaluate((el) => {
+    const rail = el.closest('[data-rail-track]')
+    const [box, chip] = [rail.getBoundingClientRect(), el.getBoundingClientRect()]
+    return { scrolls: rail.scrollWidth > rail.clientWidth + 1, left: rail.scrollLeft, inView: chip.left >= box.left - 1 && chip.right <= box.right + 1 }
+  })
+  check(placed.scrolls && placed.left > 0 && placed.inView, 'and the rail opens on it, not at the start', JSON.stringify(placed))
+  await page.screenshot({ path: `${SHOTS}/series-seasons-here.png` })
+}
+
 const cast = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Cast' }) })
 if (await until(() => cast.isVisible(), 25000)) {
   check(!/SUPPORTING/.test(await cast.innerText()), 'no shouted SUPPORTING label')

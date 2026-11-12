@@ -1032,3 +1032,29 @@ func (s *Store) Finished(ctx context.Context, animeID int) bool {
 func flagsKey(malID int) string {
 	return "flags:" + strconv.Itoa(malID)
 }
+
+func (s *Store) EpisodeTitles(ctx context.Context, animeID int) (map[int][]string, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT number, coalesce(title_en, ''), coalesce(title_ja, ''), coalesce(title_romaji, '')
+		FROM episode WHERE anime_id = ? AND is_special = 0 AND number > 0`, animeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int][]string{}
+	for rows.Next() {
+		var (
+			number int
+			titles [3]string
+		)
+		if err := rows.Scan(&number, &titles[0], &titles[1], &titles[2]); err != nil {
+			return nil, err
+		}
+		for _, title := range titles {
+			if title != "" {
+				out[number] = append(out[number], title)
+			}
+		}
+	}
+	return out, rows.Err()
+}

@@ -46,6 +46,47 @@
   --animate-sheet: sheet 0.24s var(--ease-enter);
   --animate-shimmer: shimmer 1.6s linear infinite;
   --animate-leave: leave 0.16s cubic-bezier(0.3, 0, 1, 1) forwards;
+  --animate-update-arrow: update-arrow 1.4s var(--ease-standard) infinite;
+  --animate-update-ready: update-ready 2.6s ease-in-out infinite;
+  --animate-update-in: update-in 0.4s var(--ease-standard) both;
+}
+
+@keyframes update-in {
+  from {
+    max-width: 0;
+    opacity: 0;
+  }
+  to {
+    max-width: 16rem;
+    opacity: 1;
+  }
+}
+
+@keyframes update-arrow {
+  0% {
+    opacity: 0;
+    transform: translateY(-70%);
+  }
+  30%,
+  60% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(70%);
+  }
+}
+
+@keyframes update-ready {
+  0%,
+  60%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(52 211 153 / 0);
+  }
+  30% {
+    box-shadow: 0 0 0 5px rgb(52 211 153 / 0.22);
+  }
 }
 
 @keyframes leave {

@@ -8,13 +8,38 @@ import (
 
 func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request) {
 	if s.updater == nil {
+		send(w, http.StatusOK, map[string]any{"current": update.Version, "available": false, "stage": update.StageIdle, "bytes": 0, "total": 0, "fixed": true})
+		return
+	}
+	send(w, http.StatusOK, s.updateView(r))
+}
+
+type updateView struct {
+	update.Status
+	Auto bool     `json:"auto"`
+	Busy []string `json:"busy,omitempty"`
+}
+
+func (s *Server) updateView(r *http.Request) updateView {
+	out := updateView{Status: s.updater.Status(), Auto: s.autoUpdates(r.Context())}
+	if out.Stage == update.StageReady {
+		out.Busy = s.busyWith(r.Context())
+	}
+	return out
+}
+
+func (s *Server) updateRestart(w http.ResponseWriter, r *http.Request) {
+	if s.updater == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "updater unavailable"})
 		return
 	}
-	send(w, http.StatusOK, s.updater.Status())
+	if err := s.updater.Install(); err != nil {
+		send(w, http.StatusConflict, map[string]any{"error": err.Error()})
+		return
+	}
+	send(w, http.StatusAccepted, s.updateView(r))
 }
 
-// updatedSince: the running version and the one it replaced, for Settings' New tab; any build answers.
 func (s *Server) updatedSince(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"current": update.Version}
 	if s.updater != nil {
@@ -28,22 +53,20 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "updater unavailable"})
 		return
 	}
-	st, err := s.updater.Check(r.Context())
-	if err != nil {
+	if _, err := s.updater.Check(r.Context()); err != nil {
 		s.log.Warn("update check", "err", err)
 	}
-	send(w, http.StatusOK, st)
+	send(w, http.StatusOK, s.updateView(r))
 }
 
-// updateApply starts the download; the page polls updateStatus and reloads on the new version.
-func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
+func (s *Server) updateDownload(w http.ResponseWriter, r *http.Request) {
 	if s.updater == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "updater unavailable"})
 		return
 	}
-	if err := s.updater.Apply(); err != nil {
+	if err := s.updater.Prepare(); err != nil {
 		send(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
 	}
-	send(w, http.StatusAccepted, s.updater.Status())
+	send(w, http.StatusAccepted, s.updateView(r))
 }

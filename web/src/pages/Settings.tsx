@@ -39,6 +39,7 @@ import { ComponentState } from '../components/ComponentState'
 import { ReleaseNotesList, type Notes } from '../components/ReleaseNotes'
 import { SitesEditor } from '../components/SitesEditor'
 import { WhereThingsGo } from '../components/WhereThingsGo'
+import { LocalFolders } from '../components/LocalFolders'
 import { ValueMenu } from '../components/ValueMenu'
 import { SHOW_SHORTCUTS } from '../components/keys'
 import { install, INSTALL_HELP, useInstall } from '../lib/install'
@@ -49,8 +50,8 @@ import { ENCODERS } from '../player/encoders'
 import { SEEN_KEY, useNewSettings } from '../lib/whatsNew'
 import { HOME_ROWS, hiddenRows } from '../lib/homeRows'
 import { ReleasePicker } from '../components/ReleasePicker'
-import { DESKTOP_NOTIFY_KEY, desktopNotifyWanted } from '../lib/notifications'
-import { disablePush, enablePush, pushState, testPush, type PushState } from '../lib/push'
+import { desktopNotifyWanted } from '../lib/notifications'
+import { pushState, setDeviceAlerts, testPush, type PushState } from '../lib/push'
 import {
   Button,
   ConfirmInline,
@@ -62,14 +63,17 @@ import {
   SearchInput,
   Segmented,
   Skeleton,
-  Spinner,
   Switch as UiSwitch,
   TextInput,
 } from '../components/ui'
 import { buttonClass, ControlLabel } from '../lib/ui'
 import { useDebounced, useHeldData, useMediaQuery } from '../lib/hooks'
 import { copyText, PACES } from '../lib/downloads'
-import { useAvatarEdit, useProfile, useRename } from '../lib/profile'
+import { useAvatarEdit, useProfile } from '../lib/profile'
+import { NameChoice } from '../components/NameChoice'
+import { SECRET, secretClass } from '../lib/secret'
+import { updateMoving, updatePercent, useRestartToUpdate, useUpdateActions, useUpdateStatus } from '../lib/update'
+import { UpdateRestartDialog } from '../components/UpdateButton'
 import { Avatar } from '../components/YouBits'
 import { AvatarEditor } from '../components/AvatarEditor'
 
@@ -151,7 +155,7 @@ export function Settings() {
     <SearchInput
       value={text}
       onChange={(e) => setText(e.target.value)}
-      onKeyDown={(e) => e.key === 'Escape' && setText('')}
+      onClear={() => setText('')}
       placeholder="Search settings"
       aria-label="Search settings"
       className="w-full"
@@ -567,8 +571,18 @@ function Row({
   )
 }
 
-function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label?: string }) {
-  return <UiSwitch on={on} onChange={onChange} aria-label={label} />
+function Switch({
+  on,
+  onChange,
+  label,
+  disabled,
+}: {
+  on: boolean
+  onChange: (v: boolean) => void
+  label?: string
+  disabled?: boolean
+}) {
+  return <UiSwitch on={on} onChange={onChange} disabled={disabled} aria-label={label} />
 }
 
 function useFlag() {
@@ -1191,12 +1205,12 @@ function JimakuKey() {
         ) : (
           <>
             <TextInput
-              type="password"
+              {...SECRET}
               aria-label="Jimaku API key"
               placeholder="API key"
               value={key}
               onChange={(e) => setKey(e.target.value)}
-              className="w-48"
+              className={cx('w-48', secretClass)}
             />
             <Button size="sm" onClick={() => save.mutate(key)} disabled={!key.trim() || save.isPending}>
               {save.isPending ? 'Checking…' : 'Save'}
@@ -2060,34 +2074,16 @@ function PictureSection({ host }: { host: boolean }) {
   const own = profile?.avatar === 'own'
   const from = profile?.avatar === 'anilist' ? 'From AniList. ' : profile?.avatar === 'mal' ? 'From MyAnimeList. ' : ''
   const failed = upload.isError ? upload.error : remove.isError ? remove.error : null
-  const rename = useRename()
-  const saved = profile?.name ?? ''
-  const [name, setName] = useState(saved)
-  const [shown, setShown] = useState(saved)
-  if (shown !== saved) {
-    setShown(saved)
-    setName(saved)
-  }
+  const saved = profile?.shown ?? ''
   return (
     <Section title="Profile" keywords="avatar photo profile image picture name nickname rename">
       <Row
         label="Name"
         hint={host ? 'How you appear in Yoru and to friends in rooms.' : 'Changed on the computer Yoru runs on.'}
-        keywords="name nickname rename display"
+        keywords="name nickname rename display anilist myanimelist"
+        stacked
       >
-        <TextInput
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onBlur={() => name.trim() !== saved && rename.mutate(name)}
-          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-          placeholder={user ?? 'Your name'}
-          aria-label="Name"
-          maxLength={32}
-          autoComplete="off"
-          disabled={!host}
-          className="w-56"
-        />
-        <SaveHint state={rename} />
+        <NameChoice host={host} />
       </Row>
       <Row
         label="Picture"
@@ -2170,6 +2166,7 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
       setPasted('')
       setPasting(false)
       qc.invalidateQueries({ queryKey: ['trackers'] })
+      void qc.invalidateQueries({ queryKey: ['profile'] })
     },
   })
 
@@ -2185,6 +2182,7 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
       setSecret('')
       setEditing(false)
       qc.invalidateQueries({ queryKey: ['trackers'] })
+      void qc.invalidateQueries({ queryKey: ['profile'] })
     },
   })
 
@@ -2218,6 +2216,7 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
     onSuccess: () => {
       setConfirmingOut(false)
       qc.invalidateQueries({ queryKey: ['trackers'] })
+      void qc.invalidateQueries({ queryKey: ['profile'] })
     },
   })
 
@@ -2394,13 +2393,11 @@ function Field({
     <label className="block">
       <span className="mb-1 block text-xs text-base-400">{label}</span>
       <TextInput
-        type={secret ? 'password' : 'text'}
+        {...(secret ? SECRET : { type: 'text', spellCheck: false, autoComplete: 'off' })}
         value={value}
         placeholder={placeholder}
-        spellCheck={false}
-        autoComplete="off"
         onChange={(e) => onChange(e.target.value)}
-        className="w-full font-mono"
+        className={cx('w-full font-mono', secret && secretClass)}
       />
     </label>
   )
@@ -2506,111 +2503,12 @@ function ImportRow() {
 }
 
 function LibraryTab() {
-  const local = useQuery({
-    queryKey: ['local'],
-    queryFn: () => api.get<{ stats: Record<string, number>; roots: string[]; scanning: boolean }>('/api/local'),
-    refetchInterval: (q) => (q.state.data?.scanning ? 2000 : false),
-  })
-  const [path, setPath] = useState('')
-  const qc = useQueryClient()
-
-  const save = useMutation({
-    meta: { inline: true },
-    mutationFn: (paths: string[]) => api.post('/api/local/paths', { paths }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['local'] }),
-  })
-  const scan = useMutation({
-    mutationFn: () => api.post('/api/local/scan'),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['local'] }),
-  })
-  const scanning = !!local.data?.scanning
-  const wasScanning = useRef(scanning)
-  useEffect(() => {
-    if (wasScanning.current && !scanning) {
-      for (const key of ['episodes', 'anime']) void qc.invalidateQueries({ queryKey: [key] })
-    }
-    wasScanning.current = scanning
-  }, [scanning, qc])
-
-  const roots = local.data?.roots ?? []
-  const problems =
-    save.error instanceof ApiError
-      ? ((save.error.body as { paths?: Record<string, string> } | undefined)?.paths ?? {})
-      : {}
-
   return (
     <div className="space-y-4">
-    <Section title="Local files" hint="Anime already on disk plays instantly, with no torrent involved." keywords="folders library scan disk">
-      <div className="space-y-2 py-3">
-        {roots.length > 0 && (
-          <ul className="space-y-1">
-            {roots.map((root) => (
-              <li key={root} className="flex items-center justify-between gap-2 rounded-md bg-base-800 px-3 py-1.5">
-                <span className="truncate text-sm text-base-200">{root}</span>
-                <button
-                  onClick={() => save.mutate(roots.filter((r) => r !== root))}
-                  disabled={save.isPending}
-                  className="tap relative text-xs text-base-400 hover:text-recap disabled:opacity-50"
-                >
-                  Remove
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        <div className="flex gap-2">
-          <TextInput
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            placeholder="D:\Anime"
-            aria-label="Folder to add"
-            className="min-w-0 flex-1"
-          />
-          <button
-            onClick={() => {
-              if (path.trim()) save.mutate([...roots, path.trim()], { onSuccess: () => setPath('') })
-            }}
-            disabled={save.isPending}
-            className={buttonClass()}
-          >
-            Add
-          </button>
-        </div>
-
-        {save.isError &&
-          (Object.keys(problems).length > 0 ? (
-            <ul className="space-y-0.5 text-xs text-recap">
-              {Object.entries(problems).map(([p, why]) => (
-                <li key={p}>
-                  {p}: {why}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-xs text-recap">{(save.error as Error).message}</p>
-          ))}
-      </div>
-
-      <Row
-        label={
-          local.data
-            ? `${local.data.stats.files} files · ${local.data.stats.matched} matched · ${local.data.stats.unmatched} unmatched`
-            : 'No scan yet'
-        }
-      >
-        <button
-          onClick={() => scan.mutate()}
-          disabled={local.data?.scanning || roots.length === 0}
-          className={buttonClass()}
-        >
-          {local.data?.scanning && <Spinner className="size-3.5" />}
-          {local.data?.scanning ? 'Scanning…' : 'Scan now'}
-        </button>
-      </Row>
-    </Section>
-
-    <BackupSection />
+      <Section title="Your own files" hint="Anime already on this computer plays straight from disk, with no torrent." keywords="local files folders library scan disk">
+        <LocalFolders />
+      </Section>
+      <BackupSection />
     </div>
   )
 }
@@ -2715,18 +2613,9 @@ function AlertsRow() {
     setBusy(true)
     setError('')
     try {
-      if (next && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
-        if ((await Notification.requestPermission()) !== 'granted') return
-      }
-      try {
-        localStorage.setItem(DESKTOP_NOTIFY_KEY, next ? '1' : '0')
-      } catch {
-      }
-      setWanted(next)
-      const can = state.data === 'on' || state.data === 'off'
-      if (next && can) await enablePush()
-      if (!next && can) await disablePush()
+      if (await setDeviceAlerts(next)) setWanted(next)
     } catch (e) {
+      setWanted(desktopNotifyWanted())
       setError(next ? `Alerts show while Yoru is open, not with it closed: ${(e as Error).message}` : (e as Error).message)
     } finally {
       setBusy(false)
@@ -3039,9 +2928,8 @@ function InstallAsApp() {
             onChange={(e) => setToken(e.target.value)}
             placeholder={editing ? 'Token (blank keeps the saved one)' : 'Token from duckdns.org'}
             aria-label="DuckDNS token"
-            type="password"
-            autoComplete="off"
-            className={HTTPS_INPUT}
+            {...SECRET}
+            className={cx(HTTPS_INPUT, secretClass)}
           />
           <button type="submit" disabled={save.isPending || !domain.trim()} className={buttonClass('primary')}>
             Save
@@ -3351,78 +3239,38 @@ function FirewallPanel() {
   )
 }
 
-interface UpdateStatus {
-  current: string
-  latest?: { version: string; url: string; notes?: string }
-  available: boolean
-  checkedAt?: string
-  checkError?: string
-  stage: 'idle' | 'downloading' | 'verifying' | 'restarting' | 'failed'
-  bytes: number
-  total: number
-  error?: string
-  pending?: Notes[]
-  whatsNew?: Notes[]
-  updatedFrom?: string
-}
-
 function AboutTab() {
   const qc = useQueryClient()
-  const [stuck, setStuck] = useState(false)
-
-  const status = useQuery({
-    queryKey: ['update'],
-    queryFn: () => api.get<UpdateStatus>('/api/update'),
-    retry: false,
-    refetchInterval: (q) => {
-      const stage = q.state.data?.stage
-      return stage === 'downloading' || stage === 'verifying' || stage === 'restarting' ? 500 : false
-    },
-  })
-  const check = useMutation({
-    mutationFn: () => api.post<UpdateStatus>('/api/update/check'),
-    onSuccess: (data) => qc.setQueryData(['update'], data),
-  })
-  const apply = useMutation({
-    meta: { inline: true },
-    mutationFn: () => api.post<UpdateStatus>('/api/update/apply'),
-    onSuccess: (data) => qc.setQueryData(['update'], data),
-  })
+  const f = useFlag()
+  const host = useAccess().data?.host !== false
+  const status = useUpdateStatus()
+  const { check, download } = useUpdateActions()
+  const { choose, checking, ask, close, restart } = useRestartToUpdate()
 
   const s = status.data
-  const from = s?.current
-
-  const handingOver =
-    s?.stage === 'restarting' || (status.isError && (s?.stage === 'verifying' || s?.stage === 'downloading'))
-  useEffect(() => {
-    if (!handingOver) return
-    let ticks = 0
-    const timer = window.setInterval(async () => {
-      if (++ticks === 90) setStuck(true)
-      try {
-        const health = await api.get<{ version?: string }>('/api/health')
-        if (health.version && health.version !== from) window.location.reload()
-      } catch {
-      }
-    }, 1000)
-    return () => window.clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handingOver])
 
   if (status.isPending) return <Skeleton className="h-40 w-full" />
 
-  if (!s && !(status.error instanceof ApiError && status.error.status === 503)) {
+  if (!s) {
     return (
       <Section title="Yoru">
         <p className="py-3 text-sm text-recap">{(status.error as Error | null)?.message ?? 'Could not read the version.'}</p>
       </Section>
     )
   }
-  if (!s) {
+  if (s.fixed) {
     return (
       <div className="space-y-4">
         <Section title="Yoru" hint="Development build: updates aren't checked.">
           <p className="py-3 text-sm text-base-400">Built from source.</p>
+          <Row
+            label="Update automatically"
+            hint="A copy built from source doesn't update. Released versions do."
+            keywords="auto update automatic install upgrade download restart"
+          >
+            <Switch on={false} disabled onChange={() => {}} />
+          </Row>
+          {host && <SetupGuideRow />}
         </Section>
         <LogSection />
         <ComponentsSection />
@@ -3432,8 +3280,9 @@ function AboutTab() {
     )
   }
 
-  const busy = s.stage === 'downloading' || s.stage === 'verifying' || s.stage === 'restarting'
-  const percent = s.total > 0 ? Math.round((s.bytes / s.total) * 100) : 0
+  const busy = updateMoving(s.stage)
+  const staged = s.stage === 'ready' || s.stage === 'restarting'
+  const percent = updatePercent(s)
   const pendingNotes: Notes[] = s.pending?.length
     ? s.pending
     : s.latest?.notes
@@ -3446,10 +3295,10 @@ function AboutTab() {
         return s.total > 0 ? `Downloading… ${percent}%` : 'Downloading…'
       case 'verifying':
         return 'Verifying…'
+      case 'ready':
+        return `${s.staged || s.latest?.version} is downloaded. Restart to finish.`
       case 'restarting':
-        return stuck
-          ? 'The new version has not come up. Reload this page; if that fails, start Yoru again (it falls back to the previous version).'
-          : 'Restarting into the new version…'
+        return 'Restarting into the new version…'
       case 'failed':
         return s.error ?? 'Update failed'
       default:
@@ -3472,19 +3321,46 @@ function AboutTab() {
             >
               {check.isPending ? 'Checking…' : 'Check now'}
             </button>
-            {s.available && (
+            {s.available && host && staged && (
               <button
-                onClick={() => apply.mutate()}
-                disabled={busy || apply.isPending}
+                onClick={() => void choose()}
+                disabled={checking || restart.isPending || s.stage === 'restarting'}
                 className={buttonClass('primary')}
               >
-                {busy ? 'Updating…' : s.stage === 'failed' ? 'Try again' : `Update to ${s.latest?.version}`}
+                {s.stage === 'restarting' ? 'Restarting…' : 'Restart to update'}
+              </button>
+            )}
+            {s.available && host && !staged && (
+              <button
+                onClick={() => download.mutate()}
+                disabled={busy || download.isPending}
+                className={buttonClass('primary')}
+              >
+                {busy ? 'Downloading…' : s.stage === 'failed' ? 'Try again' : `Download ${s.latest?.version}`}
               </button>
             )}
           </div>
         </Row>
+        <Row
+          label="Update automatically"
+          hint={host ? 'Downloads new versions by itself. You choose when to restart.' : 'Changed on the computer Yoru runs on.'}
+          keywords="auto update automatic install upgrade download restart"
+        >
+          <Switch
+            on={f.get('update.auto')}
+            disabled={!host}
+            onChange={(v) => {
+              f.set('update.auto', String(v))
+              void qc.invalidateQueries({ queryKey: ['update'] })
+            }}
+          />
+        </Row>
+        {host && <SetupGuideRow />}
         {s.stage === 'downloading' && s.total > 0 && <ProgressBar value={percent} className="my-3" />}
-        {apply.isError && <p className="py-3 text-xs text-recap">{(apply.error as Error).message}</p>}
+        {(download.isError || restart.isError) && (
+          <p className="py-3 text-xs text-recap">{((download.error ?? restart.error) as Error).message}</p>
+        )}
+        {ask && <UpdateRestartDialog busy={ask} version={s.staged || s.latest?.version || ''} onClose={close} />}
         {s.available && pendingNotes.length > 0 && (
           <div className="space-y-2 py-3">
             <p className="text-xs text-base-400">
@@ -3508,6 +3384,16 @@ function AboutTab() {
       <JobsSection />
       <CreditsSection />
     </div>
+  )
+}
+
+function SetupGuideRow() {
+  return (
+    <Row label="Setup guide" hint="The first-run steps, to go through again." keywords="onboarding setup welcome first run guide">
+      <Link to="/setup" className={buttonClass()}>
+        Open
+      </Link>
+    </Row>
   )
 }
 

@@ -1,7 +1,7 @@
 package server
 
 import (
-	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -310,10 +310,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/smooth", s.smoothStatus)
 	mux.HandleFunc("GET /api/smooth/{file}", s.smoothFile)
 	mux.HandleFunc("POST /api/setup/data-dir", hostOnly(s.setDataDir))
+	mux.HandleFunc("POST /api/setup/show", hostOnly(s.showFolder))
+	mux.HandleFunc("GET /api/setup/pick", s.pickStatus)
+	mux.HandleFunc("POST /api/setup/pick", hostOnly(s.pick))
 	mux.HandleFunc("GET /api/update", s.updateStatus)
 	mux.HandleFunc("GET /api/update/since", s.updatedSince)
 	mux.HandleFunc("POST /api/update/check", s.updateCheck)
-	mux.HandleFunc("POST /api/update/apply", hostOnly(s.updateApply))
+	mux.HandleFunc("POST /api/update/download", hostOnly(s.updateDownload))
+	mux.HandleFunc("POST /api/update/restart", hostOnly(s.updateRestart))
 	mux.HandleFunc("GET /api/auth/login", hostOnly(s.authLogin))
 	mux.HandleFunc("POST /api/auth/logout", hostOnly(s.authLogout))
 	mux.HandleFunc("POST /api/auth/token", hostOnly(s.authToken))
@@ -628,20 +632,31 @@ func (s *Server) logging(next http.Handler) http.Handler {
 func send(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	if sw, ok := w.(*servedWriter); ok && sw.gzip {
-		var raw bytes.Buffer
-		json.NewEncoder(&raw).Encode(body)
-		if raw.Len() < gzipFrom {
-			w.WriteHeader(status)
-			w.Write(raw.Bytes())
-			return
-		}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if sw, ok := w.(*servedWriter); ok && sw.gzip && jsonSize(body) >= gzipFrom {
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Add("Vary", "Accept-Encoding")
 		w.WriteHeader(status)
-		writeGzip(w, raw.Bytes())
+		zw := gzipWriters.Get().(*gzip.Writer)
+		zw.Reset(w)
+		json.NewEncoder(zw).Encode(body)
+		zw.Close()
+		gzipWriters.Put(zw)
 		return
 	}
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)
+}
+
+type byteCount int
+
+func (c *byteCount) Write(p []byte) (int, error) {
+	*c += byteCount(len(p))
+	return len(p), nil
+}
+
+func jsonSize(v any) int {
+	var n byteCount
+	json.NewEncoder(&n).Encode(v)
+	return int(n)
 }

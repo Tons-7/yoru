@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"yoru/internal/parse"
 )
@@ -721,6 +722,45 @@ func PickNumbered(files []File, episode int, numbers []int) (File, int, bool) {
 	return PickInPack(files, episode, numbers, Scope{})
 }
 
+func PickByTitle(files []File, episode int, numbers []int, scope Scope) (File, int, bool) {
+	numbers = slices.DeleteFunc(slices.Clone(numbers), func(n int) bool { return n <= 0 })
+	if episode <= 0 || len(scope.Named) == 0 {
+		return File{}, -1, false
+	}
+	var videos []int
+	for i, f := range files {
+		if parse.IsVideo(f.Name) && !extra(f.Name) {
+			videos = append(videos, i)
+		}
+	}
+	if len(videos) < 2 {
+		return File{}, -1, false
+	}
+	floor := medianLength(files, videos) / 4
+	numbered := map[int]int{}
+	lowest, highest := 0, 0
+	for _, i := range videos {
+		if files[i].Length < floor {
+			continue
+		}
+		if n := episodeInName(parse.BaseName(files[i].Name)); n > 0 {
+			numbered[i] = n
+			if lowest == 0 || n < lowest {
+				lowest = n
+			}
+			highest = max(highest, n)
+		}
+	}
+	if len(numbers) == 0 {
+		numbers = []int{episode}
+	}
+	i, ok := titledFor(files, videos, numbered, packNumber(episode, numbers, lowest, highest), episode, scope)
+	if !ok {
+		return File{}, -1, false
+	}
+	return files[i], i, true
+}
+
 func PickInPack(files []File, episode int, numbers []int, scope Scope) (File, int, bool) {
 	numbers = slices.DeleteFunc(slices.Clone(numbers), func(n int) bool { return n <= 0 })
 	if episode <= 0 && len(numbers) > 0 {
@@ -765,6 +805,9 @@ func PickInPack(files []File, episode int, numbers []int, scope Scope) (File, in
 		}
 	}
 	want := packNumber(episode, numbers, lowest, highest)
+	if f, i, ok := PickByTitle(files, episode, numbers, scope); ok {
+		return f, i, true
+	}
 
 	var matches []int
 	for _, i := range videos {
@@ -789,6 +832,115 @@ type Scope struct {
 	Season  int
 	Counted int
 	Others  []string
+	Named   map[int][]string
+}
+
+const titleLetters = 6
+
+func containsTitle(name, key string) bool {
+	digit := func(b byte) bool { return b >= '0' && b <= '9' }
+	for from := 0; from < len(name); {
+		at := strings.Index(name[from:], key)
+		if at < 0 {
+			return false
+		}
+		start, end := from+at, from+at+len(key)
+		before := start > 0 && digit(name[start-1]) && digit(key[0])
+		after := end < len(name) && digit(name[end]) && digit(key[len(key)-1])
+		if !before && !after {
+			return true
+		}
+		from = start + 1
+	}
+	return false
+}
+
+func titleKey(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			return unicode.ToLower(r)
+		}
+		return -1
+	}, s)
+}
+
+func namedEpisodes(files []File, videos []int, named map[int][]string) map[int]int {
+	if len(named) == 0 || len(videos) < 2 {
+		return nil
+	}
+	keys := make([]string, len(videos))
+	for n, i := range videos {
+		keys[n] = titleKey(parse.BaseName(files[i].Name))
+	}
+	shared := keys[0]
+	for _, k := range keys[1:] {
+		n := 0
+		for n < len(shared) && n < len(k) && shared[n] == k[n] {
+			n++
+		}
+		shared = shared[:n]
+	}
+	type wantedTitle struct {
+		episode int
+		key     string
+	}
+	var wanted []wantedTitle
+	for episode, titles := range named {
+		for _, title := range titles {
+			if key := titleKey(title); len(key) >= titleLetters && !strings.Contains(shared, key) {
+				wanted = append(wanted, wantedTitle{episode, key})
+			}
+		}
+	}
+	out := map[int]int{}
+	for n, i := range videos {
+		found, clash := 0, false
+		for _, w := range wanted {
+			if !containsTitle(keys[n], w.key) {
+				continue
+			}
+			if found != 0 && found != w.episode {
+				clash = true
+			}
+			found = w.episode
+		}
+		if found != 0 && !clash {
+			out[i] = found
+		}
+	}
+	return out
+}
+
+func titledFor(files []File, videos []int, numbered map[int]int, want, episode int, scope Scope) (int, bool) {
+	titled := namedEpisodes(files, videos, scope.Named)
+	if len(titled) == 0 {
+		return 0, false
+	}
+	byNumber := 0
+	for _, i := range videos {
+		if numbered[i] != want {
+			continue
+		}
+		byNumber++
+		if other, ok := titled[i]; !ok || other == episode {
+			return 0, false
+		}
+	}
+	if byNumber == 0 {
+		return 0, false
+	}
+	var mine []int
+	for _, i := range videos {
+		if titled[i] == episode && numbered[i] != want {
+			mine = append(mine, i)
+		}
+	}
+	mine = inScope(files, mine, scope)
+	if len(mine) != 1 {
+		return 0, false
+	}
+	return mine[0], true
 }
 
 func (s Scope) seasons() []int {

@@ -4,8 +4,12 @@ import { readKey, writeKey } from './storage'
 
 const ROOM_NAME_KEY = 'yoru.together.name'
 
+export type NameFrom = 'anilist' | 'mal' | 'own'
+
 export interface Profile {
   name: string
+  nameFrom: NameFrom
+  shown: string
   avatar: '' | 'own' | 'anilist' | 'mal'
   version: string
 }
@@ -70,7 +74,18 @@ export function useRename() {
   const qc = useQueryClient()
   return useMutation({
     meta: { inline: true },
+    scope: { id: 'profile-name' },
     mutationFn: (name: string) => api.put<Profile>('/api/profile/name', { name }),
+    onSuccess: (next) => qc.setQueryData(['profile'], next),
+  })
+}
+
+export function useNameFrom() {
+  const qc = useQueryClient()
+  return useMutation({
+    meta: { inline: true },
+    scope: { id: 'profile-name' },
+    mutationFn: (v: { from?: NameFrom; name?: string }) => api.put<Profile>('/api/profile/name', v),
     onSuccess: (next) => qc.setQueryData(['profile'], next),
   })
 }
@@ -78,7 +93,7 @@ export function useRename() {
 export function useRoomName(fallback: string, host: boolean | undefined) {
   const profile = useProfile().data
   const rename = useRename()
-  const name = (host === true ? '' : readKey(ROOM_NAME_KEY)) || profile?.name || fallback
+  const name = (host === true ? '' : readKey(ROOM_NAME_KEY)) || profile?.shown || fallback
   const remember = (next: string) => {
     if (next === name) return
     if (host === true) rename.mutate(next)

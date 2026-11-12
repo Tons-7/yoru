@@ -1,4 +1,3 @@
-// Settings' tabs, each on its own subject; old links still landing; a search finding a setting anywhere.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -40,7 +39,6 @@ check(await until(() => visible('Auto next episode')), 'Playback opens first, wi
 check(!(await visible('Download ahead while watching')), 'download ahead is not under Playback')
 check(!(await visible('Show titles as')) && !(await visible('Open Yoru')), 'nor language or how Yoru runs')
 
-// Casting stays with playback; how Yoru runs on its computer, and language, have tabs of their own.
 const section = (title) => page.locator('section', { has: page.getByRole('heading', { name: title, exact: true }) })
 check(await section('Casting').getByText('Draw subtitles into the picture', { exact: true }).isVisible(),
   'Casting holds its subtitles choice')
@@ -56,20 +54,17 @@ check(await section('This computer').getByText('Stay awake while downloading', {
 await page.getByRole('tab', { name: 'Language and display' }).click()
 check(await until(() => visible('Show titles as')) && (await visible('Hide spoilers')), 'Language and display holds titles and spoilers')
 
-// A stacked row (the control under its words) keeps the control right under them.
 const stacked = page.locator('[data-row]', { has: page.getByText('Subtitle languages', { exact: true }) })
 const gap = await stacked.evaluate((row) =>
   Math.round(row.lastElementChild.getBoundingClientRect().top - row.firstElementChild.lastElementChild.getBoundingClientRect().bottom))
 check(gap >= 0 && gap <= 16, 'a stacked row keeps its control under its words', `${gap}px apart`)
 await stacked.screenshot({ path: `${SHOTS}/settings-stacked-row.png` })
 
-// A link from before the regrouping still lands where its settings went.
 await page.goto(`${BASE}/settings?tab=Quality`, { waitUntil: 'domcontentloaded' })
 check(await until(() => page.getByRole('tab', { name: 'Downloads', selected: true }).isVisible()), 'an old Quality link opens Downloads')
 check(await until(() => visible('Download ahead while watching')) && (await visible('Download queue while watching')),
   'both download-while-watching choices sit together there')
 
-// The quality ladder at last has a control: up to 720p is saved as such, and back to the best.
 const quality = page.getByRole('combobox', { name: 'Preferred quality' })
 check(await until(() => quality.isVisible()), 'Downloads offers a preferred quality')
 await quality.click()
@@ -81,7 +76,6 @@ await page.getByRole('option', { name: 'Best available', exact: true }).click()
 check(await until(async () => (await prefs())['quality.prefer'] === 'best'), 'best available is saved back')
 await page.screenshot({ path: `${SHOTS}/settings-downloads.png` })
 
-// Search: by a label, by a hint's word, by a keyword, and a whole section by its title.
 const search = page.getByRole('searchbox', { name: 'Search settings' })
 await search.fill('speed')
 check(await until(() => visible('Download speed limit')), '"speed" finds the speed limit')
@@ -101,25 +95,31 @@ const soundRows = ['Voice boost', 'Night mode', 'Headphones', 'Mono', 'Volume bo
 check(await until(async () => (await Promise.all(soundRows.map(visible))).every(Boolean)), '"sound" shows the whole Sound section')
 await search.fill('zzzz no such thing')
 check(await until(() => page.getByText(/No setting matches/).isVisible()), 'no match says so')
-await page.getByRole('button', { name: 'Clear search' }).click()
+await page.getByRole('main').getByRole('button', { name: 'Clear search' }).last().click()
 check(await until(async () => (await search.inputValue()) === '' && (await tabs.first().isVisible())), 'Clear search brings the tabs back')
+const x = search.locator('xpath=..').getByRole('button', { name: 'Clear search' })
+check((await x.count()) === 0, 'an empty search box shows no X')
+await search.fill('speed')
+check(await until(() => x.isVisible()), 'typing shows an X in the box')
+await x.click()
+check(await until(async () => (await search.inputValue()) === '' && (await tabs.first().isVisible())), 'the X empties it and brings the tabs back')
+check(await search.evaluate((el) => el === document.activeElement), 'with the cursor still in the box')
+await search.fill('speed')
+await search.press('Escape')
+check(await until(async () => (await search.inputValue()) === ''), 'Escape empties it too')
 
-// From a search result to its tab, the search let go.
 await search.fill('speed')
 await page.getByRole('button', { name: /^Downloads ›$/ }).click()
 check(await until(async () => new URL(page.url()).searchParams.get('tab') === 'Downloads' && !new URL(page.url()).searchParams.get('q')),
   'a result heading opens its tab', page.url())
 
-// Another screen can link straight to one setting.
 await page.goto(`${BASE}/settings?q=download%20queue`, { waitUntil: 'domcontentloaded' })
 check(await until(() => visible('Download queue while watching')), 'a ?q= link opens on the setting it names')
 check(!(await visible('Download ahead while watching')), 'and only that one')
 
-// Escape clears the search.
 await search.press('Escape')
 check(await until(async () => !new URL(page.url()).searchParams.get('q')), 'Escape clears the search')
 
-// A phone: the tabs are a menu, searching still works, and nothing pushes the page sideways.
 await page.setViewportSize({ width: 390, height: 844 })
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
 const sections = page.getByRole('navigation', { name: 'Settings sections' })
@@ -135,7 +135,6 @@ check(await until(() => visible('Budget')), 'searching works on a phone too')
 check((await over()) <= 0, 'and its results fit the width', `${await over()}px over`)
 await page.screenshot({ path: `${SHOTS}/settings-phone-search.png` })
 
-// Clear cache asks first, then says what it freed: here nothing, as the test instance has nothing cached.
 await page.setViewportSize({ width: 1280, height: 900 })
 await page.goto(`${BASE}/settings?tab=Storage`, { waitUntil: 'domcontentloaded' })
 const cleared = page.waitForRequest((r) => r.url().includes('/api/downloads/clear?scope=completed'))
@@ -145,7 +144,6 @@ check(await page.getByText("Streamed episodes go; what's playing or downloading,
 await page.getByRole('button', { name: 'Clear cache' }).click()
 await cleared
 check(await until(() => page.getByText(/^Nothing to clear: /).isVisible()), 'and says what it cleared')
-// Pressed again, its answer stays until the next one lands: never a blink back to the words it started with.
 const hint = page.locator('[data-row]', { hasText: 'In use' }).locator('p').nth(1)
 await hint.evaluate((el) => {
   window.__hints = []
@@ -158,6 +156,19 @@ await again
 await sleep(500)
 const seen = await page.evaluate(() => window.__hints)
 check(!seen.some((t) => / cached · .* downloaded$/.test(t)), 'pressed again, it never blinks back', JSON.stringify(seen))
+
+let passwordFields = 0
+let masked = 0
+for (const tab of ['Playback', 'Language', 'Sound', 'Accounts', 'Library', 'Notifications', 'Downloads', 'Storage', 'Devices', 'Computer', 'About', 'New']) {
+  await page.goto(`${BASE}/settings?tab=${tab}`, { waitUntil: 'domcontentloaded' })
+  await sleep(700)
+  passwordFields += await page.locator('input[type="password"]').count()
+  masked += await page.locator('input[data-secret]').evaluateAll((els) => els.filter((el) => getComputedStyle(el).webkitTextSecurity === 'disc').length)
+}
+check(passwordFields === 0, 'no Settings tab has a password-type field for a password manager to fill', `${passwordFields} found`)
+const box = page.getByRole('searchbox', { name: 'Search settings' })
+check((await box.getAttribute('autocomplete')) === 'off' && (await box.inputValue()) === '', 'and the Settings search box takes no saved entries', await box.inputValue())
+console.log(`     secret fields seen masked: ${masked}`)
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 await browser.close()

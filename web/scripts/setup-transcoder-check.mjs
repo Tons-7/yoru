@@ -1,4 +1,3 @@
-// The transcoder row says what it is for, and explains half an install. Run with BIN_ONLY=ffmpeg.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -19,16 +18,16 @@ const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
-await page.goto(`${BASE}/setup`, { waitUntil: 'load', timeout: 60000 })
+await page.goto(`${BASE}/setup?step=essentials`, { waitUntil: 'load', timeout: 60000 })
 
-const item = page.locator('li').filter({ hasText: 'Transcoder' }).first()
+const item = page.locator('li').filter({ hasText: 'Player engine' }).first()
 await item.waitFor({ timeout: 30000 })
 const text = await item.innerText()
-check(text.includes('Needed for the built-in player'), 'the badge says what it is needed for')
-check(!/\bOptional\b/.test(text), 'and no longer says Optional')
-check(text.includes('ffmpeg and ffprobe') && text.includes('mpv or VLC'), 'the text names both programs and who can skip them')
-check(text.includes('ffprobe is not; Yoru needs both'), 'the page shows which half is missing')
-check(await item.getByRole('button', { name: /install/i }).isVisible(), 'and still offers to install the pair')
+check(/\bNeeded\b/.test(text), 'the player engine is marked as needed', text.replace(/\n/g, ' | '))
+check(text.includes('Prepares every episode for the built-in player'), 'and says what it is for')
+check(text.includes('ffprobe is not; Yoru needs both'), 'the guide shows which half is missing')
+check(await page.getByRole('checkbox', { name: /Player engine/ }).isChecked(), 'the pair is picked to be fetched')
+check(await page.getByRole('button', { name: 'Download and continue' }).isVisible(), 'and the step offers to download it')
 await page.screenshot({ path: `${SHOTS}/setup-transcoder.png` })
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))

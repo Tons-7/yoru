@@ -78,6 +78,8 @@ var Defaults = map[string]string{
 	"power.awake_watching":    "true",
 	"power.awake_downloading": "true",
 
+	"update.auto": "true",
+
 	"quality.ladder": `["1080p:BD:HEVC:10","1080p:BD","1080p:WEB","720p"]`,
 
 	"quality.codec":          "hevc",

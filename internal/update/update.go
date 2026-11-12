@@ -1,5 +1,3 @@
-// Package update replaces yoru.exe with the newest GitHub release. The zip is
-// the only thing touched: bin/, cache/, config.toml and the database stay.
 package update
 
 import (
@@ -33,7 +31,6 @@ import (
 	"yoru/internal/store"
 )
 
-// Version is stamped by the build (-X yoru/internal/update.Version=...); a "dev" build never updates itself.
 var Version = "dev"
 
 const (
@@ -43,10 +40,8 @@ const (
 	sigFile   = sumsFile + ".sig"
 )
 
-// signingKeyHex can be replaced at build time (-X) only by an end-to-end test signing its own fake release.
 var signingKeyHex = "22e0c47d84c95b91d24c386c08e994718a23cec6332f187c92bb3ed5ad4c279b"
 
-// signingKey verifies SHA256SUMS.txt.sig, which a stolen token or hijacked CI cannot forge.
 var signingKey = mustPublicKey(signingKeyHex)
 
 func mustPublicKey(hexKey string) ed25519.PublicKey {
@@ -63,6 +58,7 @@ const (
 	StageIdle        Stage = "idle"
 	StageDownloading Stage = "downloading"
 	StageVerifying   Stage = "verifying"
+	StageReady       Stage = "ready"
 	StageRestarting  Stage = "restarting"
 	StageFailed      Stage = "failed"
 )
@@ -75,7 +71,6 @@ type Release struct {
 	Notes   string `json:"notes,omitempty"`
 }
 
-// Notes is one release's text, so someone several versions behind reads every one, not just the newest.
 type Notes struct {
 	Version   string    `json:"version"`
 	Notes     string    `json:"notes"`
@@ -92,11 +87,12 @@ type Status struct {
 	Bytes     int64     `json:"bytes"`
 	Total     int64     `json:"total"`
 	Error     string    `json:"error,omitempty"`
-	// Pending: every release newer than this one, newest first.
+	Staged    string    `json:"staged,omitempty"`
+
 	Pending []Notes `json:"pending,omitempty"`
-	// WhatsNew: this version's notes, with those of the versions skipped since the one it replaced here.
+
 	WhatsNew []Notes `json:"whatsNew,omitempty"`
-	// UpdatedFrom: the version that ran here before this one, when known.
+
 	UpdatedFrom string `json:"updatedFrom,omitempty"`
 }
 
@@ -105,7 +101,7 @@ type Updater struct {
 	exe     string
 	staging string
 	api     string
-	// web is github.com itself, asked when the API's hourly allowance is spent (latestFromSite).
+
 	web     string
 	http    *http.Client
 	log     *slog.Logger
@@ -118,7 +114,7 @@ type Updater struct {
 
 func New(st *store.Store, exe, staging string, log *slog.Logger) *Updater {
 	api, web := "https://api.github.com", "https://github.com"
-	// An end-to-end test points a real build at a fake release server.
+
 	if override := config.Env("UPDATE_API"); override != "" {
 		api, web = override, override
 	}
@@ -132,7 +128,6 @@ func New(st *store.Store, exe, staging string, log *slog.Logger) *Updater {
 	}
 }
 
-// WithRestart sets what ends this process once the new binary is in place.
 func (u *Updater) WithRestart(f func()) *Updater { u.restart = f; return u }
 
 func (u *Updater) Status() Status {
@@ -159,8 +154,6 @@ type ghRelease struct {
 	} `json:"assets"`
 }
 
-// Check asks GitHub for the latest release and raises a notification the first
-// time a newer one is seen. A dev build only records what is out.
 func (u *Updater) Check(ctx context.Context) (Status, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -168,11 +161,11 @@ func (u *Updater) Check(ctx context.Context) (Status, error) {
 	rel, err := u.latest(ctx)
 	var all []Notes
 	if _, limited := errors.AsType[*rateLimited](err); limited {
-		// The API allows 60 asks an hour per address, which a VPN's shares; the site's pages aren't counted.
+
 		if site, serr := u.latestFromSite(ctx); serr == nil {
 			u.log.Info("GitHub's API is limiting this network; read the latest release from its site", "version", site.Version)
 			rel, err, all = site, nil, u.knownNotes(site.Version)
-			// Its feed has the latest releases' notes, or What's new would stay empty after an update.
+
 			if feed, ferr := u.feedNotes(ctx); ferr == nil {
 				all = withNotes(all, feed)
 				if i := slices.IndexFunc(feed, func(n Notes) bool { return n.Version == site.Version }); i >= 0 {
@@ -185,11 +178,15 @@ func (u *Updater) Check(ctx context.Context) (Status, error) {
 			u.log.Warn("latest release from GitHub's site", "err", serr)
 		}
 	} else if err == nil {
-		// Best effort: without the list, the latest release's own notes still show.
+
 		if all, err = u.releases(ctx); err != nil {
 			u.log.Warn("release notes", "err", err)
 			all, err = []Notes{{Version: rel.Version, Notes: rel.Notes}}, nil
 		}
+	}
+	staged := ""
+	if st := u.Status(); st.Stage == StageIdle || st.Stage == StageFailed {
+		staged = u.verifiedStaged()
 	}
 	u.set(func(s *Status) {
 		s.CheckedAt = time.Now()
@@ -200,6 +197,12 @@ func (u *Updater) Check(ctx context.Context) (Status, error) {
 		}
 		s.Latest = &rel
 		s.Available = rel.URL != "" && Newer(rel.Version, Version)
+		switch {
+		case s.Available && (s.Stage == StageIdle || s.Stage == StageFailed) && staged == rel.Version:
+			s.Stage, s.Staged, s.Error = StageReady, staged, ""
+		case s.Stage == StageReady && s.Staged != rel.Version:
+			s.Stage, s.Staged = StageIdle, ""
+		}
 		s.Pending = pending(all, Version)
 		s.WhatsNew = whatsNew(all, Version, s.UpdatedFrom)
 	})
@@ -257,7 +260,6 @@ func (u *Updater) latest(ctx context.Context) (Release, error) {
 	return rel, nil
 }
 
-// rateLimited is GitHub's API refusing for the hour; reset is when it lets this network ask again.
 type rateLimited struct{ reset time.Time }
 
 func (e *rateLimited) Error() string {
@@ -268,7 +270,6 @@ func (e *rateLimited) Error() string {
 		e.reset.Local().Format("15:04"))
 }
 
-// limitOf reads a 403 or 429 that is the API's allowance spent, not a refusal of the repository.
 func limitOf(res *http.Response) error {
 	if res.StatusCode != http.StatusForbidden && res.StatusCode != http.StatusTooManyRequests {
 		return nil
@@ -286,7 +287,6 @@ func limitOf(res *http.Response) error {
 	return &rateLimited{reset: time.Unix(reset, 0)}
 }
 
-// latestFromSite reads the newest tag from github.com's redirect, its assets at fixed addresses; no notes.
 func (u *Updater) latestFromSite(ctx context.Context) (Release, error) {
 	noFollow := *u.http
 	noFollow.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -309,7 +309,7 @@ func (u *Updater) latestFromSite(ctx context.Context) (Release, error) {
 	rel := Release{Version: strings.TrimPrefix(tag, "v")}
 	base := u.web + "/" + Repo + "/releases/download/" + tag + "/"
 	rel.Sums, rel.Sig = base+sumsFile, base+sigFile
-	// A release without this platform's zip is no update here, as with the API's asset list.
+
 	asset := base + AssetName(rel.Version)
 	head, err := http.NewRequestWithContext(ctx, http.MethodHead, asset, nil)
 	if err != nil {
@@ -330,7 +330,6 @@ func (u *Updater) latestFromSite(ctx context.Context) (Release, error) {
 	return rel, nil
 }
 
-// knownNotes are notes fetched before, plus a newer latest without any; none blank for the version running.
 func (u *Updater) knownNotes(latest string) []Notes {
 	st := u.Status()
 	all := append(slices.Clone(st.Pending), st.WhatsNew...)
@@ -340,7 +339,6 @@ func (u *Updater) knownNotes(latest string) []Notes {
 	return newestFirst(all)
 }
 
-// withNotes fills known releases' notes from the feed and adds those it alone has, newest first.
 func withNotes(known, feed []Notes) []Notes {
 	out := slices.Clone(known)
 	for _, n := range feed {
@@ -353,7 +351,6 @@ func withNotes(known, feed []Notes) []Notes {
 	return newestFirst(out)
 }
 
-// feedNotes reads the latest releases' notes from GitHub's release feed, which the API's limit doesn't count.
 func (u *Updater) feedNotes(ctx context.Context) ([]Notes, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.web+"/"+Repo+"/releases.atom", nil)
 	if err != nil {
@@ -390,8 +387,6 @@ func (u *Updater) feedNotes(ctx context.Context) ([]Notes, error) {
 	return out, nil
 }
 
-// htmlNotes turns the feed's rendered notes back into the headings, bullets and bold the About tab reads.
-// Links keep only their words, as in the notes themselves.
 func htmlNotes(rendered string) string {
 	var b strings.Builder
 	z := html.NewTokenizer(strings.NewReader(rendered))
@@ -401,7 +396,7 @@ func htmlNotes(rendered string) string {
 		case html.ErrorToken:
 			return strings.TrimSpace(blankLines.ReplaceAllString(b.String(), "\n\n"))
 		case html.TextToken:
-			// Line breaks between tags are the page's layout, not the notes'; a space between words stays.
+
 			text := string(z.Text())
 			if strings.TrimSpace(text) != "" {
 				b.WriteString(strings.ReplaceAll(text, "\n", " "))
@@ -445,7 +440,6 @@ func newestFirst(out []Notes) []Notes {
 	return out
 }
 
-// releases lists the published releases' notes, newest first; drafts and pre-releases are nobody's update.
 func (u *Updater) releases(ctx context.Context) ([]Notes, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		u.api+"/repos/"+Repo+"/releases?per_page=50", nil)
@@ -476,7 +470,6 @@ func (u *Updater) releases(ctx context.Context) ([]Notes, error) {
 	return newestFirst(out), nil
 }
 
-// pending is every release newer than current.
 func pending(all []Notes, current string) []Notes {
 	var out []Notes
 	for _, n := range all {
@@ -487,7 +480,6 @@ func pending(all []Notes, current string) []Notes {
 	return out
 }
 
-// whatsNew is current's notes and every release after from up to it; from unknown, current's alone.
 func whatsNew(all []Notes, current, from string) []Notes {
 	if current == "dev" {
 		return nil
@@ -505,7 +497,6 @@ func whatsNew(all []Notes, current, from string) []Notes {
 	return out
 }
 
-// Started records the running version; the first start after an update announces it and keeps the old one.
 func (u *Updater) Started(ctx context.Context) {
 	if u.store == nil || Version == "dev" {
 		return
@@ -517,7 +508,7 @@ func (u *Updater) Started(ctx context.Context) {
 		return
 	}
 	updated := last != "" && Newer(Version, last)
-	// Versions before this one recorded nothing; the announcement of this very version says it came by update.
+
 	if last == "" {
 		notified, _ := u.store.Setting(ctx, "update.notified")
 		updated = notified == Version
@@ -546,7 +537,6 @@ func (u *Updater) Started(ctx context.Context) {
 	}
 }
 
-// fetchSmall reads a release's small text asset.
 func (u *Updater) fetchSmall(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -564,7 +554,6 @@ func (u *Updater) fetchSmall(ctx context.Context, url string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(res.Body, 64<<10))
 }
 
-// AssetName is the zip package.ps1 publishes for this platform.
 func AssetName(version string) string {
 	if runtime.GOOS == "windows" {
 		return fmt.Sprintf("%s-%s-update.zip", config.Name, version)
@@ -572,7 +561,6 @@ func AssetName(version string) string {
 	return fmt.Sprintf("%s-%s-%s-%s.zip", config.Name, version, runtime.GOOS, runtime.GOARCH)
 }
 
-// notify announces a version once; the setting remembers which.
 func (u *Updater) notify(ctx context.Context, rel Release) {
 	if u.store == nil {
 		return
@@ -594,14 +582,22 @@ func (u *Updater) notify(ctx context.Context, rel Release) {
 	}
 }
 
-// Apply fetches the latest release in the background, swaps the executable and
-// starts the new one; the caller's restart hook then ends this process.
-func (u *Updater) Apply() error {
-	// Judged and claimed under one lock: two presses must not start two downloads into one file.
+func (u *Updater) Apply() error { return u.fetch(true) }
+
+func (u *Updater) Prepare() error { return u.fetch(false) }
+
+func (u *Updater) fetch(thenInstall bool) error {
 	u.mu.Lock()
 	st := u.status
 	if st.Stage == StageDownloading || st.Stage == StageVerifying || st.Stage == StageRestarting {
 		u.mu.Unlock()
+		return nil
+	}
+	if st.Stage == StageReady {
+		u.mu.Unlock()
+		if thenInstall {
+			return u.Install()
+		}
 		return nil
 	}
 	if !st.Available || st.Latest == nil {
@@ -616,41 +612,182 @@ func (u *Updater) Apply() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
 
-		if err := u.apply(ctx, rel); err != nil {
+		if err := u.stage(ctx, rel); err != nil {
 			u.log.Error("update", "version", rel.Version, "err", err)
 			u.set(func(s *Status) { s.Stage, s.Error = StageFailed, err.Error() })
 			return
 		}
-		u.set(func(s *Status) { s.Stage = StageRestarting })
-		u.log.Info("restarting into the new version", "version", rel.Version)
-		if u.restart != nil {
-			u.restart()
+		u.set(func(s *Status) { s.Stage, s.Staged = StageReady, rel.Version })
+		if !thenInstall {
+			u.log.Info("update downloaded; it installs when a restart is asked for", "version", rel.Version)
+			return
 		}
+		u.Install()
 	}()
 	return nil
 }
 
-func (u *Updater) apply(ctx context.Context, rel Release) error {
+func (u *Updater) Install() error {
+	u.mu.Lock()
+	if u.status.Stage != StageReady {
+		u.mu.Unlock()
+		return errors.New("no update is downloaded yet")
+	}
+	version := u.status.Staged
+	u.status.Stage = StageRestarting
+	u.mu.Unlock()
+
+	if err := u.install(version); err != nil {
+		u.log.Error("update", "version", version, "err", err)
+		u.set(func(s *Status) { s.Stage, s.Staged, s.Error = StageFailed, "", err.Error() })
+		return err
+	}
+	u.log.Info("restarting into the new version", "version", version)
+	if u.restart != nil {
+		go u.restart()
+	}
+	return nil
+}
+
+type stagedMark struct {
+	Version string `json:"version"`
+	Archive string `json:"archive"`
+}
+
+func (u *Updater) markPath() string { return filepath.Join(u.staging, "staged.json") }
+func (u *Updater) sumsPath() string { return filepath.Join(u.staging, sumsFile) }
+func (u *Updater) sigPath() string  { return filepath.Join(u.staging, sumsFile+".sig") }
+
+func (u *Updater) stagedMark() (stagedMark, bool) {
+	raw, err := os.ReadFile(u.markPath())
+	if err != nil {
+		return stagedMark{}, false
+	}
+	var mark stagedMark
+	if json.Unmarshal(raw, &mark) != nil || mark.Version == "" || mark.Archive != AssetName(mark.Version) {
+		return stagedMark{}, false
+	}
+	return mark, true
+}
+
+func (u *Updater) stagedVersion() string {
+	mark, ok := u.stagedMark()
+	if !ok || !Newer(mark.Version, Version) {
+		return ""
+	}
+	return mark.Version
+}
+
+func (u *Updater) verifiedStaged() string {
+	mark, ok := u.stagedMark()
+	if !ok {
+		return ""
+	}
+	if !Newer(mark.Version, Version) {
+		u.forgetIfIdle()
+		return ""
+	}
+	if _, err := u.stagedArchive(mark.Version); err != nil {
+		u.log.Warn("downloaded update dropped", "version", mark.Version, "err", err)
+		u.forgetIfIdle()
+		return ""
+	}
+	return mark.Version
+}
+
+func (u *Updater) forgetIfIdle() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.status.Stage == StageIdle || u.status.Stage == StageFailed {
+		u.forgetStaged()
+	}
+}
+
+func (u *Updater) stagedArchive(version string) (string, error) {
+	mark, ok := u.stagedMark()
+	if !ok || mark.Version != version {
+		return "", errors.New("the downloaded update is missing; check again")
+	}
+	raw, err := os.ReadFile(u.sumsPath())
+	if err != nil {
+		return "", errors.New("the downloaded update is missing its checksums; check again")
+	}
+	sig, err := os.ReadFile(u.sigPath())
+	if err != nil {
+		return "", errors.New("the downloaded update is missing its signature; check again")
+	}
+	archive := filepath.Join(u.staging, mark.Archive)
+	if err := verifyArchive(raw, sig, archive); err != nil {
+		return "", fmt.Errorf("the downloaded update was changed: %w", err)
+	}
+	return archive, nil
+}
+
+func (u *Updater) forgetStaged() {
+	if mark, ok := u.stagedMark(); ok {
+		os.Remove(filepath.Join(u.staging, mark.Archive))
+	}
+	for _, path := range []string{u.markPath(), u.sumsPath(), u.sigPath()} {
+		os.Remove(path)
+	}
+}
+
+func (u *Updater) stage(ctx context.Context, rel Release) error {
 	if rel.Sums == "" || rel.Sig == "" {
 		return errors.New("release carries no signed " + sumsFile + "; refusing an unverified binary")
 	}
 	if err := os.MkdirAll(u.staging, 0o755); err != nil {
 		return err
 	}
-	archive := filepath.Join(u.staging, filepath.Base(rel.URL))
-	defer os.Remove(archive)
+	u.forgetStaged()
+	name := filepath.Base(rel.URL)
+	archive := filepath.Join(u.staging, name)
+	kept := false
+	defer func() {
+		if !kept {
+			os.Remove(archive)
+		}
+	}()
 
 	if err := u.download(ctx, rel.URL, archive); err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
 
 	u.set(func(s *Status) { s.Stage = StageVerifying })
-	if err := u.verify(ctx, rel, archive); err != nil {
+	raw, err := u.fetchSmall(ctx, rel.Sums)
+	if err != nil {
+		return fmt.Errorf("checksums: %w", err)
+	}
+	sig, err := u.fetchSmall(ctx, rel.Sig)
+	if err != nil {
+		return fmt.Errorf("signature: %w", err)
+	}
+	if err := verifyArchive(raw, sig, archive); err != nil {
 		return err
 	}
+	if err := os.WriteFile(u.sumsPath(), raw, 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(u.sigPath(), sig, 0o644); err != nil {
+		return err
+	}
+	mark, _ := json.Marshal(stagedMark{Version: rel.Version, Archive: name})
+	if err := os.WriteFile(u.markPath(), mark, 0o644); err != nil {
+		return err
+	}
+	kept = true
+	return nil
+}
 
+func (u *Updater) install(version string) error {
+	archive, err := u.stagedArchive(version)
+	if err != nil {
+		u.forgetStaged()
+		return err
+	}
 	fresh := u.exe + ".new"
 	if err := extractExe(archive, fresh); err != nil {
+		os.Remove(fresh)
 		return fmt.Errorf("unpack: %w", err)
 	}
 	if err := swap(u.exe, fresh); err != nil {
@@ -658,16 +795,15 @@ func (u *Updater) apply(ctx context.Context, rel Release) error {
 		return fmt.Errorf("replace executable: %w", err)
 	}
 	if err := u.launch(u.exe); err != nil {
-		// Put the running version back, or nothing is left to start next time.
 		if rerr := Rollback(u.exe); rerr != nil {
 			u.log.Error("restore the previous version", "err", rerr)
 		}
 		return fmt.Errorf("start the new version: %w", err)
 	}
+	u.forgetStaged()
 	return nil
 }
 
-// Rollback puts the previous binary back in place of a new one that failed.
 func Rollback(exe string) error {
 	old := exe + ".old"
 	if _, err := os.Stat(old); err != nil {
@@ -685,13 +821,10 @@ func Rollback(exe string) error {
 	return nil
 }
 
-// Handover reports a start by an update, the only time a failed start falls back to the old binary.
 func Handover(args []string) bool {
 	return slices.Contains(args, "--wait-for")
 }
 
-// Relaunch hands over to a restored version at once, as this one has let go of the port, data and lock,
-// with this launch's own flags (--no-window).
 func Relaunch(exe string) error {
 	cmd := exec.Command(exe, carried(os.Args[1:])...)
 	cmd.Dir = filepath.Dir(exe)
@@ -701,7 +834,7 @@ func Relaunch(exe string) error {
 }
 
 func (u *Updater) download(ctx context.Context, url, dest string) error {
-	// No overall deadline, which a slow line would always miss: only silence ends it, besides ctx.
+
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	quiet := time.AfterFunc(stallAfter, func() { cancel(errStalled) })
@@ -758,21 +891,11 @@ func (u *Updater) download(ctx context.Context, url, dest string) error {
 	}
 }
 
-// Var so tests need not wait.
 var stallAfter = time.Minute
 
 var errStalled = errors.New("the download stopped: no data for a minute")
 
-// verify checks the zip against the published SHA256SUMS line for it, and that file against its signature.
-func (u *Updater) verify(ctx context.Context, rel Release, archive string) error {
-	raw, err := u.fetchSmall(ctx, rel.Sums)
-	if err != nil {
-		return fmt.Errorf("checksums: %w", err)
-	}
-	sig, err := u.fetchSmall(ctx, rel.Sig)
-	if err != nil {
-		return fmt.Errorf("signature: %w", err)
-	}
+func verifyArchive(raw, sig []byte, archive string) error {
 	if !ed25519.Verify(signingKey, raw, sig) {
 		return errors.New(sumsFile + " is not signed by Yoru's release key; refusing the update")
 	}
@@ -804,7 +927,6 @@ func (u *Updater) verify(ctx context.Context, rel Release, archive string) error
 	return nil
 }
 
-// extractExe writes the one executable in the zip to dest.
 func extractExe(archive, dest string) error {
 	r, err := zip.OpenReader(archive)
 	if err != nil {
@@ -834,7 +956,6 @@ func extractExe(archive, dest string) error {
 	return fmt.Errorf("%s not in the archive", want)
 }
 
-// swap moves the running binary aside and the new one in; a failure puts the old one back.
 func swap(exe, fresh string) error {
 	old := exe + ".old"
 	os.Remove(old)
@@ -848,34 +969,29 @@ func swap(exe, fresh string) error {
 	return nil
 }
 
-// Cleanup removes the last update's leftovers once this version serves; until then .old is the way back.
 func Cleanup(exe string) {
 	os.Remove(exe + ".old")
 	os.Remove(exe + ".new")
 	os.Remove(exe + ".failed")
 }
 
-// RelaunchSelf starts this binary again, told to wait for this process, for a change that needs a restart.
 func RelaunchSelf(exe string) error { return relaunch(exe) }
 
-// relaunch starts the new binary outside the job object, waiting for this exit; a windowed Yoru reopens its UI.
 func relaunch(exe string) error { return relaunchCmd(exe).Start() }
 
 func relaunchCmd(exe string) *exec.Cmd {
 	cmd := exec.Command(exe, relaunchArgs(os.Getpid(), os.Args[1:])...)
 	cmd.Dir = filepath.Dir(exe)
-	// Inherited, not NUL, so a handover failing at startup says why.
+
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	config.Detach(cmd)
 	return cmd
 }
 
-// relaunchArgs: a fresh --wait-for, the old pair dropped, the rest carried over.
 func relaunchArgs(pid int, current []string) []string {
 	return append([]string{"--wait-for", strconv.Itoa(pid)}, carried(current)...)
 }
 
-// carried is a launch's flags without its --wait-for pair.
 func carried(current []string) []string {
 	var args []string
 	skip := false
@@ -892,8 +1008,6 @@ func carried(current []string) []string {
 	return args
 }
 
-// WaitFor reads --wait-for <pid> from the arguments and blocks until that process is gone, so a relaunch
-// doesn't race its predecessor for the port, nor move the data folder while it still has the database open.
 func WaitFor(args []string, timeout time.Duration) {
 	for i, a := range args {
 		if a != "--wait-for" || i+1 >= len(args) {
@@ -911,8 +1025,6 @@ func WaitFor(args []string, timeout time.Duration) {
 	}
 }
 
-// Newer reports whether a is a later version than b: dotted numbers compared
-// left to right, so 2026.08.27 < 2026.08.27.1 and a "dev" build is never behind.
 func Newer(a, b string) bool {
 	if b == "dev" || a == "" {
 		return false

@@ -24,7 +24,7 @@ const PAST_MINI: Record<Corner, string> = {
   br: 'right-4 bottom-[23.5rem] max-sm:bottom-[calc(15.5rem+env(safe-area-inset-bottom))]',
 }
 
-export function RoomBubble() {
+export function RoomBubble({ hidden = false }: { hidden?: boolean }) {
   const { room, inRoom, together, leave } = useRoomSession()
   const match = useMatch('/watch/:animeId/:episode')
   const navigate = useNavigate()
@@ -39,7 +39,7 @@ export function RoomBubble() {
   const onRoomPage =
     !!match && !!state && Number(match.params.animeId) === state.animeId && Number(match.params.episode) === state.episode
   const visible = inRoom && !!view && !!state && !!together && !onRoomPage
-  const toasts = useRoomToasts(room, visible && !open && overlayOn())
+  const toasts = useRoomToasts(room, visible && !hidden && !open && overlayOn())
   const lastId = room.lines.length ? room.lines[room.lines.length - 1].id : 0
   const [seenId, setSeenId] = useState(0)
   if ((open || !visible) && seenId !== lastId) setSeenId(lastId)
@@ -47,7 +47,7 @@ export function RoomBubble() {
   useEffect(() => {
     if (open && feed.current) feed.current.scrollTop = feed.current.scrollHeight
   }, [open, lastId])
-  if (!visible) return null
+  if (!visible || hidden) return null
   const mine = room.me?.id
   const own = (l: { member?: string; from?: string }) => (l.member ? l.member === mine : l.from === room.me?.name)
   const unread = room.lines.filter((l) => l.id > seenId && l.kind === 'chat' && !own(l)).length

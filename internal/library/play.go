@@ -329,6 +329,17 @@ func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, boo
 	if !held {
 		return nil, false, nil
 	}
+	if p.finder != nil && rec.FileIndex >= 0 && !rec.Manual {
+		if detail, derr := p.torrent.Details(ctx, id); derr == nil && len(detail.Files) > 1 {
+			scope := p.finder.PackScope(ctx, req.AnimeID, req.Episode, req.Season)
+			numbers := fileNumbers(ctx, p.store, req.AnimeID, req.Episode)
+			if f, i, ok := torrent.PickByTitle(detail.Files, req.Episode, numbers, scope); ok && i != rec.FileIndex {
+				p.log.Info("held pack is numbered in another order; playing the file titled for this episode",
+					"anime", req.AnimeID, "episode", req.Episode, "was", rec.FilePath, "now", f.Name)
+				rec.FileIndex, rec.FilePath = i, f.Name
+			}
+		}
+	}
 
 	if p.prefetch != nil {
 		p.prefetch.Unpause(ctx, rec)

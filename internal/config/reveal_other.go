@@ -8,10 +8,24 @@ import (
 	"runtime"
 )
 
-// Reveal shows path in the file manager: selected in the Finder, its folder elsewhere.
 func Reveal(path string) error {
 	if runtime.GOOS == "darwin" {
-		return exec.Command("open", "-R", path).Start()
+		return started(exec.Command("open", "-R", path))
 	}
-	return exec.Command("xdg-open", filepath.Dir(path)).Start()
+	return started(exec.Command("xdg-open", filepath.Dir(path)))
+}
+
+func OpenFolder(path string) error {
+	if runtime.GOOS == "darwin" {
+		return started(exec.Command("open", path))
+	}
+	return started(exec.Command("xdg-open", path))
+}
+
+func started(cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
 }

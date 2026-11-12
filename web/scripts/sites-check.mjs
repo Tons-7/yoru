@@ -1,4 +1,3 @@
-// Release sites edited in the app: tested, searched with at once (no restart), reordered, removed.
 import { createServer } from 'node:http'
 import { chromium } from 'playwright'
 
@@ -17,7 +16,6 @@ const check = (ok, label, detail = '') => {
   if (!ok) failures++
 }
 
-// A TokyoTosho-style feed answering every search with one release.
 const feed = createServer((req, res) => {
   res.setHeader('Content-Type', 'application/rss+xml')
   res.end(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><item><category>Anime</category>
@@ -40,7 +38,6 @@ try {
   const section = page.locator('section', { hasText: 'Release sites' })
   check(await until(() => section.getByText(/A change here moves the list into Yoru/).isVisible()), 'it says the list is config.toml’s')
 
-  // Test first: a dead address says why, with a way to try again; the working one counts its results.
   await section.getByLabel('Feed type').selectOption('tokyotosho')
   const address = section.getByLabel('Site address')
   await address.fill('http://127.0.0.1:1')
@@ -57,7 +54,6 @@ try {
   const found = await (await fetch(`${BASE}/api/torrents?q=sites+check`)).json()
   check((found.results ?? []).some((r) => r.title.includes('Sites Check Show')), 'a search uses it at once, no restart', JSON.stringify(found).slice(0, 160))
 
-  // Order: the first wins a shared release; moving up changes it, and Remove has an Undo.
   await section.getByRole('button', { name: `Move ${feedURL} up` }).click()
   check(await until(async () => (await sites()).sites[0].url === feedURL), 'Move up puts it first')
   await page.screenshot({ path: `${SHOTS}/sites-settings.png` })
@@ -67,12 +63,10 @@ try {
   await page.getByRole('button', { name: 'Undo' }).click()
   check(await until(async () => (await sites()).sites.length === 2), 'Undo puts it back')
 
-  // Setup shows the same editor, for a first run.
-  await page.goto(`${BASE}/setup`, { waitUntil: 'domcontentloaded' })
-  check(await until(() => page.getByText(feedURL, { exact: true }).isVisible()), 'Setup lists the sites too')
+  await page.goto(`${BASE}/setup?step=sources`, { waitUntil: 'domcontentloaded' })
+  check(await until(() => page.getByText(feedURL, { exact: true }).isVisible()), "the setup guide's Sources step lists the sites too")
   await page.screenshot({ path: `${SHOTS}/sites-setup.png`, fullPage: true })
 
-  // Phone width: the form wraps, nothing runs off the edge.
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(`${BASE}/settings?tab=Downloads`, { waitUntil: 'domcontentloaded' })
   await section.getByLabel('Site address').waitFor()

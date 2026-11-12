@@ -1,6 +1,7 @@
 import { api } from './api'
+import { DESKTOP_NOTIFY_KEY } from './notifications'
+import { writeKey } from './storage'
 
-/** What alerts with Yoru closed can do on this device, or why not. */
 export type PushState = 'on' | 'off' | 'denied' | 'insecure' | 'install' | 'unsupported'
 
 const iPhone = () =>
@@ -11,7 +12,6 @@ const installed = () =>
 
 const supported = () => 'serviceWorker' in navigator && 'PushManager' in window
 
-// iPhone Safari offers push only to Yoru added to the Home Screen; plain http has no service workers at all.
 export async function pushState(): Promise<PushState> {
   if (iPhone() && !installed()) return 'install'
   if (!window.isSecureContext) return 'insecure'
@@ -26,7 +26,6 @@ async function subscription(): Promise<PushSubscription | null> {
   return (await reg?.pushManager.getSubscription()) ?? null
 }
 
-/** Registers the alerts worker; on every load while alerts are wanted, so an updated one takes over. */
 export function registerWorker(): Promise<ServiceWorkerRegistration> | undefined {
   if (!window.isSecureContext || !supported()) return undefined
   return navigator.serviceWorker.register('/sw.js')
@@ -40,7 +39,6 @@ function keyBytes(key: string): Uint8Array<ArrayBuffer> {
 const sameKey = (a: ArrayBuffer | null | undefined, b: Uint8Array) =>
   !!a && a.byteLength === b.byteLength && new Uint8Array(a).every((v, i) => v === b[i])
 
-/** Subscribes this device and tells Yoru where to send. Call from a tap: it may ask for permission. */
 export async function enablePush(): Promise<void> {
   const reg = await registerWorker()
   if (!reg) throw new Error('This browser cannot get alerts with Yoru closed')
@@ -48,7 +46,6 @@ export async function enablePush(): Promise<void> {
   const { publicKey } = await api.get<{ publicKey: string }>('/api/push')
   const key = keyBytes(publicKey)
   let sub = await reg.pushManager.getSubscription()
-  // Made for another key (Yoru's data was reset): the push service would refuse every alert sent with this one.
   if (sub && !sameKey(sub.options.applicationServerKey, key)) {
     await sub.unsubscribe()
     sub = null
@@ -64,9 +61,20 @@ export async function disablePush(): Promise<void> {
   await sub.unsubscribe()
 }
 
-/** One alert to this device only. */
 export async function testPush(): Promise<void> {
   const sub = await subscription()
   if (!sub) throw new Error('Alerts are off on this device')
   await api.post('/api/push/test', { endpoint: sub.endpoint })
+}
+
+export async function setDeviceAlerts(next: boolean): Promise<boolean> {
+  if (next && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+    if ((await Notification.requestPermission()) !== 'granted') return false
+  }
+  writeKey(DESKTOP_NOTIFY_KEY, next ? '1' : '0')
+  const state = await pushState()
+  const can = state === 'on' || state === 'off'
+  if (next && can) await enablePush()
+  if (!next && can) await disablePush()
+  return true
 }

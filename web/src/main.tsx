@@ -7,6 +7,7 @@ import { App } from './App'
 import { Toaster } from './components/Toaster'
 import { toast } from './lib/toast'
 import { watchRefreshes } from './lib/freshness'
+import { watchVersion } from './lib/version'
 import { desktopNotifyWanted } from './lib/notifications'
 import { registerWorker } from './lib/push'
 import { listenForInstall, runningInstalled } from './lib/install'
@@ -32,6 +33,7 @@ const client = new QueryClient({
 })
 
 watchRefreshes(client)
+watchVersion()
 
 window.addEventListener('vite:preloadError', (e) => {
   try {

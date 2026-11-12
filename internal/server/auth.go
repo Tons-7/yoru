@@ -34,6 +34,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state := randomHex()
+	s.rememberBack(r)
 	if err := s.store.SetSetting(r.Context(), "anilist.state", state); err != nil {
 		s.fail(w, "auth state", err)
 		return
@@ -69,7 +70,24 @@ func (s *Server) authCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	http.Redirect(w, r, "/settings?connected=anilist", http.StatusFound)
+	http.Redirect(w, r, s.afterConnect(ctx, "anilist"), http.StatusFound)
+}
+
+func (s *Server) rememberBack(r *http.Request) {
+	back := ""
+	if r.URL.Query().Get("from") == "setup" {
+		back = "setup"
+	}
+	s.store.SetSetting(r.Context(), "auth.back", back)
+}
+
+func (s *Server) afterConnect(ctx context.Context, provider string) string {
+	back, _ := s.store.Setting(ctx, "auth.back")
+	s.store.SetSetting(ctx, "auth.back", "")
+	if back == "setup" {
+		return "/setup?step=account"
+	}
+	return "/settings?connected=" + provider
 }
 
 func (s *Server) authToken(w http.ResponseWriter, r *http.Request) {

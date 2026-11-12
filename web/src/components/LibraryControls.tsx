@@ -43,6 +43,7 @@ export function DesktopControls(props: ControlProps) {
         <SearchInput
           value={text}
           onChange={(e) => onText(e.target.value)}
+          onClear={() => onText('')}
           placeholder="Filter your list…"
           aria-label="Filter library"
           className="w-64 max-w-full"

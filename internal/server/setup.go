@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -65,9 +67,9 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 			Version: versions["mpv"],
 		},
 		{
-			Name: "anime4k", Label: "Anime4K shaders",
-			Purpose: "Upscaling shaders for mpv. The browser player uses its own " +
-				"WebGPU build and needs no download.",
+			Name: "anime4k", Label: "Anime4K for mpv",
+			Purpose: "A sharper picture in the desktop player (mpv) only. The built-in player's Anime4K " +
+				"is part of Yoru and needs no download.",
 			Size:    "1 MB",
 			Present: s.hasShaders(),
 			Version: versions["anime4k"],
@@ -83,8 +85,8 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		},
 		{
 			Name: "cloudflared", Label: "Watch together",
-			Purpose: "Cloudflare's tunnel, so friends anywhere can join your watch-together room. No account or " +
-				"router setup. Runs only while a room is open.",
+			Purpose: "Only needed to host a watch-together room: friends anywhere reach yours through " +
+				"Cloudflare's tunnel. Joining a friend's room needs nothing. Runs only while your room is open.",
 			Size:    "52 MB",
 			Present: s.hasBinary("cloudflared"),
 			Version: versions["cloudflared"],
@@ -161,6 +163,78 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		body["encoder"], body["toneMapper"] = s.streams.Converter()
 	}
 	send(w, http.StatusOK, body)
+}
+
+var (
+	openFolder = config.OpenFolder
+	revealFile = config.Reveal
+	pickFolder = config.PickFolder
+	canPick    = config.CanPick
+)
+
+func (s *Server) pickStatus(w http.ResponseWriter, r *http.Request) {
+	send(w, http.StatusOK, map[string]any{"available": fromHost(r) && canPick()})
+}
+
+func (s *Server) pick(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Title string `json:"title"`
+		Start string `json:"start"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	path, err := pickFolder(body.Title, body.Start)
+	switch {
+	case errors.Is(err, config.ErrPickCancelled):
+		send(w, http.StatusOK, map[string]any{"cancelled": true})
+	case errors.Is(err, config.ErrPickBusy):
+		send(w, http.StatusConflict, map[string]any{"error": "A folder window is already open."})
+	case errors.Is(err, config.ErrNoPicker):
+		send(w, http.StatusNotImplemented, map[string]any{"error": "Type the folder instead: this computer has no folder window Yoru can open."})
+	case err != nil:
+		s.fail(w, "pick a folder", err)
+	default:
+		send(w, http.StatusOK, map[string]any{"path": path})
+	}
+}
+
+func (s *Server) showFolder(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Which string `json:"which"`
+		Path  string `json:"path"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	folders := map[string]string{"data": s.cfg.DataDir(), "cache": s.cfg.CacheDir, "bin": s.cfg.BinDir}
+	if body.Which == "library" && s.scanner != nil {
+		if roots, err := s.scanner.Roots(r.Context()); err == nil && slices.Contains(roots, body.Path) {
+			if err := openFolder(body.Path); err != nil {
+				s.fail(w, "open the folder", err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+	var err error
+	switch path, ok := folders[body.Which]; {
+	case body.Which == "config":
+		err = revealFile(s.cfg.ConfigPath())
+	case !ok || path == "":
+		send(w, http.StatusBadRequest, map[string]any{"error": "unknown folder"})
+		return
+	default:
+		if err = os.MkdirAll(path, 0o755); err == nil {
+			err = openFolder(path)
+		}
+	}
+	if err != nil {
+		s.fail(w, "open the folder", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {

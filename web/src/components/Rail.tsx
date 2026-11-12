@@ -1,8 +1,30 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import { cx } from '../lib/format'
 import { buttonClass } from '../lib/ui'
 import { Skeleton } from './ui'
+
+const places = new Map<string, number>()
+
+function usePlace(track: React.RefObject<HTMLDivElement | null>, title: string) {
+  const { pathname, search } = useLocation()
+  const key = `${pathname}${search} ${title}`
+  useLayoutEffect(() => {
+    const el = track.current
+    if (!el) return
+    const kept = places.get(key)
+    const here = el.querySelector<HTMLElement>('[aria-current="page"]')
+    if (kept !== undefined) {
+      el.scrollTo({ left: kept, behavior: 'instant' })
+    } else if (here) {
+      const [box, at] = [el.getBoundingClientRect(), here.getBoundingClientRect()]
+      el.scrollTo({ left: el.scrollLeft + at.left - box.left - (box.width - at.width) / 2, behavior: 'instant' })
+    }
+    const keep = () => places.set(key, el.scrollLeft)
+    el.addEventListener('scroll', keep, { passive: true })
+    return () => el.removeEventListener('scroll', keep)
+  }, [track, key])
+}
 
 function useScrollState(track: React.RefObject<HTMLDivElement | null>) {
   const [state, setState] = useState({
@@ -83,6 +105,7 @@ export function Rail({
 }) {
   const track = useRef<HTMLDivElement>(null)
   const { scrollable, atStart, atEnd, progress, visible } = useScrollState(track)
+  usePlace(track, title)
 
   const scrollBy = (direction: 1 | -1) => {
     const el = track.current

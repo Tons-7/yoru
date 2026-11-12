@@ -1,6 +1,7 @@
 import {
   useContext,
   useEffect,
+  useRef,
   useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
@@ -106,6 +107,7 @@ export function PageHeader({
 export const inputClass =
   'h-10 rounded-xl bg-base-800 px-3 text-sm text-base-100 transition-[box-shadow] placeholder:text-base-500 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-400 disabled:opacity-50 pointer-coarse:h-12'
 
+
 export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   const rowLabel = useContext(ControlLabel)
   return <input aria-label={rowLabel} className={cx(inputClass, className)} {...props} />
@@ -114,8 +116,11 @@ export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInput
 export function SearchInput({
   className,
   inputClassName,
+  onClear,
   ...props
-}: InputHTMLAttributes<HTMLInputElement> & { inputClassName?: string }) {
+}: InputHTMLAttributes<HTMLInputElement> & { inputClassName?: string; onClear?: () => void }) {
+  const box = useRef<HTMLInputElement>(null)
+  const filled = onClear && String(props.value ?? '') !== ''
   return (
     <div className={cx('relative', className)}>
       <svg
@@ -128,9 +133,33 @@ export function SearchInput({
       </svg>
       <input
         type="search"
-        className={cx(inputClass, 'w-full py-2 pl-9 [&::-webkit-search-cancel-button]:hidden', inputClassName)}
+        autoComplete="off"
+        data-lpignore="true"
+        data-1p-ignore="true"
+        data-form-type="other"
+        className={cx(inputClass, 'w-full py-2 pl-9 [&::-webkit-search-cancel-button]:hidden', onClear && 'pr-9', inputClassName)}
         {...props}
+        ref={box}
+        onKeyDown={(e) => {
+          props.onKeyDown?.(e)
+          if (e.key === 'Escape' && filled && !e.defaultPrevented) onClear()
+        }}
       />
+      {filled && (
+        <button
+          type="button"
+          aria-label="Clear search"
+          onClick={() => {
+            onClear()
+            box.current?.focus()
+          }}
+          className="tap absolute top-1/2 right-1.5 grid size-7 -translate-y-1/2 place-items-center rounded-full text-base-400 transition-colors hover:bg-base-700 hover:text-white"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden className="size-3.5">
+            <path d="M5 5l10 10M15 5L5 15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        </button>
+      )}
     </div>
   )
 }

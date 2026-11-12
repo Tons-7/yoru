@@ -240,6 +240,7 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 
 	identity := newShowIdentity(append(append([]string{}, titles...), english))
 	others := otherEntries(req, append(append([]string{}, titles...), english))
+	named, _ := f.store.EpisodeTitles(ctx, req.AnimeID)
 	held, _ := f.store.ShowTorrents(ctx, req.AnimeID)
 
 	seen := map[string]struct{}{}
@@ -269,6 +270,7 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 				Season:    req.Season,
 				Counted:   req.Counted,
 				Others:    others,
+				Named:     named,
 				Held:      held[strings.ToLower(t.InfoHash)],
 			}
 			if series != nil {
@@ -578,7 +580,9 @@ func (f *Finder) PackScope(ctx context.Context, animeID, episode, season int) to
 	titles, _ := f.store.SearchTitles(ctx, animeID)
 	english, _ := f.store.EnglishTitle(ctx, animeID)
 	req := f.numbering(ctx, Request{AnimeID: animeID, Episode: episode, Season: season}, titles, english)
-	return torrent.Scope{Season: req.Season, Counted: req.Counted, Others: otherEntries(req, append(append([]string{}, titles...), english))}
+	named, _ := f.store.EpisodeTitles(ctx, animeID)
+	return torrent.Scope{Season: req.Season, Counted: req.Counted, Named: named,
+		Others: otherEntries(req, append(append([]string{}, titles...), english))}
 }
 
 func (f *Finder) defaultSeason(ctx context.Context, animeID int, titles []string) int {

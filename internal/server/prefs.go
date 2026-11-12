@@ -138,7 +138,7 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 var (
 	limitSettings = map[string]bool{"downloads.limit_bytes": true, "downloads.upload": true, "downloads.adapter": true}
 	hostSettings  = map[string]bool{"downloads.adapter": true, "discord.enabled": true, "discord.everywhere": true,
-		"power.awake_watching": true, "power.awake_downloading": true}
+		"power.awake_watching": true, "power.awake_downloading": true, "update.auto": true}
 )
 
 func (s *Server) applyLimits(ctx context.Context) {

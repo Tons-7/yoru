@@ -38,6 +38,7 @@ import { readKey, writeKey } from '../lib/storage'
 import { buttonClass } from '../lib/ui'
 import { copyText } from '../lib/downloads'
 import { attachVideo, detachVideo } from '../lib/miniplayer'
+import { jump } from '../lib/seekIntent'
 import { actionFor, keyHint, keyScope, useKeymap, type KeyAction } from '../lib/keymap'
 import { getSleep, noteInput, setSleep, useSleep, type Sleep } from '../lib/watching'
 import { useAnime4K, type UpscaleTier } from './anime4k'
@@ -552,7 +553,7 @@ export function Player({
       })
   }
   useSeekRecovery(video, hls)
-  useStallWatchdog(video, hls)
+  useStallWatchdog(video, hls, stream?.id, () => recoverRef.current())
   useSlowLink(video, onSlowLink)
   const fonts = useEmbeddedFonts(stream?.fontsUrl, epoch)
   const pip = useDocumentPiP(host)
@@ -917,7 +918,7 @@ export function Player({
   const seekBy = useCallback(
     (delta: number) => {
       if (!video) return
-      video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + delta))
+      jump(video, Math.max(0, Math.min(video.duration || 0, video.currentTime + delta)))
     },
     [video],
   )
@@ -943,7 +944,7 @@ export function Player({
       ['pause', () => video.pause()],
       ['seekbackward', (d) => seekBy(-(d.seekOffset ?? 10))],
       ['seekforward', (d) => seekBy(d.seekOffset ?? 10)],
-      ['seekto', (d) => d.seekTime !== undefined && (video.currentTime = d.seekTime)],
+      ['seekto', (d) => d.seekTime !== undefined && jump(video, d.seekTime)],
       ['nexttrack', hasNext ? () => onNextRef.current?.('media') : null],
       ['previoustrack', hasPrevious ? () => onPreviousRef.current?.() : null],
     ]
@@ -1108,7 +1109,7 @@ export function Player({
   const noteSkip = autoSkipped.note
   const skipActive = useCallback(() => {
     if (!video || !activeSkip) return
-    video.currentTime = activeSkip.end
+    jump(video, activeSkip.end)
     noteSkip(activeSkip)
   }, [video, activeSkip, noteSkip])
 
@@ -1125,7 +1126,7 @@ export function Player({
     (by: number) => {
       if (!video) return
       if (!video.paused) video.pause()
-      video.currentTime = Math.max(0, video.currentTime + by / 23.976)
+      jump(video, Math.max(0, video.currentTime + by / 23.976))
     },
     [video],
   )
@@ -1205,7 +1206,7 @@ export function Player({
         scrubFrom.current ??= video.currentTime
         const to = Math.min(Math.max(0, scrubFrom.current + seconds), (video.duration || 0) - 1)
         if (done) {
-          if (seconds !== 0) video.currentTime = to
+          if (seconds !== 0) jump(video, to)
           scrubFrom.current = null
           return
         }
@@ -1671,7 +1672,7 @@ export function Player({
           <button
             onClick={() => {
               if (Date.now() - offered.at < SKIPPED_GUARD) return
-              if (video) video.currentTime = offered.range.start
+              if (video) jump(video, offered.range.start)
               autoSkipped.dismiss()
             }}
             className="min-h-9 rounded-lg px-3 font-semibold hover:bg-white/15 pointer-coarse:min-h-11"
@@ -1682,7 +1683,7 @@ export function Player({
             <button
               onClick={() => {
                 if (Date.now() - offered.at < SKIPPED_GUARD) return
-                if (video) video.currentTime = offered.range.start
+                if (video) jump(video, offered.range.start)
                 onSkipVote!(offered.range.id!, false)
                 autoSkipped.dismiss()
               }}
@@ -1726,7 +1727,7 @@ export function Player({
           skips={skips}
           streamId={stream?.id}
           video={video}
-          onSeek={(t) => video && (video.currentTime = t)}
+          onSeek={(t) => video && jump(video, t)}
         />
 
         <div className="relative mt-1.5 flex items-center gap-1 text-white sm:mt-2 sm:gap-2">
@@ -3392,7 +3393,7 @@ function useKeyboard({
       const action = actionFor(e)
       if (!action) {
         if (/^[0-9]$/.test(e.key) && video && Number.isFinite(video.duration)) {
-          video.currentTime = (video.duration * Number(e.key)) / 10
+          jump(video, (video.duration * Number(e.key)) / 10)
           nudge()
         }
         return

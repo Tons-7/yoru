@@ -1,5 +1,3 @@
-// Real builds update themselves: the release to this build, then this build again with GitHub's API limited.
-//   YORU_REPO=D:\yoru node scripts/update-check.mjs
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { createServer } from 'node:http'
@@ -9,7 +7,6 @@ import { join } from 'node:path'
 import { chromium } from 'playwright'
 
 const REPO = process.env.YORU_REPO ?? join(process.cwd(), '..')
-// A release people have installed (2026.10.17), by its commit: its tag went with it, as only three are kept.
 const RELEASED_TAG = process.env.YORU_TAG ?? '13c57fb9da3c328895d7b40e60c33a0da17b0dfa'
 const PORT = 4398
 const BASE = `http://127.0.0.1:${PORT}`
@@ -17,7 +14,9 @@ const OLD = '1.0.0'
 const MID = '1.0.0.1'
 const NEW = '1.0.1'
 const NEWER = '1.0.2'
+const NEWEST = '1.0.3'
 const NOTES = {
+  [NEWEST]: '- the newest one',
   [NEWER]: '- the next one',
   [NEW]: '## The big one\n- **Keep all** keeps every episode\n- a second line',
   [MID]: '- a fix in between',
@@ -43,8 +42,6 @@ const api = async (path, init) => {
 }
 const post = (path, body) => api(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
 
-// ---------------------------------------------------------------- build
-// One fixed folder: Windows Firewall adds rules for each new program path that listens, and alerts each time.
 const scratch = join(tmpdir(), 'yoru-update-check')
 rmSync(scratch, { recursive: true, force: true })
 const root = join(scratch, 'app')
@@ -53,27 +50,24 @@ const release = join(scratch, 'release')
 const oldTree = join(scratch, 'released-src')
 for (const d of [root, data, release]) mkdirSync(d, { recursive: true })
 
-// The updater refuses an unsigned release, so these are signed by a key only these test builds trust.
 const { publicKey, privateKey } = generateKeyPairSync('ed25519')
 const trusted = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url').toString('hex')
 const build = (dir, version, out) =>
   spawnSync(
     'go',
-    // -H windowsgui as package.ps1 builds them: a windowed app updating itself, with no console.
     ['build', '-trimpath', '-ldflags', `-s -w -H windowsgui -X yoru/internal/update.Version=${version} -X yoru/internal/update.signingKeyHex=${trusted}`,
       '-o', out, './cmd/yoru'],
     { cwd: dir, stdio: 'inherit', env: { ...process.env, CGO_ENABLED: '0' } },
   )
 
-// The released Yoru, from its tag; it embeds web/dist, which the tag doesn't carry, so this tree's is lent.
 const added = spawnSync('git', ['worktree', 'add', '--detach', oldTree, RELEASED_TAG], { cwd: REPO, stdio: 'inherit' })
 check(added.status === 0, `checked out Yoru ${RELEASED_TAG}`)
 cpSync(join(REPO, 'web', 'dist'), join(oldTree, 'web', 'dist'), { recursive: true })
 check(build(oldTree, OLD, join(root, 'yoru.exe')).status === 0, `built Yoru ${OLD} (the release)`)
 check(build(REPO, NEW, join(release, 'new.exe')).status === 0, `built Yoru ${NEW}`)
 check(build(REPO, NEWER, join(release, 'newer.exe')).status === 0, `built Yoru ${NEWER}`)
+check(build(REPO, NEWEST, join(release, 'newest.exe')).status === 0, `built Yoru ${NEWEST}`)
 
-// As package.ps1 zips it.
 const tar = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
 const pack = (version, binary) => {
   const dir = join(release, `yoru-${version}`)
@@ -88,13 +82,11 @@ const pack = (version, binary) => {
     .join('')
   return { version, assets, sums, signature: sign(null, Buffer.from(sums), privateKey) }
 }
-const releases = { [NEW]: pack(NEW, 'new.exe'), [NEWER]: pack(NEWER, 'newer.exe') }
+const releases = { [NEW]: pack(NEW, 'new.exe'), [NEWER]: pack(NEWER, 'newer.exe'), [NEWEST]: pack(NEWEST, 'newest.exe') }
 let latest = releases[NEW]
 let listed = [NEW, MID, OLD]
-// Spent: the API answers 403 for the hour, and only github.com's pages say what's out.
 let limited = false
 
-// ---------------------------------------------------------------- fake github
 const gh = createServer((req, res) => {
   const url = req.url ?? ''
   const dl = (name) => `${ghBase()}/dl/${latest.version}/${name}`
@@ -127,7 +119,6 @@ const gh = createServer((req, res) => {
       }),
     )
   } else if (/^\/repos\/Tons-7\/yoru\/releases\?/.test(url)) {
-    // Every release, so one several versions behind reads all of them; drafts and betas are nobody's.
     res.setHeader('content-type', 'application/json')
     res.end(
       JSON.stringify([
@@ -137,11 +128,10 @@ const gh = createServer((req, res) => {
       ]),
     )
   } else if (url === '/Tons-7/yoru/releases.atom') {
-    // The release feed, which the API's limit doesn't count: each release's notes rendered, as GitHub does.
     const html = (md) => md.split('\n').map((l) => (l.startsWith('## ') ? `<h2>${l.slice(3)}</h2>` : `<ul><li>${l.slice(2)}</li></ul>`))
       .join('\n').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     const xml = (s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-    const entries = [NEWER, ...listed].map((v) =>
+    const entries = [...new Set([NEWER, ...listed])].map((v) =>
       `<entry><link rel="alternate" type="text/html" href="${ghBase()}/Tons-7/yoru/releases/tag/v${v}"/>` +
       `<content type="html">${xml(html(NOTES[v]))}</content></entry>`)
     res.setHeader('content-type', 'application/atom+xml')
@@ -164,16 +154,14 @@ const gh = createServer((req, res) => {
 await new Promise((r) => gh.listen(0, '127.0.0.1', r))
 const ghBase = () => `http://127.0.0.1:${gh.address().port}`
 
-// ---------------------------------------------------------------- run the released Yoru
-// Its own peer port: the default is the real app's.
 writeFileSync(join(root, 'config.toml'), `addr = "127.0.0.1:${PORT}"\n\n[torrent]\nlisten_port = 4343\nupnp = false\n`)
 const env = {
   ...process.env,
   YORU_ROOT: root,
-  // APPDATA too, so nothing of this user's own is read.
   LOCALAPPDATA: data,
   APPDATA: data,
   YORU_UPDATE_API: ghBase(),
+  YORU_TOGETHER_LOCAL: '1',
   YORU_NO_WINDOW: '1',
 }
 const old = spawn(join(root, 'yoru.exe'), [], { env, cwd: root })
@@ -195,18 +183,15 @@ const waitVersion = async (want, seconds) => {
 }
 
 check(await waitVersion(OLD, 30), `Yoru ${OLD} answering`)
-// Something of the user's, to find again after the update.
 const kept = await post('/api/prefs', { key: 'playback.autonext', value: 'true' })
 check(kept.ok, 'a setting saved')
 
-// The startup check runs as a job; give it a moment, then force one anyway.
 await sleep(500)
 const checked = await post('/api/update/check')
 check(checked.ok && checked.body.available && checked.body.latest?.version === NEW, 'the release sees the update', JSON.stringify(checked.body))
 const versions = (list) => (list ?? []).map((n) => n.version).join(',')
 check(versions(checked.body.pending) === `${NEW},${MID}`, 'every release since this one is offered, newest first', versions(checked.body.pending))
 
-// ---------------------------------------------------------------- release -> this build
 const applied = await post('/api/update/apply')
 check(applied.status === 202, 'apply accepted', JSON.stringify(applied.body))
 
@@ -235,18 +220,19 @@ const updated = ((await api('/api/notifications')).body.items ?? []).filter((n) 
 check(updated.length === 1, 'an "Updated to Yoru" notification is raised once')
 
 const browser = await chromium.launch()
-const page = await browser.newPage()
-await page.goto(`${BASE}/settings?tab=About`, { waitUntil: 'domcontentloaded' })
-// This bare install has no ffmpeg, so the first load is sent to Setup once; then About within the app.
-await page.waitForURL(/\/setup/, { timeout: 5000 }).catch(() => {})
-await page.evaluate(() => {
-  history.pushState(null, '', '/settings?tab=About')
-  dispatchEvent(new PopStateEvent('popstate'))
-})
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+const openAbout = async () => {
+  await page.goto(`${BASE}/settings?tab=About`, { waitUntil: 'domcontentloaded' })
+  await page.waitForURL(/\/setup/, { timeout: 5000 }).catch(() => {})
+  await page.evaluate(() => {
+    history.pushState(null, '', '/settings?tab=About')
+    dispatchEvent(new PopStateEvent('popstate'))
+  })
+}
+await openAbout()
 const whatsNew = page.getByRole('heading', { name: `What's new since ${OLD}` })
 const shown = await whatsNew.waitFor({ timeout: 15000 }).then(() => true, () => false)
 check(shown, "the About tab says what's new since the old version")
-// Skipped when absent, so the teardown below still runs.
 if (shown) {
   const section = page.locator('section', { has: whatsNew })
   check((await section.locator('details').count()) === 2, 'one fold per release')
@@ -257,33 +243,97 @@ if (shown) {
   check(!(await section.innerText()).includes('**'), 'no markdown left showing')
   check((await page.title()).includes('Yoru'), 'the window is called Yoru', await page.title())
 }
-await browser.close()
 
-// ---------------------------------------------------------------- this build -> newer, API limited
 latest = releases[NEWER]
 listed = [NEWER, NEW, MID, OLD]
 limited = true
 const again = await post('/api/update/check')
 check(again.ok && again.body.available && again.body.latest?.version === NEWER && !again.body.checkError,
   `with the API limited, Yoru still sees ${NEWER} from github.com's pages`, JSON.stringify(again.body))
-const second = await post('/api/update/apply')
-check(second.status === 202, 'second apply accepted', JSON.stringify(second.body))
-check(await waitVersion(NEWER, 60), `Yoru ${NEWER} answering`)
+check(again.body.auto === true, 'automatic updates are on from the start')
+
+const waitStage = async (want, seconds) => {
+  let body = {}
+  for (let i = 0; i < seconds * 2; i++) {
+    body = (await api('/api/update')).body ?? {}
+    if (body.stage === want) break
+    await sleep(500)
+  }
+  return body
+}
+const brief = (s) => JSON.stringify({ stage: s.stage, staged: s.staged, error: s.error, busy: s.busy })
+const reloaded = async (seconds) => {
+  for (let i = 0; i < seconds * 4; i++) {
+    const still = await page.evaluate(() => window.__before === true).catch(() => true)
+    if (!still) return true
+    await sleep(250)
+  }
+  return false
+}
+
+const ready = await waitStage('ready', 60)
+check(ready.stage === 'ready' && ready.staged === NEWER, `Yoru downloads ${NEWER} by itself`, brief(ready))
+await sleep(3000)
+check((await api('/api/health')).body.version === NEW, 'and waits for the restart to be asked for')
+check(readFileSync(yoruExe).equals(readFileSync(join(release, 'new.exe'))), 'yoru.exe is untouched until then')
+
+const room = await post('/api/together', { animeId: 7, episode: 1, infoHash: 'abc123' })
+check(room.ok, 'a watch-together room opened', JSON.stringify(room.body))
+check(((await api('/api/update')).body.busy ?? []).some((line) => line.includes('room')), 'Yoru knows a restart would close the room')
+
+await openAbout()
+const pill = page.locator('[data-update="ready"]')
+check(await pill.waitFor({ timeout: 15000 }).then(() => true, () => false), 'the top bar offers the restart')
+await pill.click()
+const dialog = page.getByRole('alertdialog', { name: 'Restart Yoru to update?' })
+check(await dialog.waitFor({ timeout: 5000 }).then(() => true, () => false), 'with a room open, the restart asks first')
+check((await dialog.innerText().catch(() => '')).includes('room closes'), 'and says what it interrupts')
+await dialog.getByRole('button', { name: 'Not now' }).click()
+await sleep(1500)
+check((await dialog.count()) === 0 && (await api('/api/health')).body.version === NEW, '"Not now" leaves Yoru running')
+await pill.click()
+await dialog.waitFor({ timeout: 5000 }).catch(() => {})
+await page.mouse.click(12, 880)
+await sleep(1200)
+check((await dialog.count()) === 0 && (await api('/api/health')).body.version === NEW, 'a click outside closes it the same way')
+check(await pill.isVisible(), 'and the button stays for later')
+await page.evaluate(() => (window.__before = true))
+await pill.click()
+await dialog.getByRole('button', { name: 'Restart now' }).click()
+check(await page.getByRole('alertdialog', { name: 'Updating Yoru' }).waitFor({ timeout: 10000 }).then(() => true, () => false),
+  'the window says Yoru is updating')
+check(await waitVersion(NEWER, 60), `Yoru ${NEWER} answering after the restart`)
+check(await reloaded(30), 'the window reloads into the new version')
 for (let i = 0; i < 40 && existsSync(yoruExe + '.old'); i++) await sleep(250)
 check(readFileSync(yoruExe).equals(readFileSync(join(release, 'newer.exe'))), 'yoru.exe is the newer program')
 check(!existsSync(yoruExe + '.old') && !existsSync(yoruExe + '.new'), 'no leftovers from the second update')
-let newest = {}
-for (let i = 0; i < 40 && !newest.whatsNew?.length; i++) {
+let second = {}
+for (let i = 0; i < 40 && !second.whatsNew?.length; i++) {
   await sleep(250)
-  newest = (await api('/api/update')).body ?? {}
+  second = (await api('/api/update')).body ?? {}
 }
-check(newest.whatsNew?.[0]?.version === NEWER && newest.whatsNew[0].notes === NOTES[NEWER],
-  "with the API still limited, what's new reads the notes from the release feed", JSON.stringify(newest.whatsNew))
+check(second.whatsNew?.[0]?.version === NEWER && second.whatsNew[0].notes === NOTES[NEWER],
+  "with the API still limited, what's new reads the notes from the release feed", JSON.stringify(second.whatsNew))
+
+latest = releases[NEWEST]
+listed = [NEWEST, NEWER, NEW, MID, OLD]
+const third = await post('/api/update/check')
+check(third.ok && third.body.latest?.version === NEWEST, `Yoru sees ${NEWEST}`, JSON.stringify(third.body.latest))
+const ready2 = await waitStage('ready', 60)
+check(ready2.stage === 'ready' && ready2.staged === NEWEST && !ready2.busy?.length, `${NEWEST} is downloaded with nothing in the way`, brief(ready2))
+await openAbout()
+const restartHere = page.getByRole('button', { name: 'Restart to update', exact: true })
+check(await restartHere.waitFor({ timeout: 15000 }).then(() => true, () => false), 'the About tab offers the restart too')
+await restartHere.click()
+check(!(await dialog.waitFor({ timeout: 1500 }).then(() => true, () => false)), 'with nothing running, there is no question')
+check(await waitVersion(NEWEST, 60), `one click restarts into ${NEWEST}`)
+for (let i = 0; i < 40 && existsSync(yoruExe + '.old'); i++) await sleep(250)
+check(readFileSync(yoruExe).equals(readFileSync(join(release, 'newest.exe'))), 'yoru.exe is the newest program')
+check(!existsSync(yoruExe + '.old') && !existsSync(yoruExe + '.new'), 'no leftovers from the third update')
+await browser.close()
 
 if (failures) console.log(oldLog.slice(-2000))
 
-// ---------------------------------------------------------------- teardown
-// The new process broke away from ours; stop it by path so a real one survives.
 spawnSync('powershell', [
   '-NoProfile', '-Command',
   `Get-Process yoru -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '${root}*' } | Stop-Process -Force`,

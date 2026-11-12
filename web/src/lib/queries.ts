@@ -97,8 +97,18 @@ export function useSchedule(days = 7, mine = false, back = 0, enabled = true) {
 export function useNow(every = 30_000) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), every)
-    return () => window.clearInterval(id)
+    const tick = () => setNow(Date.now())
+    const back = () => document.visibilityState === 'visible' && tick()
+    const id = window.setInterval(tick, every)
+    document.addEventListener('visibilitychange', back)
+    window.addEventListener('pageshow', tick)
+    window.addEventListener('focus', tick)
+    return () => {
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', back)
+      window.removeEventListener('pageshow', tick)
+      window.removeEventListener('focus', tick)
+    }
   }, [every])
   return now
 }
@@ -261,6 +271,7 @@ export function useBetterCopies(animeId?: number) {
 }
 
 export interface DriveRoom {
+  bytes?: number
   freeBytes?: number
   drive?: string
 }
@@ -353,8 +364,18 @@ export function useEpisodes(animeId: number | undefined) {
       api.get<{ items: Episode[]; count: number; titlesPending?: boolean }>(
         `/api/episodes${query({ id: animeId })}`,
       ),
-    refetchInterval: (q) => (q.state.data?.titlesPending ? 3000 : false),
+    refetchInterval: (q) => (q.state.data?.titlesPending ? 3000 : untilNextAiring(q.state.data?.items)),
   })
+}
+
+function untilNextAiring(items: Episode[] | undefined): number | false {
+  const now = Date.now()
+  let soonest = Infinity
+  for (const e of items ?? []) {
+    if (e.airDate && e.airDate * 1000 > now) soonest = Math.min(soonest, e.airDate * 1000)
+  }
+  if (!Number.isFinite(soonest)) return false
+  return Math.min(Math.max(soonest - now + 60_000, 60_000), 12 * 3_600_000)
 }
 
 export function useRecommendations(animeId: number | undefined) {

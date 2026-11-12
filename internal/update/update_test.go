@@ -30,7 +30,6 @@ import (
 	"yoru/internal/store"
 )
 
-// --no-window is forwarded, never added, so a windowed Yoru reopens its UI.
 func TestRelaunchForwardsTheWindowChoice(t *testing.T) {
 	for _, tc := range []struct {
 		current []string
@@ -47,7 +46,6 @@ func TestRelaunchForwardsTheWindowChoice(t *testing.T) {
 	}
 }
 
-// With the child's output on NUL, a handover that failed took the app away without a word.
 func TestRelaunchKeepsTheOutputItWasStartedWith(t *testing.T) {
 	cmd := relaunchCmd(filepath.Join(t.TempDir(), config.ExeName("yoru")))
 
@@ -96,7 +94,6 @@ func testStore(t *testing.T) *store.Store {
 	return store.New(conn)
 }
 
-// fakeGitHub serves one release with a stand-in executable, signed by a test key the updater trusts.
 func fakeGitHub(t *testing.T, version string, exeBody []byte, sums bool) *httptest.Server {
 	return fakeGitHubSigned(t, version, exeBody, sums, true)
 }
@@ -106,16 +103,14 @@ func fakeGitHubSigned(t *testing.T, version string, exeBody []byte, sums, truste
 	return fakeRelease(t, version, exeBody, sums, trusted, false)
 }
 
-// fakeRelease also serves github.com's own pages; limited, the API says its hourly allowance is spent.
 func fakeRelease(t *testing.T, version string, exeBody []byte, sums, trusted, limited bool) *httptest.Server {
 	t.Helper()
 	return fakeTamperedRelease(t, version, exeBody, sums, trusted, limited, tamper{})
 }
 
-// tamper is what a broken mirror or a mis-listed release does to the files the signed sums vouch for.
 type tamper struct {
-	listedAs string // the name the signed sums give the zip; "" is its own
-	served   []byte // a zip served in place of the one the sums hash
+	listedAs string
+	served   []byte
 }
 
 func fakeTamperedRelease(t *testing.T, version string, exeBody []byte, sums, trusted, limited bool, tm tamper) *httptest.Server {
@@ -193,7 +188,6 @@ func fakeTamperedRelease(t *testing.T, version string, exeBody []byte, sums, tru
 	return srv
 }
 
-// A release signed by any other key is not Yoru's, whatever its checksums say.
 func TestApplyRefusesAReleaseSignedByAStranger(t *testing.T) {
 	setVersion(t, "2026.08.24")
 	st := testStore(t)
@@ -221,7 +215,6 @@ func TestApplyRefusesAReleaseSignedByAStranger(t *testing.T) {
 	}
 }
 
-// A signed sums file vouches for one zip: a different one, or none listed for this platform, installs nothing.
 func TestApplyRefusesAnArchiveItsSignedSumsDontVouchFor(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -273,10 +266,8 @@ func newUpdater(t *testing.T, st *store.Store, gh *httptest.Server, exe string) 
 	return u
 }
 
-// When the limited API lets this network ask again.
 var resetAt = time.Date(2026, 10, 18, 19, 42, 0, 0, time.Local)
 
-// Behind a VPN the API's hourly allowance is soon spent; github.com's own pages still say what's out.
 func TestRateLimitedCheckReadsTheSite(t *testing.T) {
 	setVersion(t, "2026.08.24")
 	st := testStore(t)
@@ -297,7 +288,7 @@ func TestRateLimitedCheckReadsTheSite(t *testing.T) {
 	if len(got.Pending) != 1 || got.Pending[0].Version != "2026.08.27" {
 		t.Errorf("pending = %+v, want the new version listed", got.Pending)
 	}
-	// Signed and checked as any other: the site gives the same files.
+
 	if err := u.Apply(); err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +302,6 @@ func TestRateLimitedCheckReadsTheSite(t *testing.T) {
 	}
 }
 
-// Notes from an earlier check stay; the site has none to give.
 func TestRateLimitedCheckKeepsTheNotesItHad(t *testing.T) {
 	setVersion(t, "2026.08.24")
 	u := newUpdater(t, testStore(t), fakeRelease(t, "2026.08.27", []byte("new"), true, true, true), "yoru.exe")
@@ -324,7 +314,6 @@ func TestRateLimitedCheckKeepsTheNotesItHad(t *testing.T) {
 		t.Errorf("pending = %+v, want the notes read before", got.Pending)
 	}
 
-	// Up to date, the site's answer adds nothing blank to What's new.
 	setVersion(t, "2026.08.27")
 	u.set(func(s *Status) { s.Pending, s.WhatsNew = nil, nil })
 	if got, _ = u.Check(context.Background()); len(got.WhatsNew) != 0 {
@@ -332,8 +321,6 @@ func TestRateLimitedCheckKeepsTheNotesItHad(t *testing.T) {
 	}
 }
 
-// Limited, the notes come from the release feed, which the API's limit doesn't count: What's new after an
-// update isn't left empty. Its HTML goes back to the headings, bullets and bold the About tab reads.
 func TestRateLimitedCheckReadsTheNotesFromTheFeed(t *testing.T) {
 	setVersion(t, "2026.08.27")
 	gh := fakeRelease(t, "2026.08.27", []byte("new"), true, true, true)
@@ -359,7 +346,6 @@ func TestRateLimitedCheckReadsTheNotesFromTheFeed(t *testing.T) {
 	}
 }
 
-// With the site out of reach too, the check says what's wrong and when it clears, not "HTTP 403".
 func TestRateLimitedCheckSaysUntilWhen(t *testing.T) {
 	setVersion(t, "2026.08.24")
 	gh := fakeRelease(t, "2026.08.27", []byte("new"), true, true, true)
@@ -373,7 +359,6 @@ func TestRateLimitedCheckSaysUntilWhen(t *testing.T) {
 		t.Errorf("checkError = %q", st.CheckErr)
 	}
 
-	// A refusal that isn't the allowance is no limit.
 	res := &http.Response{StatusCode: http.StatusForbidden, Header: http.Header{"X-Ratelimit-Remaining": {"12"}}}
 	if limitOf(res) != nil {
 		t.Error("a 403 with allowance left was read as a rate limit")
@@ -488,7 +473,6 @@ func TestApplyRefusesAnUnverifiableArchive(t *testing.T) {
 	}
 }
 
-// A new binary that can't start (quarantined, say) isn't left with nothing to fall back to.
 func TestApplyRestoresTheOldBinaryWhenTheNewOneWontStart(t *testing.T) {
 	setVersion(t, "2026.08.24")
 	st := testStore(t)
@@ -512,7 +496,6 @@ func TestApplyRestoresTheOldBinaryWhenTheNewOneWontStart(t *testing.T) {
 	}
 }
 
-// A new version failing to start hands back to the one kept as .old; once one serves, the leftovers go.
 func TestRollbackThenCleanup(t *testing.T) {
 	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
 	os.WriteFile(exe, []byte("new, failing"), 0o755)
@@ -546,7 +529,6 @@ func TestSwapRestoresTheOldBinaryWhenTheNewOneCannotMoveIn(t *testing.T) {
 	}
 }
 
-// Two presses at once start one download: the second sees the first's claim.
 func TestApplyTwiceStartsOneDownload(t *testing.T) {
 	setVersion(t, "2026.08.24")
 	st := testStore(t)
@@ -572,5 +554,163 @@ func TestApplyTwiceStartsOneDownload(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if n := restarts.Load(); n != 1 {
 		t.Fatalf("%d restarts, want one", n)
+	}
+}
+
+func TestPrepareDownloadsAndWaitsForTheRestart(t *testing.T) {
+	setVersion(t, "2026.08.24")
+	st := testStore(t)
+	gh := fakeGitHub(t, "2026.08.27", []byte("new binary"), true)
+	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
+	os.WriteFile(exe, []byte("old binary"), 0o755)
+
+	var launched string
+	restarted := make(chan struct{})
+	u := newUpdater(t, st, gh, exe).WithRestart(func() { close(restarted) })
+	u.launch = func(path string) error { launched = path; return nil }
+
+	if err := u.Install(); err == nil {
+		t.Fatal("a restart into an update that was never downloaded was accepted")
+	}
+	if _, err := u.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	ready := func(u *Updater) bool {
+		for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+			if s := u.Status(); s.Stage == StageReady {
+				return true
+			} else if s.Stage == StageFailed {
+				t.Fatalf("download failed: %s", s.Error)
+			}
+		}
+		return false
+	}
+	if !ready(u) {
+		t.Fatalf("never ready; status = %+v", u.Status())
+	}
+	if s := u.Status(); s.Staged != "2026.08.27" {
+		t.Errorf("staged %q, want the new version", s.Staged)
+	}
+	if got, _ := os.ReadFile(exe); string(got) != "old binary" || launched != "" {
+		t.Fatalf("downloading alone replaced or started the program: %q, launched %q", got, launched)
+	}
+	select {
+	case <-restarted:
+		t.Fatal("Yoru restarted before being asked to")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	again := newUpdater(t, st, gh, exe)
+	again.staging = u.staging
+	if _, err := again.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s := again.Status(); s.Stage != StageReady || s.Staged != "2026.08.27" || s.Bytes != 0 {
+		t.Errorf("after starting Yoru again the download is not remembered: %+v", s)
+	}
+
+	if err := u.Install(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-restarted:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("no restart; status = %+v", u.Status())
+	}
+	if got, _ := os.ReadFile(exe); string(got) != "new binary" || launched != exe {
+		t.Errorf("after the restart: executable %q, launched %q", got, launched)
+	}
+	if again.stagedVersion() != "" {
+		t.Error("the installed download is still kept as waiting")
+	}
+}
+
+func TestARewrittenMarkDoesNotMakeAChangedDownloadTrusted(t *testing.T) {
+	setVersion(t, "2026.08.24")
+	st := testStore(t)
+	gh := fakeGitHub(t, "2026.08.27", []byte("new binary"), true)
+	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
+	os.WriteFile(exe, []byte("old binary"), 0o755)
+	u := newUpdater(t, st, gh, exe)
+	u.launch = func(string) error { return nil }
+	if _, err := u.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end) && u.Status().Stage != StageReady; time.Sleep(20 * time.Millisecond) {
+	}
+	mark, ok := u.stagedMark()
+	if !ok {
+		t.Fatal("nothing staged")
+	}
+	older := mark
+	older.Archive = AssetName("2026.08.25")
+	if raw, _ := json.Marshal(older); os.WriteFile(u.markPath(), raw, 0o644) != nil {
+		t.Fatal("could not rewrite the mark")
+	}
+	if _, ok := u.stagedMark(); ok {
+		t.Error("a mark naming another release's archive was accepted, which would allow a downgrade")
+	}
+	forged := filepath.Join(u.staging, "forged.zip")
+	if err := os.WriteFile(forged, []byte("not signed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mark.Archive = "forged.zip"
+	raw, _ := json.Marshal(mark)
+	if err := os.WriteFile(u.markPath(), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Install(); err == nil {
+		t.Fatal("an archive named by a rewritten mark was installed")
+	}
+	if got, _ := os.ReadFile(exe); string(got) != "old binary" {
+		t.Errorf("executable = %q, want it untouched", got)
+	}
+}
+
+func TestATamperedDownloadIsNotOfferedForRestart(t *testing.T) {
+	setVersion(t, "2026.08.24")
+	st := testStore(t)
+	gh := fakeGitHub(t, "2026.08.27", []byte("new binary"), true)
+	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
+	os.WriteFile(exe, []byte("old binary"), 0o755)
+	u := newUpdater(t, st, gh, exe)
+	u.launch = func(string) error { return nil }
+	if _, err := u.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end) && u.Status().Stage != StageReady; time.Sleep(20 * time.Millisecond) {
+	}
+	mark, ok := u.stagedMark()
+	if !ok {
+		t.Fatal("nothing staged")
+	}
+	if err := os.WriteFile(filepath.Join(u.staging, mark.Archive), []byte("something else"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	again := newUpdater(t, st, gh, exe)
+	again.staging = u.staging
+	if _, err := again.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s := again.Status(); s.Stage == StageReady {
+		t.Fatalf("a changed file was offered for restart: %+v", s)
+	}
+	if err := u.Install(); err == nil {
+		t.Fatal("a changed file was installed")
+	}
+	if got, _ := os.ReadFile(exe); string(got) != "old binary" {
+		t.Errorf("executable = %q, want it untouched", got)
 	}
 }

@@ -38,6 +38,8 @@ import { SearchBox } from './SearchBox'
 import { Shortcuts } from './Shortcuts'
 import { SavedCopyNotice } from './SavedCopyNotice'
 import { CatalogueStatus } from './CatalogueStatus'
+import { UpdateButton, UpdateRestarting } from './UpdateButton'
+import { useUpdateOffered } from '../lib/update'
 import { menuItems, useDismiss, useMediaQuery, walkMenu } from '../lib/hooks'
 import { useNewSettings } from '../lib/whatsNew'
 import { playingNow } from '../lib/miniplayer'
@@ -63,7 +65,8 @@ function Shell() {
   const wide = useMediaQuery('(min-width: 40rem)')
   const focus = useFocus()
   const { pathname, search } = useLocation()
-  const backBar = !wide && !fullBleed && !isTabPage(pathname, search)
+  const guide = pathname === '/setup'
+  const backBar = !wide && !fullBleed && !guide && !isTabPage(pathname, search)
 
   const pageKey = fullBleed ? 'watch' : pathname
 
@@ -125,7 +128,7 @@ function Shell() {
       <p role="status" className="sr-only">
         {arrived}
       </p>
-      {!focus && (
+      {!focus && !guide && (
         <Header
           wide={wide}
           bare={fullBleed && !wide}
@@ -142,9 +145,9 @@ function Shell() {
         tabIndex={-1}
         className={cx(
           'mx-auto w-full animate-enter outline-none',
-          fullBleed ? 'pb-8' : 'max-w-[1600px] px-4 pt-4 pb-16 sm:px-6',
-          !fullBleed && roomyPage(pathname, search) && 'min-[1800px]:max-w-[2400px] min-[1800px]:px-12',
-          !fullBleed && 'max-sm:pb-[calc(5rem+env(safe-area-inset-bottom))]',
+          guide ? '' : fullBleed ? 'pb-8' : 'max-w-[1600px] px-4 pt-4 pb-16 sm:px-6',
+          !fullBleed && !guide && roomyPage(pathname, search) && 'min-[1800px]:max-w-[2400px] min-[1800px]:px-12',
+          !fullBleed && !guide && 'max-sm:pb-[calc(5rem+env(safe-area-inset-bottom))]',
           backBar && '[&_h1.page-title]:sr-only',
         )}
       >
@@ -152,9 +155,10 @@ function Shell() {
           <Outlet />
         </ErrorBoundary>
       </main>
-      {!wide && !focus && !fullBleed && <BottomTabs />}
-      {!focus && <ScrollButtons />}
-      {!focus && <RoomBubble />}
+      {!wide && !focus && !fullBleed && !guide && <BottomTabs />}
+      {!focus && !guide && <ScrollButtons />}
+      <RoomBubble hidden={focus} />
+      <UpdateRestarting />
     </div>
   )
 }
@@ -323,7 +327,10 @@ function LogoBar() {
   return (
     <div className="flex h-16 items-center justify-between px-4">
       <Logo />
-      <CatalogueStatus label={false} />
+      <div className="flex items-center gap-2">
+        <UpdateButton compact />
+        <CatalogueStatus label={false} />
+      </div>
     </div>
   )
 }
@@ -375,6 +382,7 @@ function BackBar({ parent, title, shown, tall }: Back) {
 }
 
 function DesktopBar() {
+  const updating = useUpdateOffered()
   return (
     <div className="mx-auto flex h-16 w-full max-w-[1600px] items-center gap-2 px-4 lg:gap-4 lg:px-6 min-[1800px]:max-w-[2400px] min-[1800px]:px-12">
       <BackButton />
@@ -385,7 +393,8 @@ function DesktopBar() {
       </nav>
       <span aria-hidden className="flex-1 lg:hidden" />
       <SearchBox />
-      <CatalogueStatus />
+      <UpdateButton />
+      <CatalogueStatus quiet={updating} />
       <TitleLanguage />
       <DownloadsPanel />
       <NotificationPanel />

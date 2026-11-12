@@ -16,7 +16,6 @@ import (
 	"yoru/internal/tray"
 )
 
-// appExit ends Yoru, answering first: stopping closes the server under the request.
 func (s *Server) appExit(w http.ResponseWriter, r *http.Request) {
 	if s.exit == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "this Yoru can't be exited from here"})
@@ -29,7 +28,6 @@ func (s *Server) appExit(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// appStartup says whether Yoru starts in the tray when the user signs in; a POST turns that on or off.
 func (s *Server) appStartup(w http.ResponseWriter, r *http.Request) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -56,17 +54,14 @@ func (s *Server) appStartup(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"on": on, "tray": tray.Available})
 }
 
-// watching is another device playing through this Yoru, from its progress reports.
 type watching struct {
 	device           string
 	animeID, episode int
 	at               time.Time
 }
 
-// watchingFor is how long after its last report a device still counts as playing: reports come every 10 s.
 const watchingFor = 45 * time.Second
 
-// noteWatching records another device's report, or forgets it once it paused or stopped.
 func (s *Server) noteWatching(r *http.Request, animeID, episode int, stopped bool) {
 	key := watcherKey(r)
 	s.watchingMu.Lock()
@@ -81,8 +76,6 @@ func (s *Server) noteWatching(r *http.Request, animeID, episode int, stopped boo
 	s.watching[key] = watching{device: deviceName(r.UserAgent()), animeID: animeID, episode: episode, at: time.Now()}
 }
 
-// watcherKey tells devices apart: by their device cookie, else by address and browser, as phones behind one
-// router (or one HTTPS proxy) share an address.
 func watcherKey(r *http.Request) string {
 	if id := requestDevice(r); id != "" {
 		return "device " + id
@@ -90,7 +83,6 @@ func watcherKey(r *http.Request) string {
 	return clientAddr(r) + " " + r.UserAgent()
 }
 
-// appActivity is what exiting would stop on other devices: who is playing what. Downloads the page knows.
 func (s *Server) appActivity(w http.ResponseWriter, r *http.Request) {
 	type entry struct {
 		Device  string `json:"device"`
@@ -115,7 +107,6 @@ func (s *Server) appActivity(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"watching": out})
 }
 
-// appShow brings up Yoru's window: a second launch asks this one, so the window stays the running Yoru's.
 func (s *Server) appShow(w http.ResponseWriter, r *http.Request) {
 	if s.showWindow == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "this Yoru has no window"})
@@ -125,7 +116,6 @@ func (s *Server) appShow(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// logText is the last run's log and this one's, to copy or save and send.
 func (s *Server) logText(w http.ResponseWriter, r *http.Request) {
 	var b bytes.Buffer
 	for _, part := range []struct{ label, name string }{
@@ -150,7 +140,6 @@ func (s *Server) logText(w http.ResponseWriter, r *http.Request) {
 	w.Write(b.Bytes())
 }
 
-// readCapped is a file's last max bytes, where the newest lines are.
 func readCapped(path string, max int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -163,7 +152,6 @@ func readCapped(path string, max int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, max))
 }
 
-// logFolder shows yoru.log in the file manager.
 func (s *Server) logFolder(w http.ResponseWriter, r *http.Request) {
 	if err := config.Reveal(filepath.Join(s.cfg.DataDir(), config.Name+".log")); err != nil {
 		s.fail(w, "show the log", err)

@@ -19,6 +19,7 @@ import (
 const (
 	avatarSetting = "profile.avatar"
 	nameSetting   = "profile.name"
+	nameFrom      = "profile.name_from"
 	avatarMax     = 32 << 10
 	avatarKept    = 24 * time.Hour
 	avatarRetry   = time.Hour
@@ -192,28 +193,71 @@ func (a *trackerAvatars) load(ctx context.Context, link string) (string, []byte,
 	return kind, body, nil
 }
 
+func (s *Server) profileName(ctx context.Context) (own, from, shown string) {
+	own, _ = s.store.Setting(ctx, nameSetting)
+	from, _ = s.store.Setting(ctx, nameFrom)
+	names := map[string]string{"own": own}
+	names["anilist"], _ = s.store.Setting(ctx, "anilist.user_name")
+	names["mal"], _ = s.store.Setting(ctx, "mal.user_name")
+	if _, known := names[from]; !known {
+		from = "anilist"
+		if own != "" {
+			from = "own"
+		}
+	}
+	for _, source := range []string{from, "anilist", "mal", "own"} {
+		if names[source] != "" {
+			return own, from, names[source]
+		}
+	}
+	return own, from, ""
+}
+
 func (s *Server) profile(w http.ResponseWriter, r *http.Request) {
-	name, _ := s.store.Setting(r.Context(), nameSetting)
+	name, from, shown := s.profileName(r.Context())
+	out := map[string]any{"name": name, "nameFrom": from, "shown": shown, "avatar": "", "version": ""}
 	if own, _ := s.store.Setting(r.Context(), avatarSetting); own != "" {
-		send(w, http.StatusOK, map[string]any{"name": name, "avatar": "own", "version": versionOf(own)})
-		return
+		out["avatar"], out["version"] = "own", versionOf(own)
+	} else if source, link := s.trackerAvatarURL(r.Context()); link != "" {
+		out["avatar"], out["version"] = source, versionOf(link)
 	}
-	source, link := s.trackerAvatarURL(r.Context())
-	version := ""
-	if link != "" {
-		version = versionOf(link)
-	}
-	send(w, http.StatusOK, map[string]any{"name": name, "avatar": source, "version": version})
+	send(w, http.StatusOK, out)
 }
 
 func (s *Server) setProfileName(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name string `json:"name"`
+		Name *string `json:"name"`
+		From string  `json:"from"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	if err := s.store.SetSetting(r.Context(), nameSetting, cleanName(body.Name, "")); err != nil {
+	values := map[string]string{}
+	if body.Name != nil {
+		values[nameSetting] = cleanName(*body.Name, "")
+		values[nameFrom] = ""
+		if values[nameSetting] != "" {
+			values[nameFrom] = "own"
+		}
+	}
+	switch body.From {
+	case "anilist", "mal":
+		values[nameFrom] = body.From
+	case "own":
+		own, typed := values[nameSetting]
+		if !typed {
+			own, _ = s.store.Setting(r.Context(), nameSetting)
+		}
+		values[nameFrom] = ""
+		if own != "" {
+			values[nameFrom] = "own"
+		}
+	case "":
+	default:
+		send(w, http.StatusBadRequest, map[string]any{"error": "unknown name source"})
+		return
+	}
+	if err := s.store.SetSettings(r.Context(), values); err != nil {
 		s.fail(w, "save name", err)
 		return
 	}

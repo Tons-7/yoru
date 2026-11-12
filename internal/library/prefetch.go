@@ -1204,6 +1204,7 @@ func (p *Prefetcher) fetchRelease(ctx context.Context, animeID, episode, season 
 					Season:  scope.Season,
 					Counted: scope.Counted,
 					Others:  scope.Others,
+					Named:   scope.Named,
 				}}}
 			}
 		}

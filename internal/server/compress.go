@@ -40,14 +40,6 @@ func takesGzip(r *http.Request) bool {
 	return false
 }
 
-func writeGzip(w io.Writer, raw []byte) {
-	zw := gzipWriters.Get().(*gzip.Writer)
-	zw.Reset(w)
-	zw.Write(raw)
-	zw.Close()
-	gzipWriters.Put(zw)
-}
-
 type packedFile struct {
 	once sync.Once
 	body []byte

@@ -1,10 +1,12 @@
 package torrent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func mb(n int64) int64 { return n << 20 }
 
-// Chinese groups number in a bracket of their own; the marked form drops the season.
 func TestEpisodeInNameReadsBracketsAndMarkedForms(t *testing.T) {
 	for name, want := range map[string]int{
 		"[VCB-Studio] Shingeki no Kyojin [05][Ma10p_1080p][x265_flac]": 5,
@@ -24,7 +26,6 @@ func TestEpisodeInNameReadsBracketsAndMarkedForms(t *testing.T) {
 	}
 }
 
-// A VCB pack is playable, and a lone bracket-numbered file for another episode does not play as episode 1.
 func TestBracketNumberedPackAndLoneFile(t *testing.T) {
 	var pack []File
 	for n := 1; n <= 12; n++ {
@@ -50,8 +51,6 @@ func twoDigits(n int) string {
 	return string(rune('0'+n/10)) + string(rune('0'+n%10))
 }
 
-// Extras under their own folder, or named as openings, previews and menus, never play as an episode;
-// among files numbered alike the largest is the episode.
 func TestExtrasAreNeverTheEpisode(t *testing.T) {
 	files := []File{
 		{Name: "Show/Extras/[G] Show - NCOP 01 [1080p].mkv", Length: mb(90)},
@@ -69,13 +68,12 @@ func TestExtrasAreNeverTheEpisode(t *testing.T) {
 	if !ok || got.Name != "Show/[G] Show - 01 [1080p].mkv" {
 		t.Fatalf("picked %q, %v", got.Name, ok)
 	}
-	// A folder of nothing but extras names no episode.
+
 	if _, _, ok := PickEpisode(files[:6], 1); ok {
 		t.Error("an opening was taken as episode 1")
 	}
 }
 
-// A recap "12.5" is not episode 12, whichever sorts first.
 func TestRecapIsNotTheEpisode(t *testing.T) {
 	files := []File{
 		{Name: "Show - 11.mkv", Length: mb(700)},
@@ -88,7 +86,6 @@ func TestRecapIsNotTheEpisode(t *testing.T) {
 	}
 }
 
-// A pack of a later cour may count from one or carry on the season's count: its own files say which.
 func TestPackNumberingIsReadOffItsFiles(t *testing.T) {
 	numbered := func(from, to int) []File {
 		var out []File
@@ -97,27 +94,96 @@ func TestPackNumberingIsReadOffItsFiles(t *testing.T) {
 		}
 		return out
 	}
-	// Part 2's episode 12 is "23" counted through the season (part 1 had 11).
+
 	if got, _, ok := PickNumbered(numbered(12, 23), 12, []int{12, 23}); !ok || got.Name != "[G] Mushoku Tensei - 23 [1080p].mkv" {
 		t.Errorf("season count: picked %q, %v", got.Name, ok)
 	}
 	if got, _, ok := PickNumbered(numbered(1, 12), 12, []int{12, 23}); !ok || got.Name != "[G] Mushoku Tensei - 12 [1080p].mkv" {
 		t.Errorf("own count: picked %q, %v", got.Name, ok)
 	}
-	// Half a pack still tells: files 7-12 hold episode 8 under its own count, not 19.
+
 	if got, _, ok := PickNumbered(numbered(7, 12), 8, []int{8, 19}); !ok || got.Name != "[G] Mushoku Tensei - 08 [1080p].mkv" {
 		t.Errorf("partial pack: picked %q, %v", got.Name, ok)
 	}
-	// A bare pack of a later cour: only the carried-over number is offered, and the pack counts that way.
+
 	if got, _, ok := PickNumbered(numbered(12, 23), 12, []int{23}); !ok || got.Name != "[G] Mushoku Tensei - 23 [1080p].mkv" {
 		t.Errorf("bare later cour: picked %q, %v", got.Name, ok)
 	}
 }
 
-// Older fansubs shipped as .ogm and iTunes rips as .m4v; they play like any other container.
 func TestOtherVideoContainersCount(t *testing.T) {
 	files := []File{{Name: "Show - 01.ogm", Length: mb(300)}, {Name: "Show - 02.m4v", Length: mb(300)}}
 	if got, _, ok := PickEpisode(files, 2); !ok || got.Name != "Show - 02.m4v" {
 		t.Errorf("picked %q, %v", got.Name, ok)
+	}
+}
+
+func TestAPackNumberedInDiscOrderIsMatchedByItsEpisodeTitles(t *testing.T) {
+	names := []string{
+		"Season 1/[Sav1or] Princess Principal - S01E07 - case16 Loudly Laundry [BD][1080p][AV1][OPUS][Dual Audio].mkv",
+		"Season 1/[Sav1or] Princess Principal - S01E08 - case11 Pell-mell Duel [BD][1080p][AV1][OPUS][Dual Audio].mkv",
+		"Season 1/[Sav1or] Princess Principal - S01E09 - case20 Ripper Dipper [BD][1080p][AV1][OPUS][Dual Audio].mkv",
+		"Season 1/[Sav1or] Princess Principal - S01E10 - case22 Comfort Comrade [BD][1080p][AV1][OPUS][Dual Audio].mkv",
+	}
+	files := make([]File, len(names))
+	for i, name := range names {
+		files[i] = File{Name: name, Length: 700 << 20}
+	}
+	broadcast := map[int][]string{
+		7:  {"Loudly Laundry", "case16 Loudly Laundry"},
+		8:  {"Ripper Dipper", "case20 Ripper Dipper"},
+		9:  {"Pell-mell Duel", "case11 Pell-mell Duel"},
+		10: {"Comfort Comrade", "case22 Comfort Comrade"},
+	}
+	for episode, want := range map[int]string{7: "Loudly Laundry", 8: "Ripper Dipper", 9: "Pell-mell Duel", 10: "Comfort Comrade"} {
+		f, _, ok := PickInPack(files, episode, []int{episode}, Scope{Season: 1, Named: broadcast})
+		if !ok || !strings.Contains(f.Name, want) {
+			t.Errorf("episode %d played %q, want the file titled %q", episode, f.Name, want)
+		}
+	}
+
+	for episode, want := range map[int]string{8: "S01E08", 9: "S01E09"} {
+		if f, _, ok := PickInPack(files, episode, []int{episode}, Scope{Season: 1}); !ok || !strings.Contains(f.Name, want) {
+			t.Errorf("with no titles known, episode %d played %q, want the file numbered %s", episode, f.Name, want)
+		}
+	}
+
+	plain := []File{
+		{Name: "[Group] Show - 08 [1080p].mkv", Length: 700 << 20},
+		{Name: "[Group] Show - 09 [1080p].mkv", Length: 700 << 20},
+	}
+	if f, _, ok := PickInPack(plain, 8, []int{8}, Scope{Named: broadcast}); !ok || !strings.Contains(f.Name, "- 08") {
+		t.Errorf("files that carry no titles: episode 8 played %q, want the one numbered 08", f.Name)
+	}
+
+	show := map[int][]string{8: {"Princess Principal"}, 9: {"Pell-mell Duel"}}
+	if f, _, ok := PickInPack(files, 8, []int{8}, Scope{Season: 1, Named: show}); !ok || !strings.Contains(f.Name, "S01E08") {
+		t.Errorf("an episode titled like the show itself: episode 8 played %q, want the file numbered S01E08", f.Name)
+	}
+
+	half := []File{
+		{Name: "Show - S01E08 - Pell-mell Duel.mkv", Length: 700 << 20},
+		{Name: "Show - S01E09.mkv", Length: 700 << 20},
+	}
+	if f, _, ok := PickInPack(half, 8, []int{8}, Scope{Season: 1, Named: broadcast}); !ok || !strings.Contains(f.Name, "S01E08") {
+		t.Errorf("no file is titled for episode 8: played %q, want the one numbered S01E08", f.Name)
+	}
+}
+
+func TestATitleEndingInANumberDoesNotMatchALongerNumber(t *testing.T) {
+	for _, c := range []struct {
+		name, key string
+		want      bool
+	}{
+		{"showepisode20", "episode2", false},
+		{"showepisode2", "episode2", true},
+		{"showepisode2final", "episode2", true},
+		{"show12episode2", "2episode2", false},
+		{"pellmellduel1080p", "pellmellduel", true},
+		{"episode21andepisode2", "episode2", true},
+	} {
+		if got := containsTitle(c.name, c.key); got != c.want {
+			t.Errorf("containsTitle(%q, %q) = %v, want %v", c.name, c.key, got, c.want)
+		}
 	}
 }

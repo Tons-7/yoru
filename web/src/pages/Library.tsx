@@ -173,6 +173,7 @@ function MyList({ switcher }: { switcher: ReactNode }) {
                 autoFocus={searching}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
+                onClear={() => setText('')}
                 placeholder="Search your library"
                 aria-label="Filter library"
                 className="min-w-0 flex-1"

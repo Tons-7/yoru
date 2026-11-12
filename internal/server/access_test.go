@@ -22,11 +22,10 @@ import (
 	"yoru/internal/transcode"
 )
 
-// from sets the client address, which is what decides whether the token is demanded at all.
 func (h *harness) from(t *testing.T, addr, target string, header http.Header) *http.Response {
 	t.Helper()
 	req := httptest.NewRequest("GET", target, nil)
-	// What a real client sends; the guard only exempts loopback by name too.
+
 	req.Host = "127.0.0.1:4321"
 	req.RemoteAddr = addr
 	maps.Copy(req.Header, header)
@@ -36,7 +35,6 @@ func (h *harness) from(t *testing.T, addr, target string, header http.Header) *h
 	return rec.Result()
 }
 
-// Away is a public address off this machine's own networks: never the LAN, loopback, or a link's own.
 func TestAwayFromHome(t *testing.T) {
 	for addr, want := range map[string]bool{
 		"192.168.1.20": false, "10.0.0.5": false, "127.0.0.1": false, "::1": false, "fe80::1": false, "fd00::5": false,
@@ -113,7 +111,6 @@ func TestRemoteAcceptsEveryTokenChannel(t *testing.T) {
 	}
 }
 
-// A media element can't set headers on segment requests, so the query token leaves a cookie.
 func TestQueryTokenSetsCookie(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -133,7 +130,6 @@ func TestQueryTokenSetsCookie(t *testing.T) {
 	t.Fatal("no cookie set")
 }
 
-// An unset token must not read as "no authentication required".
 func TestMissingTokenFailsClosedForRemotes(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = ""
@@ -144,8 +140,6 @@ func TestMissingTokenFailsClosedForRemotes(t *testing.T) {
 	}
 }
 
-// A page on any hostname that resolves to 127.0.0.1 reaches this socket from
-// the local browser, so the address alone cannot earn the unguarded exemption.
 func TestForeignHostOnLoopbackStillNeedsTheToken(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -165,7 +159,6 @@ func TestForeignHostOnLoopbackStillNeedsTheToken(t *testing.T) {
 		}
 	}
 
-	// The real local names still work without one.
 	for _, host := range []string{"localhost:4321", "127.0.0.1:4321", "[::1]:4321"} {
 		req := httptest.NewRequest("GET", "/api/access", nil)
 		req.RemoteAddr = "127.0.0.1:5555"
@@ -179,7 +172,6 @@ func TestForeignHostOnLoopbackStillNeedsTheToken(t *testing.T) {
 	}
 }
 
-// Through a proxy on this machine, however it's set up, devices need the token and never get host controls.
 func TestProxiedRequestsAreNotTheHost(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -212,8 +204,6 @@ func TestProxiedRequestsAreNotTheHost(t *testing.T) {
 	}
 }
 
-// The host's own page says devices come through a proxy, and where it is reached from outside: an address
-// only a paired device's request gives, as a forged one would carry the token off in the link.
 func TestTheHostSeesItsProxy(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -248,7 +238,6 @@ func TestTheHostSeesItsProxy(t *testing.T) {
 	}
 }
 
-// A proxy's own address names no device; the client it names does, and only its own entry counts.
 func TestClientAddrThroughProxies(t *testing.T) {
 	for _, c := range []struct {
 		name, remote, want string
@@ -257,13 +246,13 @@ func TestClientAddrThroughProxies(t *testing.T) {
 		{"direct", "192.168.1.50:5555", "192.168.1.50", nil},
 		{"nearest entry", "127.0.0.1:1", "203.0.113.4", http.Header{"X-Forwarded-For": {"6.6.6.6, 203.0.113.4"}}},
 		{"last header", "127.0.0.1:1", "203.0.113.4", http.Header{"X-Forwarded-For": {"6.6.6.6", "203.0.113.4"}}},
-		// The proxy appends X-Forwarded-For; an X-Real-Ip beside it may be the client's own, passed through.
+
 		{"appended entry first", "127.0.0.1:1", "203.0.113.4", http.Header{"X-Real-Ip": {"10.9.9.9"}, "X-Forwarded-For": {"203.0.113.4"}}},
 		{"real ip alone", "127.0.0.1:1", "198.51.100.7", http.Header{"X-Real-Ip": {"198.51.100.7"}}},
 		{"forwarded v6", "127.0.0.1:1", "2001:db8::1", http.Header{"Forwarded": {`for="[2001:db8::1]:4711";proto=https`}}},
 		{"names none", "127.0.0.1:1", "", http.Header{"Via": {"1.1 nginx"}}},
 		{"remote proxy names none", "192.168.1.9:1", "192.168.1.9", http.Header{"Via": {"1.1 nas"}}},
-		// A LAN device naming another address would slip a deny kept for its own.
+
 		{"forged from the LAN", "192.168.1.9:1", "192.168.1.9", http.Header{"X-Real-Ip": {"10.9.9.9"}}},
 	} {
 		req := httptest.NewRequest("GET", "/", nil)
@@ -275,14 +264,12 @@ func TestClientAddrThroughProxies(t *testing.T) {
 	}
 }
 
-// The source reaches ffmpeg as -i, so only the two shapes /api/play hands out
-// may be accepted; anything else is a fetch or a file read of the caller's choosing.
 func TestStreamOpenRejectsForeignSources(t *testing.T) {
 	const engineAddr = "127.0.0.1:3030"
 	h := newHarness(t, config.Config{}, nil)
 	h.server.playback = library.NewPlayback(h.store, nil, torrent.NewClient("http://"+engineAddr), nil, t.TempDir(),
 		slog.New(slog.DiscardHandler))
-	// Present so the handler reaches the source check; nothing here runs ffmpeg.
+
 	h.server.streams = transcode.NewManager("ffmpeg", "ffprobe", t.TempDir(), "libx264", slog.New(slog.DiscardHandler))
 
 	for _, source := range []string{
@@ -303,7 +290,6 @@ func TestStreamOpenRejectsForeignSources(t *testing.T) {
 		}
 	}
 
-	// And the engine's own stream URL is still accepted, or nothing plays.
 	engine := "http://" + engineAddr + "/torrents/4/stream/2"
 	req := httptest.NewRequest("POST", "/api/stream/open?id=1&episode=1&source="+url.QueryEscape(engine), nil)
 	req.RemoteAddr = "127.0.0.1:5555"
@@ -316,8 +302,6 @@ func TestStreamOpenRejectsForeignSources(t *testing.T) {
 	}
 }
 
-// A page on another site can make the browser POST to 127.0.0.1, where the
-// loopback exemption needs no token. Clearing downloads that way is data loss.
 func TestCrossSitePostsAreRefused(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	post := func(header map[string]string) int {
@@ -345,7 +329,7 @@ func TestCrossSitePostsAreRefused(t *testing.T) {
 	for _, header := range []map[string]string{
 		{"Origin": "http://127.0.0.1:4321"},
 		{"Sec-Fetch-Site": "same-origin"},
-		{}, // a script or the harness, not a browser
+		{},
 	} {
 		if code := post(header); code == http.StatusForbidden {
 			t.Errorf("%v: refused Yoru's own request", header)
@@ -353,7 +337,6 @@ func TestCrossSitePostsAreRefused(t *testing.T) {
 	}
 }
 
-// Another site's page in the host's browser can't make Yoru work for it, nor frame it; links still open.
 func TestLoopbackRefusesOtherSitesSubrequests(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	get := func(path string, header map[string]string) *httptest.ResponseRecorder {
@@ -380,7 +363,7 @@ func TestLoopbackRefusesOtherSitesSubrequests(t *testing.T) {
 		{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"},
 		{"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors"},
 		{"Sec-Fetch-Site": "none", "Sec-Fetch-Mode": "navigate"},
-		{}, // mpv, VLC, ffmpeg
+		{},
 	} {
 		if rec := get("/api/setup", header); rec.Code == http.StatusForbidden {
 			t.Errorf("%v: refused", header)
@@ -392,7 +375,6 @@ func TestLoopbackRefusesOtherSitesSubrequests(t *testing.T) {
 	}
 }
 
-// A paired phone can't point the library at host drives, move the database, or link trackers.
 func TestHostOnlyRoutesRefusePairedDevices(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -407,7 +389,10 @@ func TestHostOnlyRoutesRefusePairedDevices(t *testing.T) {
 		{"GET", "/api/network", ""},
 		{"POST", "/api/trackers", `{}`},
 		{"POST", "/api/setup/install/ffmpeg", ""},
-		{"POST", "/api/update/apply", ""},
+		{"POST", "/api/setup/show", `{"which":"cache"}`},
+		{"POST", "/api/setup/pick", `{}`},
+		{"POST", "/api/update/download", ""},
+		{"POST", "/api/update/restart", ""},
 		{"POST", "/api/auth/logout", ""},
 		{"POST", "/api/auth/token", `{"token":"x"}`},
 		{"POST", "/api/mal/auth/logout", ""},
@@ -443,7 +428,6 @@ func TestHostOnlyRoutesRefusePairedDevices(t *testing.T) {
 	}
 }
 
-// Switching network access off must shut out a phone still on a kept-alive connection, token or not.
 func TestNetworkOffRefusesPairedDevices(t *testing.T) {
 	h := newHarness(t, config.Config{Addr: "127.0.0.1:4321"}, nil)
 	h.server.token = "s3cret"
@@ -504,14 +488,12 @@ func TestRotateReplacesTokenAndPersists(t *testing.T) {
 		t.Errorf("stored %q, live %q", saved, h.server.token)
 	}
 
-	// The old token must stop working immediately.
 	res := h.from(t, "192.168.1.50:5555", "/api/health", http.Header{"Authorization": {"Bearer s3cret"}})
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Errorf("old token still accepted: %d", res.StatusCode)
 	}
 }
 
-// The AniList JWT is a setting; the settings endpoint must not hand it out.
 func TestSettingsRedactsSecrets(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	ctx := t.Context()
@@ -528,7 +510,6 @@ func TestSettingsRedactsSecrets(t *testing.T) {
 		t.Error("redaction removed ordinary settings too")
 	}
 
-	// Still readable by key for internal callers.
 	if got, _ := h.store.Setting(ctx, "anilist.token"); got != "jwt-here" {
 		t.Errorf("Setting() = %q, want the stored value", got)
 	}
@@ -539,7 +520,7 @@ func TestSecretClassification(t *testing.T) {
 		"anilist.token", "access.token", "anilist.client.secret", "anilist.state",
 		"anilist.client_secret", "mal.client_secret", "mal.refresh.token",
 	}
-	// A client id isn't a credential; shown to check against the developer page.
+
 	plain := []string{
 		"cache.budget_bytes", "playback.player", "anilist.user_name", "notify.enabled",
 		"anilist.client_id", "mal.client_id",
@@ -574,7 +555,7 @@ func TestQRIsValidScalableSVG(t *testing.T) {
 	if doc.ViewBox == "" {
 		t.Error("no viewBox; the QR would not scale")
 	}
-	// A fixed width on the root would stop it scaling to a TV screen.
+
 	if doc.Width != "" {
 		t.Errorf("svg pins width=%q", doc.Width)
 	}
@@ -590,8 +571,6 @@ type matrixFunc func(qrcode.Matrix) error
 func (f matrixFunc) Write(m qrcode.Matrix) error { return f(m) }
 func (f matrixFunc) Close() error                { return nil }
 
-// Reading the bitmap as [x][y] instead of [y][x] renders a transpose that still
-// looks like a valid QR code, so each module must land at the encoder's x/y.
 func TestQRRendersModulesAtLibraryCoordinates(t *testing.T) {
 	const content = "http://192.168.1.50:4321/?token=s3cret"
 	const quiet = 4
@@ -601,8 +580,6 @@ func TestQRRendersModulesAtLibraryCoordinates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Iterate is a separate path to the matrix from the Bitmap call qrSVG uses, so
-	// this compares the renderer against the encoder rather than against itself.
 	want := map[[2]int]bool{}
 	err = code.Save(matrixFunc(func(m qrcode.Matrix) error {
 		m.Iterate(qrcode.IterDirection_ROW, func(x, y int, v qrcode.QRValue) {
@@ -657,7 +634,7 @@ func TestQRMatrixIsSquareAndAValidSize(t *testing.T) {
 			t.Fatalf("row %d has %d columns, want %d", i, len(row), size)
 		}
 	}
-	// Always-black module, one of the few positions fixed by the spec.
+
 	if !cells[size-8][8] {
 		t.Error("dark module missing at row size-8, column 8")
 	}
@@ -695,8 +672,6 @@ func TestBoundDetectsRemoteReachability(t *testing.T) {
 	}
 }
 
-// The setting must record only what actually happened, so a port already in use
-// cannot leave the app claiming to be reachable when it is not.
 func TestAccessNetworkSwitchMovesTheListener(t *testing.T) {
 	var moved []string
 	s := &Server{
@@ -708,7 +683,6 @@ func TestAccessNetworkSwitchMovesTheListener(t *testing.T) {
 		t.Fatalf("LANAddr = %q, want the same port on every interface", got)
 	}
 
-	// Only from the machine itself: a paired phone must not be able to open the port on the owner's behalf.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/access/network", strings.NewReader(`{"lan":true}`))
 	r.RemoteAddr = "192.168.1.20:5555"
@@ -721,7 +695,6 @@ func TestAccessNetworkSwitchMovesTheListener(t *testing.T) {
 	}
 }
 
-// A build with no listener of its own says so rather than pretending.
 func TestAccessNetworkSwitchNeedsAListener(t *testing.T) {
 	s := &Server{cfg: config.Config{Addr: "127.0.0.1:4321"}}
 

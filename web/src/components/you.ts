@@ -8,7 +8,7 @@ import { useDownloadQueue, useDownloads, usePrefs, useSetPref, useSpeedUnit, use
 export function useAccount() {
   const trackers = useTrackers().data?.trackers ?? []
   const signedIn = trackers.filter((t) => t.connected)
-  const name = useProfile().data?.name
+  const name = useProfile().data?.shown
   return {
     user: name || signedIn.find((t) => t.user)?.user,
     signedIn,

@@ -65,6 +65,7 @@ const CHECKS = [
   ['related-check.mjs', {}, ALONE],
   ['releases-check.mjs', {}, ALONE],
   ['saved-copy-check.mjs', {}, ALONE],
+  ['stuck-check.mjs'],
   ['freshness-check.mjs', {}, ALONE],
   ['seek-spinner-check.mjs'],
   ['segmented-scroll-check.mjs'],
@@ -148,6 +149,7 @@ if (!built) {
 }
 
 if (built && !only.length) await step('self-update', 'node scripts/update-check.mjs', webDir)
+if (built && !only.length) await step('setup guide', 'node scripts/setup-check.mjs', webDir)
 
 if (built) {
   console.log(`\n▶ ${checks.length} checks (logs: ${logs})`)

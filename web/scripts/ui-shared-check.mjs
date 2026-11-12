@@ -1,4 +1,3 @@
-// Shared pieces: inline confirms, the pager's clamp, Settings tabs, folder refusals, a job that didn't start.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -21,7 +20,6 @@ const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 const tab = (name) => page.getByRole('tab', { name, exact: true })
 
-// The tab lives in the URL: a reload keeps it, and a link to another one switches even from here.
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
 await tab('Downloads').click()
 check(await until(async () => new URL(page.url()).searchParams.get('tab') === 'Downloads'), 'a picked tab is in the URL', page.url())
@@ -35,7 +33,6 @@ await page.evaluate(() => {
 })
 check(await until(() => tab('About').getAttribute('aria-selected').then((v) => v === 'true')), 'the same ?tab= link again switches back')
 
-// The inline confirm on a faked network-open Devices tab (this instance listens on 127.0.0.1 alone).
 let rotated = 0
 await page.route('**/api/access', (route) =>
   route.fulfill({
@@ -46,7 +43,6 @@ await page.route('**/api/access/rotate', (route) => {
   rotated++
   return route.fulfill({ json: {} })
 })
-// A fresh load: the access state fetched at startup is kept a while, so the fake would go unasked.
 await page.goto(`${BASE}/settings?tab=Devices`, { waitUntil: 'domcontentloaded' })
 const signOut = page.getByRole('button', { name: 'Sign out all devices' })
 if (await signOut.waitFor({ timeout: 8000 }).then(() => true, () => false)) {
@@ -63,7 +59,6 @@ if (await signOut.waitFor({ timeout: 8000 }).then(() => true, () => false)) {
 await page.unroute('**/api/access')
 await page.unroute('**/api/access/rotate')
 
-// A job the server refused says so under its row.
 await page.route('**/api/jobs/*', (route) =>
   route.request().method() === 'POST' ? route.fulfill({ status: 500, json: { error: 'job exploded' } }) : route.fallback(),
 )
@@ -74,23 +69,20 @@ await run.click()
 check(await until(() => page.getByText("Didn't start: job exploded").isVisible()), 'a refused job run is said, not swallowed')
 await page.unroute('**/api/jobs/*')
 
-// Library folders: the refused path and why, beside the list, and the text stays to correct.
 await tab('Library').click()
 const folder = page.getByRole('textbox', { name: 'Folder to add' })
 await folder.waitFor({ timeout: 8000 })
 const bad = 'Z:\\no\\such\\folder\\yoru-check'
 await folder.fill(bad)
-await page.getByRole('button', { name: 'Add', exact: true }).click()
+await page.getByRole('button', { name: 'Add folder', exact: true }).click()
 check(await until(() => page.getByText(`${bad}: not readable`).isVisible()), 'the refused folder is named with its reason')
 check((await folder.inputValue()) === bad, 'the refused path stays in the box to fix')
 
-// A later page left empty steps back instead of saying there is nothing.
 for (const path of ['/library?page=5', '/history?page=4']) {
   await page.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded' })
   check(await until(async () => new URL(page.url()).searchParams.get('page') === '1'), `${path.split('?')[0]} steps back to a page with something`, page.url())
 }
 
-// Notifications, faked: the page and the bell's panel confirm the same way.
 let deleted = 0
 const now = Math.floor(Date.now() / 1000)
 await page.route('**/api/notifications*', (route) => {
@@ -124,7 +116,6 @@ check(await until(() => page.getByRole('button', { name: 'Clear', exact: true })
 check(deleted === 1, 'backing out deletes nothing')
 await page.unroute('**/api/notifications*')
 
-// On a phone the tabs are a menu; a strip hid the last ones off-screen.
 const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
 phone.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 await phone.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })

@@ -162,10 +162,11 @@ type Candidate struct {
 
 	ByHand bool
 
-	Season  int      `json:"-"`
-	Counted int      `json:"-"`
-	Others  []string `json:"-"`
-	Held    bool     `json:"held,omitempty"`
+	Season  int              `json:"-"`
+	Counted int              `json:"-"`
+	Others  []string         `json:"-"`
+	Named   map[int][]string `json:"-"`
+	Held    bool             `json:"held,omitempty"`
 }
 
 const nominalRuntime = 24

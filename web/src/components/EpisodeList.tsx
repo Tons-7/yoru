@@ -50,7 +50,7 @@ function airDay(unix: number) {
 
 function outWhen(unix: number | undefined, now: number, withTime = true) {
   if (!unix) return 'Not out yet'
-  if (unix * 1000 - now < DAY) return `Out ${relativeTime(unix)}`
+  if (unix * 1000 - now < DAY) return `Out ${relativeTime(unix, now)}`
   const day = new Date(unix * 1000).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
   return withTime ? `Out ${day}, ${airTime(unix)}` : `Out ${day}`
 }
@@ -403,6 +403,7 @@ export function EpisodeList({
                     <SearchInput
                       value={term}
                       onChange={(e) => search(e.target.value)}
+                      onClear={() => search('')}
                       placeholder="Find an episode"
                       aria-label="Search episodes"
                       className="w-full sm:w-56"
@@ -445,6 +446,7 @@ export function EpisodeList({
         <SearchInput
           value={term}
           onChange={(e) => search(e.target.value)}
+          onClear={() => search('')}
           placeholder={`Search ${episodes.length} episodes`}
           aria-label="Search episodes"
         />

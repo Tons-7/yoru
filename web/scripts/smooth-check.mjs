@@ -246,9 +246,9 @@ check(status.ready === true, 'FlyHigh is installed at the pinned version', JSON.
 {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
   const page = await context.newPage()
-  await page.goto(`${BASE}/setup`, { waitUntil: 'domcontentloaded' })
-  const listed = await page.getByText('Smooth motion').first().waitFor({ timeout: 15000 }).then(() => true).catch(() => false)
-  check(listed, 'the Setup page shows the Smooth motion row')
+  await page.goto(`${BASE}/setup?step=essentials`, { waitUntil: 'domcontentloaded' })
+  const listed = await page.getByText('Smooth motion', { exact: true }).first().waitFor({ timeout: 15000 }).then(() => true).catch(() => false)
+  check(listed, "the setup guide's Essentials step shows Smooth motion")
   await page.screenshot({ path: join(SHOTS, 'smooth-setup.png'), fullPage: true })
   await context.close()
 }
