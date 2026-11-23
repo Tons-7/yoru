@@ -14,13 +14,13 @@ func TestInterestIsStickyUntilPeerHasNothingWeLack(t *testing.T) {
 		cs := storage.NewFile(t.TempDir())
 		t.Cleanup(func() { cs.Close() })
 		tt := cl.newTorrent(mi.HashInfoBytes(), cs)
+		cl.lock()
+		defer cl.unlock()
+		tt.initialPieceCheckDisabled = true
 		if withInfo {
-			cl.lock()
 			if err := tt.setInfoBytesLocked(mi.InfoBytes); err != nil {
-				cl.unlock()
 				t.Fatal(err)
 			}
-			cl.unlock()
 		}
 		pc := cl.newConnection(nil, newConnectionOpts{network: "test"})
 		pc.setTorrent(tt)
