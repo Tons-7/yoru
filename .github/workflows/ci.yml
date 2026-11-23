@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - run: |
+          New-Item -ItemType Directory -Force web/dist | Out-Null
+          Set-Content web/dist/index.html '<!doctype html>'
       - run: go vet ./...
       - run: go test ./...
 
