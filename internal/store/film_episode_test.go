@@ -14,7 +14,6 @@ func film(t *testing.T, s *Store, id int, format string, episodes int, descripti
 	}
 }
 
-// No source keeps episode data for a film, so its one episode is described by the film's own entry.
 func TestAFilmIsItsOwnEpisode(t *testing.T) {
 	s := newTestStore(t)
 	film(t, s, 1, "MOVIE", 1, "A girl <i>forgets</i>.<br><br>\n(Source: Somewhere) &amp; more", "banner.jpg", "cover.jpg")
@@ -41,7 +40,6 @@ func TestAFilmIsItsOwnEpisode(t *testing.T) {
 	}
 }
 
-// The cover stands in without a banner, and a one-part OVA is described the same way but keeps its number.
 func TestAOnePartOVAIsDescribedByItsEntry(t *testing.T) {
 	s := newTestStore(t)
 	film(t, s, 1, "OVA", 1, "An extra.", nil, "cover.jpg")
@@ -55,7 +53,6 @@ func TestAOnePartOVAIsDescribedByItsEntry(t *testing.T) {
 	}
 }
 
-// What a source did record wins; only the gaps are filled.
 func TestAFilmKeepsWhatASourceRecorded(t *testing.T) {
 	s := newTestStore(t)
 	film(t, s, 1, "MOVIE", 1, "From the entry.", "banner.jpg", "cover.jpg")
@@ -74,7 +71,6 @@ func TestAFilmKeepsWhatASourceRecorded(t *testing.T) {
 	}
 }
 
-// A film not out yet is described too, but still marked as expected rather than as there to watch.
 func TestAnUnreleasedFilmStaysExpected(t *testing.T) {
 	s := newTestStore(t)
 	film(t, s, 1, "MOVIE", 1, "Coming.", nil, "cover.jpg")
@@ -88,7 +84,6 @@ func TestAnUnreleasedFilmStaysExpected(t *testing.T) {
 	}
 }
 
-// A show's episodes are never described by the show: only a one-part entry is its own episode.
 func TestAShowIsNotItsOwnEpisode(t *testing.T) {
 	s := newTestStore(t)
 	film(t, s, 1, "TV", 3, "The whole show.", "banner.jpg", "cover.jpg")

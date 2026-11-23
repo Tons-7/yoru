@@ -145,7 +145,7 @@ export function SearchBox() {
       className={cx('relative ml-auto flex min-w-0 flex-1 justify-end max-lg:hidden sm:max-w-xs', onSearchPage && 'invisible')}
       onSubmit={(e) => {
         e.preventDefault()
-        if (active >= 0 && hits[active]) pick(hits[active].id)
+        if (showMenu && active >= 0 && hits[active]) pick(hits[active].id)
         else browse()
       }}
       onBlur={(e) => {
@@ -180,6 +180,7 @@ export function SearchBox() {
               setActive((a) => Math.max(-1, a - 1))
             } else if (e.key === 'Escape') {
               setOpen(false)
+              setActive(-1)
             }
           }}
           role="combobox"
@@ -253,7 +254,7 @@ export function SearchBox() {
               Nothing matches “{q}”.
             </li>
           )}
-          {searching && <li role="presentation" className="mx-1.5 my-1 h-px bg-white/[0.07]" />}
+          {searching && <li role="presentation" className="mx-1.5 my-1 h-px bg-white/7" />}
           <li id={`yoru-search-opt-${last}`} role="option" aria-selected={active === last}>
             <button
               type="button"

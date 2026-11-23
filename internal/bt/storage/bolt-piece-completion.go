@@ -1,4 +1,4 @@
-//go:build !noboltdb && !wasm
+//go:build !noboltdb
 
 package storage
 
@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -47,17 +49,58 @@ func NewBoltPieceCompletion(dir string) (ret PieceCompletion, err error) {
 	return
 }
 
-// openBolt opens the db, turning a panic on a damaged file into an error.
 func openBolt(p string) (db *bbolt.DB, err error) {
+	var file *os.File
+	defer debug.SetPanicOnFault(debug.SetPanicOnFault(true))
 	defer func() {
 		if r := recover(); r != nil {
+			if file != nil {
+				file.Close()
+			}
+			db = nil
 			err = fmt.Errorf("opening %s: %v", p, r)
 		}
 	}()
-	return bbolt.Open(p, 0o660, &bbolt.Options{Timeout: time.Second})
+	db, err = bbolt.Open(p, 0o660, &bbolt.Options{
+		Timeout: time.Second,
+		OpenFile: func(name string, flag int, perm os.FileMode) (*os.File, error) {
+			f, err := os.OpenFile(name, flag, perm)
+			file = f
+			return f, err
+		},
+	})
+	if err != nil {
+		return
+	}
+	if err = readThrough(db); err != nil {
+		closeQuietly(db)
+		db = nil
+	}
+	return
 }
 
-// damaged: bbolt read the file and found it broken, not that the OS refused it (held, denied, mmap).
+func closeQuietly(db *bbolt.DB) {
+	defer func() { recover() }()
+	db.Close()
+}
+
+func readThrough(db *bbolt.DB) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("reading through: %v", r)
+		}
+	}()
+	return db.View(func(tx *bbolt.Tx) error {
+		c := tx.Bucket(completionBucketKey)
+		if c == nil {
+			return nil
+		}
+		return c.ForEachBucket(func(k []byte) error {
+			return c.Bucket(k).ForEach(func(_, _ []byte) error { return nil })
+		})
+	})
+}
+
 func damaged(err error) bool {
 	var pathErr *os.PathError
 	var errno syscall.Errno
@@ -68,8 +111,6 @@ func damaged(err error) bool {
 	return true
 }
 
-// NewBoltPieceCompletionRecovering swaps a db too damaged to open (NoSync risks a torn write) for a new one
-// (reset: every piece is rehashed). One the OS withholds (another process, access) is an error, never moved.
 func NewBoltPieceCompletionRecovering(dir string) (ret PieceCompletion, reset bool, err error) {
 	ret, err = NewBoltPieceCompletion(dir)
 	if err == nil || !damaged(err) {
@@ -79,11 +120,19 @@ func NewBoltPieceCompletionRecovering(dir string) (ret PieceCompletion, reset bo
 	if renameErr := os.Rename(p, p+".damaged-"+time.Now().Format("20060102-150405")); renameErr != nil {
 		return nil, false, fmt.Errorf("%w (and moving it aside: %v)", err, renameErr)
 	}
+	pruneDamaged(p, 2)
 	ret, err = NewBoltPieceCompletion(dir)
 	return ret, err == nil, err
 }
 
-// Forget drops a torrent's records in one transaction, so the db doesn't keep every torrent ever held.
+func pruneDamaged(p string, keep int) {
+	old, _ := filepath.Glob(p + ".damaged-*")
+	slices.Sort(old)
+	for _, f := range old[:max(0, len(old)-keep)] {
+		os.Remove(f)
+	}
+}
+
 func (me boltPieceCompletion) Forget(ih metainfo.Hash) error {
 	return me.db.Update(func(tx *bbolt.Tx) error {
 		c := tx.Bucket(completionBucketKey)

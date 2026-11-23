@@ -16,7 +16,6 @@ import (
 	"time"
 )
 
-// Real-swarm diagnosis: reads as ffmpeg does and logs each peer's state when a read blocks. SWARMDIAG=magnet.
 func TestSwarmDiagnosis(t *testing.T) {
 	magnet := os.Getenv("SWARMDIAG")
 	if magnet == "" {
@@ -58,7 +57,6 @@ func TestSwarmDiagnosis(t *testing.T) {
 	tor := en.t
 	pieceLen := tor.Info().PieceLength
 	size := tor.Info().TotalLength()
-	// ffmpeg reads at twice the video's rate; a 24-minute episode of this size gives the rate.
 	rate := float64(size) / (24 * 60) * 2
 	t.Logf("%s: %d MiB, pieces %d KiB, reading at %.1f MiB/s", tor.Name(), size>>20, pieceLen>>10, rate/(1<<20))
 
@@ -78,7 +76,6 @@ func TestSwarmDiagnosis(t *testing.T) {
 	var blockedTotal time.Duration
 	reqq := regexp.MustCompile(`reqq: (\d+)\+`)
 	for time.Now().Before(end) && pos < size {
-		// Paced like ffmpeg's -readrate: never further ahead of the clock than the rate allows.
 		if ahead := time.Duration(float64(pos)/rate*float64(time.Second)) - time.Since(start); ahead > 0 {
 			time.Sleep(ahead)
 		}
@@ -108,7 +105,6 @@ func TestSwarmDiagnosis(t *testing.T) {
 					e.cl.WriteStatus(&status)
 					name := filepath.Join(out, fmt.Sprintf("stall-%02d.txt", dumps))
 					os.WriteFile(name, status.Bytes(), 0o644)
-					// Each peer's queue and last useful chunk, on one line.
 					for block := range strings.SplitSeq(status.String(), "\n\n") {
 						if m := reqq.FindStringSubmatch(block); m != nil {
 							t.Logf("  peer: %s", summarise(block))
@@ -142,7 +138,6 @@ func TestSwarmDiagnosis(t *testing.T) {
 		pos>>20, size>>20, time.Since(start).Seconds(), stalls, blockedTotal.Seconds(), out)
 }
 
-// summarise keeps a peer block's address, request queue, flags and how long since it last helped.
 func summarise(block string) string {
 	var parts []string
 	for line := range strings.SplitSeq(block, "\n") {

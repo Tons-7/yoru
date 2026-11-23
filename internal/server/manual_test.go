@@ -104,7 +104,6 @@ func TestBookmarkEndpoints(t *testing.T) {
 	}
 }
 
-// Genres are AniList's, so a filtered draw is answered from there; a plain one stays local to the corpus.
 func TestRandomWithGenresAsksAniList(t *testing.T) {
 	var queries []string
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +128,6 @@ func TestRandomWithGenresAsksAniList(t *testing.T) {
 		t.Fatalf("queries = %v", queries)
 	}
 
-	// Nothing in the corpus and no genres: one upstream draw, no genre filter.
 	before := len(queries)
 	res, body = h.do(t, "GET", "/api/random")
 	if res.StatusCode != 200 || body["id"] != float64(100) || len(queries) == before {

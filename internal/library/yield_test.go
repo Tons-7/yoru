@@ -9,7 +9,6 @@ import (
 	"yoru/internal/store"
 )
 
-// A background download must not starve the episode starting.
 func TestStartingEpisodeTakesTheLine(t *testing.T) {
 	engine := newFakeEngine()
 	p := newPlayback(t, engine, []indexer.Torrent{
@@ -48,7 +47,6 @@ func TestStartingEpisodeTakesTheLine(t *testing.T) {
 		t.Error("a kept download was paused; the queue manages those")
 	}
 
-	// Episode 2 now plays; leaving episode 1 must not hand the line back.
 	const next = "7777777777777777777777777777777777777777"
 	if err := p.store.RecordTorrent(ctx, store.TorrentRecord{InfoHash: next, EngineID: 52, Name: "Frieren - 02", AnimeID: 1, EpKey: "2"}); err != nil {
 		t.Fatal(err)

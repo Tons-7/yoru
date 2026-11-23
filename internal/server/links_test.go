@@ -9,7 +9,6 @@ import (
 	"yoru/internal/config"
 )
 
-// A MyAnimeList page opens its show: by the offline catalogue, else AniList's answer, else it says so.
 func TestAMyAnimeListLinkFindsItsShow(t *testing.T) {
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

@@ -11,8 +11,6 @@ import (
 	"yoru/internal/bt"
 )
 
-// Two releases with one name and different content live in their own folders; deleting one leaves the
-// other's bytes, and a restart keeps each where it was.
 func TestSameNamedReleasesKeepTheirOwnFiles(t *testing.T) {
 	dirA, dirB := t.TempDir(), t.TempDir()
 	miA, contentA := makePack(t, dirA)
@@ -73,7 +71,6 @@ func TestSameNamedReleasesKeepTheirOwnFiles(t *testing.T) {
 		t.Fatalf("the other release is no longer complete: %+v", st)
 	}
 
-	// After a restart the second release is still where it was.
 	f.engine.Stop()
 	f.peer = &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}
 	f.start(t)

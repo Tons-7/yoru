@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -32,9 +33,8 @@ func TestMALPullAppliesASiteEditAndFlagsItForAniList(t *testing.T) {
 	if _, err := sync.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	st.ClearDirty(ctx, 154587, 1, 1)
+	st.ClearDirtyAt(ctx, 154587, 1, 1, math.MaxInt64)
 
-	// The site moved on: 10 watched and rated 8.
 	imp, err := sync.Pull(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +51,6 @@ func TestMALPullAppliesASiteEditAndFlagsItForAniList(t *testing.T) {
 		t.Fatalf("dirty = %+v, want the site edit queued for AniList", dirty)
 	}
 
-	// And MAL is not told its own change back.
 	before := len(up.pushed())
 	if _, err := sync.Run(ctx); err != nil {
 		t.Fatal(err)
@@ -61,8 +60,6 @@ func TestMALPullAppliesASiteEditAndFlagsItForAniList(t *testing.T) {
 	}
 }
 
-// MAL keeps whole points, so an 85 goes up as 9 and comes back as 9. Reading
-// that back as 90 rounded every score, and pushed the rounding to AniList.
 func TestMALPullKeepsAFinerScore(t *testing.T) {
 	up := &malServer{list: `{"data":[
 	  {"node":{"id":52991,"title":"Frieren","num_episodes":28},
@@ -80,7 +77,7 @@ func TestMALPullKeepsAFinerScore(t *testing.T) {
 	if _, err := sync.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	st.ClearDirty(ctx, 154587, 1, 1)
+	st.ClearDirtyAt(ctx, 154587, 1, 1, math.MaxInt64)
 
 	imp, err := sync.Pull(ctx)
 	if err != nil {
@@ -139,7 +136,6 @@ func TestMALPullLeavesAnUnpushedLocalEditAlone(t *testing.T) {
 	addAnime(t, st, 154587, 52991, 28)
 	st.MarkWatched(ctx, 154587, 6)
 	sync.Run(ctx)
-	// Site says 10; here it just became 12 and is still unpushed to AniList.
 	st.MarkWatched(ctx, 154587, 12)
 
 	imp, err := sync.Pull(ctx)
@@ -152,7 +148,6 @@ func TestMALPullLeavesAnUnpushedLocalEditAlone(t *testing.T) {
 	if e, _ := st.ListEntry(ctx, 154587); e.Progress != 12 {
 		t.Fatalf("local edit lost: progress = %d", e.Progress)
 	}
-	// And the local edit still reaches MAL.
 	sync.Run(ctx)
 	pushed := up.pushed()
 	if got := pushed[len(pushed)-1].Get("num_watched_episodes"); got != "12" {
@@ -176,7 +171,6 @@ func TestMALPushCarriesTheScore(t *testing.T) {
 		t.Fatalf("pushed = %v, want score 9 (85/100 rounded)", pushed)
 	}
 
-	// Changing only the score is a change.
 	st.SetScore(ctx, 154587, 40)
 	sync.Run(ctx)
 	pushed = up.pushed()
@@ -185,7 +179,6 @@ func TestMALPushCarriesTheScore(t *testing.T) {
 	}
 }
 
-// aniServer fakes enough of AniList for a push then a pull: it records mutations and serves one fixed list.
 type aniServer struct {
 	list string
 
@@ -225,7 +218,6 @@ func (a *aniServer) handler() http.HandlerFunc {
 			id, _ := req.Variables["animeId"].(float64)
 			a.mu.Lock()
 			a.toggled = append(a.toggled, int(id))
-			// The site flips it, so what it holds changes with the call.
 			if i := slices.Index(a.favourites, int(id)); i >= 0 {
 				a.favourites = slices.Delete(a.favourites, i, i+1)
 			} else {
@@ -235,7 +227,6 @@ func (a *aniServer) handler() http.HandlerFunc {
 			io.WriteString(w, `{"data":{"ToggleFavourite":{"anime":{"pageInfo":{"total":1}}}}}`)
 			return
 		}
-		// By operation name: the list query's media fragment asks for a "favourites" count of its own.
 		if strings.Contains(req.Query, "query Favourites(") {
 			a.mu.Lock()
 			nodes := make([]string, 0, len(a.favourites))
@@ -301,7 +292,6 @@ func TestAniListRunPushesThenPullsSiteEdits(t *testing.T) {
 		t.Fatalf("pushed variables = %v", v)
 	}
 
-	// The site's copy is newer than the push and replaces it once pushed.
 	e, _ := st.ListEntry(ctx, 100)
 	if e.Progress != 9 || e.Score != 80 || e.ID != 77 {
 		t.Fatalf("entry = %+v", e)
@@ -324,7 +314,6 @@ func TestAniListPullSkipsAnUnpushedEdit(t *testing.T) {
 	st.ImportList(ctx, []store.Anime{{ID: 100, Romaji: "Frieren"}}, nil, store.ImportMerge)
 	st.MarkWatched(ctx, 100, 3)
 
-	// Push refused: the row stays dirty and the pull must leave it.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct{ Query string }
 		decodeJSON(r, &req)
@@ -356,7 +345,6 @@ func TestPushOneReachesBothTrackers(t *testing.T) {
 	sync, st := newAniSync(t, ani)
 	mal := &malServer{list: `{"data":[],"paging":{}}`}
 	malSync, _ := newMALSync(t, mal)
-	// Same database for both halves.
 	malSync.store = st
 	sync.WithMAL(malSync)
 	ctx := context.Background()

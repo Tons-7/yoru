@@ -1,16 +1,13 @@
-// Package match resolves a parsed release title to a specific anime. AniList search
-// degrades on specific queries, so candidates come from a local token index scored here.
 package match
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
 	"yoru/internal/corpus"
 )
 
-// Weights follow Seanime's published table, which is the most battle-tested
-// set in this space, with two corrections noted at their use sites.
 const (
 	scoreExact          = 15.0
 	scoreNormalisedEq   = 14.0
@@ -24,8 +21,6 @@ const (
 
 	scoreSeasonMatch    = 5.0
 	scoreSeasonMismatch = -8.0
-	scorePartMatch      = 3.0
-	scorePartMismatch   = -5.0
 	scoreFormatMatch    = 5.0
 	scoreFormatMismatch = -5.0
 	scoreYearExact      = 4.0
@@ -34,7 +29,6 @@ const (
 
 	scoreEpisodeOutOfRange = -6.0
 
-	// Settles a tie between franchise entries, never overturns a better title match.
 	BoostWatching  = 4.0
 	BoostPlanned   = 2.0
 	BoostCompleted = 1.0
@@ -44,14 +38,10 @@ const (
 	thresholdFuzzyHigh   = 0.90
 	thresholdFuzzyMedium = 0.80
 
-	// Auto-accept needs a high score and daylight over the runner-up: bare
-	// "Frieren" scores identically against season 1, season 2 and the ONA.
 	thresholdAccept = 6.0
 	thresholdAuto   = 16.0
 	thresholdMargin = 2.0
 
-	// Season and year are only computed for candidates whose title is already
-	// plausible, so a coincidental year cannot rescue an unrelated show.
 	thresholdTitleFloor = 2.0
 )
 
@@ -67,13 +57,10 @@ type Media struct {
 type Query struct {
 	Title   string
 	Season  int
-	Part    int
 	Year    int
 	Format  string
 	Episode int
 
-	// Boost nudges specific anime by id: franchise seasons share one English
-	// title, so titles alone can't separate them but what the user watches can.
 	Boost map[int]float64
 }
 
@@ -89,10 +76,8 @@ type Result struct {
 type Decision string
 
 const (
-	// Confident enough to start playing without asking.
 	Auto Decision = "auto"
-	// Too close to the runner-up to act on, so the options are surfaced.
-	Ask Decision = "ask"
+	Ask  Decision = "ask"
 )
 
 func (r Result) Ambiguous() bool { return r.Decision == Ask }
@@ -111,15 +96,14 @@ type key struct {
 	main   bool
 }
 
-// Index holds the searchable corpus: built in O(titles), a lookup then touches under 1% of it.
 type Index struct {
 	media   []indexed
 	byToken map[string][]int32
-	byID    map[int]int32
+	byNorm  map[string][]int32
 }
 
 func NewIndex() *Index {
-	return &Index{byToken: make(map[string][]int32), byID: make(map[int]int32)}
+	return &Index{byToken: make(map[string][]int32), byNorm: make(map[string][]int32)}
 }
 
 func (ix *Index) Len() int { return len(ix.media) }
@@ -153,12 +137,15 @@ func (ix *Index) Add(m Media) {
 
 	pos := int32(len(ix.media))
 	ix.media = append(ix.media, entry)
-	ix.byID[m.ID] = pos
 
 	for tok := range entry.tokens {
 		ix.byToken[tok] = append(ix.byToken[tok], pos)
 	}
-	// Compounds let "rezero" reach "re zero kara hajimeru", which release groups write both ways.
+	for _, k := range entry.keys {
+		if len(k.tokens) == 0 && k.norm != "" && !slices.Contains(ix.byNorm[k.norm], pos) {
+			ix.byNorm[k.norm] = append(ix.byNorm[k.norm], pos)
+		}
+	}
 	for _, k := range entry.keys {
 		for i := 0; i+1 < len(k.tokens); i++ {
 			if len(k.tokens[i]) <= 5 && len(k.tokens[i+1]) <= 5 {
@@ -197,15 +184,17 @@ func (ix *Index) Rank(q Query, n int) []Result {
 	qt := significant(qn)
 
 	results := make([]Result, 0, 16)
-	for _, pos := range ix.candidates(qt) {
+	positions := ix.candidates(qt)
+	if len(qt) == 0 {
+		positions = ix.byNorm[qn]
+	}
+	for _, pos := range positions {
 		entry := ix.media[pos]
 		if r, ok := score(q, qn, qf, qt, entry); ok {
 			results = append(results, r)
 		}
 	}
 
-	// Quantise before sorting. Comparing floats with a tolerance is not a
-	// strict weak ordering and makes sort.Slice return arbitrary results.
 	sort.Slice(results, func(i, j int) bool {
 		a, b := int64(results[i].Score*1000), int64(results[j].Score*1000)
 		if a != b {
@@ -220,7 +209,6 @@ func (ix *Index) Rank(q Query, n int) []Result {
 	return results
 }
 
-// candidates unions the query tokens' posting lists; empty is a miss, not a reason for a full scan.
 func (ix *Index) candidates(tokens []string) []int32 {
 	seen := make(map[int32]struct{}, 256)
 	out := make([]int32, 0, 256)
@@ -258,7 +246,6 @@ func score(q Query, qn, qf string, qt []string, entry indexed) (Result, bool) {
 	r := Result{MediaID: entry.media.ID, Score: best, Matched: matched}
 	r.Reasons = append(r.Reasons, reason)
 
-	// A stronger title match earns more trust in the metadata signals.
 	trust := best / 6.0
 	if trust > 1 {
 		trust = 1
@@ -273,14 +260,6 @@ func score(q Query, qn, qf string, qt []string, entry indexed) (Result, bool) {
 		case q.Season > 0 && m.Season > 0 && q.Season != m.Season:
 			r.Score += scoreSeasonMismatch
 			r.Reasons = append(r.Reasons, "different season")
-		}
-	}
-
-	if q.Part > 0 && m.Season > 0 {
-		if q.Part == m.Season {
-			r.Score += scorePartMatch
-		} else {
-			r.Score += scorePartMismatch
 		}
 	}
 
@@ -306,7 +285,6 @@ func score(q Query, qn, qf string, qt []string, entry indexed) (Result, bool) {
 		}
 	}
 
-	// An episode past a season's count rules it out, separating entries sharing an English title.
 	if q.Episode > 0 && m.Episodes > 0 && q.Episode > m.Episodes {
 		r.Score += scoreEpisodeOutOfRange
 		r.Reasons = append(r.Reasons, "episode number exceeds this entry")
@@ -336,7 +314,6 @@ func titleScore(rawQuery, qn, qf string, qt []string, k key) (float64, string) {
 	case cover == 1 && len(qt) == len(k.tokens) && len(qt) > 0:
 		return scoreTokenPerfect + complexity(qt), "every word matches"
 	case cover == 1:
-		// Scaled by coverage, or "Boku wa Hero" ties "Boku no Hero Academia".
 		ratio := float64(min(len(qt), len(k.tokens))) / float64(max(len(qt), len(k.tokens)))
 		return scoreTokenComplete * ratio, "all words present"
 	case shared >= thresholdTokenHigh:
@@ -355,7 +332,6 @@ func titleScore(rawQuery, qn, qf string, qt []string, k key) (float64, string) {
 	}
 }
 
-// A long title matching in full is far stronger evidence than one word, so length is rewarded.
 func complexity(tokens []string) float64 {
 	switch {
 	case len(tokens) >= 3:
@@ -388,7 +364,6 @@ func tokenOverlap(a, b []string) (ratio float64, coverage float64) {
 	return float64(hits) / float64(max(len(a), len(b))), coverage
 }
 
-// Single characters carry no signal and blow up the posting lists.
 func significant(norm string) []string {
 	fields := strings.Fields(norm)
 	out := make([]string, 0, len(fields))

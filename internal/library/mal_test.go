@@ -18,8 +18,7 @@ import (
 )
 
 type malServer struct {
-	list string
-	// listing, when set, holds each list request until the test takes a value and sends one back.
+	list    string
 	listing chan struct{}
 
 	mu          sync.Mutex
@@ -88,7 +87,29 @@ func newMALSync(t *testing.T, upstream *malServer) (*MALSync, *store.Store) {
 	client.SetToken(mal.Token{Access: "acc", Expires: time.Now().Add(time.Hour)})
 
 	st := store.New(conn)
+	if err := st.Pulled(context.Background(), malTracker); err != nil {
+		t.Fatal(err)
+	}
 	return NewMALSync(st, client, log), st
+}
+
+func TestMALRunWaitsForAFirstPull(t *testing.T) {
+	up := &malServer{list: `{"data":[],"paging":{}}`}
+	sync, st := newMALSync(t, up)
+	ctx := context.Background()
+	st.ForgetPushed(ctx, malTracker)
+	addAnime(t, st, 154587, 52991, 28)
+	st.MarkWatched(ctx, 154587, 10)
+
+	if rep, err := sync.Run(ctx); err != nil || rep.Pushed != 0 {
+		t.Fatalf("pushed before MAL was read: %+v %v", rep, err)
+	}
+	if _, err := sync.Pull(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rep, err := sync.Run(ctx); err != nil || rep.Pushed != 1 {
+		t.Fatalf("after the pull: %+v %v", rep, err)
+	}
 }
 
 func addAnime(t *testing.T, s *store.Store, animeID, malID, episodes int) {
@@ -130,7 +151,6 @@ func TestMALSyncPushesLocalProgress(t *testing.T) {
 		t.Errorf("status = %q", got)
 	}
 
-	// A second run has nothing left to say.
 	rep, err = sync.Run(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +163,6 @@ func TestMALSyncPushesLocalProgress(t *testing.T) {
 	}
 }
 
-// MAL already knows most of the list, so connecting must not fire a request per entry.
 func TestImportSuppressesRedundantPushes(t *testing.T) {
 	up := &malServer{list: `{"data":[
 	  {"node":{"id":52991,"title":"Frieren","num_episodes":28},
@@ -159,8 +178,8 @@ func TestImportSuppressesRedundantPushes(t *testing.T) {
 
 	addAnime(t, st, 154587, 52991, 28)
 	addAnime(t, st, 1, 101, 12)
-	st.MarkWatched(ctx, 154587, 10) // MAL agrees
-	st.MarkWatched(ctx, 1, 5)       // MAL is behind
+	st.MarkWatched(ctx, 154587, 10)
+	st.MarkWatched(ctx, 1, 5)
 
 	imp, err := sync.Pull(ctx)
 	if err != nil {
@@ -221,7 +240,6 @@ func TestPushOneTargetsASingleAnime(t *testing.T) {
 		t.Errorf("episodes = %q, want anime 2's progress", got)
 	}
 
-	// Nothing new to say about it now.
 	if err := sync.PushOne(ctx, 2); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +269,6 @@ func TestSyncIsInertWithoutAConnection(t *testing.T) {
 	}
 }
 
-// An anime MAL cannot address must not be retried forever.
 func TestUnmappedAnimeIsNeverPushed(t *testing.T) {
 	up := &malServer{list: `{"data":[],"paging":{}}`}
 	sync, st := newMALSync(t, up)
@@ -269,7 +286,6 @@ func TestUnmappedAnimeIsNeverPushed(t *testing.T) {
 	}
 }
 
-// A failure must leave the entry pending rather than recording it as sent.
 func TestFailedPushStaysPending(t *testing.T) {
 	var fail = true
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -298,6 +314,7 @@ func TestFailedPushStaysPending(t *testing.T) {
 	st := store.New(conn)
 	sync := NewMALSync(st, client, log)
 	ctx := context.Background()
+	st.Pulled(ctx, malTracker)
 
 	addAnime(t, st, 1, 101, 12)
 	st.MarkWatched(ctx, 1, 3)

@@ -13,7 +13,6 @@ const favouritesQuery = `query Favourites($userId: Int!, $page: Int!) {
   }
 }`
 
-// Favourites returns the anime ids on the user's favourites list.
 func (c *Client) Favourites(ctx context.Context, userID int) ([]int, error) {
 	var ids []int
 
@@ -51,7 +50,6 @@ const toggleFavouriteQuery = `mutation Favourite($animeId: Int!) {
   ToggleFavourite(animeId: $animeId) { anime { pageInfo { total } } }
 }`
 
-// ToggleFavourite flips the flag (AniList cannot set it). Never retried: a retried toggle undoes itself.
 func (c *Client) ToggleFavourite(ctx context.Context, mediaID int) error {
 	var out struct{}
 	return c.MutateOnce(ctx, toggleFavouriteQuery, map[string]any{"animeId": mediaID}, &out)

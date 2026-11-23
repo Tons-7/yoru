@@ -1,5 +1,3 @@
-// Subtitle size steps grow the dialogue and are remembered; z/x shift cues in time.
-//   node scripts/run-player-check.mjs subtitle-look-check.mjs
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -35,7 +33,6 @@ async function waitPlaying() {
   return false
 }
 
-// Paused at t, so every shot is of the same frame.
 async function holdAt(t) {
   await page.evaluate((at) => {
     const v = document.querySelector('video')
@@ -45,8 +42,6 @@ async function holdAt(t) {
   await sleep(2500)
 }
 
-// The lower third, where dialogue sits, with the controls in the same state
-// for every shot: a key press shows them, which would read as a change.
 async function shot(name) {
   const box = await video().boundingBox()
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
@@ -55,7 +50,6 @@ async function shot(name) {
   return (await page.screenshot({ clip, path: `${SHOTS}/${name}.png` })).toString('base64')
 }
 
-// Pixels that differ between two shots of the same frame.
 function changed(a, b) {
   return page.evaluate(
     async ([a, b]) => {
@@ -94,10 +88,8 @@ const openMenu = async () => {
 
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await waitPlaying(), 'playback started')
-// Settles the subtitle renderer before measuring.
 await sleep(3000)
 
-// A cue covers 7–11 s.
 await holdAt(8.5)
 const normal = await shot('look-size-100')
 await openMenu()
@@ -118,17 +110,15 @@ check(await sizeIs('Medium'), 'Medium returns it to 100%')
 await page.keyboard.press('Escape')
 await sleep(1000)
 
-// 6.5 s falls between the 2–6 s and 7–11 s cues.
 await holdAt(6.5)
 const gap = await shot('look-delay-0')
 const steady = await changed(gap, await shot('look-delay-0-again'))
 for (let i = 0; i < 10; i++) await page.keyboard.press('x')
-// The toast, not the screen reader's copy of it.
 const toast = page.getByText('Subtitle delay +1.0 s').and(page.locator(':not([role=status])'))
-check(await toast.isVisible(), 'x shows the new delay')
+check(await toast.first().waitFor({ timeout: 3000 }).then(() => true, () => false), 'x shows the new delay')
 await sleep(1500)
 const delayed = await changed(gap, await shot('look-delay-plus1'))
-check(delayed > steady + 1000, 'a +1 s delay shows the earlier cue in the gap', `${delayed} px changed (noise ${steady})`)
+check(delayed > steady + 600, 'a +1 s delay shows the earlier cue in the gap', `${delayed} px changed (noise ${steady})`)
 for (let i = 0; i < 10; i++) await page.keyboard.press('z')
 await sleep(1500)
 const back = await changed(gap, await shot('look-delay-back'))

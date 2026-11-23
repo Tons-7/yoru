@@ -99,7 +99,7 @@ func pickHere(title, start string) (string, error) {
 			dlg.call(vtSetTitle, uintptr(unsafe.Pointer(t)))
 		}
 	}
-	if info, err := os.Stat(start); err == nil && info.IsDir() {
+	if start = pickStart(start); start != "" {
 		if p, err := windows.UTF16PtrFromString(start); err == nil {
 			var item *comObject
 			hr, _, _ := shCreateItemFromParsingName.Call(uintptr(unsafe.Pointer(p)), 0,

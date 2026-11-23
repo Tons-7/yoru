@@ -173,7 +173,7 @@ check((await dead7.count()) === 1, 'a failed download is one row', `${await dead
 const dead7Text = (await dead7.first().innerText()).replace(/\n/g, ' | ')
 check(/87%/.test(dead7Text) && /gave up after 3 tries/.test(dead7Text) && !/Paused/.test(dead7Text), 'it shows what it got and why it stopped', dead7Text)
 check((await dead7.getByRole('button', { name: 'Try again' }).count()) === 1, 'and offers to try again')
-check((await dead7.getByRole('progressbar').count()) + (await dead7.locator('.bg-base-800').count()) >= 1, 'with its progress bar')
+check((await dead7.getByRole('progressbar').first().getAttribute('aria-valuenow').catch(() => null)) === '87', 'with its progress bar at 87%')
 queueCalls.length = 0
 calls.length = 0
 await dead7.getByRole('button', { name: 'Remove from queue' }).click()
@@ -204,7 +204,7 @@ const unnamed = await page.locator('ul.space-y-2 button').evaluateAll((buttons) 
   buttons.filter((b) => !(b.getAttribute('aria-label') || b.textContent?.trim())).length,
 )
 check(unnamed === 0, 'every control in the list has a name', `${unnamed} unnamed`)
-const rail = await page.locator('ul.space-y-2 button[aria-label="Keep"], ul.space-y-2 button[aria-label^="Change release"]').evaluateAll((buttons) =>
+const rail = await page.locator('ul.space-y-2 button[aria-label^="Keep "], ul.space-y-2 button[aria-label^="Change release"]').evaluateAll((buttons) =>
   buttons.map((b) => b.getBoundingClientRect()).map((r) => `${Math.round(r.width)}x${Math.round(r.height)}`),
 )
 check(rail.length >= 4 && rail.every((s) => s === '28x28'), 'icons are 28 px squares, the same on every row', [...new Set(rail)].join(','))
@@ -212,7 +212,7 @@ await page.setViewportSize({ width: 390, height: 800 })
 await page.waitForTimeout(300)
 const phone = await page.evaluate(() => ({
   overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-  keep: [...document.querySelectorAll('ul.space-y-2 button[aria-label="Keep"]')].map((b) => {
+  keep: [...document.querySelectorAll('ul.space-y-2 button[aria-label^="Keep "]')].map((b) => {
     const r = b.getBoundingClientRect()
     return r.width > 0 && r.right <= innerWidth && r.left >= 0
   }),

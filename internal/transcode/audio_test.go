@@ -16,7 +16,6 @@ func dualAudioInfo() *MediaInfo {
 	}
 }
 
-// Dub gets English even with Japanese marked default; sub gets Japanese.
 func TestChooseAudioByPreference(t *testing.T) {
 	info := dualAudioInfo()
 	if got := ChooseAudio(info, "dub"); got != 1 {
@@ -29,7 +28,6 @@ func TestChooseAudioByPreference(t *testing.T) {
 		t.Errorf("either picked track %d, want the default 0", got)
 	}
 
-	// Title carries the language when the tag does not.
 	byTitle := &MediaInfo{Audio: []Stream{
 		{Codec: "aac", Title: "Japanese 2.0"},
 		{Codec: "aac", Title: "English 5.1"},
@@ -38,8 +36,6 @@ func TestChooseAudioByPreference(t *testing.T) {
 		t.Errorf("dub by title picked %d, want 1", got)
 	}
 
-	// A dub with no English track at all falls back to the default rather than
-	// guessing; the release filter is what keeps a sub-only file out.
 	subOnly := &MediaInfo{Audio: []Stream{
 		{Codec: "aac", Language: "jpn"}, {Codec: "aac", Language: "jpn", Default: true},
 	}}
@@ -47,13 +43,11 @@ func TestChooseAudioByPreference(t *testing.T) {
 		t.Errorf("dub with no English picked %d, want the default 1", got)
 	}
 
-	// A single-track file has nothing to choose.
 	if got := ChooseAudio(&MediaInfo{Audio: []Stream{{Codec: "aac"}}}, "dub"); got != 0 {
 		t.Errorf("single track picked %d, want 0", got)
 	}
 }
 
-// The preference picks a track on first open and on change, never on a same-choice reopen.
 func TestAudioPreferenceAppliesOnFirstOpenAndOnChange(t *testing.T) {
 	s := &Session{Info: dualAudioInfo()}
 	if !s.ApplyAudioPreference("sub") {
@@ -70,7 +64,6 @@ func TestAudioPreferenceAppliesOnFirstOpenAndOnChange(t *testing.T) {
 	}
 }
 
-// The chosen track is the one ffmpeg maps and the one the plan judges.
 func TestAudioTrackDrivesArgsAndPlan(t *testing.T) {
 	info := &MediaInfo{
 		Video: &Stream{Codec: "h264", BitDepth: 8},
@@ -92,5 +85,21 @@ func TestAudioTrackDrivesArgsAndPlan(t *testing.T) {
 	}
 	if s.Plan.AudioCopy {
 		t.Error("second track is ac3, should re-encode")
+	}
+}
+
+func TestApplyAudioPreferenceOnlyChangesOnce(t *testing.T) {
+	s := &Session{}
+	if !s.ApplyAudioPreference("") {
+		t.Fatal("the first open made no choice")
+	}
+	if s.ApplyAudioPreference("") {
+		t.Error("a reopen with no preference counted as a change")
+	}
+	if s.ApplyAudioPreference("either") {
+		t.Error("\"either\" after no preference counted as a change")
+	}
+	if !s.ApplyAudioPreference("dub") {
+		t.Error("switching to dub was not a change")
 	}
 }

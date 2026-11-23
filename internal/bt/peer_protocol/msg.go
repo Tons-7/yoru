@@ -9,8 +9,6 @@ import (
 	"io"
 )
 
-// This is a lazy union representing all the possible fields for messages. Go doesn't have ADTs, and
-// I didn't choose to use type-assertions. Fields are ordered to minimize struct size and padding.
 type Message struct {
 	PiecesRoot           [32]byte
 	Piece                []byte
@@ -159,7 +157,6 @@ func (msg *Message) getPayloadLength() (length Integer, err error) {
 }
 
 func (msg Message) MarshalBinary() (data []byte, err error) {
-	// A pool with the length prefix preset isn't simply faster when a []byte goes out; benchmark first.
 	var buf bytes.Buffer
 	err = msg.WriteTo(&buf)
 	data = buf.Bytes()
@@ -181,7 +178,8 @@ func marshalBitfield(bf []bool) (b []byte) {
 
 func (me *Message) UnmarshalBinary(b []byte) error {
 	d := Decoder{
-		R: bufio.NewReader(bytes.NewReader(b)),
+		R:         bufio.NewReader(bytes.NewReader(b)),
+		MaxLength: Integer(len(b)),
 	}
 	err := d.Decode(me)
 	if err != nil {

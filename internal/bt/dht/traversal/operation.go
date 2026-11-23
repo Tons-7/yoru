@@ -3,6 +3,7 @@ package traversal
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 
@@ -17,12 +18,10 @@ import (
 )
 
 type QueryResult struct {
-	// Set when the reply is a BEP 5 response (it has "r").
 	ResponseFrom *krpc.NodeInfo
-	// A closest node's data, a token string in practice; generics would spread through all of Operation.
-	ClosestData any
-	Nodes       []krpc.NodeInfo
-	Nodes6      []krpc.NodeInfo
+	ClosestData  any
+	Nodes        []krpc.NodeInfo
+	Nodes6       []krpc.NodeInfo
 }
 
 type OperationInput struct {
@@ -31,8 +30,6 @@ type OperationInput struct {
 	K          int
 	DoQuery    func(context.Context, krpc.NodeAddr) QueryResult
 	NodeFilter func(types.AddrMaybeId) bool
-	// Which nodes join the closest set by the data (usually the reply's token) they gave: get_peers keeps
-	// strings only, as Token needs one to announce to them.
 	DataFilter func(data any) bool
 }
 
@@ -85,7 +82,6 @@ type Operation struct {
 	stopped      chansync.SetOnce
 }
 
-// I don't think you should access this until the Stopped event.
 func (op *Operation) Stats() *Stats {
 	return &op.stats
 }
@@ -131,14 +127,12 @@ func (op *Operation) addNodeLocked(n types.AddrMaybeId) (err error) {
 	return nil
 }
 
-// Add an unqueried node returning an error with a reason why the node wasn't added.
 func (op *Operation) AddNode(n types.AddrMaybeId) (err error) {
 	op.mu.Lock()
 	defer op.mu.Unlock()
 	return op.addNodeLocked(n)
 }
 
-// Add a bunch of unqueried nodes at once, returning how many were successfully added.
 func (op *Operation) AddNodes(nodes []types.AddrMaybeId) (added int) {
 	op.mu.Lock()
 	defer op.mu.Unlock()
@@ -235,7 +229,6 @@ func (op *Operation) startQuery() {
 			op.outstanding--
 			op.cond.Broadcast()
 		}()
-		// log.Printf("traversal querying %v", a)
 		atomic.AddUint32(&op.stats.NumAddrsTried, 1)
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
@@ -255,7 +248,29 @@ func (op *Operation) startQuery() {
 				op.addClosest(*res.ResponseFrom, res.ClosestData)
 			}()
 		}
-		op.AddNodes(types.AddrMaybeIdSliceFromNodeInfoSlice(res.Nodes))
-		op.AddNodes(types.AddrMaybeIdSliceFromNodeInfoSlice(res.Nodes6))
+		op.AddNodes(replyNodes(a.Addr, res.Nodes))
+		op.AddNodes(replyNodes(a.Addr, res.Nodes6))
 	}()
+}
+
+const maxNodesPerReply = 8
+
+func replyNodes(from krpc.NodeAddrPort, nodes []krpc.NodeInfo) []types.AddrMaybeId {
+	local := !PublicAddr(from.Addr())
+	all := types.AddrMaybeIdSliceFromNodeInfoSlice(nodes)
+	kept := all[:0]
+	for _, n := range all {
+		if len(kept) == maxNodesPerReply {
+			break
+		}
+		if local || PublicAddr(n.Addr.Addr()) {
+			kept = append(kept, n)
+		}
+	}
+	return kept
+}
+
+func PublicAddr(a netip.Addr) bool {
+	a = a.Unmap()
+	return a.IsGlobalUnicast() && !a.IsPrivate()
 }

@@ -10,10 +10,7 @@ import (
 )
 
 type LocalLtepProtocolMap struct {
-	// Extension names by number less one; the first NumBuiltin use built-in handlers. Moved past them a
-	// protocol is yours to handle, removed it's off; change it in PeerConnAdded.
-	Index []pp.ExtensionName
-	// How many of the protocols are using the builtin handlers.
+	Index      []pp.ExtensionName
 	NumBuiltin int
 }
 
@@ -28,7 +25,6 @@ func (me *LocalLtepProtocolMap) toSupportedExtensionDict() (m map[pp.ExtensionNa
 	return
 }
 
-// LookupId names a local extension ID, builtin when handled here; ID 0 is the handshake, an error.
 func (me *LocalLtepProtocolMap) LookupId(id pp.ExtensionNumber) (name pp.ExtensionName, builtin bool, err error) {
 	if id == 0 {
 		err = fmt.Errorf("extension ID 0 is handshake")

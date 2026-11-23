@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -68,8 +69,8 @@ func TestAnnounceLocalhost(t *testing.T) {
 
 func TestUDPTracker(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.SkipNow()
+	if os.Getenv("YORU_LIVE") == "" {
+		t.Skip("set YORU_LIVE=1 to announce to live trackers")
 	}
 	req := AnnounceRequest{
 		NumWant: -1,
@@ -88,7 +89,6 @@ func TestUDPTracker(t *testing.T) {
 		Request:    req,
 		Context:    ctx,
 	}.Do()
-	// Skip any net errors, or the tracker turning us down, as we don't control the server.
 	var ne net.Error
 	var refused udp.ErrorResponse
 	if errors.As(err, &ne) || errors.As(err, &refused) {
@@ -100,9 +100,8 @@ func TestUDPTracker(t *testing.T) {
 
 func TestAnnounceRandomInfoHashThirdParty(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		// It contacts third-party servers, whose answers vary.
-		t.SkipNow()
+	if os.Getenv("YORU_LIVE") == "" {
+		t.Skip("set YORU_LIVE=1 to announce to live trackers")
 	}
 	req := AnnounceRequest{
 		Event: Stopped,
@@ -131,7 +130,6 @@ func TestAnnounceRandomInfoHashThirdParty(t *testing.T) {
 				return
 			}
 			if resp.Leechers != 0 || resp.Seeders != 0 || len(resp.Peers) != 0 {
-				// A random infohash in 2^160 can't have peers.
 				t.Error(resp)
 				return
 			}
@@ -143,7 +141,6 @@ func TestAnnounceRandomInfoHashThirdParty(t *testing.T) {
 	cancel()
 }
 
-// Check that URLPath option is done correctly.
 func TestURLPathOption(t *testing.T) {
 	conn, err := net.ListenPacket("udp", "localhost:0")
 	if err != nil {
@@ -163,9 +160,12 @@ func TestURLPathOption(t *testing.T) {
 		announceErr <- err
 	}()
 	var b [512]byte
-	// conn.SetReadDeadline(time.Now().Add(time.Second))
-	_, addr, _ := conn.ReadFrom(b[:])
-	r := bytes.NewReader(b[:])
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	n, addr, err := conn.ReadFrom(b[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := bytes.NewReader(b[:n])
 	var h udp.RequestHeader
 	udp.Read(r, &h)
 	w := &bytes.Buffer{}
@@ -175,7 +175,7 @@ func TestURLPathOption(t *testing.T) {
 	})
 	udp.Write(w, udp.ConnectionResponse{ConnectionId: 42})
 	conn.WriteTo(w.Bytes(), addr)
-	n, _, _ := conn.ReadFrom(b[:])
+	n, _, _ = conn.ReadFrom(b[:])
 	r = bytes.NewReader(b[:n])
 	udp.Read(r, &h)
 	udp.Read(r, &AnnounceRequest{})
@@ -191,4 +191,34 @@ func TestURLPathOption(t *testing.T) {
 	udp.Write(w, udp.AnnounceResponseHeader{})
 	conn.WriteTo(w.Bytes(), addr)
 	require.NoError(t, <-announceErr)
+}
+
+func TestAnnounceReconnectsAfterErrorResponse(t *testing.T) {
+	srv := server{t: map[[20]byte]torrent{}}
+	var err error
+	srv.pc, err = net.ListenPacket("udp", "localhost:0")
+	require.NoError(t, err)
+	defer srv.pc.Close()
+	go func() {
+		for srv.serveOne() == nil {
+		}
+	}()
+	cl, err := NewClient(fmt.Sprintf("udp://%s/announce", srv.pc.LocalAddr()), NewClientOpts{})
+	require.NoError(t, err)
+	defer cl.Close()
+	req := AnnounceRequest{NumWant: -1, Event: Started}
+	rand.Read(req.PeerId[:])
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err = cl.Announce(ctx, req, AnnounceOpt{})
+	require.NoError(t, err)
+	srv.forget()
+
+	var refused udp.ErrorResponse
+	_, err = cl.Announce(ctx, req, AnnounceOpt{})
+	require.ErrorAs(t, err, &refused, "an announce on a forgotten connection id")
+
+	_, err = cl.Announce(ctx, req, AnnounceOpt{})
+	require.NoError(t, err, "the announce after an error response did not reconnect")
 }

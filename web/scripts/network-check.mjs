@@ -1,4 +1,3 @@
-// Per device: the mobile-data card, quality steps, Settings rows, softened flashing, the encoder, the New tab.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -7,7 +6,7 @@ const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const SHOTS = process.env.SHOTS ?? '.'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const until = async (fn, ms = 15_000) => {
-  for (const end = Date.now() + ms; Date.now() < end; await sleep(200)) if (await fn()) return true
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(200)) if (await Promise.resolve().then(fn).catch(() => false)) return true
   return false
 }
 const api = async (path, body) =>
@@ -27,7 +26,6 @@ await api('/api/prefs', { key: 'playback.autoplay', value: 'false' })
 const browser = await chromium.launch()
 const errors = []
 
-// A phone whose browser says it's on mobile data (or Wi-Fi), as Chrome on Android does.
 async function phone(type, stored = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 860 } })
   await context.addInitScript(
@@ -59,7 +57,6 @@ const plays = (page) =>
     }),
   )
 
-// ---------------------------------------------------------------- Ask first, on mobile data
 {
   const { context, page, opens, plans } = await phone('cellular')
   await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
@@ -73,27 +70,24 @@ const plays = (page) =>
   check(await until(() => opens.includes('480')), 'data saver opens it at 480p', opens.join(','))
   check(await until(() => plans.some((p) => p.maxRate > 0 && p.height === 480)), 'capped by the server', JSON.stringify(plans.at(-1)))
   check(await plays(page), 'and it plays')
-  // Opened again the same sitting: not asked again.
   await page.reload({ waitUntil: 'domcontentloaded' })
   check(await until(() => opens.filter((q) => q === '480').length >= 2), 'the sitting keeps the answer, unasked', opens.join(','))
   check(!(await card.isVisible().catch(() => false)), 'with no card')
   await context.close()
 }
 
-// ---------------------------------------------------------------- remembered on this device
 {
   const { context, page, opens } = await phone('cellular')
   await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
   const card = page.getByRole('dialog', { name: "You're on mobile data" })
   await card.waitFor({ timeout: 15_000 })
-  await card.getByRole('checkbox', { name: 'Remember on this device' }).check()
+  await card.getByRole('switch', { name: 'Remember on this device' }).click()
   await card.getByRole('button', { name: 'Play', exact: true }).click()
   check(await until(() => opens.length > 0 && opens.at(-1) === ''), 'Play opens it at full quality', opens.join(','))
   check((await page.evaluate(() => localStorage.getItem('yoru.mobileData'))) === 'full', 'and remembers it on this device')
   await context.close()
 }
 
-// ---------------------------------------------------------------- Wi-Fi only
 {
   const { context, page, opens } = await phone('cellular', { 'yoru.mobileData': 'wifi' })
   await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
@@ -104,7 +98,17 @@ const plays = (page) =>
   await context.close()
 }
 
-// ---------------------------------------------------------------- on Wi-Fi; the player's quality steps
+{
+  const { context, page, opens } = await phone('cellular', { 'yoru.mobileData': 'wifi' })
+  await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
+  const card = page.getByRole('dialog', { name: "You're on mobile data" })
+  await card.waitFor({ timeout: 15_000 })
+  await card.getByRole('button', { name: 'Play once with data saver' }).click()
+  check(await until(() => opens.includes('480')), 'or to play once with data saver', opens.join(','))
+  check((await page.evaluate(() => localStorage.getItem('yoru.mobileData'))) === 'wifi', 'without changing the device setting')
+  await context.close()
+}
+
 {
   const { context, page, opens, plans } = await phone('wifi')
   await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
@@ -123,10 +127,9 @@ const plays = (page) =>
   check((await page.evaluate(() => localStorage.getItem('yoru.quality'))) === '720', 'kept for this device')
   await page.keyboard.press('i')
   const info = await page.locator('[aria-label="Playback info"]').innerText().catch(() => '')
-  check(/capped at 480p|capped at 720p/.test(info), 'Playback info says the picture is capped', info.replace(/\n/g, ' | '))
+  check(/capped at 720p/.test(info), 'Playback info says the picture is capped', info.replace(/\n/g, ' | '))
   await page.screenshot({ path: `${SHOTS}/network-quality.png` })
 
-  // Settings, Devices: the same two choices, this device's.
   await page.goto(`${BASE}/settings?tab=Devices`, { waitUntil: 'domcontentloaded' })
   const quality = page.getByRole('combobox', { name: 'Streaming quality' })
   check(await until(async () => (await quality.innerText().catch(() => '')) === '720p'), 'Settings shows this device’s quality')
@@ -139,7 +142,6 @@ const plays = (page) =>
   await context.close()
 }
 
-// ---------------------------------------------------------------- softened flashing, the encoder, the New tab
 {
   const { context, page, plans } = await phone('wifi')
   await page.goto(`${BASE}/settings?tab=Sound`, { waitUntil: 'domcontentloaded' })
@@ -155,11 +157,10 @@ const plays = (page) =>
   const converting = page.locator('[data-row]', { hasText: 'Converting' })
   check(await until(() => converting.isVisible()), 'About names what converts', (await converting.innerText().catch(() => '')).replace(/\n/g, ' '))
 
-  // As after an update from an older version.
   await page.route('**/api/update/since', (r) => r.fulfill({ json: { current: '2026.10.30', updatedFrom: '2026.10.20' } }))
   await api('/api/prefs', { key: 'settings.new_seen', value: '' })
   await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
-  const tab = page.getByRole('tab', { name: /New/ })
+  const tab = page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: /New/ })
   check(await until(() => tab.isVisible()), 'after an update, Settings has a New tab')
   check(await tab.locator('[aria-label="not seen yet"]').isVisible().catch(() => false), 'marked until seen')
   await page.getByRole('button', { name: 'Profile and settings' }).click()

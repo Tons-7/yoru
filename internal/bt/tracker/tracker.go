@@ -1,16 +1,8 @@
 package tracker
 
 import (
-	"context"
 	"errors"
-	"fmt"
-	"net"
-	"net/http"
-	"net/url"
 	"time"
-
-	"github.com/anacrolix/log"
-	"yoru/internal/bt/dht/krpc"
 
 	trHttp "yoru/internal/bt/tracker/http"
 	"yoru/internal/bt/tracker/shared"
@@ -34,54 +26,4 @@ type AnnounceEvent = shared.AnnounceEvent
 
 var ErrBadScheme = errors.New("unknown scheme")
 
-// Deprecated. Use tracker.NewClient and friends instead.
-type Announce struct {
-	TrackerUrl          string
-	Request             AnnounceRequest
-	HostHeader          string
-	HttpProxy           func(*http.Request) (*url.URL, error)
-	HttpRequestDirector func(*http.Request) error
-	DialContext         func(ctx context.Context, network, addr string) (net.Conn, error)
-	ListenPacket        func(network, addr string) (net.PacketConn, error)
-	ServerName          string
-	UserAgent           string
-	UdpNetwork          string
-	// If the port is zero, it's assumed to be the same as the Request.Port.
-	ClientIp4 krpc.NodeAddr
-	// If the port is zero, it's assumed to be the same as the Request.Port.
-	ClientIp6 krpc.NodeAddr
-	Context   context.Context
-	Logger    log.Logger
-}
-
-// The code *is* the documentation.
 const DefaultTrackerAnnounceTimeout = 15 * time.Second
-
-func (me Announce) Do() (res AnnounceResponse, err error) {
-	cl, err := NewClient(me.TrackerUrl, NewClientOpts{
-		Http: trHttp.NewClientOpts{
-			Proxy:       me.HttpProxy,
-			DialContext: me.DialContext,
-		},
-		UdpNetwork:   me.UdpNetwork,
-		Logger:       me.Logger.WithContextValue(fmt.Sprintf("tracker client for %q", me.TrackerUrl)),
-		ListenPacket: me.ListenPacket,
-	})
-	if err != nil {
-		return
-	}
-	defer cl.Close()
-	if me.Context == nil {
-		// The old 15 s timeout unless a Context is given; longer ones rate limit overloaded trackers.
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultTrackerAnnounceTimeout)
-		defer cancel()
-		me.Context = ctx
-	}
-	return cl.Announce(me.Context, me.Request, trHttp.AnnounceOpt{
-		UserAgent:           me.UserAgent,
-		HostHeader:          me.HostHeader,
-		ClientIp4:           me.ClientIp4.IP,
-		ClientIp6:           me.ClientIp6.IP,
-		HttpRequestDirector: me.HttpRequestDirector,
-	})
-}

@@ -20,10 +20,18 @@ export function AvatarEditor({ file, onCancel, onSave }: { file: File; onCancel:
   useEffect(() => {
     const url = URL.createObjectURL(file)
     const img = new Image()
-    img.onload = () => (img.naturalWidth && img.naturalHeight ? setPicture(img) : setProblem("That picture couldn't be read."))
-    img.onerror = () => setProblem("That picture couldn't be read.")
+    let gone = false
+    img.onload = () => {
+      if (gone) return
+      if (img.naturalWidth && img.naturalHeight) setPicture(img)
+      else setProblem("That picture couldn't be read.")
+    }
+    img.onerror = () => !gone && setProblem("That picture couldn't be read.")
     img.src = url
-    return () => URL.revokeObjectURL(url)
+    return () => {
+      gone = true
+      URL.revokeObjectURL(url)
+    }
   }, [file])
 
   useLayoutEffect(() => {
@@ -57,15 +65,17 @@ export function AvatarEditor({ file, onCancel, onSave }: { file: File; onCancel:
     setAt((was) => held({ x: (was.x * z) / zoom, y: (was.y * z) / zoom }, picture.naturalWidth * fit * z, picture.naturalHeight * fit * z))
   }
 
+  const pos = held(at)
   const save = () => {
     if (!picture || !circle) return
-    const side = circle / scale
+    const side = Math.min(circle / scale, picture.naturalWidth, picture.naturalHeight)
+    const clampTo = (v: number, most: number) => Math.min(Math.max(0, v), Math.max(0, most))
     try {
       onSave(
         renderAvatar(picture, {
           side,
-          x: picture.naturalWidth / 2 - at.x / scale - side / 2,
-          y: picture.naturalHeight / 2 - at.y / scale - side / 2,
+          x: clampTo(picture.naturalWidth / 2 - pos.x / scale - side / 2, picture.naturalWidth - side),
+          y: clampTo(picture.naturalHeight / 2 - pos.y / scale - side / 2, picture.naturalHeight - side),
         }),
       )
     } catch (err) {
@@ -84,16 +94,26 @@ export function AvatarEditor({ file, onCancel, onSave }: { file: File; onCancel:
         className="animate-fade-in relative w-full max-w-xl rounded-xl border border-base-800 bg-base-900 p-4 shadow-2xl"
       >
         <h2 className="text-base font-semibold text-white">Edit picture</h2>
-        <p className="mt-0.5 text-xs text-base-500">Drag to move. Zoom with the slider or the mouse wheel.</p>
+        <p className="mt-0.5 text-xs text-base-500">Drag or use the arrow keys to move it. The slider zooms.</p>
 
         <div
           ref={stage}
-          className="relative mt-4 aspect-[4/3] max-h-[60vh] w-full touch-none overflow-hidden rounded-lg bg-base-950 select-none"
+          tabIndex={picture ? 0 : -1}
+          role="group"
+          aria-label="Picture position: arrow keys move it"
+          onKeyDown={(e) => {
+            const step = e.shiftKey ? 40 : 10
+            const by = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key]
+            if (!picture || !by) return
+            e.preventDefault()
+            setAt(held({ x: pos.x + by[0], y: pos.y + by[1] }))
+          }}
+          className="relative mt-4 aspect-4/3 max-h-[60vh] w-full touch-none overflow-hidden rounded-lg bg-base-950 select-none focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:outline-hidden"
           style={{ cursor: picture ? 'grab' : 'default' }}
           onPointerDown={(e) => {
             if (!picture) return
             e.currentTarget.setPointerCapture(e.pointerId)
-            drag.current = { id: e.pointerId, x: e.clientX - at.x, y: e.clientY - at.y }
+            drag.current = { id: e.pointerId, x: e.clientX - pos.x, y: e.clientY - pos.y }
           }}
           onPointerMove={(e) => {
             const d = drag.current
@@ -109,7 +129,7 @@ export function AvatarEditor({ file, onCancel, onSave }: { file: File; onCancel:
               alt=""
               draggable={false}
               className="pointer-events-none absolute top-1/2 left-1/2 max-w-none"
-              style={{ width, height, transform: `translate(calc(-50% + ${at.x}px), calc(-50% + ${at.y}px))` }}
+              style={{ width, height, transform: `translate(calc(-50% + ${pos.x}px), calc(-50% + ${pos.y}px))` }}
             />
           )}
           <div
@@ -135,7 +155,7 @@ export function AvatarEditor({ file, onCancel, onSave }: { file: File; onCancel:
           />
         </label>
 
-        {problem && <p className="mt-3 text-xs text-recap">{problem}</p>}
+        {problem && <p className="mt-3 text-xs text-red-300">{problem}</p>}
 
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="ghost" onClick={onCancel}>

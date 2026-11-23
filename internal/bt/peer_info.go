@@ -6,15 +6,12 @@ import (
 	"yoru/internal/bt/peer_protocol"
 )
 
-// Peer connection info, handed about publicly.
 type PeerInfo struct {
-	Id     [20]byte
-	Addr   PeerRemoteAddr
-	Source PeerSource
-	// Peer is known to support encryption.
+	Id                 [20]byte
+	Addr               PeerRemoteAddr
+	Source             PeerSource
 	SupportsEncryption bool
 	peer_protocol.PexPeerFlags
-	// Whether we can ignore poor or bad behaviour from the peer.
 	Trusted bool
 }
 
@@ -27,11 +24,9 @@ func (me PeerInfo) equal(other PeerInfo) bool {
 		me.Trusted == other.Trusted
 }
 
-// Generate PeerInfo from peer exchange
 func (me *PeerInfo) FromPex(na krpc.NodeAddr, fs peer_protocol.PexPeerFlags) {
 	me.Addr = ipPortAddr{append([]byte(nil), na.IP...), na.Port}
 	me.Source = PeerSourcePex
-	// If they prefer encryption, they must support it.
 	if fs.Get(peer_protocol.PexPrefersEncryption) {
 		me.SupportsEncryption = true
 	}

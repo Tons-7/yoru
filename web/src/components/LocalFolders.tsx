@@ -30,12 +30,18 @@ export function LocalFolders() {
   const save = useMutation({
     meta: { inline: true },
     mutationFn: (paths: string[]) => api.post('/api/local/paths', { paths }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['local'] }),
+    onSuccess: () => {
+      for (const key of ['local', 'localFiles', 'episodes', 'anime']) void qc.invalidateQueries({ queryKey: [key] })
+    },
   })
   const scan = useMutation({
     meta: { inline: true },
     mutationFn: () => api.post('/api/local/scan'),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['local'] }),
+    onSuccess: async () => {
+      await qc.refetchQueries({ queryKey: ['local'] })
+      if (qc.getQueryData<LocalState>(['local'])?.scanning) return
+      for (const key of ['episodes', 'anime', 'localFiles']) void qc.invalidateQueries({ queryKey: [key] })
+    },
   })
   const show = useMutation({
     meta: { inline: true },
@@ -56,15 +62,30 @@ export function LocalFolders() {
   const problems =
     save.error instanceof ApiError ? ((save.error.body as { paths?: Record<string, string> } | undefined)?.paths ?? {}) : {}
   const remove = (folder: string) => {
-    const before = roots
     save.mutate(
       roots.filter((r) => r !== folder),
-      { onSuccess: () => toast(`Removed ${folder}`, 'info', { label: 'Undo', run: () => save.mutate(before) }) },
+      {
+        onSuccess: () =>
+          toast(`Removed ${folder}`, 'info', {
+            label: 'Undo',
+            run: () => {
+              const now = qc.getQueryData<LocalState>(['local'])?.roots ?? []
+              if (!now.includes(folder)) save.mutate([...now, folder])
+            },
+          }),
+      },
     )
   }
   const add = () => {
     const next = path.trim()
-    if (next) save.mutate([...roots, next], { onSuccess: () => setPath('') })
+    if (!next) return
+    const same = (a: string) => a.replace(/[\\/]+$/, '').toLowerCase() === next.replace(/[\\/]+$/, '').toLowerCase()
+    if (roots.some(same)) {
+      toast('That folder is already in the list', 'info')
+      setPath('')
+      return
+    }
+    save.mutate([...roots, next], { onSuccess: () => setPath('') })
   }
 
   return (
@@ -130,7 +151,7 @@ export function LocalFolders() {
         </form>
       )}
       {save.isError && (
-        <div className="pb-3 text-xs text-recap">
+        <div className="pb-3 text-xs text-red-300">
           {Object.keys(problems).length > 0 ? (
             Object.entries(problems).map(([p, why]) => (
               <p key={p}>
@@ -142,7 +163,7 @@ export function LocalFolders() {
           )}
         </div>
       )}
-      {show.isError && <p className="pb-3 text-xs text-recap">{(show.error as Error).message}</p>}
+      {show.isError && <p className="pb-3 text-xs text-red-300">{(show.error as Error).message}</p>}
 
       {roots.length > 0 && stats && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3 border-t border-white/5 py-3.5">
@@ -165,7 +186,7 @@ export function LocalFolders() {
           </div>
         </div>
       )}
-      {scan.isError && <p className="pb-3 text-xs text-recap">{(scan.error as Error).message}</p>}
+      {scan.isError && <p className="pb-3 text-xs text-red-300">{(scan.error as Error).message}</p>}
     </div>
   )
 }

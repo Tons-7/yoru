@@ -3,7 +3,7 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 import { api, query, statusLabel, type LibraryItem, type ListStatus, type Page } from './api'
 import { useMediaQuery } from './hooks'
 import { libraryProgress, type LibraryProgress } from './libraryText'
-import { refreshListState, useNow, type LibraryCounts } from './queries'
+import { LIST_STATE_KEYS, refreshListState, useNow, type LibraryCounts } from './queries'
 import { readKey, writeKey } from './storage'
 import { toast } from './toast'
 import { removeWithUndo } from './undo'
@@ -67,15 +67,44 @@ export interface ListFilter {
   q: string
   sort: string
   fav: boolean
+  more?: MoreFilters
 }
 
+export interface MoreFilters {
+  format: string
+  season: string
+  year: string
+  genre: string
+  airing: boolean
+  disk: boolean
+}
+
+export const NO_MORE_FILTERS: MoreFilters = { format: '', season: '', year: '', genre: '', airing: false, disk: false }
+
+export const moreFiltersOn = (m: MoreFilters) =>
+  !!(m.format || m.season || m.year || m.genre || m.airing || m.disk)
+
 export function useLibraryItems(f: ListFilter, page: number, perPage: number, enabled = true) {
+  const m = f.more ?? NO_MORE_FILTERS
   return useQuery({
     enabled,
-    queryKey: ['library', 'view', f.status, f.q, f.sort, f.fav, page, perPage],
+    queryKey: ['library', 'view', f.status, f.q, f.sort, f.fav, m, page, perPage],
     queryFn: ({ signal }) =>
       api.get<Page<LibraryItem>>(
-        `/api/library${query({ status: f.status, q: f.q, sort: f.sort, fav: f.fav ? 1 : undefined, page, perPage })}`,
+        `/api/library${query({
+          status: f.status,
+          q: f.q,
+          sort: f.sort,
+          fav: f.fav ? 1 : undefined,
+          format: m.format || undefined,
+          season: m.season || undefined,
+          year: m.year || undefined,
+          genre: m.genre || undefined,
+          airing: m.airing ? 1 : undefined,
+          disk: m.disk ? 1 : undefined,
+          page,
+          perPage,
+        })}`,
         signal,
       ),
   })
@@ -93,10 +122,7 @@ export function patchItem(qc: QueryClient, id: number, patch: Partial<LibraryIte
   )
 }
 
-const ELSEWHERE = [
-  'continue', 'discover', 'browse', 'schedule', 'anime', 'episodes', 'franchise', 'recommend', 'aired',
-  'bookmarks', 'search', 'history', 'upnext', 'upnext-after', 'home',
-]
+const ELSEWHERE = LIST_STATE_KEYS.filter((key) => key !== 'library')
 
 export function refreshElsewhere(qc: QueryClient) {
   for (const key of ELSEWHERE) void qc.invalidateQueries({ queryKey: [key] })
@@ -117,8 +143,8 @@ export function progressPatch(item: LibraryItem, target: number): Partial<Librar
   return { progress: target, status: item.status === 'COMPLETED' ? 'CURRENT' : item.status }
 }
 
-export function sendProgress(animeId: number, from: number, to: number) {
-  if (to > from) return api.post('/api/watched', { animeId, episode: to, watched: true })
+export function sendProgress(animeId: number, from: number, to: number, undoable = false) {
+  if (to > from) return api.post('/api/watched', { animeId, episode: to, watched: true, ...(undoable && { undoable }) })
   if (to < from) return api.post('/api/watched', { animeId, episode: to + 1, watched: false })
   return Promise.resolve()
 }
@@ -130,7 +156,7 @@ export function usePlusOne() {
     const before: Partial<LibraryItem> = { progress: item.progress, status: item.status }
     const after = progressPatch(item, episode)
     patchItem(qc, item.id, after)
-    sendProgress(item.id, item.progress, episode).then(
+    sendProgress(item.id, item.progress, episode, true).then(
       () => {
         refreshListState(qc)
         toast(`Episode ${episode} of ${item.title} watched`, 'info', {
@@ -140,7 +166,10 @@ export function usePlusOne() {
             const unwound = after.status === 'COMPLETED' ? 'CURRENT' : after.status
             const restore = !!before.status && before.status !== unwound && before.status !== 'REPEATING'
             sendProgress(item.id, episode, item.progress)
-              .then(() => (restore ? api.post('/api/status', { animeId: item.id, status: before.status }) : undefined))
+              .then(() => {
+                if (!before.status) return api.del(`/api/status/${item.id}`)
+                return restore ? api.post('/api/status', { animeId: item.id, status: before.status }) : undefined
+              })
               .then(
                 () => refreshListState(qc),
                 (e: Error) => {
@@ -175,10 +204,7 @@ export function useRemoveFromLibrary() {
         (listed
           ? api.del(`/api/status/${item.id}`)
           : api.post('/api/bookmarks', { animeId: item.id, favourite: false })
-        ).then(() => {
-          refreshListState(qc)
-          return qc.invalidateQueries({ queryKey: ['library'] })
-        }),
+        ).then(() => refreshListState(qc)),
     })
   }
 }

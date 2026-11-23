@@ -51,6 +51,30 @@ func TestTable(t *testing.T) {
 	assert.Equal(t, 0, tbl.numNodes())
 }
 
+func TestClosestNodesAreTheNearestInOrder(t *testing.T) {
+	tbl := table{k: 8}
+	var nodes []*node
+	for i := 1; i <= 40; i++ {
+		id := int160.FromByteArray([20]byte{byte(i), byte(i * 7)})
+		n := &node{nodeKey: nodeKey{Id: id, Addr: NewAddr(&net.UDPAddr{IP: net.IPv4(1, 2, 3, byte(i)), Port: 1000 + i})}}
+		if tbl.addNode(n) == nil {
+			nodes = append(nodes, n)
+		}
+	}
+	target := int160.FromByteArray([20]byte{0x20, 0x01})
+	got := tbl.closestNodes(5, target, func(*node) bool { return true })
+	assert.Len(t, got, 5)
+	for i := 1; i < len(got); i++ {
+		assert.LessOrEqual(t, got[i-1].Id.Distance(target).Cmp(got[i].Id.Distance(target)), 0)
+	}
+	far := got[len(got)-1].Id.Distance(target)
+	for _, n := range nodes {
+		if n.Id.Distance(target).Cmp(far) < 0 {
+			assert.Contains(t, got, n)
+		}
+	}
+}
+
 func TestRandomIdInBucket(t *testing.T) {
 	tbl := table{
 		rootID: int160.FromByteArray(RandomNodeID()),

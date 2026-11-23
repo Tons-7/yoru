@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"yoru/internal/proc"
@@ -28,8 +31,10 @@ type Tunnel struct {
 	bin func() string
 	log *slog.Logger
 
-	mu  sync.Mutex
-	run *run
+	mu      sync.Mutex
+	run     *run
+	onDrop  func()
+	stopped bool
 }
 
 type run struct {
@@ -39,6 +44,14 @@ type run struct {
 	exited chan struct{}
 	url    string
 	err    error
+	killed atomic.Bool
+	drop   func()
+}
+
+func (t *Tunnel) OnDrop(f func()) {
+	t.mu.Lock()
+	t.onDrop = f
+	t.mu.Unlock()
 }
 
 func New(bin func() string, log *slog.Logger) *Tunnel {
@@ -56,6 +69,10 @@ func (r *run) over() bool {
 
 func (t *Tunnel) Open(ctx context.Context, target string) (string, error) {
 	t.mu.Lock()
+	if t.stopped {
+		t.mu.Unlock()
+		return "", errors.New("Yoru is stopping")
+	}
 	r := t.run
 	if r == nil || r.target != target || r.over() {
 		if r != nil {
@@ -81,6 +98,12 @@ func (t *Tunnel) Open(ctx context.Context, target string) (string, error) {
 	case <-ctx.Done():
 		return "", ctx.Err()
 	case <-wait.C:
+		t.mu.Lock()
+		if t.run == r {
+			t.run = nil
+		}
+		t.mu.Unlock()
+		r.kill()
 		return "", errors.New("Cloudflare didn't answer in time")
 	}
 }
@@ -111,8 +134,19 @@ func (t *Tunnel) Close() {
 	}
 }
 
+func (t *Tunnel) Stop() {
+	t.mu.Lock()
+	t.stopped = true
+	t.mu.Unlock()
+	t.Close()
+}
+
 func (t *Tunnel) start(target string) (*run, error) {
-	cmd := proc.Hide(exec.Command(t.bin(), "tunnel", "--no-autoupdate", "--url", target))
+	args := []string{"tunnel", "--no-autoupdate"}
+	if own := ownConfig(); own != "" {
+		args = append(args, "--config", own)
+	}
+	cmd := proc.Hide(exec.Command(t.bin(), append(args, "--url", target)...))
 	out, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, err
@@ -121,7 +155,7 @@ func (t *Tunnel) start(target string) (*run, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start cloudflared: %w", err)
 	}
-	r := &run{target: target, cmd: cmd, ready: make(chan struct{}), exited: make(chan struct{})}
+	r := &run{target: target, cmd: cmd, ready: make(chan struct{}), exited: make(chan struct{}), drop: t.onDrop}
 	go r.watch(out, t.log)
 	return r, nil
 }
@@ -148,6 +182,7 @@ func (r *run) watch(out io.Reader, log *slog.Logger) {
 	if err := lines.Err(); err != nil && last == "" {
 		last = err.Error()
 	}
+	io.Copy(io.Discard, out)
 	err := r.cmd.Wait()
 	why := logPrefix.ReplaceAllString(last, "")
 	switch {
@@ -160,12 +195,28 @@ func (r *run) watch(out io.Reader, log *slog.Logger) {
 	}
 	close(r.exited)
 	if opened {
+		if r.killed.Load() {
+			log.Info("watch together tunnel closed")
+			return
+		}
 		log.Warn("watch together tunnel ended", "err", r.err)
+		if r.drop != nil {
+			go r.drop()
+		}
 	}
 }
 
 func (r *run) kill() {
+	r.killed.Store(true)
 	if r.cmd.Process != nil {
 		r.cmd.Process.Kill()
 	}
+}
+
+func ownConfig() string {
+	path := filepath.Join(os.TempDir(), "yoru-cloudflared.yml")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		return ""
+	}
+	return path
 }

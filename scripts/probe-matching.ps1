@@ -1,12 +1,3 @@
-<#
-.SYNOPSIS
-Checks release matching across a spread of anime rather than one episode.
-
-.DESCRIPTION
-Searches for one episode of each sampled show and reports whether anything was
-found, whether a release was good enough to auto-pick, and why candidates were
-refused. Nothing is downloaded.
-#>
 param(
     [int]$Count = 15,
     [string]$Base = "http://127.0.0.1:4321"
@@ -27,7 +18,8 @@ $pool = $pool | Where-Object { $_.id } | Sort-Object id -Unique | Get-Random -Co
 $rows = @()
 foreach ($a in $pool) {
     $ep = 1
-    if ($a.progress -gt 0) { $ep = [int]$a.progress }
+    if ($a.progress -gt 0) { $ep = [int]$a.progress + 1 }
+    if ($a.nextEpisode -gt 0 -and $ep -ge [int]$a.nextEpisode) { $ep = [Math]::Max(1, [int]$a.nextEpisode - 1) }
 
     $r = $null
     try {

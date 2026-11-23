@@ -18,7 +18,6 @@ import (
 	"yoru/internal/transcode"
 )
 
-// mpv and VLC skip only what Settings ask for; chapters named to skip always go.
 func TestExternalPlayersSkipOnlyWhatIsAskedFor(t *testing.T) {
 	ranges := []player.SkipRange{{Kind: "op"}, {Kind: "mixed-ed"}, {Kind: "recap"}, {Kind: "ed"}, {Kind: "preview"},
 		{Kind: "eyecatch"}, {Kind: "skip"}}
@@ -43,7 +42,6 @@ func TestExternalPlayersSkipOnlyWhatIsAskedFor(t *testing.T) {
 	}
 }
 
-// A first opening and a finished show's last ending play, unless Settings say to skip them too.
 func TestTheFirstAndLastSongsPlay(t *testing.T) {
 	st := skipStore(t)
 	ctx := context.Background()
@@ -89,8 +87,6 @@ func (f fakeProber) Probe(context.Context, string) (*transcode.MediaInfo, error)
 	return f.info, nil
 }
 
-// mpv auto-skips only from what it is handed, so the launch path has to resolve
-// the ranges itself rather than rely on the browser having played the episode.
 func TestMpvSkipRangesPreferChaptersAndFallBack(t *testing.T) {
 	st := skipStore(t)
 	ctx := context.Background()
@@ -111,7 +107,6 @@ func TestMpvSkipRangesPreferChaptersAndFallBack(t *testing.T) {
 		t.Errorf("the probed length was lost: %v", duration)
 	}
 
-	// Only the opening is marked; the ending has to come from what was stored.
 	if err := st.SaveSkips(ctx, 52991, 1, []metadata.SkipTime{
 		{Kind: "ed", Start: 1300, End: 1390},
 	}); err != nil {
@@ -135,7 +130,6 @@ func TestMpvSkipRangesPreferChaptersAndFallBack(t *testing.T) {
 		}
 	}
 
-	// The viewer's mark beats the file's chapter; what Yoru found only fills a gap.
 	st.SaveOwnSkip(ctx, 7, 1, player.SkipRange{Kind: "op", Start: 95, End: 185, Source: "marked"})
 	st.SaveOwnSkip(ctx, 7, 1, player.SkipRange{Kind: "ed", Start: 1, End: 2, Source: "found"})
 	got, _ = p.skipRanges(ctx, req, "x.mkv", prefs)
@@ -146,8 +140,6 @@ func TestMpvSkipRangesPreferChaptersAndFallBack(t *testing.T) {
 	}
 }
 
-// AniSkip matches on the episode's length, so a guessed one returns either
-// nothing or another cut's timings. Without a real length, do not ask.
 func TestSkipsWithoutADurationDoesNotAsk(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

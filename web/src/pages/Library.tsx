@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { statusLabel, type LibraryItem } from '../lib/api'
-import { useLibraryCounts } from '../lib/queries'
+import { useLibraryCounts, useTrackers } from '../lib/queries'
 import { PosterGrid } from '../components/PosterCard'
 import { LibraryCard } from '../components/LibraryCard'
 import { LibraryRows, LibraryTable } from '../components/LibraryList'
@@ -13,12 +13,15 @@ import {
   countFor,
   DEFAULT_SORT,
   hiddenKey,
+  moreFiltersOn,
+  NO_MORE_FILTERS,
   STATUS_ORDER,
   useGridColumns,
   useLayout,
   useLibraryItems,
   type Counts,
   type Layout,
+  type MoreFilters,
 } from '../lib/library'
 import { useHiddenKeys } from '../lib/undo'
 import { useSide, type Sides } from '../lib/view'
@@ -59,7 +62,7 @@ function MyList({ switcher }: { switcher: ReactNode }) {
   const fav = raw === LEGACY_FAVOURITES || params.get('fav') === '1'
   const status = raw === LEGACY_FAVOURITES ? '' : raw
   const sort = params.get('sort') ?? DEFAULT_SORT
-  const page = Number(params.get('page') ?? 1)
+  const page = Math.max(1, Math.floor(Number(params.get('page') ?? 1)) || 1)
 
   const [text, setText] = useState(params.get('q') ?? '')
   const q = useDebounced(text.trim(), 250)
@@ -79,12 +82,21 @@ function MyList({ switcher }: { switcher: ReactNode }) {
   const [searching, setSearching] = useState(false)
   const searchOpen = searching || !!fromURL
 
+  const more: MoreFilters = {
+    format: params.get('format') ?? '',
+    season: params.get('season') ?? '',
+    year: params.get('year') ?? '',
+    genre: params.get('genre') ?? '',
+    airing: params.get('airing') === '1',
+    disk: params.get('disk') === '1',
+  }
+  const filtered = moreFiltersOn(more)
   const counts = useLibraryCounts().data as Counts | undefined
   const hidden = useHiddenKeys()
-  const sectioned = layout === 'grid' && !status && !q && !fav
+  const sectioned = layout === 'grid' && !status && !q && !fav && !filtered
   const columns = useGridColumns()
   const perPage = layout === 'grid' ? columns * Math.round(ABOUT_PER_PAGE / columns) : ABOUT_PER_PAGE
-  const list = useLibraryItems({ status, q, sort, fav }, page, perPage, !sectioned)
+  const list = useLibraryItems({ status, q, sort, fav, more }, page, perPage, !sectioned)
   const { data, isPending, isError, error, refetch } = list
   const items = (data?.items ?? []).filter((it) => !hidden.has(hiddenKey(it.id)))
   const mixed = !status && (!!q || fav || layout === 'list')
@@ -108,6 +120,17 @@ function MyList({ switcher }: { switcher: ReactNode }) {
     change((next) => {
       if (on) next.set('fav', '1')
       else next.delete('fav')
+    })
+  const setMore = (key: keyof MoreFilters, value: string | boolean) =>
+    change((next) => {
+      const param = key
+      if (value === true) next.set(param, '1')
+      else if (value) next.set(param, String(value))
+      else next.delete(param)
+    })
+  const clearMore = () =>
+    change((next) => {
+      for (const key of Object.keys(NO_MORE_FILTERS)) next.delete(key)
     })
   const setSort = (value: string) =>
     change((next) => {
@@ -139,6 +162,9 @@ function MyList({ switcher }: { switcher: ReactNode }) {
     onFav: setFav,
     onSort: setSort,
     onLayout: setLayout,
+    more,
+    onMore: setMore,
+    onClearMore: clearMore,
   }
   const total = counts?.total
 
@@ -295,7 +321,7 @@ function GridSkeleton({ n }: { n: number }) {
     <PosterGrid>
       {Array.from({ length: n }, (_, i) => (
         <div key={i}>
-          <Skeleton className="aspect-[2/3] w-full" />
+          <Skeleton className="aspect-2/3 w-full" />
           <Skeleton className="mt-2 h-4 w-3/4" />
           <Skeleton className="mt-1.5 h-3 w-1/2" />
         </div>
@@ -344,6 +370,7 @@ function Nothing({
   onStatus: (status: string) => void
   onFav: (on: boolean) => void
 }) {
+  const connected = !!useTrackers().data?.trackers.some((t) => t.connected)
   if (q) {
     return (
       <Empty
@@ -391,7 +418,17 @@ function Nothing({
       />
     )
   }
-  return (
+  return connected ? (
+    <Empty
+      title="Nothing here yet"
+      hint="Browse and add shows, or bring your tracker's list in from Settings."
+      action={
+        <LinkButton to="/browse" variant="primary">
+          Browse anime
+        </LinkButton>
+      }
+    />
+  ) : (
     <Empty
       title="Nothing here yet"
       hint="Connect AniList in settings to import your list, or browse and tag shows yourself."

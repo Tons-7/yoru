@@ -10,7 +10,6 @@ import (
 	"testing"
 )
 
-// A minute of video with a line every two seconds.
 func minuteWithCues(t *testing.T, ffmpeg string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -34,7 +33,6 @@ func minuteWithCues(t *testing.T, ffmpeg string) string {
 	return out
 }
 
-// Reading around the playhead adds its lines at their real times, losing none found earlier.
 func TestExtractAroundMergesThePlayheadStretch(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	clip := minuteWithCues(t, ffmpeg)
@@ -42,7 +40,6 @@ func TestExtractAroundMergesThePlayheadStretch(t *testing.T) {
 	s := NewSubtitles(ffmpeg)
 	path := filepath.Join(dir, "sub-1.ass")
 
-	// What a read from the start got before the download ran out.
 	early := testASS[:strings.Index(testASS, "Dialogue:")] +
 		"Dialogue: 0,0:00:00.00,0:00:00.50,Default,,0,0,0,,cue 0\n"
 	if err := os.WriteFile(path, []byte(early), 0o644); err != nil {

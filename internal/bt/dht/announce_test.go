@@ -1,15 +1,11 @@
 package dht
 
 import (
-	"context"
 	"crypto/rand"
 	"net"
 	"testing"
-	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/time/rate"
 )
 
 func TestAnnounceNoStartingNodes(t *testing.T) {
@@ -38,19 +34,9 @@ func TestAnnounceStopsNoPending(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	defer s.Close()
 	a, err := s.Announce(randomInfohash(), 0, true)
 	require.NoError(t, err)
 	defer a.Close()
 	<-a.Peers
-}
-
-// rate.Limiter doesn't wake a waiter once its delay is set, so can't cancel a done query's reservation.
-func TestRateLimiterInadequate(t *testing.T) {
-	rl := rate.NewLimiter(rate.Every(time.Hour), 1)
-	assert.NoError(t, rl.Wait(context.Background()))
-	time.AfterFunc(time.Millisecond, func() { rl.AllowN(time.Now(), -1) })
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	time.AfterFunc(2*time.Millisecond, cancel)
-	assert.EqualValues(t, context.Canceled, rl.Wait(ctx))
 }

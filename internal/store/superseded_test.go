@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// A replaced release goes when it can cost nothing: never while playing, and a finished one only once
-// the episode's new release is finished too.
 func TestSupersededReadyWaitsForTheReplacement(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -29,7 +27,6 @@ func TestSupersededReadyWaitsForTheReplacement(t *testing.T) {
 	if !ready() {
 		t.Error("an unfinished replaced release is worth nothing to keep, yet it waits")
 	}
-	// Kept by hand: with nothing on disk it costs nothing to drop; with data it waits as a finished one does.
 	if _, err := s.KeepDownload(ctx, "old", true); err != nil {
 		t.Fatal(err)
 	}

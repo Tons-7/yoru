@@ -5,7 +5,6 @@ import { bytes, cx } from '../lib/format'
 import { refreshDownloads, type BetterCopy } from '../lib/queries'
 import { Button, ConfirmInline } from './ui'
 
-/** SeaDex's best release over a show's kept episodes, to replace or turn down for good; never taken alone. */
 export function BetterCopyOffer({ offer, showTitle = true, className }: { offer: BetterCopy; showTitle?: boolean; className?: string }) {
   const qc = useQueryClient()
   const [confirming, setConfirming] = useState(false)
@@ -37,7 +36,7 @@ export function BetterCopyOffer({ offer, showTitle = true, className }: { offer:
         <p className="truncate text-xs text-base-500" title={offer.kept}>
           Kept now: {offer.kept}
         </p>
-        {error && <p className="text-xs text-recap">{error.message}</p>}
+        {error && <p className="text-xs text-red-300">{error.message}</p>}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {confirming ? (
@@ -52,10 +51,26 @@ export function BetterCopyOffer({ offer, showTitle = true, className }: { offer:
           />
         ) : (
           <>
-            <Button size="sm" variant="primary" onClick={() => setConfirming(true)}>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => {
+                dismiss.reset()
+                setConfirming(true)
+              }}
+              disabled={replace.isSuccess}
+            >
               Replace
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => dismiss.mutate()} disabled={dismiss.isPending}>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                replace.reset()
+                dismiss.mutate()
+              }}
+              disabled={dismiss.isPending}
+            >
               Don't offer again
             </Button>
           </>

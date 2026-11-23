@@ -79,7 +79,6 @@ func (e *Encoder) reflectByteSlice(s []byte) {
 	e.write(s)
 }
 
-// True when v is a Marshaler and marshalled itself.
 func (e *Encoder) reflectMarshaler(v reflect.Value) bool {
 	if !v.Type().Implements(marshalerType) {
 		if v.Kind() != reflect.Pointer && v.CanAddr() && v.Addr().Type().Implements(marshalerType) {
@@ -178,10 +177,8 @@ func (e *Encoder) reflectValue(v reflect.Value) {
 }
 
 func (e *Encoder) reflectSequence(v reflect.Value) {
-	// Use bencode string-type
 	if v.Type().Elem().Kind() == reflect.Uint8 {
 		if v.Kind() != reflect.Slice {
-			// Can't use []byte optimization
 			if !v.CanAddr() {
 				e.writeStringPrefix(int64(v.Len()))
 				for i := 0; i < v.Len(); i++ {
@@ -259,7 +256,6 @@ func makeEncodeFields(t reflect.Type) (fs []encodeField) {
 					v = v.Field(i)
 					if v.Kind() == reflect.Pointer {
 						if v.IsNil() {
-							// This will skip serializing this value.
 							return reflect.Value{}
 						}
 						v = v.Elem()

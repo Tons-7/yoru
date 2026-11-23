@@ -30,8 +30,6 @@ func (r requestStrategyInputMultiTorrent) Capacity() (int64, bool) {
 	return (*r.capFunc)()
 }
 
-// The input bound to one Torrent, for a quicker lookup; not needed for correctness. TODO: unique.Handle
-// on infohash would make it unnecessary.
 type requestStrategyInputSingleTorrent struct {
 	requestStrategyInputCommon
 	t *Torrent
@@ -47,16 +45,10 @@ func (r requestStrategyInputSingleTorrent) Capacity() (cap int64, capped bool) {
 
 var _ requestStrategy.Input = requestStrategyInputSingleTorrent{}
 
-// getRequestStrategyInputCommon returns request strategy Input implementation common to all inputs.
 func (cl *Client) getRequestStrategyInputCommon() requestStrategyInputCommon {
 	return requestStrategyInputCommon{cl.config.MaxUnverifiedBytes}
 }
 
-func (t *Torrent) getRequestStrategyInput() requestStrategy.Input {
-	return t.clientPieceRequestOrderKey().getRequestStrategyInput(t.cl)
-}
-
-// Wraps a Torrent to provide request-strategy.Torrent interface.
 type requestStrategyTorrent struct {
 	t *Torrent
 }

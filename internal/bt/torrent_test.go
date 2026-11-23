@@ -27,26 +27,19 @@ func r(i, b, l pp.Integer) Request {
 	return Request{Index: i, ChunkSpec: ChunkSpec{Begin: b, Length: l}}
 }
 
-// Check the given request is correct for various torrent offsets.
 func TestTorrentRequest(t *testing.T) {
-	const s = 472183431 // Length of torrent.
+	const s = 472183431
 	for _, _case := range []struct {
-		off int64   // An offset into the torrent.
-		req Request // The expected request. The zero value means !ok.
+		off int64
+		req Request
 	}{
-		// Invalid offset.
 		{-1, Request{}},
 		{0, r(0, 0, 16384)},
-		// One before the end of a piece.
 		{1<<18 - 1, r(0, 1<<18-16384, 16384)},
-		// Offset beyond torrent length.
 		{472 * 1 << 20, Request{}},
-		// One before the end of the torrent. Complicates the chunk length.
 		{s - 1, r((s-1)/(1<<18), (s-1)%(1<<18)/(16384)*(16384), 12935)},
 		{1, r(0, 0, 16384)},
-		// One before end of chunk.
 		{16383, r(0, 0, 16384)},
-		// Second chunk.
 		{16384, r(0, 16384, 16384)},
 	} {
 		req, ok := torrentOffsetRequest(472183431, 1<<18, 16384, _case.off)
@@ -78,8 +71,6 @@ func TestTorrentString(t *testing.T) {
 	}
 }
 
-// Many overlapping Readers on a big torrent of small pieces: every reader change (in any Torrent)
-// recalculates piece priorities.
 func BenchmarkUpdatePiecePriorities(b *testing.B) {
 	const (
 		numPieces   = 13410
@@ -110,7 +101,6 @@ func BenchmarkUpdatePiecePriorities(b *testing.B) {
 	}
 }
 
-// A torrent with zero-length files starts, and creates them (on native file storage).
 func testEmptyFilesAndZeroPieceLength(t *testing.T, cfg *ClientConfig) {
 	cl, err := NewClient(cfg)
 	require.NoError(t, err)
@@ -157,16 +147,13 @@ func TestPieceHashFailed(t *testing.T) {
 		uint64(tt.pieceRequestIndexBegin(1)+3))
 	require.True(t, tt.pieceAllDirty(1))
 	tt.pieceHashed(1, false, nil)
-	// Dirty chunks should be cleared so we can try again.
 	require.False(t, tt.pieceAllDirty(1))
 	tt.cl.unlock()
 }
 
-// Check the behaviour of Torrent.Metainfo when metadata is not completed.
 func TestTorrentMetainfoIncompleteMetadata(t *testing.T) {
 	cfg := TestingConfig(t)
 	cfg.Debug = true
-	// Disable this just because we manually initiate a connection without it.
 	cfg.MinPeerExtensions.SetBit(pp.ExtensionBitFast, false)
 	cl, err := NewClient(cfg)
 	require.NoError(t, err)
@@ -247,14 +234,12 @@ func TestRelativeAvailabilityHaveNone(t *testing.T) {
 	tt.assertAllPiecesRelativeAvailabilityZero()
 }
 
-// Uploads while it downloads; done, StopSeedingWhenComplete stops it, and SetUploads changes it live.
 func TestStopSeedingWhenComplete(t *testing.T) {
 	cl := newTestingClient(t)
 	tor := cl.newTorrentForTesting()
 	qt.Assert(t, qt.IsNil(tor.setInfoUnlocked(&metainfo.Info{
 		Pieces: make([]byte, metainfo.HashSize), Name: "x", PieceLength: 1 << 14, Length: 1 << 14,
 	})))
-	// As Yoru runs it.
 	cl.lock()
 	cl.config.Seed = true
 	cl.unlock()

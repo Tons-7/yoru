@@ -35,7 +35,6 @@ func ownedFixture(t *testing.T) (*Cache, *store.Store, *fakeEngine) {
 	return c, st, engine
 }
 
-// Another program's downloads in a shared engine must not be adopted and swept.
 func TestAdoptSkipsDownloadsOutsideTheCache(t *testing.T) {
 	c, st, engine := ownedFixture(t)
 	engine.ids[1] = "foreign"
@@ -71,10 +70,9 @@ func TestEvictNeverDeletesOutsideTheCache(t *testing.T) {
 	}
 }
 
-// Ids are per engine session: the stored one can name another torrent by now.
 func TestEvictFindsTheTorrentByHash(t *testing.T) {
 	c, st, engine := ownedFixture(t)
-	record(t, st, "abc", "abc", 0) // recorded as id 7
+	record(t, st, "abc", "abc", 0)
 	engine.ids[3] = "abc"
 	engine.ids[7] = "other"
 
@@ -125,7 +123,6 @@ func TestOrphansKeepsEverythingOnRecord(t *testing.T) {
 	}
 }
 
-// With the engine holding nothing, records still claim their files and the sweep goes ahead for the rest.
 func TestOrphansWithAnEmptyEngineKeepsWhatIsOnRecord(t *testing.T) {
 	c, st, _ := ownedFixture(t)
 	was := orphanSettle
@@ -169,7 +166,6 @@ func TestClearKeepsKeptDownloads(t *testing.T) {
 	}
 }
 
-// Clearing deletes whole torrents, so a pack with one file still arriving is not finished.
 func TestClearFinishedOnlyJudgesTheWholeTorrent(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -184,7 +180,6 @@ func TestClearFinishedOnlyJudgesTheWholeTorrent(t *testing.T) {
 	}
 }
 
-// "Overlord IV" states no season in words; its S04 releases were all refused as season 1 asked for.
 func TestNumeralSequelTakesItsSeason(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -212,7 +207,6 @@ func (downIndexer) Search(context.Context, indexer.Query) ([]indexer.Torrent, er
 	return nil, errors.New("dial tcp: no such host")
 }
 
-// Every site failing is an outage, not "no release", which may well exist.
 func TestFindReportsAnOutage(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -226,7 +220,6 @@ func TestFindReportsAnOutage(t *testing.T) {
 	}
 }
 
-// A candidate that turns out to be a download already on record is someone's, whatever the race assumed.
 func TestDiscardSparesADownloadOnRecord(t *testing.T) {
 	engine := newFakeEngine()
 	p := newPlayback(t, engine, nil)
@@ -248,7 +241,6 @@ func TestDiscardSparesADownloadOnRecord(t *testing.T) {
 	}
 }
 
-// A record the engine lost is deleted by name; a torrent may name itself the cache root or a Yoru folder.
 func TestRemoveByNameNeverDeletesTheCacheOrYorusFolders(t *testing.T) {
 	c, st, _ := ownedFixture(t)
 	ctx := context.Background()
@@ -269,7 +261,6 @@ func TestRemoveByNameNeverDeletesTheCacheOrYorusFolders(t *testing.T) {
 	}
 }
 
-// A torrent the engine holds but nobody recorded is deleted only from Yoru's own cache folder.
 func TestRemoveRefusesAnUntrackedDownloadOutsideTheCache(t *testing.T) {
 	c, _, engine := ownedFixture(t)
 	engine.ids[1] = "foreign"
@@ -283,7 +274,6 @@ func TestRemoveRefusesAnUntrackedDownloadOutsideTheCache(t *testing.T) {
 	}
 }
 
-// Yoru's own folders inside the cache folder are never orphans.
 func TestOrphansLeaveYorusOwnFoldersAlone(t *testing.T) {
 	c, _, _ := ownedFixture(t)
 	was := orphanSettle
@@ -308,7 +298,6 @@ func TestOrphansLeaveYorusOwnFoldersAlone(t *testing.T) {
 	}
 }
 
-// A deletion takes only the reviewed orphans: one that turned up or was claimed since stays.
 func TestRemoveOrphansDeletesOnlyTheReviewedNames(t *testing.T) {
 	c, st, _ := ownedFixture(t)
 	was := orphanSettle
@@ -320,7 +309,6 @@ func TestRemoveOrphansDeletesOnlyTheReviewedNames(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Claimed after the preview: a download recorded it.
 	record(t, st, "clm", "claimed.mkv", 0)
 
 	gone, err := c.RemoveOrphans(context.Background(), []string{"reviewed.mkv", "claimed.mkv"})
@@ -337,8 +325,6 @@ func TestRemoveOrphansDeletesOnlyTheReviewedNames(t *testing.T) {
 	}
 }
 
-// Records hold a torrent's own name; on disk the engine may have made it safe for Windows or tagged it with the
-// hash, and the sweep and the delete must both find it there.
 func TestCacheFindsTheEnginesNamesOnDisk(t *testing.T) {
 	c, st, _ := ownedFixture(t)
 	ctx := context.Background()
@@ -349,17 +335,17 @@ func TestCacheFindsTheEnginesNamesOnDisk(t *testing.T) {
 	record(t, st, colon, "Show: Part 1.mkv", 0)
 	record(t, st, clash, "Other.mkv", 0)
 	record(t, st, old, "Old.mkv", 0)
-	// The tag after the extension is how a clash was named before safe names.
 	safe, tagged, oldTagged := torrent.SafeName("Show: Part 1.mkv"), torrent.Tagged("Other.mkv", clash), "Old.mkv [cccccccc]"
 	for _, name := range []string{safe, tagged, oldTagged, "stray.mkv"} {
 		if err := os.WriteFile(filepath.Join(c.dir, name), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// On Windows the older versions wrote "Show: Part 1.mkv" into a stream of "Show", listed as an empty file.
 	keeps := map[string]bool{safe: true, tagged: true, oldTagged: true, "stray.mkv": false}
+	evicted := []string{colon, clash, old}
 	if host, ok := torrent.StreamHost("Show: Part 1.mkv"); ok {
 		record(t, st, "dddddddd44", "Show: Part 1.mkv", 0)
+		evicted = append(evicted, "dddddddd44")
 		if err := os.WriteFile(filepath.Join(c.dir, "Show: Part 1.mkv"), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -375,11 +361,10 @@ func TestCacheFindsTheEnginesNamesOnDisk(t *testing.T) {
 		}
 	}
 
-	// Evicting the old clash takes its own tagged file, not the plain name another torrent may hold.
 	if err := os.WriteFile(filepath.Join(c.dir, "Old.mkv"), []byte("another torrent's"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, hash := range []string{colon, clash, old} {
+	for _, hash := range evicted {
 		if err := c.evict(ctx, store.CacheEntry{InfoHash: hash}); err != nil {
 			t.Fatal(err)
 		}

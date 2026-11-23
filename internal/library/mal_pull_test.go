@@ -30,7 +30,6 @@ func pull(t *testing.T, sync *MALSync) MALImport {
 	return imp
 }
 
-// Without AniList nothing clears the dirty flag, which used to block every later site edit.
 func TestSiteEditsKeepLandingWithoutAniList(t *testing.T) {
 	up := &malServer{list: malList(malEntry(101, 4, 0, "watching", time.Now()))}
 	sync, st := newMALSync(t, up)
@@ -50,7 +49,6 @@ func TestSiteEditsKeepLandingWithoutAniList(t *testing.T) {
 		t.Fatalf("entry = %+v, want the site's 8 and 7/10", e)
 	}
 
-	// Watching the next episode here moves MAL forward, never back to the stale 4.
 	if _, err := st.MarkWatched(ctx, 1, 9); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +61,6 @@ func TestSiteEditsKeepLandingWithoutAniList(t *testing.T) {
 	}
 }
 
-// Both sides moved since the last push: the local edit wins and goes to MAL.
 func TestLocalEditBeatsASiteEditMadeMeanwhile(t *testing.T) {
 	up := &malServer{list: malList(malEntry(101, 4, 0, "watching", time.Now()))}
 	sync, st := newMALSync(t, up)
@@ -85,7 +82,6 @@ func TestLocalEditBeatsASiteEditMadeMeanwhile(t *testing.T) {
 	}
 }
 
-// Connecting MAL to a list Yoru already holds merges: MAL's score stays, the newer side's progress wins.
 func TestFirstConnectMergesInsteadOfWiping(t *testing.T) {
 	t.Run("MAL edited last", func(t *testing.T) {
 		up := &malServer{list: malList(malEntry(101, 24, 8, "completed", time.Now().Add(time.Hour)))}
@@ -126,7 +122,6 @@ func TestFirstConnectMergesInsteadOfWiping(t *testing.T) {
 	})
 }
 
-// A refused token says so: the run fails and Settings asks for a reconnect, until a pull goes through.
 func TestRefusedTokenAsksForAReconnect(t *testing.T) {
 	up := &malServer{list: malList(), patchStatus: http.StatusUnauthorized}
 	sync, st := newMALSync(t, up)
@@ -153,7 +148,6 @@ func TestRefusedTokenAsksForAReconnect(t *testing.T) {
 	}
 }
 
-// A push waits for a pull in flight, so the pull cannot judge the push's own write as a site edit.
 func TestPushWaitsForAPullInFlight(t *testing.T) {
 	up := &malServer{list: malList(malEntry(101, 5, 0, "watching", time.Now())), listing: make(chan struct{})}
 	sync, st := newMALSync(t, up)
@@ -165,7 +159,7 @@ func TestPushWaitsForAPullInFlight(t *testing.T) {
 
 	pulled := make(chan error)
 	go func() { _, err := sync.Pull(ctx); pulled <- err }()
-	<-up.listing // the pull is reading the list
+	<-up.listing
 
 	st.MarkWatched(ctx, 1, 6)
 	pushed := make(chan error)
@@ -190,7 +184,6 @@ func TestPushWaitsForAPullInFlight(t *testing.T) {
 	}
 }
 
-// Two AniList entries on one MAL id: one speaks for it in both directions, so they stop overwriting each other.
 func TestSharedMALIDHasOneVoice(t *testing.T) {
 	up := &malServer{list: malList()}
 	sync, st := newMALSync(t, up)
@@ -199,7 +192,7 @@ func TestSharedMALIDHasOneVoice(t *testing.T) {
 	addAnime(t, st, 2, 101, 24)
 	st.MarkWatched(ctx, 1, 3)
 	st.MarkWatched(ctx, 2, 7)
-	st.MarkWatched(ctx, 2, 8) // edited last, a tick after anime 1 even within the same second
+	st.MarkWatched(ctx, 2, 8)
 
 	if _, err := sync.Run(ctx); err != nil {
 		t.Fatal(err)

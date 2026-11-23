@@ -1,4 +1,3 @@
-// Northern-hemisphere quarters, as AniList and the server use.
 const SEASONS = ['WINTER', 'SPRING', 'SUMMER', 'FALL']
 
 export interface SeasonYear {

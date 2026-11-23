@@ -7,6 +7,26 @@ import (
 	"time"
 )
 
+func TestASavedShowWhoseEpisodeAiredStaysDueForItsCheck(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	status := "RELEASING"
+	aired, next := int(time.Now().Unix())-60, 5
+	if _, err := s.w.Exec(`INSERT INTO anime (id, title_romaji, status, next_episode, next_airing_at, synced_at)
+		VALUES (9, 'Show', 'RELEASING', 5, ?, ?)`, aired, aired-3600); err != nil {
+		t.Fatal(err)
+	}
+	pop := 99
+	if _, err := s.ImportList(ctx, []Anime{{ID: 9, Romaji: "Show", Status: &status, NextEpisode: &next,
+		NextAiringAt: &aired, Popularity: &pop}}, nil, ImportMerge); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := s.StaleAiring(ctx, time.Now(), 10)
+	if err != nil || !slices.Contains(ids, 9) {
+		t.Fatalf("stale airing = %v %v: a save hid the aired episode's check", ids, err)
+	}
+}
+
 func TestAnswersRoundTripAndPrune(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -80,13 +100,13 @@ func TestStaleAiringPicksShowsPastDue(t *testing.T) {
 		status         string
 		nextAt, synced int64
 	}{
-		{1, "RELEASING", now - 600, now - 3600},            // aired since last looked: due
-		{2, "RELEASING", now + 3600, now - 600},            // checked recently: not due
-		{3, "RELEASING", now + 3600, now - 7*3600},         // older than six hours: due
-		{4, "NOT_YET_RELEASED", now + 86400, now - 7*3600}, // announced, under a day: not due
+		{1, "RELEASING", now - 600, now - 3600},
+		{2, "RELEASING", now + 3600, now - 600},
+		{3, "RELEASING", now + 3600, now - 7*3600},
+		{4, "NOT_YET_RELEASED", now + 86400, now - 7*3600},
 		{5, "NOT_YET_RELEASED", now + 86400, now - 25*3600},
-		{6, "FINISHED", 0, now - 90*86400},    // over: never
-		{7, "RELEASING", now - 600, now - 60}, // looked after it aired: not due
+		{6, "FINISHED", 0, now - 90*86400},
+		{7, "RELEASING", now - 600, now - 60},
 	} {
 		var nextAt any
 		if row.nextAt != 0 {

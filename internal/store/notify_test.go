@@ -74,7 +74,6 @@ func TestMarkAllRead(t *testing.T) {
 	}
 }
 
-// Polling runs every half hour; without this the same release is announced again on every pass.
 func TestNotifiedReleaseIsRecordedOnce(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -168,7 +167,6 @@ func TestFollowRoundTrip(t *testing.T) {
 		t.Fatalf("follows = %+v", got)
 	}
 
-	// Following again does not duplicate.
 	if err := s.SetFollow(ctx, 1, true); err != nil {
 		t.Fatal(err)
 	}

@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// Every launch names its own IPC socket, so a dying mpv or a second Yoru can never answer for the new one.
 func TestEachLaunchGetsItsOwnSocket(t *testing.T) {
 	a, b := uniqueSocket(`\\.\pipe\yoru-mpv`, 1), uniqueSocket(`\\.\pipe\yoru-mpv`, 2)
 	if a == b || !strings.HasPrefix(a, `\\.\pipe\yoru-mpv-`) {

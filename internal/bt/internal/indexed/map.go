@@ -8,8 +8,6 @@ import (
 
 type mapTriggerFunc[K, V any] func(key K, old, new g.Option[V])
 
-// A table of key and value records, on Table2 through Pair (K and V are Record, to stay comparable).
-// TODO: a real map implementing relation, or btree.Map's values.
 type Map[K, V Record] struct {
 	Table2[K, V]
 	keyCmp func(a, b K) int
@@ -47,7 +45,6 @@ func (me *Map[K, V]) Update(key K, updateFunc func(V) V) (res UpdateResult) {
 	panicif.False(overwrote)
 	panicif.NotEq(replaced, old)
 	panicif.NotZero(me.cmp(replaced, old))
-	// Is this lazy? Should the caller be triggering instead?
 	res.Changed = true
 	me.Changed(g.Some(old), g.Some(new))
 	return
@@ -66,8 +63,8 @@ func (me *Map[K, V]) Get(k K) (v V, ok bool) {
 		if me.keyCmp(r.Left, k) == 0 {
 			v = r.Right
 			ok = true
-			break
 		}
+		break
 	}
 	return
 }
@@ -81,7 +78,6 @@ func (me *Map[K, V]) Delete(k K) (removed bool) {
 	return me.Table2.Delete(Pair[K, V]{Left: k})
 }
 
-// Update the function otherwise create it, in both cases using the update function provided.
 func (me *Map[K, V]) UpdateOrCreate(k K, updateFunc func(old V) V) (created bool) {
 	me.Alter(k, func(v V, existed bool) (V, bool) {
 		created = !existed
@@ -95,7 +91,6 @@ func (me *Map[K, V]) OnValueChange(do mapTriggerFunc[K, V]) {
 		if old.Ok && new.Ok {
 			panicif.NotZero(me.keyCmp(old.Value.Left, new.Value.Left))
 		}
-		// Key must be one or the other.
 		var key K
 		if old.Ok {
 			key = old.Value.Left
@@ -106,7 +101,6 @@ func (me *Map[K, V]) OnValueChange(do mapTriggerFunc[K, V]) {
 	})
 }
 
-// Maps don't compare on the value, so we can leave them as zeroes.
 func (me *Map[K, V]) SetMinRecord(min K) {
 	me.table.SetMinRecord(Pair[K, V]{Left: min})
 }

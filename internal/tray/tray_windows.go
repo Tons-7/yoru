@@ -1,5 +1,3 @@
-// Package tray is Yoru's icon in the notification area: it shows Yoru runs with no window open, offers Open
-// and Exit, and hears the session end, which a windowed app only learns by message.
 package tray
 
 import (
@@ -14,11 +12,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Available: this system shows Yoru's icon.
 const Available = true
 
-// Options says what the icon does. Open and Exit run on their own goroutine; Ending runs on the icon's, and
-// Windows ends the process once it returns, so it must stop Yoru first (bounded).
 type Options struct {
 	Tip    string
 	Open   func()
@@ -26,7 +21,6 @@ type Options struct {
 	Ending func()
 }
 
-// Tray is the running icon; a nil one closes as a no-op.
 type Tray struct {
 	hwnd windows.HWND
 	done chan struct{}
@@ -55,6 +49,10 @@ var (
 	setForegroundWindow   = user32.NewProc("SetForegroundWindow")
 	getCursorPos          = user32.NewProc("GetCursorPos")
 	loadIcon              = user32.NewProc("LoadIconW")
+	setTimer              = user32.NewProc("SetTimer")
+	killTimer             = user32.NewProc("KillTimer")
+	getSystemMetrics      = user32.NewProc("GetSystemMetrics")
+	privateExtractIcons   = user32.NewProc("PrivateExtractIconsW")
 	shellNotifyIcon       = shell32.NewProc("Shell_NotifyIconW")
 	extractIconEx         = shell32.NewProc("ExtractIconExW")
 	getModuleHandle       = kernel32.NewProc("GetModuleHandleW")
@@ -65,6 +63,7 @@ const (
 	wmClose           = 0x0010
 	wmQueryEndSession = 0x0011
 	wmEndSession      = 0x0016
+	wmTimer           = 0x0113
 	wmNull            = 0x0000
 	wmLButtonUp       = 0x0202
 	wmRButtonUp       = 0x0205
@@ -132,13 +131,13 @@ type msg struct {
 	Private uint32
 }
 
-// One icon per process: the window procedure finds its options here.
 var (
 	mu             sync.Mutex
 	current        *running
 	taskbarCreated uint32
-	// The icon's thread is in Ending, waiting for Yoru to stop; the session takes the icon with it.
-	ending atomic.Bool
+	ending         atomic.Bool
+	shown          atomic.Bool
+	retries        int
 )
 
 type running struct {
@@ -146,19 +145,27 @@ type running struct {
 	icon notifyIconData
 }
 
-// Start shows the icon and runs its window on a thread of its own until Close.
 func Start(opts Options) (*Tray, error) {
 	t := &Tray{done: make(chan struct{})}
 	ready := make(chan error, 1)
 	go t.loop(opts, ready)
 	if err := <-ready; err != nil {
-		return nil, err
+		if t.hwnd == 0 {
+			return nil, err
+		}
+		return t, err
 	}
 	return t, nil
 }
 
+const (
+	iconRetryTimer = 1
+	smCxSmIcon     = 49
+)
+
+func Shown() bool { return shown.Load() }
+
 func (t *Tray) loop(opts Options, ready chan<- error) {
-	// A window's messages arrive on the thread that made it.
 	runtime.LockOSThread()
 	defer close(t.done)
 
@@ -174,7 +181,6 @@ func (t *Tray) loop(opts Options, ready chan<- error) {
 		ready <- err
 		return
 	}
-	// A hidden top-level window, not a message-only one: only top-level windows hear the session end.
 	title, _ := windows.UTF16PtrFromString("Yoru")
 	hwnd, _, err := createWindowEx.Call(0, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(title)), 0,
 		0, 0, 0, 0, 0, 0, uintptr(instance), 0)
@@ -197,11 +203,12 @@ func (t *Tray) loop(opts Options, ready chan<- error) {
 	current, taskbarCreated = r, uint32(created)
 	mu.Unlock()
 	if ok, _, err := shellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&r.icon))); ok == 0 {
-		destroyWindow.Call(hwnd)
+		setTimer.Call(hwnd, iconRetryTimer, 5000, 0)
 		ready <- errors.Join(errors.New("add the tray icon"), err)
-		return
+	} else {
+		shown.Store(true)
+		ready <- nil
 	}
-	ready <- nil
 
 	var m msg
 	for {
@@ -214,10 +221,18 @@ func (t *Tray) loop(opts Options, ready chan<- error) {
 	}
 }
 
-// appIcon is the exe's own icon at tray size, or Windows' generic one.
 func appIcon() windows.Handle {
 	if exe, err := os.Executable(); err == nil {
 		path, _ := windows.UTF16PtrFromString(exe)
+		size, _, _ := getSystemMetrics.Call(smCxSmIcon)
+		if size > 0 {
+			var icon windows.Handle
+			var id uint32
+			if n, _, _ := privateExtractIcons.Call(uintptr(unsafe.Pointer(path)), 0, size, size,
+				uintptr(unsafe.Pointer(&icon)), uintptr(unsafe.Pointer(&id)), 1, 0); n == 1 && icon != 0 {
+				return icon
+			}
+		}
 		var large, small windows.Handle
 		if n, _, _ := extractIconEx.Call(uintptr(unsafe.Pointer(path)), 0, uintptr(unsafe.Pointer(&large)),
 			uintptr(unsafe.Pointer(&small)), 1); n > 0 && small != 0 {
@@ -258,15 +273,25 @@ func wndProc(hwnd, message, wParam, lParam uintptr) uintptr {
 		postQuitMessage.Call(0)
 		return 0
 	case uint32(message) == taskbarCreated:
-		// Explorer restarted and forgot every icon.
-		shellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&r.icon)))
+		if ok, _, _ := shellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&r.icon))); ok != 0 {
+			shown.Store(true)
+			killTimer.Call(hwnd, iconRetryTimer)
+		}
+		return 0
+	case message == wmTimer && wParam == iconRetryTimer:
+		retries++
+		if ok, _, _ := shellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&r.icon))); ok != 0 {
+			shown.Store(true)
+			killTimer.Call(hwnd, iconRetryTimer)
+		} else if retries >= 6 {
+			killTimer.Call(hwnd, iconRetryTimer)
+		}
 		return 0
 	}
 	ret, _, _ := defWindowProc.Call(hwnd, message, wParam, lParam)
 	return ret
 }
 
-// menu is the right-click menu: Open Yoru (the default, in bold) and Exit Yoru.
 func (r *running) menu(hwnd windows.HWND) {
 	h, _, _ := createPopupMenu.Call()
 	if h == 0 {
@@ -282,7 +307,6 @@ func (r *running) menu(hwnd windows.HWND) {
 
 	var pt point
 	getCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
-	// Foreground first, and a null message after, or the menu stays up when clicked away from.
 	setForegroundWindow.Call(uintptr(hwnd))
 	cmd, _, _ := trackPopupMenu.Call(h, tpmRightButton|tpmReturnCmd|tpmNoNotify, uintptr(pt.X), uintptr(pt.Y), 0,
 		uintptr(hwnd), 0)
@@ -295,7 +319,6 @@ func (r *running) menu(hwnd windows.HWND) {
 	}
 }
 
-// Close removes the icon and ends its thread.
 func (t *Tray) Close() {
 	if t == nil || t.hwnd == 0 || ending.Load() {
 		return

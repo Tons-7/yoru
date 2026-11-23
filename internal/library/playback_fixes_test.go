@@ -19,9 +19,11 @@ func quickRace(t *testing.T) {
 	t.Cleanup(func() { raceStagger = old })
 }
 
-// Leaving the page mid-race drops the release that had already warmed; it is nobody's download.
 func TestCancelledRaceDiscardsWhatWarmed(t *testing.T) {
 	quickRace(t)
+	grace, poll := abortGrace, abortPoll
+	abortGrace, abortPoll = time.Second, 20*time.Millisecond
+	t.Cleanup(func() { abortGrace, abortPoll = grace, poll })
 	engine := newFakeEngine()
 	engine.slow[goodHash] = 5 * time.Second
 	p := newPlayback(t, engine, []indexer.Torrent{
@@ -38,10 +40,12 @@ func TestCancelledRaceDiscardsWhatWarmed(t *testing.T) {
 	if _, _, _, _, _, err := p.attach(ctx, PlayRequest{AnimeID: 1, Episode: 1, Season: 1, Prefs: score.DefaultPreferences()}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("attach = %v, want the cancel", err)
 	}
+	if engine.wasDeleted(otherHash) {
+		t.Fatal("the warmed release was deleted before a retry could use it")
+	}
 	eventually(t, "the warmed release to be discarded", func() bool { return engine.wasDeleted(otherHash) })
 }
 
-// A candidate that fails at once hands its turn to the next without the stagger.
 func TestAFailedCandidateDoesNotHoldTheNextBack(t *testing.T) {
 	old := raceStagger
 	raceStagger = 3 * time.Second
@@ -62,7 +66,6 @@ func TestAFailedCandidateDoesNotHoldTheNextBack(t *testing.T) {
 	}
 }
 
-// mpv closing unpins the episode, pauses its download per the prefs, and resumes what yielded.
 func TestPlayerExitReleasesTheEpisode(t *testing.T) {
 	engine := newFakeEngine()
 	engine.ids[1] = goodHash
@@ -105,7 +108,6 @@ func TestPlayerExitReleasesTheEpisode(t *testing.T) {
 	}
 }
 
-// Relaunching ends the previous mpv; its tracker must not unpin the episode the new one is playing.
 func TestStaleTrackerDoesNotUnpin(t *testing.T) {
 	engine := newFakeEngine()
 	engine.ids[1] = goodHash
@@ -124,7 +126,7 @@ func TestStaleTrackerDoesNotUnpin(t *testing.T) {
 	gen := p.trackGen.Load()
 	done := make(chan struct{})
 	go func() { p.track(old, 1, 5, 1, gen, 0); close(done) }()
-	p.trackGen.Add(1) // the relaunch, before the old player is told to stop
+	p.trackGen.Add(1)
 	old.events <- player.Event{Kind: player.EventExit}
 	close(old.events)
 	<-done
@@ -135,7 +137,6 @@ func TestStaleTrackerDoesNotUnpin(t *testing.T) {
 	}
 }
 
-// A release picked by hand leaves the resolved one for the next ordinary play.
 func TestHandPickLeavesThePreparedReleaseAlone(t *testing.T) {
 	quickRace(t)
 	engine := newFakeEngine()
@@ -156,14 +157,12 @@ func TestHandPickLeavesThePreparedReleaseAlone(t *testing.T) {
 	}
 }
 
-// A stream opening between the queue's look and its start stands the download down at once.
 func TestQueueStandsDownWhenAStreamOpensAsItStarts(t *testing.T) {
 	d, st, _ := workerQueueWith(t, release(otherHash, "[Group] Show - 02 [1080p].mkv", 50))
 	ctx := context.Background()
 	if _, err := st.Enqueue(ctx, 1, 1, []int{2}); err != nil {
 		t.Fatal(err)
 	}
-	// Watching already when step runs: Run would not have called it, but a stream can open in between.
 	d.mu.Lock()
 	d.watching["1-9"] = struct{}{}
 	d.mu.Unlock()
@@ -177,8 +176,6 @@ func TestQueueStandsDownWhenAStreamOpensAsItStarts(t *testing.T) {
 	}
 }
 
-// Notifications for dubs: the sub that comes first is fetched but not announced, and the dub that follows
-// still is. It used to mark the episode told, so the dub never was.
 func TestDubNotificationAfterTheSubArrives(t *testing.T) {
 	st := airingStore(t, 6, time.Now().Add(-time.Hour).Unix(), 5)
 	ctx := context.Background()
@@ -201,7 +198,6 @@ func TestDubNotificationAfterTheSubArrives(t *testing.T) {
 	}
 	source.results = append(source.results,
 		release("2222222222222222222222222222222222222222", "[Group] Bleach - Sennen Kessen-hen - Kashin Tan - 06 [1080p][English Dub].mkv", 40))
-	// Not searched again at once: a dub comes days later, and every poll would spend the sites' budget.
 	if rep, err = w.Poll(ctx); err != nil || rep.Found != 0 {
 		t.Fatalf("the next poll: report = %+v, %v; want the episode left alone for now", rep, err)
 	}
@@ -214,8 +210,6 @@ func TestDubNotificationAfterTheSubArrives(t *testing.T) {
 	}
 }
 
-// A dub show's new episode is downloaded although the global "notify for" filter asks for subs: that
-// filter is for the notification, the download follows the show's own prefs.
 func TestAutoDownloadFollowsTheShowNotTheNotifyFilter(t *testing.T) {
 	st := airingStore(t, 6, time.Now().Add(-time.Hour).Unix(), 5)
 	ctx := context.Background()

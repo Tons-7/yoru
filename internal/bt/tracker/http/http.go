@@ -25,18 +25,23 @@ var vars = expvar.NewMap("tracker/http")
 
 const maxResponseBytes = 4 << 20
 
+func bodyPreview(b []byte) string {
+	if len(b) <= 200 {
+		return fmt.Sprintf("%q", b)
+	}
+	return fmt.Sprintf("%q… (%d bytes)", b[:200], len(b))
+}
+
 func setAnnounceParams(_url *url.URL, ar *AnnounceRequest, opts AnnounceOpt) {
 	q := url.Values{}
 
 	q.Set("key", strconv.FormatInt(int64(ar.Key), 10))
 	q.Set("info_hash", string(ar.InfoHash[:]))
 	q.Set("peer_id", string(ar.PeerId[:]))
-	// AFAICT, port is mandatory, and there's no implied port key.
 	q.Set("port", fmt.Sprintf("%d", ar.Port))
 	q.Set("uploaded", strconv.FormatInt(ar.Uploaded, 10))
 	q.Set("downloaded", strconv.FormatInt(ar.Downloaded, 10))
 
-	// AWS S3's tracker answers 400 for a left out of range (-1 included) and 500 for none at all.
 	left := ar.Left
 	if left < 0 {
 		left = math.MaxInt64
@@ -46,10 +51,7 @@ func setAnnounceParams(_url *url.URL, ar *AnnounceRequest, opts AnnounceOpt) {
 	if ar.Event != shared.None {
 		q.Set("event", ar.Event.String())
 	}
-	// http://stackoverflow.com/questions/17418004/why-does-tracker-server-not-understand-my-request-bittorrent-protocol
 	q.Set("compact", "1")
-	// According to https://wiki.vuze.com/w/Message_Stream_Encryption. TODO:
-	// Take EncryptionPolicy or something like it as a parameter.
 	q.Set("supportcrypto", "1")
 	doIp := func(versionKey string, ip net.IP) {
 		if ip == nil {
@@ -57,17 +59,12 @@ func setAnnounceParams(_url *url.URL, ar *AnnounceRequest, opts AnnounceOpt) {
 		}
 		ipString := ip.String()
 		q.Set(versionKey, ipString)
-		// Let's try listing them. BEP 3 mentions having an "ip" param, and BEP 7 says we can list
-		// addresses for other address-families, although it's not encouraged.
 		q.Add("ip", ipString)
 	}
 	doIp("ipv4", opts.ClientIp4)
 	doIp("ipv6", opts.ClientIp6)
-	// We're operating purely on query-escaped strings, where + would have already been encoded to
-	// %2B, and + has no other special meaning. Trackers read a + in the info hash as a space.
 	qstr := strings.ReplaceAll(q.Encode(), "+", "%20")
 
-	// Some private trackers require the original query param to be in the first position.
 	if _url.RawQuery != "" {
 		_url.RawQuery += "&" + qstr
 	} else {
@@ -86,9 +83,16 @@ type AnnounceOpt struct {
 type AnnounceRequest = udp.AnnounceRequest
 
 func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceOpt) (ret AnnounceResponse, err error) {
+	if localHost(cl.url_.Hostname()) && !strings.HasSuffix(cl.url_.Path, "/announce") {
+		err = fmt.Errorf("local tracker %s has no /announce path", cl.url_.Host)
+		return
+	}
 	_url := httptoo.CopyURL(cl.url_)
 	setAnnounceParams(_url, &ar, opt)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, _url.String(), nil)
+	if err != nil {
+		return
+	}
 	userAgent := opt.UserAgent
 	if userAgent == "" {
 		userAgent = version.DefaultHttpUserAgent
@@ -111,7 +115,6 @@ func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceO
 		return
 	}
 	defer resp.Body.Close()
-	// An announce answer is a few KB; the tracker is whoever a magnet named.
 	var buf bytes.Buffer
 	if _, err = io.Copy(&buf, io.LimitReader(resp.Body, maxResponseBytes+1)); err != nil {
 		return
@@ -121,7 +124,7 @@ func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceO
 		return
 	}
 	if resp.StatusCode != 200 {
-		err = fmt.Errorf("response from tracker: %s: %q", resp.Status, buf.Bytes())
+		err = fmt.Errorf("response from tracker: %s: %s", resp.Status, bodyPreview(buf.Bytes()))
 		return
 	}
 	var trackerResponse HttpResponse
@@ -129,7 +132,7 @@ func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceO
 	if _, ok := err.(bencode.ErrUnusedTrailingBytes); ok {
 		err = nil
 	} else if err != nil {
-		err = fmt.Errorf("error decoding %q: %s", buf.Bytes(), err)
+		err = fmt.Errorf("error decoding %s: %s", bodyPreview(buf.Bytes()), err)
 		return
 	}
 	if trackerResponse.FailureReason != "" {
@@ -157,7 +160,7 @@ func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceO
 }
 
 type AnnounceResponse struct {
-	Interval int32 // Minimum seconds the local peer should wait before next announce.
+	Interval int32
 	Leechers int32
 	Seeders  int32
 	Peers    []Peer

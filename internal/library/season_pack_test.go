@@ -6,7 +6,6 @@ import (
 	"yoru/internal/parse"
 )
 
-// A whole-season pack confirms an episode of its season.
 func TestSeasonPackConfirmsItsOwnSeason(t *testing.T) {
 	pack := parse.Parse("Monster.2004.S01.1080p.BluRay.DUAL.FLAC.2.0.x264-Kitsune")
 	if !pack.Batch || pack.Season != 1 || pack.Episode != 0 {

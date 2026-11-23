@@ -92,8 +92,6 @@ type tableWriter struct {
 	statusWriter
 }
 
-// Flushes/ends a column. Probably want to check we don't have buffered data before starting new
-// table elements.
 func (me *tableWriter) col() {
 	me.curRow = append(me.curRow, me.buf.String())
 	me.buf.Reset()
@@ -113,7 +111,6 @@ func (me *tableWriter) row() {
 }
 
 func (me *tableWriter) getColWidths() (widths []int) {
-	// Imagine if we made this column-oriented...
 	for _, row := range me.cells {
 		for i, col := range row {
 			for i >= len(widths) {
@@ -128,7 +125,6 @@ func (me *tableWriter) getColWidths() (widths []int) {
 func (me *tableWriter) end() {
 	widths := me.getColWidths()
 	for _, row := range me.cells {
-		// You could use an indentWriter here to maintain multi-line cells at the same indent.
 		for i, col := range row {
 			if i != 0 {
 				me.parent.w.Write([]byte{' '})

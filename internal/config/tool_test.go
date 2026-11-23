@@ -18,17 +18,14 @@ func TestExeNameSuffixesOnlyOnWindows(t *testing.T) {
 	}
 }
 
-// Tool prefers bin/, then PATH, so a brew/apt install works with nothing in bin/.
 func TestToolPrefersBinThenPath(t *testing.T) {
 	bin := t.TempDir()
 	c := Config{BinDir: bin}
 
-	// A tool found nowhere gives the bin path, so an error names where Yoru looked.
 	if got := c.Tool("nedb-nonesuch"); got != filepath.Join(bin, ExeName("nedb-nonesuch")) {
 		t.Errorf("missing tool = %q, want the bin path", got)
 	}
 
-	// One in bin/ wins even if a same-named tool is on PATH.
 	name := "yoru-tool-test"
 	inBin := filepath.Join(bin, ExeName(name))
 	if err := os.WriteFile(inBin, []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -38,7 +35,6 @@ func TestToolPrefersBinThenPath(t *testing.T) {
 		t.Errorf("bin tool = %q, want %q", got, inBin)
 	}
 
-	// One only on PATH is found there.
 	pathDir := t.TempDir()
 	onPath := filepath.Join(pathDir, ExeName("yoru-path-tool"))
 	if err := os.WriteFile(onPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -50,7 +46,6 @@ func TestToolPrefersBinThenPath(t *testing.T) {
 	}
 }
 
-// ffprobe comes from wherever ffmpeg does, even with a stray one in bin/.
 func TestFfprobePairsWithFfmpeg(t *testing.T) {
 	bin, pathDir := t.TempDir(), t.TempDir()
 	for _, p := range []string{

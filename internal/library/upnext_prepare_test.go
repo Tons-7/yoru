@@ -15,7 +15,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// With an Up next list, what gets ready during an episode is the list's next, not the show's.
 func TestPrepareFollowsTheUpNextList(t *testing.T) {
 	eng := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"torrents":[]}`)

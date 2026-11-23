@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// A check of carried-over data finishing after Stop wrote the session again, into a folder already let go.
 func TestNoSessionIsWrittenAfterStop(t *testing.T) {
 	f := &fixture{cache: t.TempDir(), session: t.TempDir(), peer: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}}
 	f.start(t)

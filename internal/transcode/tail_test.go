@@ -15,7 +15,6 @@ import (
 	"yoru/internal/sound"
 )
 
-// Every segment up to the last arrives, asked in order as hls.js does, on sources with an awkward end.
 func TestTheLastSegmentArrives(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	cases := []struct {
@@ -78,7 +77,6 @@ func TestTheLastSegmentArrives(t *testing.T) {
 					t.Fatalf("segment %d of %d never came (after %s): %v", n, s.Segments, time.Since(began).Round(time.Millisecond), err)
 				}
 			}
-			// The last segment runs to the end, less at most the sub-second sliver segmentCount folds into it.
 			last := max(segmentEnd(t, ffprobe, s, s.Segments-1, "v:0"), segmentEnd(t, ffprobe, s, s.Segments-1, "a:0"))
 			if last < s.Info.Duration-1 {
 				t.Errorf("the last segment ends at %.3f, the file at %.3f", last, s.Info.Duration)
@@ -87,7 +85,6 @@ func TestTheLastSegmentArrives(t *testing.T) {
 	}
 }
 
-// segmentEnd is the last time one track reaches in segment n, as the browser reads it; -1 for a track it lacks.
 func segmentEnd(t *testing.T, ffprobe string, s *Session, n int, track string) float64 {
 	t.Helper()
 	init, err := os.ReadFile(s.InitPath())

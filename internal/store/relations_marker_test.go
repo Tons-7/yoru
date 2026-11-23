@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// A standalone show's marker stops a lookup per visit, and survives other shows' franchise rebuilds.
 func TestNoRelationsMarkerSurvivesARebuild(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -21,15 +20,13 @@ func TestNoRelationsMarkerSurvivesARebuild(t *testing.T) {
 		t.Fatal("the marker was not recorded")
 	}
 
-	// Another show's relations are fetched, which rebuilds the franchise table.
-	if _, err := s.RebuildFranchises(ctx); err != nil {
+	if _, err := s.RebuildFranchisesFor(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if known, _ := s.HasRelations(ctx, 1); !known {
 		t.Fatal("the marker did not survive the rebuild")
 	}
 
-	// And it must not invent a season chain for the show.
 	seasons, err := s.Franchise(ctx, 1)
 	if err != nil {
 		t.Fatal(err)

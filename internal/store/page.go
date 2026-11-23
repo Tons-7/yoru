@@ -5,7 +5,6 @@ import (
 	"strconv"
 )
 
-// Total supports numbered pages, HasMore supports infinite scroll; a UI can use either.
 type Page[T any] struct {
 	Items   []T  `json:"items"`
 	Total   int  `json:"total"`
@@ -21,7 +20,6 @@ type Paging struct {
 
 func (p Paging) Offset() int { return (p.Page - 1) * p.PerPage }
 
-// perPage is clamped: unbounded, one request could pull the whole corpus.
 func ParsePaging(q url.Values, defaultPerPage, maxPerPage int) Paging {
 	page, _ := strconv.Atoi(q.Get("page"))
 	if page < 1 {
@@ -36,14 +34,12 @@ func ParsePaging(q url.Values, defaultPerPage, maxPerPage int) Paging {
 		perPage = maxPerPage
 	}
 
-	// SQLite walks every skipped row, so a deep offset is capped.
 	if page > 10000 {
 		page = 10000
 	}
 	return Paging{Page: page, PerPage: perPage}
 }
 
-// Callers query perPage+1 so HasMore needs no second query.
 func NewPage[T any](items []T, p Paging, total int) Page[T] {
 	hasMore := p.PerPage > 0 && len(items) > p.PerPage
 	if hasMore {

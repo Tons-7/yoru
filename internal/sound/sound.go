@@ -1,5 +1,3 @@
-// Package sound is what Yoru does to an episode's audio on the way out (dialogue lift, night mode,
-// headphones, mono, volume boost): one description, rendered for ffmpeg, mpv and VLC.
 package sound
 
 import (
@@ -8,30 +6,20 @@ import (
 	"strings"
 )
 
-// Options is the viewer's choice; the zero value changes nothing.
 type Options struct {
-	// Voice lifts dialogue over music and effects: "", "medium" (+6 dB) or "high" (+12 dB).
-	Voice string `json:"voice"`
-	// Night narrows the gap between loud effects and quiet lines.
-	Night bool `json:"night"`
-	// Headphones feeds a little of each channel to the other ear, as speakers in a room do.
-	Headphones bool `json:"headphones"`
-	// Mono plays both channels in both ears: a voice mixed to one side reaches both.
-	Mono bool `json:"mono"`
-	// Boost raises the whole mix, for a quiet release: "", "medium" (+6 dB) or "high" (+12 dB).
-	Boost string `json:"boost"`
+	Voice      string `json:"voice"`
+	Night      bool   `json:"night"`
+	Headphones bool   `json:"headphones"`
+	Mono       bool   `json:"mono"`
+	Boost      string `json:"boost"`
 }
 
-// The boost in dB per level: twice and four times as loud, limited so nothing clips.
 var boostLevels = map[string]float64{"medium": 6, "high": 12}
 
-// The dB lift per level, after MPEG-H dialogue enhancement: 6 dB typical, 12 dB the ceiling.
 var voiceLevels = map[string]float64{"medium": 6, "high": 12}
 
-// Levels are the settings' spellings: off, or a lift.
 var Levels = []string{"off", "medium", "high"}
 
-// ValidVoice accepts off, "" and the levels; ValidBoost the same for the volume boost.
 func ValidVoice(level string) bool {
 	_, ok := voiceLevels[level]
 	return ok || level == "" || level == "off"
@@ -42,7 +30,6 @@ func ValidBoost(level string) bool {
 	return ok || level == "" || level == "off"
 }
 
-// Normalized folds "off" into the zero value.
 func Normalized(o Options) Options {
 	if o.Voice == "off" {
 		o.Voice = ""
@@ -53,13 +40,11 @@ func Normalized(o Options) Options {
 	return o
 }
 
-// Any reports whether anything is asked for.
 func (o Options) Any() bool {
 	o = Normalized(o)
 	return o.Voice != "" || o.Night || o.Headphones || o.Mono || o.Boost != ""
 }
 
-// Level is the voice setting as shown: "off" or the level.
 func (o Options) Level() string {
 	if o = Normalized(o); o.Voice == "" {
 		return "off"
@@ -68,28 +53,21 @@ func (o Options) Level() string {
 }
 
 const (
-	// Speech intelligibility lives around 1-4 kHz; a small, broad lift there, on the dialogue only.
-	presence = "equalizer=f=2500:t=q:w=1:g=2"
-	// A moderate compressor is what a receiver's night mode is: 3:1 above -24 dB, 6 dB made up.
-	night = "acompressor=threshold=0.0631:ratio=3:attack=20:release=250:makeup=2"
-	// Bauer-style crossfeed: each channel bleeds a little into the other, below 700 Hz most of all.
+	presence   = "equalizer=f=2500:t=q:w=1:g=2"
+	night      = "acompressor=threshold=0.0631:ratio=3:attack=20:release=250:makeup=2"
 	headphones = "crossfeed=strength=0.3:range=0.5"
 	mono       = "pan=stereo|FL=0.5*FL+0.5*FR|FR=0.5*FL+0.5*FR"
-	// Latency compensated, no make-up: lifted lines must not clip, nothing else changes.
-	limiter = "alimiter=limit=0.98:level=0:latency=1"
+	limiter    = "alimiter=limit=0.98:level=0:latency=1"
 )
 
-// The fold-down's weights: dialogue (centre) at the fronts' level, not -ac 2's -3 dB; rears -3 dB; sum 1.
 const front, rear = 0.369, 0.262
 
-// Stereo folds surround down to two channels by those weights; LFE dropped, as -ac 2 drops it.
 var Stereo = "aformat=channel_layouts=5.1," + fold(front)
 
 func fold(centre float64) string {
 	return fmt.Sprintf("pan=stereo|FL=%.3f*FL+%.3f*FC+%.3f*BL|FR=%.3f*FR+%.3f*FC+%.3f*BR", front, centre, rear, front, centre, rear)
 }
 
-// Chain is the ffmpeg filter graph for that many channels, ending in stereo; "" when nothing is asked.
 func Chain(o Options, channels int) string {
 	o = Normalized(o)
 	if !o.Any() {
@@ -102,14 +80,11 @@ func Chain(o Options, channels int) string {
 	switch {
 	case channels == 1:
 		if o.Voice != "" {
-			// Mono is all dialogue: nothing to lift it over.
 			parts = append(parts, presence)
 		}
 		parts = append(parts, "aformat=channel_layouts=stereo")
 	case channels == 2:
 		if gain, ok := voiceLevels[o.Voice]; ok {
-			// original=0: the sides stay as they are and only detected speech is added back, scaled so a
-			// fully centred voice gains the level asked for (enhance × pan gain = lift − 1).
 			lift := math.Pow(10, gain/20)
 			enhance, pan := 2.0, (lift-1)/2
 			if gain >= 12 {
@@ -122,7 +97,6 @@ func Chain(o Options, channels int) string {
 		}
 	default:
 		if gain, ok := voiceLevels[o.Voice]; ok {
-			// Stereo's fold with only the centre moved.
 			parts = append(parts, "aformat=channel_layouts=5.1", presence+":c=FC", fold(front*math.Pow(10, gain/20)))
 		} else {
 			parts = append(parts, Stereo)
@@ -143,18 +117,14 @@ func Chain(o Options, channels int) string {
 	return strings.Join(append(parts, limiter), ",")
 }
 
-// MPVArgs renders the same for mpv, which carries ffmpeg's filters: its own fold-down to stereo first,
-// so one graph serves every layout, the centre of a surround mix landing where the extraction finds it.
 func MPVArgs(o Options) []string {
 	chain := Chain(o, 2)
 	if chain == "" {
 		return nil
 	}
-	return []string{"--audio-channels=stereo", "--af=lavfi=[" + chain + "]"}
+	return []string{"--audio-channels=stereo", "--af=lavfi=[aformat=channel_layouts=stereo," + chain + "]"}
 }
 
-// VLCArgs renders what VLC can do: its compressor, its own headphone and mono modes, and for the voice a
-// lift of the speech bands of its equalizer, which is as close as it gets without an extraction.
 func VLCArgs(o Options) []string {
 	o = Normalized(o)
 	if !o.Any() {
@@ -162,7 +132,6 @@ func VLCArgs(o Options) []string {
 	}
 	var filters, args []string
 	if o.Voice != "" {
-		// Bands: 60 170 310 600 1k 3k 6k 12k 14k 16k Hz; no preamp, or everything gets louder.
 		bands := "0 0 0 0 3 4 2 0 0 0"
 		if o.Voice == "high" {
 			bands = "0 0 0 0 5 7 3 0 0 0"

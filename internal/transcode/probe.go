@@ -210,11 +210,11 @@ func (p *Prober) Probe(ctx context.Context, url string) (*MediaInfo, error) {
 
 	out, err := cmd.Output()
 	if err != nil {
-		if reason := strings.TrimSpace(stderr.String()); reason != "" {
-			return nil, fmt.Errorf("ffprobe: %w: %s", err, firstLine(reason))
-		}
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("ffprobe: %w within %s", ErrProbeTimeout, probeLimit)
+		}
+		if reason := strings.TrimSpace(stderr.String()); reason != "" {
+			return nil, fmt.Errorf("ffprobe: %w: %s", err, firstLine(reason))
 		}
 		return nil, fmt.Errorf("ffprobe: %w", err)
 	}

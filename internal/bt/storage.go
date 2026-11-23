@@ -18,7 +18,6 @@ func (t *Torrent) storageReader() storageReader {
 	}
 }
 
-// This wraps per-piece storage as a whole-torrent storageReader.
 type storagePieceReader struct {
 	t       *Torrent
 	pr      storage.PieceReader
@@ -72,14 +71,12 @@ type storageReader interface {
 	io.Closer
 }
 
-// This wraps a storage impl provided TorrentReader as a storageReader.
 type torrentStorageImplReader struct {
 	implReader storage.TorrentReader
 	t          *Torrent
 }
 
 func (me torrentStorageImplReader) ReadAt(p []byte, off int64) (n int, err error) {
-	// TODO: Should waitNoPendingWrites take a region?
 	me.t.pieceForOffset(off).waitNoPendingWrites()
 	return me.implReader.ReadAt(p, off)
 }

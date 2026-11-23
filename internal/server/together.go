@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"html"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -20,9 +22,11 @@ import (
 )
 
 const (
-	togetherMax  = 8
-	togetherFor  = 24 * time.Hour
-	togetherIdle = 10 * time.Minute
+	togetherMax    = 8
+	fullRoomAway   = 2 * time.Minute
+	togetherKnocks = 3
+	togetherFor    = 24 * time.Hour
+	togetherIdle   = 10 * time.Minute
 )
 
 var (
@@ -71,20 +75,21 @@ type togetherMember struct {
 }
 
 type togetherRoom struct {
-	mu      sync.Mutex
-	code    string
-	secret  string
-	title   string
-	created time.Time
-	empty   time.Time
-	ask     bool
-	wait    bool
-	anyone  bool
-	state   togetherState
-	members []*togetherMember
-	picks   []togetherPick
-	picked  int
-	shown   string
+	mu        sync.Mutex
+	code      string
+	secret    string
+	tunnelled bool
+	title     string
+	created   time.Time
+	empty     time.Time
+	ask       bool
+	wait      bool
+	anyone    bool
+	state     togetherState
+	members   []*togetherMember
+	picks     []togetherPick
+	picked    int
+	shown     string
 }
 
 type togetherPick struct {
@@ -182,7 +187,7 @@ func (r *togetherRoom) send(event map[string]any, to ...*togetherMember) {
 	targets := to
 	if len(to) == 0 {
 		for _, m := range r.members {
-			if m.Admitted {
+			if m.Admitted && m.Connected {
 				targets = append(targets, m)
 			}
 		}
@@ -209,7 +214,7 @@ func (r *togetherRoom) tidy() {
 		if m.Connected || m.gone.IsZero() {
 			return false
 		}
-		wait := 2 * time.Minute
+		wait := 30 * time.Minute
 		if !m.Admitted {
 			wait = 10 * time.Minute
 		}
@@ -221,7 +226,19 @@ func (r *togetherRoom) tidy() {
 	for _, m := range r.members {
 		if m.Admitted {
 			m.Host = true
+			r.knocksTo(m)
 			return
+		}
+	}
+}
+
+func (r *togetherRoom) knocksTo(host *togetherMember) {
+	if !r.ask || host == nil {
+		return
+	}
+	for _, o := range r.members {
+		if !o.Admitted {
+			r.send(map[string]any{"type": "knock", "member": o.ID, "name": o.Name}, host)
 		}
 	}
 }
@@ -280,7 +297,12 @@ func (s *Server) roomRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /together/{code}", s.togetherPage)
 }
 
-func (s *Server) SetTunnel(t *tunnel.Tunnel) { s.tunnel = t }
+func (s *Server) SetTunnel(t *tunnel.Tunnel) {
+	s.tunnel = t
+	if t != nil {
+		t.OnDrop(s.reopenTunnel)
+	}
+}
 
 func (s *Server) roomAddress() (string, error) {
 	s.roomMu.Lock()
@@ -375,8 +397,11 @@ func (s *Server) createTogether(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		base = url
-	case len(s.httpsNames()) > 0:
+	case len(s.httpsNames()) > 0 && s.bound():
 		base, homeOnly = fmt.Sprintf("https://%s:%s", s.httpsNames()[0], s.port()), true
+		if lan := lanAddrs(); s.certs.HomeBlocked() && len(lan) > 0 {
+			base = fmt.Sprintf("http://%s:%s", lan[0], s.port())
+		}
 	}
 	if base == "" {
 		send(w, http.StatusConflict, map[string]any{"error": "Hosting a room needs the Watch together download.",
@@ -384,7 +409,8 @@ func (s *Server) createTogether(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	room := &togetherRoom{
-		code: strings.ToLower(newPairCode()), secret: NewAccessToken(), title: body.Title, created: time.Now(), wait: true,
+		tunnelled: strings.Contains(base, "trycloudflare.com"),
+		code:      strings.ToLower(newPairCode()), secret: NewAccessToken(), title: body.Title, created: time.Now(), wait: true,
 		state: togetherState{Playing: body.Playing, Position: body.Position, At: nowMillis(), AnimeID: body.AnimeID,
 			Episode: body.Episode, InfoHash: strings.ToLower(body.InfoHash), Audio: roomAudio(body.Audio)},
 	}
@@ -394,6 +420,9 @@ func (s *Server) createTogether(w http.ResponseWriter, req *http.Request) {
 	room.members = []*togetherMember{host}
 	s.togetherMu.Lock()
 	s.expireRooms()
+	for s.rooms[room.code] != nil {
+		room.code = strings.ToLower(newPairCode())
+	}
 	s.rooms[room.code] = room
 	s.togetherMu.Unlock()
 	link := fmt.Sprintf("%s/together/%s?k=%s", base, room.code, room.secret)
@@ -474,8 +503,30 @@ func (s *Server) joinTogether(w http.ResponseWriter, req *http.Request) {
 	room.mu.Lock()
 	defer room.mu.Unlock()
 	room.tidy()
-	if len(room.members) >= togetherMax {
+	count := func() (in, waiting int) {
+		for _, o := range room.members {
+			switch {
+			case o.Admitted || o.Connected:
+				in++
+			default:
+				waiting++
+			}
+		}
+		return in, waiting
+	}
+	in, waiting := count()
+	if in >= togetherMax {
+		room.members = slices.DeleteFunc(room.members, func(m *togetherMember) bool {
+			return m.Admitted && !m.Connected && !m.Host && !m.gone.IsZero() && time.Since(m.gone) > fullRoomAway
+		})
+		in, waiting = count()
+	}
+	if in >= togetherMax {
 		send(w, http.StatusConflict, map[string]any{"error": fmt.Sprintf("The room is full (%d people).", togetherMax)})
+		return
+	}
+	if room.ask && waiting >= togetherKnocks {
+		send(w, http.StatusTooManyRequests, map[string]any{"error": "Too many people are waiting to join. Try again in a minute."})
 		return
 	}
 	m := &togetherMember{ID: randomHex()[:12], Name: uniqueName(room.members, cleanName(body.Name, "Friend")), Admitted: !room.ask,
@@ -538,26 +589,45 @@ func (s *Server) togetherSocket(w http.ResponseWriter, req *http.Request) {
 			closed := make(chan struct{})
 			go func() {
 				defer close(closed)
+				defer ws.Close()
 				var discard string
 				for websocket.Message.Receive(ws, &discard) == nil {
 					ws.SetReadDeadline(time.Now().Add(roomSilence))
 				}
 			}()
-			followRoom(room, m, closed, func(raw []byte) bool { return websocket.Message.Send(ws, string(raw)) == nil })
+			followRoom(room, m, closed, func(raw []byte) bool {
+				ws.SetWriteDeadline(time.Now().Add(15 * time.Second))
+				return websocket.Message.Send(ws, string(raw)) == nil
+			})
 		},
 	}.ServeHTTP(w, req)
 }
 
+const togetherStreams = 4
+
 func followRoom(room *togetherRoom, m *togetherMember, done <-chan struct{}, write func([]byte) bool) {
 	room.mu.Lock()
-	if !slices.Contains(room.members, m) {
+	if !slices.Contains(room.members, m) || m.streams >= togetherStreams {
 		room.mu.Unlock()
 		return
+	}
+	if m.streams == 0 {
+	drain:
+		for {
+			select {
+			case <-m.events:
+			default:
+				break drain
+			}
+		}
 	}
 	m.streams++
 	m.Connected, room.empty = true, time.Time{}
 	if m.Admitted {
 		room.sendView()
+	}
+	if m.Host {
+		room.knocksTo(m)
 	}
 	room.mu.Unlock()
 
@@ -590,6 +660,9 @@ func followRoom(room *togetherRoom, m *togetherMember, done <-chan struct{}, wri
 				return
 			}
 		case <-tick.C:
+			if time.Since(room.created) > togetherFor {
+				return
+			}
 			if !write(fmt.Appendf(nil, `{"type":"tick","now":%d}`, nowMillis())) {
 				return
 			}
@@ -630,7 +703,7 @@ func (s *Server) togetherAct(w http.ResponseWriter, req *http.Request) {
 	room.mu.Lock()
 	defer room.mu.Unlock()
 	m := room.member(body.Member, body.Token)
-	if m == nil || !m.Admitted {
+	if m == nil || (!m.Admitted && body.Type != "leave") {
 		send(w, http.StatusForbidden, map[string]any{"error": "Not in this room."})
 		return
 	}
@@ -785,6 +858,14 @@ func (s *Server) togetherAct(w http.ResponseWriter, req *http.Request) {
 		}
 		if body.Ask != nil {
 			room.ask = *body.Ask
+			if !room.ask {
+				for _, o := range room.members {
+					if !o.Admitted {
+						o.Admitted = true
+						room.send(map[string]any{"type": "admitted"}, o)
+					}
+				}
+			}
 		}
 		if body.Wait != nil {
 			room.wait = *body.Wait
@@ -821,6 +902,9 @@ func (s *Server) togetherAct(w http.ResponseWriter, req *http.Request) {
 
 func (s *Server) togetherPage(w http.ResponseWriter, req *http.Request) {
 	link := "https://" + req.Host + req.URL.RequestURI()
+	if config.Env("TOGETHER_LOCAL") != "" {
+		link = requestOrigin(req) + req.URL.RequestURI()
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	fmt.Fprint(w, `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -830,10 +914,48 @@ html{scrollbar-width:thin;scrollbar-color:#1e212a #0b0c10}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0c10;color:#d6dbe6;font:18px/1.5 system-ui,sans-serif}
 main{max-width:32rem;padding:2rem;text-align:center}h1{font-size:1.5rem;margin:0 0 .75rem}p{margin:0 0 1rem;color:#8b93a7}
 code{display:block;margin:1rem 0;padding:.75rem;border-radius:.6rem;background:#161a23;color:#fff;font-size:.8rem;word-break:break-all}
-button{font:inherit;font-weight:600;padding:.6rem 1.2rem;border:0;border-radius:.6rem;background:#6a55f5;color:#fff;cursor:pointer}
+button,a.open{display:inline-block;font:inherit;font-weight:600;padding:.6rem 1.2rem;border:0;border-radius:.6rem;background:#6a55f5;color:#fff;cursor:pointer;text-decoration:none;min-height:1.5rem}
+button.quiet{background:#1e212a;color:#d6dbe6}.row{display:flex;gap:.6rem;justify-content:center;flex-wrap:wrap}small{display:block;margin-top:1rem;color:#6b7386;font-size:.85rem}
 </style></head><body><main><h1>Watch together on Yoru</h1>
-<p>Open your own Yoru and paste this link into its search. It fetches the episode itself and joins the room.</p>
+<p>Yoru running on this computer opens the room in one step. It fetches the episode itself and joins.</p>
+<div class="row"><a class="open" href="http://localhost:4321/open?url=`+url.QueryEscape(link)+`">Open in my Yoru</a>
+<button class="quiet" onclick="navigator.clipboard.writeText(document.getElementById('link').textContent).then(()=>this.textContent='Copied')">Copy link</button></div>
 <code id="link">`+html.EscapeString(link)+`</code>
-<button onclick="navigator.clipboard.writeText(document.getElementById('link').textContent).then(()=>this.textContent='Copied')">Copy link</button>
+<small>On a phone with the Yoru app installed, use Share, then Yoru. Or paste the link into Yoru's search.</small>
 </main></body></html>`)
+}
+
+func (s *Server) reopenTunnel() {
+	s.togetherMu.Lock()
+	var rooms []*togetherRoom
+	for _, r := range s.rooms {
+		if r.tunnelled {
+			rooms = append(rooms, r)
+		}
+	}
+	s.togetherMu.Unlock()
+	if len(rooms) == 0 || s.tunnel == nil {
+		return
+	}
+	target, err := s.roomAddress()
+	if err != nil {
+		s.log.Warn("reopen the watch together tunnel", "err", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	base, err := s.tunnel.Open(ctx, target)
+	if err != nil {
+		s.log.Warn("reopen the watch together tunnel", "err", err)
+		return
+	}
+	s.log.Info("watch together tunnel reopened", "url", base)
+	for _, r := range rooms {
+		r.mu.Lock()
+		link := fmt.Sprintf("%s/together/%s?k=%s", base, r.code, r.secret)
+		if host := r.host(); host != nil {
+			r.send(map[string]any{"type": "link", "link": link}, host)
+		}
+		r.mu.Unlock()
+	}
 }

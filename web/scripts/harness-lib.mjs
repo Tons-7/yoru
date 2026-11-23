@@ -1,4 +1,4 @@
-import { copyFileSync, linkSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, linkSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -15,7 +15,7 @@ export function linkBin(from, to, only = null) {
     const src = join(from, entry.name)
     const dst = join(to, entry.name)
     if (entry.isDirectory()) {
-      symlinkSync(src, dst, process.platform === 'win32' ? 'junction' : 'dir')
+      cpSync(src, dst, { recursive: true })
       continue
     }
     if (WRITTEN_BY_YORU.has(entry.name)) {
@@ -45,19 +45,21 @@ export async function prepareLocalEpisode({ base, lib, anime, autoplay = true })
       body: JSON.stringify(body),
     })
 
-  for (let i = 0; i < 60; i++) {
-    try {
-      if ((await fetch(`${base}/api/setup`)).ok) break
-    } catch {}
-    await sleep(1000)
+  let up = false
+  for (let i = 0; i < 60 && !up; i++) {
+    up = await fetch(`${base}/api/setup`).then((r) => r.ok, () => false)
+    if (!up) await sleep(1000)
   }
-  await post('/api/local/paths', { paths: [lib] })
-  await post('/api/local/scan', {})
+  if (!up) return false
+  const added = await post('/api/local/paths', { paths: [lib] })
+  const scanned = await post('/api/local/scan', {})
+  if (!added.ok || !scanned.ok) return false
   let file
   for (let i = 0; i < 30 && !file; i++) {
     await sleep(1000)
     const files = await (await fetch(`${base}/api/local/files`)).json()
-    file = (files.items ?? []).find((f) => String(f.path ?? '').includes('Yoru Test Show'))
+    const shows = (files.items ?? []).filter((f) => String(f.path ?? '').includes('Yoru Test Show'))
+    file = shows.find((f) => String(f.path).includes('Yoru Test Show - 01')) ?? shows[0]
   }
   if (!file) return false
   const assign = await post('/api/local/assign', { id: file.id, animeId: Number(anime), episode: 1 })

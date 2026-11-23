@@ -6,13 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 	"time"
 )
 
-// Matroska element IDs read here, marker bits kept as written.
 const (
 	mkvEBML           = 0x1A45DFA3
 	mkvSegment        = 0x18538067
@@ -34,16 +32,13 @@ const (
 	mkvCluster        = 0x1F43B675
 )
 
-// errNoIndex: the file has no keyframe index to plan from; the caller keeps evenly spaced segments.
 var errNoIndex = errors.New("no keyframe index")
 
-// Bounds against a damaged file: no real header or index comes near these.
 const (
 	maxMetaBytes = 4 << 20
 	maxCueBytes  = 32 << 20
 )
 
-// keyframesOf reads the first video track's keyframe times, in seconds, from a Matroska file's Cues.
 func keyframesOf(ctx context.Context, source string) ([]float64, error) {
 	r, size, closer, err := openReaderAt(ctx, source)
 	if err != nil {
@@ -114,14 +109,10 @@ func matroskaKeyframes(r io.ReaderAt, size int64) ([]float64, error) {
 	return slices.Compact(times), nil
 }
 
-// mkvTop is a Matroska file's layout before its first Cluster.
 type mkvTop struct {
-	// ebmlEnd: where the EBML header ends; seg: where the Segment's body starts.
 	ebmlEnd, seg, segEnd int64
-	// where: each top-level element's offset, from the SeekHead and the elements before the first Cluster.
-	where map[uint64]int64
-	// Nanoseconds per timestamp tick.
-	scale uint64
+	where                map[uint64]int64
+	scale                uint64
 }
 
 func matroskaTop(r io.ReaderAt, size int64) (*mkvTop, error) {
@@ -139,7 +130,6 @@ func matroskaTop(r io.ReaderAt, size int64) (*mkvTop, error) {
 		segEnd = seg + segSize
 	}
 
-	// Where Info, Tracks and Cues are: the SeekHead says, and the top level before the first Cluster shows.
 	where := map[uint64]int64{}
 	var seekHeads []int64
 	for at := seg; at < segEnd; {
@@ -207,7 +197,6 @@ type field struct {
 	data []byte
 }
 
-// fields splits an element's body into its children; a damaged one ends the list.
 func fields(buf []byte) []field {
 	var out []field
 	for len(buf) > 0 {
@@ -243,7 +232,6 @@ func uintOf(b []byte) uint64 {
 	return v
 }
 
-// vint reads an EBML variable-length integer: an ID keeps its marker bits, a size drops them (-1 when unknown).
 func vint(buf []byte, keepMarker bool) (int64, int) {
 	if len(buf) == 0 || buf[0] == 0 {
 		return 0, 0
@@ -270,7 +258,6 @@ func vint(buf []byte, keepMarker bool) (int64, int) {
 	return int64(v), n
 }
 
-// elementAt reads the header of the element at off: its ID, body length (-1 unknown) and header length.
 func elementAt(r io.ReaderAt, off int64) (uint64, int64, int64, error) {
 	var buf [16]byte
 	got, err := r.ReadAt(buf[:], off)
@@ -288,7 +275,6 @@ func elementAt(r io.ReaderAt, off int64) (uint64, int64, int64, error) {
 	return uint64(id), length, int64(n + m), nil
 }
 
-// readBody reads the body of the element at off, refusing one larger than limit.
 func readBody(r io.ReaderAt, off, limit int64) ([]byte, error) {
 	_, length, head, err := elementAt(r, off)
 	if err != nil {
@@ -304,10 +290,9 @@ func readBody(r io.ReaderAt, off, limit int64) ([]byte, error) {
 	return body, nil
 }
 
-// openReaderAt opens a file on disk, or a URL read by byte ranges, as the encoder would read it.
 func openReaderAt(ctx context.Context, source string) (io.ReaderAt, int64, func(), error) {
 	if !remote(source) {
-		f, err := os.Open(source)
+		f, err := openShared(source)
 		if err != nil {
 			return nil, 0, nil, err
 		}
@@ -333,7 +318,6 @@ func openReaderAt(ctx context.Context, source string) (io.ReaderAt, int64, func(
 	return &rangeReader{ctx: ctx, url: source}, res.ContentLength, func() {}, nil
 }
 
-// rangeReader reads a URL by byte ranges.
 type rangeReader struct {
 	ctx context.Context
 	url string
@@ -360,8 +344,6 @@ func (h *rangeReader) ReadAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
-// The longest a session's open waits on the index: a download's last pieces may not have come yet.
 const keyframeIndexWait = 4 * time.Second
 
-// isMatroska: the container the index reader understands.
 func isMatroska(container string) bool { return strings.Contains(container, "matroska") }

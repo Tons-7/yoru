@@ -214,6 +214,12 @@ func TestSequelsNamedByTheirBaseTitleMatch(t *testing.T) {
 	if identifies(t, "[Group] Monster Musume no Oisha-san - 01 [1080p].mkv", "Monster: Season 1") {
 		t.Error("a one-word base accepted a longer show")
 	}
+	if identifies(t, "[SubsPlease] Kono Subarashii Sekai ni Bakuen wo! - 05 (1080p).mkv", "Kono Subarashii Sekai ni Shukufuku wo!") {
+		t.Error("a spin-off one word away was taken for the show")
+	}
+	if !identifies(t, "[Group] Kono Subarashii Sekai ni Shukufuku o! - 05 (1080p).mkv", "Kono Subarashii Sekai ni Shukufuku wo!") {
+		t.Error("a spelling variant of one word was rejected")
+	}
 }
 
 func TestBaseOf(t *testing.T) {

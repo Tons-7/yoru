@@ -1,6 +1,4 @@
-// Library backup (export, import), the components section, and Downloads' keep control.
-// Run through run-player-check.mjs with CHECK=backup-check.mjs.
-import { writeFileSync } from 'node:fs'
+import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { chromium } from 'playwright'
@@ -27,7 +25,6 @@ const api = async (path, init) => {
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
 
-// ---------------------------------------------------------------- backup
 await page.goto(`${BASE}/settings?tab=Library`)
 await page.getByText('Backup').waitFor({ timeout: 10_000 })
 
@@ -45,9 +42,9 @@ check(
   'export is served as a download',
 )
 
-// Import a file: one entry the seeded catalogue knows, one it does not. A backup kuro made, which still reads.
 const known = exported.body?.entries?.[0]?.animeId ?? 127230
 const file = join(tmpdir(), 'yoru-backup-check.json')
+process.on('exit', () => rmSync(file, { force: true }))
 writeFileSync(
   file,
   JSON.stringify({
@@ -59,7 +56,7 @@ writeFileSync(
     ],
   }),
 )
-await page.locator('input[type=file]').setInputFiles(file)
+await page.locator('input[type=file][accept*=".json"]').setInputFiles(file)
 await page.getByText(/Imported 1 entry/).waitFor({ timeout: 10_000 })
 check(true, 'import through the chooser reports what it applied')
 const after = await api('/api/library/export')
@@ -69,19 +66,16 @@ check(
 )
 await page.screenshot({ path: join(shots, 'backup.png') })
 
-// ---------------------------------------------------------------- components
 await page.goto(`${BASE}/settings?tab=About`)
 await page.getByText('Programs Yoru uses').waitFor({ timeout: 10_000 })
 const rows = await page.locator('text=Torrent engine').count()
 check(rows === 1, 'components are listed in Settings, not only on the setup page')
 await page.screenshot({ path: join(shots, 'components.png') })
 
-// ---------------------------------------------------------------- keep control
 const downloads = await api('/api/downloads')
 const first = downloads.body?.items?.[0]
 if (first) {
   await page.goto(`${BASE}/downloads`)
-  // The keep toggle is an icon; its pressed state is the word.
   const button = page.locator('button[aria-label="Keep"]').first()
   await button.waitFor({ timeout: 10_000 })
   const pressed = async () => (await button.getAttribute('aria-pressed')) === 'true'

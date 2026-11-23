@@ -18,7 +18,6 @@ import (
 const (
 	ManamiURL   = "https://github.com/manami-project/anime-offline-database/releases/download/latest/anime-offline-database.jsonl.zst"
 	AnimeAPIURL = "https://raw.githubusercontent.com/nattadasu/animeApi/v3/database/animeapi.tsv"
-	DeadIDsURL  = "https://github.com/manami-project/anime-offline-database/releases/download/latest/anilist-minified.json.zst"
 
 	userAgent = "yoru/0.1 (personal media library)"
 )

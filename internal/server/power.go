@@ -8,13 +8,10 @@ import (
 )
 
 const (
-	awakeCheck = 30 * time.Second
-	// A device between episodes, or a queue between downloads, isn't done with the computer.
+	awakeCheck  = 30 * time.Second
 	awakeLinger = 2 * time.Minute
 )
 
-// KeepAwake holds the computer awake while other devices play or downloads move, as Settings allow. The host's
-// own window needs none of it: its browser keeps the computer awake while playing.
 func (s *Server) KeepAwake(ctx context.Context, k *power.Keeper) {
 	tick := time.NewTicker(awakeCheck)
 	defer tick.Stop()
@@ -52,7 +49,6 @@ func (s *Server) awakeReason(ctx context.Context) string {
 	return ""
 }
 
-// serving counts a stream a TV or another device's player app reads through its link, for as long as it reads.
 func (s *Server) serving() func() {
 	s.linkReads.Add(1)
 	return func() {
@@ -61,7 +57,6 @@ func (s *Server) serving() func() {
 	}
 }
 
-// othersWatching: a device reported playing lately, or a TV or player app is reading a stream.
 func (s *Server) othersWatching() bool {
 	if s.linkReads.Load() > 0 || time.Since(time.Unix(s.linkReadAt.Load(), 0)) < watchingFor {
 		return true
@@ -76,7 +71,6 @@ func (s *Server) othersWatching() bool {
 	return false
 }
 
-// downloadsMoving: a download is receiving (the linger spans the queue's gaps); a quiet swarm keeps no one up.
 func (s *Server) downloadsMoving(ctx context.Context) bool {
 	if s.cache == nil {
 		return false

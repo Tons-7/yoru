@@ -9,12 +9,12 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"yoru/internal/anilist"
 	"yoru/internal/store"
 )
 
-// relationsServer answers the Relations query from a table of edges per id; other queries get nothing.
 func relationsServer(t *testing.T, answers map[int]string, asked *atomic.Int32) *anilist.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -64,8 +64,6 @@ func edge(kind string, id int, format string) string {
 	return `{"relationType":"` + kind + `","node":{"id":` + itoa(id) + `,"type":"ANIME","format":"` + format + `","episodes":12,"startDate":{"year":2020,"month":1,"day":` + itoa(id) + `}}}`
 }
 
-// A series reached by a PARENT or SPIN_OFF edge is not stamped as walked: its own chain is asked for when
-// it is opened. A film reached the same way is, since its chain is this one.
 func TestWalkStampsOnlyWhatItAskedFor(t *testing.T) {
 	var asked atomic.Int32
 	al := relationsServer(t, map[int]string{
@@ -104,7 +102,6 @@ func TestWalkStampsOnlyWhatItAskedFor(t *testing.T) {
 	}
 }
 
-// AniList answering nothing for the show (hidden adult entry) is not a standalone show: asked again next time.
 func TestNoAnswerIsNotAStandaloneShow(t *testing.T) {
 	var asked atomic.Int32
 	al := relationsServer(t, map[int]string{}, &asked)
@@ -120,7 +117,6 @@ func TestNoAnswerIsNotAStandaloneShow(t *testing.T) {
 	if known, _ := st.HasRelations(ctx, 1); known {
 		t.Fatal("a show AniList did not answer for was recorded as standalone")
 	}
-	// A fresh client, past the response cache: the next visit asks again.
 	r.al = relationsServer(t, map[int]string{}, &asked)
 	if err := r.Ensure(ctx, 1); err != nil {
 		t.Fatal(err)
@@ -130,7 +126,6 @@ func TestNoAnswerIsNotAStandaloneShow(t *testing.T) {
 	}
 }
 
-// An edge AniList no longer reports is gone after the next walk, and a dead member is left out of the seasons.
 func TestWalkReplacesTheEdgesOfWhatItFetched(t *testing.T) {
 	var asked atomic.Int32
 	answers := map[int]string{
@@ -153,7 +148,6 @@ func TestWalkReplacesTheEdgesOfWhatItFetched(t *testing.T) {
 		t.Fatalf("seasons = %+v", fr.Seasons)
 	}
 
-	// AniList re-types the edge: 2 is a summary now, not a season.
 	answers[1] = media(1, edge("SUMMARY", 2, "TV"))
 	answers[2] = media(2, edge("PARENT", 1, "TV"))
 	r.al = relationsServer(t, answers, &asked)
@@ -165,7 +159,6 @@ func TestWalkReplacesTheEdgesOfWhatItFetched(t *testing.T) {
 	}
 }
 
-// Members Yoru never showed get the walk's dates, so an earlier season isn't sorted last.
 func TestWalkDatesOrderMembersWithoutARow(t *testing.T) {
 	var asked atomic.Int32
 	al := relationsServer(t, map[int]string{
@@ -174,7 +167,6 @@ func TestWalkDatesOrderMembersWithoutARow(t *testing.T) {
 	}, &asked)
 	st := prefetchStore(t)
 	ctx := context.Background()
-	// Only the later season has an anime row; the earlier one is known by name alone.
 	if _, err := st.ImportList(ctx, []store.Anime{tvEntry(5, "2020-01-05")}, nil, store.ImportMerge); err != nil {
 		t.Fatal(err)
 	}
@@ -189,5 +181,28 @@ func TestWalkDatesOrderMembersWithoutARow(t *testing.T) {
 	fr, _ := st.Franchise(ctx, 5)
 	if len(fr.Seasons) != 2 || fr.Seasons[0].ID != 4 {
 		t.Fatalf("seasons = %+v, want the earlier season first", fr.Seasons)
+	}
+}
+
+func TestRelationsFromASavedAnswerAreNotStored(t *testing.T) {
+	var asked atomic.Int32
+	al := relationsServer(t, map[int]string{
+		1: media(1, edge("SEQUEL", 2, "TV")),
+	}, &asked)
+	st := prefetchStore(t)
+	ctx := context.Background()
+	if _, err := st.ImportList(ctx, []store.Anime{tvEntry(1, "2021-01-01"), tvEntry(2, "2022-01-01")}, nil, store.ImportMerge); err != nil {
+		t.Fatal(err)
+	}
+	page, _ := anilist.WithServed(ctx)
+	anilist.NoteSaved(page, time.Now().Add(-48*time.Hour))
+	if _, err := NewRelations(st, al, discard()).Fetch(page, 1); err != nil {
+		t.Fatal(err)
+	}
+	if has, _ := st.HasRelations(ctx, 1); has {
+		t.Error("relations from a two-day-old saved answer were stored")
+	}
+	if !st.RelationsStale(ctx, 1, relationsMaxAge) {
+		t.Error("a walk built on a saved answer was stamped as fresh")
 	}
 }

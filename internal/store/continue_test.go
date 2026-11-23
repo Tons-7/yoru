@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// Finishing an episode cleanly offers the next, so the row never empties.
 func TestContinueWatchingOffersTheNextEpisode(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -35,7 +34,6 @@ func TestContinueWatchingOffersTheNextEpisode(t *testing.T) {
 		t.Errorf("nothing to resume, yet a position came back: %+v", r)
 	}
 
-	// Part way through the next one, it is a resume again.
 	playThrough(t, s, 1, "2", 0, 300, 1400)
 	page, err = s.ContinueWatching(ctx, all)
 	if err != nil {
@@ -49,8 +47,6 @@ func TestContinueWatchingOffersTheNextEpisode(t *testing.T) {
 	}
 }
 
-// A show's own threshold decides "finished" on the rail as it does for resume,
-// or 85% under a 0.8 threshold shows Resume and then starts from zero.
 func TestContinueWatchingUsesTheShowsThreshold(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -76,8 +72,6 @@ func TestContinueWatchingUsesTheShowsThreshold(t *testing.T) {
 	}
 }
 
-// A rewatch resets every position, so the show has to come back through the
-// next-episode path rather than vanishing until something is left half watched.
 func TestContinueWatchingSurvivesARewatch(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -110,8 +104,6 @@ func TestContinueWatchingSurvivesARewatch(t *testing.T) {
 	}
 }
 
-// Dismissing a next-episode card had nothing to update: the episode has never
-// been played, so no playback row existed and the card came straight back.
 func TestDismissingANeverPlayedEpisodeSticks(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -136,7 +128,6 @@ func TestDismissingANeverPlayedEpisodeSticks(t *testing.T) {
 		t.Fatalf("dismissed and still offered: %d items, total %d", len(page.Items), page.Total)
 	}
 
-	// And the marker is not a play: history and the recent row ignore it.
 	hist, err := s.History(ctx, all)
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +143,6 @@ func TestDismissingANeverPlayedEpisodeSticks(t *testing.T) {
 		t.Errorf("the dismissal turned up in recently watched: %+v", recent.Items)
 	}
 
-	// Actually playing it undoes the dismissal.
 	playThrough(t, s, 1, "2", 0, 300, 1400)
 	page, err = s.ContinueWatching(ctx, all)
 	if err != nil {
@@ -163,7 +153,6 @@ func TestDismissingANeverPlayedEpisodeSticks(t *testing.T) {
 	}
 }
 
-// The last episode of a finished show is not something to continue.
 func TestContinueWatchingStopsAtTheEnd(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -186,7 +175,6 @@ func TestContinueWatchingStopsAtTheEnd(t *testing.T) {
 	}
 }
 
-// An episode not out yet isn't "none met your preferences", which sends people to settings.
 func TestEpisodeAiredReadsTheSchedule(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -213,14 +201,12 @@ func TestEpisodeAiredReadsTheSchedule(t *testing.T) {
 	if ok, _ := s.EpisodeAired(ctx, 1, 9); ok {
 		t.Error("episode 9 is further out still")
 	}
-	// A show with no schedule at all must not be reported as unaired.
 	seedCatalogue(t, s, 2, "FINISHED", 12)
 	if ok, _ := s.EpisodeAired(ctx, 2, 3); !ok {
 		t.Error("no schedule is not evidence of a future date")
 	}
 }
 
-// An unaired next episode isn't offered, or the card sits all week and fails when clicked.
 func TestContinueWatchingWaitsForTheEpisodeToAir(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -249,7 +235,6 @@ func TestContinueWatchingWaitsForTheEpisodeToAir(t *testing.T) {
 		t.Fatalf("episode 6 airs in three days, yet it is offered: %+v", page.Items)
 	}
 
-	// Once it has aired the card is due again.
 	past := int(time.Now().Add(-time.Hour).Unix())
 	if _, err := s.ImportList(ctx, []Anime{
 		{ID: 1, Romaji: "Show", NextEpisode: &next, NextAiringAt: &past},
@@ -265,7 +250,6 @@ func TestContinueWatchingWaitsForTheEpisodeToAir(t *testing.T) {
 	}
 }
 
-// A dismissal is not a play, so it must not turn up as somewhere to resume.
 func TestDismissalIsNotAResumePoint(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -27,7 +27,7 @@ check(await prepareLocalEpisode({ base: BASE, lib: process.env.YORU_LIB, anime: 
 
 let EP = 1
 if (REAL) {
-  const dir = join(tmpdir(), 'yoru-e2e', 'real')
+  const dir = join(tmpdir(), 'yoru-e2e-real-clip')
   mkdirSync(dir, { recursive: true })
   const out = join(dir, 'Yoru Real Show - 02.mkv')
   const ffmpeg = join(repo, 'bin', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
@@ -178,6 +178,40 @@ const level = (page) =>
     return peak
   })
 
+const hogGpu = (page) =>
+  page.evaluate(async () => {
+    const adapter = await navigator.gpu.requestAdapter()
+    const device = await adapter.requestDevice()
+    const module = device.createShaderModule({
+      code: `@group(0) @binding(0) var<storage, read_write> o: array<f32>;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
+  var x = f32(g.x);
+  for (var i = 0u; i < 120000u; i++) { x = sin(x) * 1.0001 + cos(x * 0.5); }
+  o[g.x % 1024u] = x;
+}`,
+    })
+    const pipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } })
+    const buffer = device.createBuffer({ size: 4096, usage: GPUBufferUsage.STORAGE })
+    const group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer } }] })
+    window.__hog = true
+    const burn = async () => {
+      while (window.__hog) {
+        for (let n = 0; n < 4; n++) {
+          const enc = device.createCommandEncoder()
+          const pass = enc.beginComputePass()
+          pass.setPipeline(pipeline)
+          pass.setBindGroup(0, group)
+          pass.dispatchWorkgroups(4096)
+          pass.end()
+          device.queue.submit([enc.finish()])
+        }
+        await device.queue.onSubmittedWorkDone()
+      }
+    }
+    void burn()
+  })
+const preciseOf = (page) => page.evaluate(() => document.querySelector('video')?.previousElementSibling?.dataset?.precise ?? '')
+
 const gpu = await (async () => {
   const context = await browser.newContext()
   const page = await context.newPage()
@@ -260,6 +294,7 @@ if (gpu && status.ready) {
   const f = await frames(s.page, 4000)
   check(f.canvas > f.video * 1.4, 'smooth motion alone: more pictures than the video has', rate(f))
   check(f.canvas <= 126, 'Auto stays at or under 120 frames a second', rate(f))
+  check((await preciseOf(s.page)) === '0', 'a 720p picture leaves precise motion off', await preciseOf(s.page))
   {
     const box = await s.page.locator('video').boundingBox()
     if (box) await s.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
@@ -382,6 +417,7 @@ if (gpu && status.ready) {
     const both = await watch({ 'yoru.smooth': 'on', 'yoru.anime4k': tier }, big)
     const native = await both.page.locator('video').evaluate((v) => `${v.videoWidth}x${v.videoHeight}`)
     check(!!both.size, `with Anime4K ${tier} on a 1440p screen: the picture is shown`, `${both.size} from ${native}`)
+    check((await preciseOf(both.page)) === '1', `with Anime4K ${tier}: the upscaled picture gets precise motion`, await preciseOf(both.page))
     await sleep(5000)
     const fb = await frames(both.page, 4000)
     check(fb.canvas > fb.video * 1.4, `with Anime4K ${tier}: still more pictures than the video has`, rate(fb))
@@ -399,6 +435,28 @@ if (gpu && status.ready) {
     }
     check(both.errors.length === 0, `with Anime4K ${tier}: no errors`, both.errors.join(' | '))
     await both.context.close()
+  }
+
+  {
+    const p = await watch({ 'yoru.smooth': 'on', 'yoru.anime4k': 'light' }, big)
+    await sleep(3000)
+    const before = await preciseOf(p.page)
+    await hogGpu(p.page)
+    let after = before
+    for (let i = 0; i < 60 && after === '1'; i++) {
+      await sleep(1000)
+      after = await preciseOf(p.page)
+    }
+    await p.page.evaluate(() => (window.__hog = false))
+    await sleep(4000)
+    const fp = await frames(p.page, 3000)
+    check(
+      before === '1' && after === '0' && fp.canvas > fp.video * 1.4,
+      'a GPU that falls behind on a big picture: precise motion goes first and smooth motion keeps going',
+      `${before} -> ${after}, ${rate(fp)}`,
+    )
+    check(p.errors.length === 0, 'dropping precise motion: no errors', p.errors.join(' | '))
+    await p.context.close()
   }
 
   await post('/api/prefs', { key: 'playback.smooth_held', value: 'true' })
@@ -432,37 +490,7 @@ if (gpu && status.ready) {
 
   const slow = await watch({ 'yoru.smooth': 'on', 'yoru.anime4k': 'off' })
   await sleep(3000)
-  await slow.page.evaluate(async () => {
-    const adapter = await navigator.gpu.requestAdapter()
-    const device = await adapter.requestDevice()
-    const module = device.createShaderModule({
-      code: `@group(0) @binding(0) var<storage, read_write> o: array<f32>;
-@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) g: vec3u) {
-  var x = f32(g.x);
-  for (var i = 0u; i < 120000u; i++) { x = sin(x) * 1.0001 + cos(x * 0.5); }
-  o[g.x % 1024u] = x;
-}`,
-    })
-    const pipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } })
-    const buffer = device.createBuffer({ size: 4096, usage: GPUBufferUsage.STORAGE })
-    const group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer } }] })
-    window.__hog = true
-    const burn = async () => {
-      while (window.__hog) {
-        for (let n = 0; n < 4; n++) {
-          const enc = device.createCommandEncoder()
-          const pass = enc.beginComputePass()
-          pass.setPipeline(pipeline)
-          pass.setBindGroup(0, group)
-          pass.dispatchWorkgroups(4096)
-          pass.end()
-          device.queue.submit([enc.finish()])
-        }
-        await device.queue.onSubmittedWorkDone()
-      }
-    }
-    void burn()
-  })
+  await hogGpu(slow.page)
   const gaveUp = await slow.page
     .getByText('Smooth motion turned itself off for this episode')
     .first()

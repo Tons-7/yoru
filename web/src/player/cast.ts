@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { appleTouchDevice } from '../lib/install'
 
-// Google Cast: the Web Sender SDK sends the episode to a Chromecast, whose Default Media Receiver plays
-// Yoru's own HLS through a link signed for the session. Only on an HTTPS or localhost page.
 
 const SDK = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1'
 
-// The slice of the SDK used here.
 interface CastSession {
   getCastDevice(): { friendlyName: string }
   loadMedia(request: unknown): Promise<unknown>
-  // The older session, which takes a whole queue at once.
   getSessionObj(): {
     queueLoad(request: unknown, done: () => void, failed: (err?: { code?: string; description?: string }) => void): void
   }
@@ -68,18 +64,12 @@ interface ChromeCast {
 const sdk = () =>
   window as unknown as { cast?: { framework: CastFramework }; chrome?: { cast?: ChromeCast }; __onGCastApiAvailable?: (ok: boolean) => void }
 
-/** An iPhone or iPad: no browser there can cast, so nothing about it is offered. */
 export const castImpossible = appleTouchDevice
 
-/** Brave keeps casting behind a switch of its own, which the needs list names. */
-export const isBrave = () => 'brave' in navigator
-
-/** Casting needs a secure page; whether this browser can cast is the SDK's answer, not its name. */
 export function castSupported(): boolean {
   return window.isSecureContext && !castImpossible()
 }
 
-/** 'off': this browser can't cast, or has it turned off. 'failed': the SDK didn't arrive (offline, blocked). */
 export type CastSdk = 'loading' | 'ok' | 'off' | 'failed'
 
 let loading: Promise<CastSdk> | null = null
@@ -100,7 +90,6 @@ function loadSdk(): Promise<CastSdk> {
     script.src = SDK
     script.async = true
     script.onerror = () => {
-      // Tried again on the next player, as the connection may be back.
       loading = null
       resolve('failed')
     }
@@ -109,45 +98,56 @@ function loadSdk(): Promise<CastSdk> {
   return loading
 }
 
-/** An episode the TV plays after the one cast, on its own: the server's queue. */
 export interface QueuedMedia {
-  /** Which episode this is ("anime-episode"), so a page can tell its own on the TV from another's. */
   key: string
   url: string
   title: string
   subtitle?: string
   artwork?: string
   subtitles: Array<{ url: string; language?: string; title?: string }>
-  /** Position in subtitles of the track to show, if any. */
   subtitleTrack?: number
 }
 
 export interface CastMedia extends QueuedMedia {
   startAt: number
-  /** How the TV draws them: TextTrackStyle's fields (see subLook.ts). */
   textStyle?: Record<string, unknown>
-  /** What plays after, with Auto next on; each opens on the server once the TV gets to it. */
   queue?: QueuedMedia[]
 }
 
-/** An episode's key, the same for every device's session of it ("-dev…", "-cast", drawn-in copies). */
 export const episodeKey = (sessionId: string) => sessionId.replace(/-[a-z].*$/, '')
 
 export type CastPhase = 'none' | 'idle' | 'connecting' | 'connected'
 
-// What this page last sent to the TV, the queue after it included. A session outlives episodes and is joined
-// on any page of Yoru, so a connection alone doesn't say the TV plays the episode open here.
-let sent: { items: Array<{ key: string; url: string }>; seen: boolean } | null = null
+type Sent = { items: Array<{ key: string; url: string }>; seen: boolean }
 
-/** The cast device's state, and the TV's player once connected. 'none': no device found, or no SDK. */
+const SENT_KEY = 'yoru.cast.sent'
+
+function readSent(): Sent | null {
+  try {
+    const raw = sessionStorage.getItem(SENT_KEY)
+    const v = raw ? (JSON.parse(raw) as Sent) : null
+    return v && Array.isArray(v.items) && v.items.length > 0 ? v : null
+  } catch {
+    return null
+  }
+}
+
+let sent: Sent | null = readSent()
+
+function setSent(next: Sent | null) {
+  sent = next
+  try {
+    if (next) sessionStorage.setItem(SENT_KEY, JSON.stringify(next))
+    else sessionStorage.removeItem(SENT_KEY)
+  } catch {
+  }
+}
+
 export function useCast() {
   const [phase, setPhase] = useState<CastPhase>('none')
-  // Not asked on an insecure page: the SDK can't work there, and the needs list says why.
   const [sdkState, setSdkState] = useState<CastSdk>(() => (castSupported() ? 'loading' : 'off'))
   const [device, setDevice] = useState('')
-  // key: the episode these times are of, '' while the TV plays none of this page's.
   const [remote, setRemote] = useState({ time: 0, duration: 0, paused: true, key: '' })
-  // The key of the stream the TV plays, if this page sent it; '' for anything else.
   const [playing, setPlaying] = useState('')
   const player = useRef<RemotePlayer | null>(null)
   const controller = useRef<RemotePlayerController | null>(null)
@@ -156,7 +156,6 @@ export function useCast() {
     if (!castSupported()) return
     let stop = () => {}
     let cancelled = false
-    // A browser the SDK doesn't know may never answer: shown as can't cast, and corrected if it answers late.
     const silent = window.setTimeout(() => setSdkState((s) => (s === 'loading' ? 'off' : s)), 10_000)
     void loadSdk().then((state) => {
       const fw = sdk().cast?.framework
@@ -169,26 +168,22 @@ export function useCast() {
       const c = new fw.RemotePlayerController(p)
       player.current = p
       controller.current = c
-      // Ours while the TV reports one of our links, and until it first does (still loading it); not once it
-      // moved on to another sender's.
       const ours = () => {
         if (!sent) return ''
         const on = sent.items.find((i) => i.url === p.mediaInfo?.contentId)
         if (on) {
-          sent.seen = true
+          if (!sent.seen) setSent({ ...sent, seen: true })
           return on.key
         }
         return sent.seen ? '' : sent.items[0].key
       }
       const onState = () => {
         const state = ctx.getCastState()
-        if (state !== 'CONNECTED') sent = null
+        if (state === 'NOT_CONNECTED' || state === 'NO_DEVICES_AVAILABLE') setSent(null)
         setPhase(state === 'CONNECTED' ? 'connected' : state === 'CONNECTING' ? 'connecting' : state === 'NOT_CONNECTED' ? 'idle' : 'none')
         setDevice(ctx.getCurrentSession()?.getCastDevice().friendlyName ?? '')
         setPlaying(ours())
       }
-      // The length each link first showed: an episode's stays put, so another is the next's, its time come
-      // before the TV said it moved on.
       const lengths = new Map<string, number>()
       const onChange = () => {
         const url = p.mediaInfo?.contentId ?? ''
@@ -214,7 +209,6 @@ export function useCast() {
     }
   }, [])
 
-  /** Asks for a device when none is connected (Chrome's own picker), then plays the media there. */
   const start = useCallback(async (media: CastMedia) => {
     const { cast, chrome } = sdk()
     if (!cast || !chrome?.cast) throw new Error('Casting is not available in this browser')
@@ -227,7 +221,6 @@ export function useCast() {
     const describe = (item: QueuedMedia) => {
       const info = new m.MediaInfo(item.url, 'application/x-mpegURL')
       info.streamType = m.StreamType.BUFFERED
-      // Yoru's segments are fragmented MP4; the receiver assumes TS unless told.
       info.hlsSegmentFormat = m.HlsSegmentFormat.FMP4
       info.hlsVideoSegmentFormat = m.HlsVideoSegmentFormat.FMP4
       const meta = new m.GenericMediaMetadata()
@@ -248,12 +241,10 @@ export function useCast() {
       return info
     }
     const all = [media, ...(media.queue ?? [])]
-    // Before the load: the TV may report the new media before it settles.
     const before = sent
-    sent = { items: all.map((i) => ({ key: i.key, url: i.url })), seen: false }
+    setSent({ items: all.map((i) => ({ key: i.key, url: i.url })), seen: false })
     try {
       if (all.length > 1) {
-        // Each plays on its own and loads a little before the last ends: the TV goes on with this page shut.
         const items = all.map((item, i) => {
           const q = new m.QueueItem(describe(item))
           q.autoplay = true
@@ -277,14 +268,12 @@ export function useCast() {
         await session.loadMedia(request)
       }
     } catch (e) {
-      sent = before
+      setSent(before)
       throw e
     }
     setPlaying(media.key)
   }, [])
 
-  /** The TV connected, else Chrome's own list, which also makes it search (on a Mac it finds TVs only once
-   *  something asks); false when that list was closed without a pick. */
   const connect = useCallback(async () => {
     const ctx = sdk().cast?.framework.CastContext.getInstance()
     if (!ctx) throw new Error('Casting is not available in this browser')
@@ -292,7 +281,6 @@ export function useCast() {
     try {
       await ctx.requestSession()
     } catch (e) {
-      // "cancel": closed without a pick, nothing went wrong.
       if (/cancel/i.test(e instanceof Error ? e.message : String(e))) return false
       throw e
     }

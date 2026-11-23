@@ -1,26 +1,18 @@
-import { useCallback, useLayoutEffect, useRef } from 'react'
-
-// Touch on the picture: hold for 2×, drag to scrub, pinch to fill, swipe down out of fullscreen.
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 
 export interface Gestures {
-  /** Held still: 2× from on until off. */
   hold: (on: boolean) => void
-  /** A sideways drag: seconds so far, then done on lift; a drag the browser took ends at 0. */
   scrub: (seconds: number, done: boolean) => void
-  /** Two fingers spread (true) or pinched (false), once per touch. */
   pinch: (spread: boolean) => void
   swipe: (down: boolean) => void
 }
 
 const HOLD_MS = 450
-// Past this a finger is moving, not resting or tapping.
 const SLOP = 12
 const SWIPE = 70
 
-// over: the touch did its gesture; the rest of it, to the last finger's lift, does nothing.
 type Kind = 'none' | 'hold' | 'scrub' | 'pinch' | 'swipe' | 'over'
 
-/** The picture's pointer handlers; used() says the touch that just ended was a gesture, not a tap. */
 export function useTouchGestures(g: Gestures, opts: { swipes: boolean; secondsAcross: number }) {
   const points = useRef(new Map<number, { x0: number; y0: number; x: number; y: number }>())
   const kind = useRef<Kind>('none')
@@ -28,11 +20,11 @@ export function useTouchGestures(g: Gestures, opts: { swipes: boolean; secondsAc
   const timer = useRef<number | undefined>(undefined)
   const spread = useRef(0)
   const scrubbed = useRef(0)
-  // The handlers stay the same functions; what they call is the last render's.
   const latest = useRef({ g, opts })
   useLayoutEffect(() => {
     latest.current = { g, opts }
   })
+  useEffect(() => () => window.clearTimeout(timer.current), [])
 
   const distance = () => {
     const [a, b] = [...points.current.values()]
@@ -41,20 +33,18 @@ export function useTouchGestures(g: Gestures, opts: { swipes: boolean; secondsAc
   const end = useCallback((as: Kind) => {
     window.clearTimeout(timer.current)
     if (as === 'hold') latest.current.g.hold(false)
+    if (as === 'scrub') latest.current.g.scrub(0, true)
     kind.current = 'none'
   }, [])
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLElement>) => {
       if (e.pointerType !== 'touch') return
-      // A new touch's first finger: any finger still listed lifted somewhere this never heard.
       if (e.isPrimary) points.current.clear()
       points.current.set(e.pointerId, { x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY })
-      // Followed to the lift even off the picture.
       try {
         e.currentTarget.setPointerCapture(e.pointerId)
       } catch {
-        // Already gone.
       }
       if (points.current.size === 1) {
         kind.current = 'none'
@@ -102,7 +92,6 @@ export function useTouchGestures(g: Gestures, opts: { swipes: boolean; secondsAc
         kind.current = 'swipe'
         spent.current = true
       } else if (Math.hypot(dx, dy) > SLOP) {
-        // A scroll of the page, not a hold.
         window.clearTimeout(timer.current)
       }
     }
@@ -122,13 +111,11 @@ export function useTouchGestures(g: Gestures, opts: { swipes: boolean; secondsAc
       if (was === 'scrub') latest.current.g.scrub(lifted ? scrubbed.current : 0, true)
       if (was === 'swipe' && lifted && Math.abs(p.y - p.y0) > SWIPE) latest.current.g.swipe(p.y > p.y0)
       if (points.current.size === 0 || was === 'hold') end(was)
-      // A pinch is two fingers: one lifted ends it.
       else if (was === 'pinch') kind.current = 'over'
     },
     [end],
   )
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLElement>) => finish(e, true), [finish])
-  // The browser took the touch (a scroll): nothing it started is carried out.
   const onPointerCancel = useCallback((e: React.PointerEvent<HTMLElement>) => finish(e, false), [finish])
 
   return {

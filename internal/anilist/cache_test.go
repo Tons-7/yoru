@@ -29,7 +29,6 @@ func cachingServer(t *testing.T, hits *atomic.Int64) *Client {
 	return New(slog.New(slog.DiscardHandler), WithEndpoint(srv.URL), WithoutRateLimit())
 }
 
-// A week of schedule is nine of thirty requests a minute, and every page showing tonight asks for it.
 func TestRepeatedQueryHitsTheNetworkOnce(t *testing.T) {
 	var hits atomic.Int64
 	c := cachingServer(t, &hits)
@@ -45,7 +44,6 @@ func TestRepeatedQueryHitsTheNetworkOnce(t *testing.T) {
 		t.Errorf("%d requests, want 1", hits.Load())
 	}
 
-	// Different variables are a different question.
 	var out struct{}
 	if err := c.Query(ctx, `query Q { Page { media { id } } }`,
 		map[string]any{"page": 2}, &out); err != nil {
@@ -72,7 +70,6 @@ func TestMutationIsNeverCached(t *testing.T) {
 	}
 }
 
-// Several identical queries at once share one request instead of each missing the empty cache.
 func TestConcurrentIdenticalQueriesShareOneRequest(t *testing.T) {
 	var hits atomic.Int64
 	c := cachingServer(t, &hits)
@@ -94,8 +91,6 @@ func TestConcurrentIdenticalQueriesShareOneRequest(t *testing.T) {
 	}
 }
 
-// The same document returns different results with and without a token, since
-// AniList hides adult titles from an account that has not opted into them.
 func TestTokenIsPartOfTheCacheKey(t *testing.T) {
 	var hits atomic.Int64
 	c := cachingServer(t, &hits)

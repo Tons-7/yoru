@@ -79,7 +79,7 @@ func (id *showIdentity) matchesName(title string) bool {
 	folded := identityTokens(corpus.Fold(title))
 	for _, f := range id.folded {
 		if len(f) > 0 && (slices.Equal(folded, f) ||
-			(len(folded) == len(f) && overlap(folded, f) >= sameNameOverlap) ||
+			(len(folded) == len(f) && overlap(folded, f) >= sameNameOverlap && variants(folded, f)) ||
 			(len(f) > 1 && slices.Equal(singular(folded), singular(f)))) {
 			return true
 		}
@@ -147,6 +147,51 @@ func baseOf(title string) string {
 		}
 	}
 	return title[:cut]
+}
+
+func variants(a, b []string) bool {
+	left, right := tokenSet(a), tokenSet(b)
+	var onlyA, onlyB []string
+	for t := range left {
+		if !right[t] {
+			onlyA = append(onlyA, t)
+		}
+	}
+	for t := range right {
+		if !left[t] {
+			onlyB = append(onlyB, t)
+		}
+	}
+	for _, x := range onlyA {
+		if !slices.ContainsFunc(onlyB, func(y string) bool { return spelledAlike(x, y) }) {
+			return false
+		}
+	}
+	return true
+}
+
+func spelledAlike(a, b string) bool {
+	return editDistance(a, b) <= max(1, min(len(a), len(b))/3)
+}
+
+func editDistance(a, b string) int {
+	prev := make([]int, len(b)+1)
+	cur := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(b)]
 }
 
 func overlap(a, b []string) float64 {

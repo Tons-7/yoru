@@ -18,7 +18,6 @@ const (
 const ConnectRequestConnectionId = 0x41727101980
 
 const (
-	// BEP 41
 	optionTypeEndOfOptions = 0
 	optionTypeNOP          = 1
 	optionTypeURLData      = 2
@@ -47,7 +46,7 @@ type RequestHeader struct {
 	ConnectionId  ConnectionId
 	Action        Action
 	TransactionId TransactionId
-} // 16 bytes
+}
 
 type AnnounceResponseHeader struct {
 	Interval int32
@@ -72,7 +71,6 @@ func mustMarshal(data any) []byte {
 	return b
 }
 
-// This is for fixed-size, builtin types only I think.
 func Write(w io.Writer, data any) error {
 	return binary.Write(w, binary.BigEndian, data)
 }

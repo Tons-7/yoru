@@ -12,7 +12,6 @@ import (
 	"yoru/internal/store"
 )
 
-// Jujutsu Kaisen as AniList has it: the film between the first and second seasons.
 const jjk1, jjk0, jjk2, jjk3 = 113415, 131573, 145064, 172463
 
 func jjkStore(t *testing.T) *store.Store {
@@ -36,23 +35,20 @@ func jjkStore(t *testing.T) *store.Store {
 	if err := st.SaveRelations(ctx, nil, rels); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.RebuildFranchises(ctx); err != nil {
+	if _, err := st.RebuildFranchisesFor(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	// TheTVDB files the film as special 2; catalogues fetched before that was dropped still say so.
 	if _, err := st.SaveEpisodes(ctx, jjk0, []metadata.Episode{{Number: 1, TvdbNumber: 2}}); err != nil {
 		t.Fatal(err)
 	}
 	return st
 }
 
-// What a search for the film can turn up: the show's episodes under the same name, and the film.
 func jjkReleases() []indexer.Torrent {
 	return []indexer.Torrent{
 		sized("s3e02", "JUJUTSU.KAISEN.S03E02.One.More.Time.1080p.CR.WEB-DL.DUAL.AAC2.0.H.264-VARYG.mkv", 90, 1.4),
 		sized("s1e01", "Jujutsu.Kaisen.S01E01.Ryomen.Sukuna.1080p.CR.WEB-DL.AAC2.0.H.264-VARYG.mkv", 80, 1.4),
 		sized("sp01", "[SubsPlease] Jujutsu Kaisen - 01 (1080p) [8AE2A4A5].mkv", 70, 1.4),
-		// The second season's first episode, counted on from the first.
 		sized("sp25", "[SubsPlease] Jujutsu Kaisen - 25 (1080p) [9F2A4C11].mkv", 60, 1.4),
 		sized("judas", "[Judas] Jujutsu Kaisen 0 (The Movie) [BD 1080p][HEVC x265 10bit][Dual-Audio][Multi-Subs]", 30, 4.2),
 		sized("erai", "[Erai-raws] Jujutsu Kaisen 0 Movie [1080p][Multiple Subtitle]", 20, 3.1),
@@ -67,7 +63,6 @@ func kept(c Candidates) map[string]bool {
 	return out
 }
 
-// A film named like its show is none of the show's episodes, whatever its stale TheTVDB number says.
 func TestFilmIsNotItsShowsEpisode(t *testing.T) {
 	st := jjkStore(t)
 	got, _ := findFilm(t, st, jjk0, jjkReleases())
@@ -86,7 +81,6 @@ func TestFilmIsNotItsShowsEpisode(t *testing.T) {
 	}
 }
 
-// The same releases still reach the episodes they are.
 func TestShowsEpisodesStillMatchBesideTheFilm(t *testing.T) {
 	st := jjkStore(t)
 	cases := []struct {
@@ -109,7 +103,6 @@ func TestShowsEpisodesStillMatchBesideTheFilm(t *testing.T) {
 				t.Errorf("anime %d episode %d lost %s; kept %v", c.anime, c.episode, hash, have)
 			}
 		}
-		// The film names no episode, so it may stay as an unconfirmed pack; it must not be the pick.
 		if got.Best == nil || !slices.Contains(c.want, got.Best.Torrent.InfoHash) {
 			t.Errorf("anime %d episode %d picked %+v, want one of %v", c.anime, c.episode, got.Best, c.want)
 		}

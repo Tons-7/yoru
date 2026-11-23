@@ -1,5 +1,3 @@
-// A release bigger than the cache budget: the watch page says it will be removed, and Keep makes it stay.
-// The play answer and the downloads list are fed to the page, so no torrent is involved.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -58,7 +56,6 @@ await note.getByRole('button', { name: 'Keep this episode' }).click()
 check(await until(() => keeps.length === 1), 'Keep asks the server to keep the download', keeps.join(','))
 check(await until(() => note.isVisible().then((v) => !v)), 'a kept download has no warning')
 
-// Within the budget there is nothing to say.
 film = { ...film, kept: false, totalBytes: 2 * GB }
 await page.reload({ waitUntil: 'domcontentloaded' })
 await page.getByText('Big Film').first().waitFor({ timeout: 10_000 }).catch(() => {})

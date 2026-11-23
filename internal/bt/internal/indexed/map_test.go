@@ -17,12 +17,6 @@ type overdueRecord struct {
 	when    time.Time
 }
 
-type overdueRecordPrimaryKey int
-
-func (me overdueRecordPrimaryKey) Compare(other overdueRecordPrimaryKey) int {
-	return cmp.Compare(me, other)
-}
-
 func overdueRecordIndexCompare(l, r overdueRecord) int {
 	return cmp.Or(
 		extracmp.CompareBool(l.active, r.active),
@@ -82,20 +76,11 @@ func TestOverdue(t *testing.T) {
 	qt.Assert(t, qt.CmpEquals([]int{0, 5, 6, 1, 3, 2, 4, 7}, slices.Collect(MapPairIterRight(idx.Iter))))
 }
 
-type orderedPrimaryKey[T cmp.Ordered] struct {
-	inner T
-}
-
-func (me orderedPrimaryKey[T]) Compare(other orderedPrimaryKey[T]) int {
-	return cmp.Compare(me.inner, other.inner)
-}
-
 func TestEnsureAndUpdate(t *testing.T) {
 	var a Table[int]
 	a.Init(cmp.Compare[int])
 	a.Create(1)
 	a.Update(1, func(r int) int {
-		// Check the record was created with the necessary key values for discovery.
 		panicif.NotEq(r, 1)
 		return r
 	})

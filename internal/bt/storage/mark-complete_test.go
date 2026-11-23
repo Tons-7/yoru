@@ -17,20 +17,8 @@ func BenchmarkMarkComplete(b *testing.B) {
 	b.Run("File", func(b *testing.B) {
 		ci := storage.NewFileOpts(storage.NewFileClientOpts{
 			ClientBaseDir: b.TempDir(),
-			// TODO: Is the benchmark finding a bug?
-			UsePartFiles: g.Some(false),
+			UsePartFiles:  g.Some(false),
 		})
-		//ci := storage.NewFile(b.TempDir())
-		b.Cleanup(func() { ci.Close() })
-		bench(b, ci)
-	})
-	b.Run("Mmap", func(b *testing.B) {
-		ci := storage.NewMMap(b.TempDir())
-		b.Cleanup(func() { ci.Close() })
-		bench(b, ci)
-	})
-	b.Run("BoltDb", func(b *testing.B) {
-		ci := storage.NewBoltDB(b.TempDir())
 		b.Cleanup(func() { ci.Close() })
 		bench(b, ci)
 	})

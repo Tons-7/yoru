@@ -5,19 +5,13 @@ import (
 	pp "yoru/internal/bt/peer_protocol"
 )
 
-// Callbacks run synchronously, maybe under the Client's and other locks; their arguments aren't theirs to
-// keep. Nil ones are skipped.
 type Callbacks struct {
-	// After a peer connection's BitTorrent handshake, without the Client lock.
-	CompletedHandshake func(*PeerConn, InfoHash)
-	ReadMessage        func(*PeerConn, *pp.Message)
-	// This can be folded into the general case below.
-	ReadExtendedHandshake func(*PeerConn, *pp.ExtendedHandshakeMessage)
-	PeerConnClosed        func(*PeerConn)
-	// A BEP 10 message, to each handler in order.
+	CompletedHandshake           func(*PeerConn, InfoHash)
+	ReadMessage                  func(*PeerConn, *pp.Message)
+	ReadExtendedHandshake        func(*PeerConn, *pp.ExtendedHandshakeMessage)
+	PeerConnClosed               func(*PeerConn)
 	PeerConnReadExtensionMessage []func(PeerConnReadExtensionMessageEvent)
 
-	// Provides secret keys to be tried against incoming encrypted connections.
 	ReceiveEncryptedHandshakeSkeys mse.SecretKeyIter
 
 	ReceivedUsefulData []func(ReceivedUsefulDataEvent)
@@ -26,12 +20,8 @@ type Callbacks struct {
 	SentRequest        []func(PeerRequestEvent)
 	PeerClosed         []func(*Peer)
 	NewPeer            []func(*Peer)
-	// A PeerConn joined a Torrent, handshaken but before the extended handshake: the time to change
-	// the extensions offered.
-	PeerConnAdded []func(*PeerConn)
+	PeerConnAdded      []func(*PeerConn)
 
-	// Sends status event updates. Useful to inform the user of specific events as they happen,
-	// for logging or to action on.
 	StatusUpdated []func(StatusUpdatedEvent)
 }
 
@@ -48,19 +38,17 @@ type PeerRequestEvent struct {
 }
 
 type PeerConnReadExtensionMessageEvent struct {
-	PeerConn *PeerConn
-	// You can look up what protocol this corresponds to using the PeerConn.LocalLtepProtocolMap.
+	PeerConn        *PeerConn
 	ExtensionNumber pp.ExtensionNumber
 	Payload         []byte
 }
 
 type StatusUpdatedEvent struct {
-	Event StatusEvent `json:"event"`
-	Error error       `json:"error"`
-	// The following fields may or may not be populated depending on the event.
-	PeerId   PeerID `json:"peer_id"`
-	Url      string `json:"url"`
-	InfoHash string `json:"info_hash"`
+	Event    StatusEvent `json:"event"`
+	Error    error       `json:"error"`
+	PeerId   PeerID      `json:"peer_id"`
+	Url      string      `json:"url"`
+	InfoHash string      `json:"info_hash"`
 }
 
 type StatusEvent string

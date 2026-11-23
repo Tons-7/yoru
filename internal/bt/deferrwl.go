@@ -2,22 +2,16 @@ package bt
 
 import (
 	"fmt"
-	"reflect"
 	"sync"
 
-	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/missinggo/v2/panicif"
 )
 
-// Runs deferred actions on Unlock; they follow write-locked changes, and the race detector catches a
-// defer without the write lock.
 type lockWithDeferreds struct {
 	internal      sync.RWMutex
 	unlockActions []func()
-	uniqueActions map[any]struct{}
-	// Currently unlocking, defers should not occur?
-	allowDefers bool
-	client      *Client
+	allowDefers   bool
+	client        *Client
 }
 
 func (me *lockWithDeferreds) Lock() {
@@ -27,7 +21,6 @@ func (me *lockWithDeferreds) Lock() {
 }
 
 func (me *lockWithDeferreds) Unlock() {
-	// If this doesn't happen other clean up handlers will block on the lock.
 	defer me.internal.Unlock()
 	panicif.False(me.allowDefers)
 	me.allowDefers = false
@@ -41,7 +34,6 @@ func (me *lockWithDeferreds) Unlock() {
 		panic(fmt.Sprintf("num deferred changed while running: %v -> %v", startLen, len(me.unlockActions)))
 	}
 	me.unlockActions = me.unlockActions[:0]
-	me.uniqueActions = nil
 }
 
 func (me *lockWithDeferreds) RLock() {
@@ -52,42 +44,11 @@ func (me *lockWithDeferreds) RUnlock() {
 	me.internal.RUnlock()
 }
 
-// Not allowed after unlock has started.
 func (me *lockWithDeferreds) Defer(action func()) {
 	me.deferInner(action)
 }
 
-// Already guarded.
 func (me *lockWithDeferreds) deferInner(action func()) {
 	panicif.False(me.allowDefers)
 	me.unlockActions = append(me.unlockActions, action)
-}
-
-// Protected from looping by once filter.
-func (me *lockWithDeferreds) deferOnceInner(key any, action func()) {
-	panicif.False(me.allowDefers)
-	g.MakeMapIfNil(&me.uniqueActions)
-	if g.MapContains(me.uniqueActions, key) {
-		return
-	}
-	me.uniqueActions[key] = struct{}{}
-	me.deferInner(action)
-}
-
-// Protected from looping by once filter. Note that if arg is the receiver of action, it should
-// match the receiver type (like being a pointer if the method takes a pointer receiver).
-func (me *lockWithDeferreds) DeferUniqueUnaryFunc(arg any, action func()) {
-	me.deferOnceInner(unaryFuncKey(action, arg), action)
-}
-
-func unaryFuncKey(f func(), key any) funcAndArgKey {
-	return funcAndArgKey{
-		funcStr: reflect.ValueOf(f).String(),
-		key:     key,
-	}
-}
-
-type funcAndArgKey struct {
-	funcStr string
-	key     any
 }

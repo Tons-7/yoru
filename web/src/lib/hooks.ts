@@ -1,21 +1,18 @@
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-/** A button's last answer, kept while it's asked again: a new run starts empty, so its words would blink back. */
 export function useHeldData<T>(mutation: { data?: T; isPending: boolean }): T | undefined {
   const [last, setLast] = useState(mutation.data)
   if (mutation.data !== undefined && mutation.data !== last) setLast(mutation.data)
   return mutation.data ?? (mutation.isPending ? last : undefined)
 }
 
-/** A page whose last item went: back to the last page that still has some, not a false "nothing here". */
 export function useClampPage(empty: boolean, page: number, total: number | undefined, perPage: number, onPage: (page: number) => void) {
+  const move = useEffectEvent(onPage)
   useEffect(() => {
-    // Only ever down, so a stale total can't bounce it between pages.
-    if (empty && page > 1 && total !== undefined) onPage(Math.max(1, Math.min(page - 1, Math.ceil(total / perPage))))
-  }, [empty, page, total, perPage, onPage])
+    if (empty && page > 1 && total !== undefined) move(Math.max(1, Math.min(page - 1, Math.ceil(total / perPage))))
+  }, [empty, page, total, perPage])
 }
 
-/** A modal's keyboard contract: focus moves in, Tab stays inside, and returns to the opener on close. */
 export function useModalFocus<T extends HTMLElement>(ref: React.RefObject<T | null>, open = true) {
   useEffect(() => {
     if (!open) return
@@ -23,14 +20,12 @@ export function useModalFocus<T extends HTMLElement>(ref: React.RefObject<T | nu
     const focusables = () =>
       Array.from(
         ref.current?.querySelectorAll<HTMLElement>(
-          // iframe: a trailer's player takes keys and Tab too.
           'button:not([disabled]), a[href], input:not([disabled]), select, textarea, iframe, [tabindex]:not([tabindex="-1"])',
         ) ?? [],
       )
     let panel = ref.current
     let frame = 0
     const focusIn = (tries: number) => {
-      // An item that took focus itself (autoFocus on the checked choice) keeps it.
       if (ref.current?.contains(document.activeElement)) {
         panel = ref.current
         return
@@ -40,7 +35,6 @@ export function useModalFocus<T extends HTMLElement>(ref: React.RefObject<T | nu
         panel = ref.current
         first.focus()
       } else if (tries > 0) {
-        // A portal menu measures its trigger first and renders a frame later.
         frame = requestAnimationFrame(() => focusIn(tries - 1))
       }
     }
@@ -64,46 +58,42 @@ export function useModalFocus<T extends HTMLElement>(ref: React.RefObject<T | nu
     return () => {
       cancelAnimationFrame(frame)
       document.removeEventListener('keydown', onKey)
-      // Not when the click that closed it put focus somewhere else on purpose.
       const now = document.activeElement
       if (!now || now === document.body || panel?.contains(now)) opener?.focus?.()
     }
   }, [ref, open])
 }
 
-/** Closes on an outside click or Escape — both matter for a menu to feel right. */
-// active: listening only while the menu is open, not for every closed one on the page.
 export function useDismiss<T extends HTMLElement>(onClose: () => void, active = true) {
   const ref = useRef<T>(null)
-  // The latest close, so a caller's new function doesn't rebuild the Back watcher, which would lose its place.
   const close = useEffectEvent(onClose)
 
   useEffect(() => {
     if (!active) return
+    const layer = Symbol()
+    dismissLayers.push(layer)
     function onPointer(e: MouseEvent | TouchEvent) {
       const target = e.target as Node | null
       if (!ref.current || ref.current.contains(target)) return
-      // A portal menu isn't inside the trigger, so without this a click on it reads as outside and closes it.
       const portal = target instanceof Element ? target.closest('[data-portal-menu]') : null
       if (portal && !portal.contains(ref.current)) return
       close()
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') close()
+      if (e.key === 'Escape' && dismissLayers.at(-1) === layer) close()
     }
-    // A menu in the picture-in-picture window hears that window's clicks and keys too.
     const docs = new Set([document, ref.current?.ownerDocument ?? document])
     for (const doc of docs) {
       doc.addEventListener('mousedown', onPointer)
       doc.addEventListener('touchstart', onPointer)
       doc.addEventListener('keydown', onKey)
     }
-    // Android's Back closes what is open rather than leaving the page; Esc comes this way too, a second close.
     const Watcher = (window as { CloseWatcher?: new () => { onclose: (() => void) | null; destroy: () => void } }).CloseWatcher
     const back = Watcher ? new Watcher() : null
     if (back) back.onclose = () => close()
     return () => {
       back?.destroy()
+      dismissLayers.splice(dismissLayers.indexOf(layer), 1)
       for (const doc of docs) {
         doc.removeEventListener('mousedown', onPointer)
         doc.removeEventListener('touchstart', onPointer)
@@ -115,12 +105,12 @@ export function useDismiss<T extends HTMLElement>(onClose: () => void, active = 
   return ref
 }
 
-/** A menu's items as the keyboard walks them: the visible ones (a phone hides some), radios included. */
+const dismissLayers: symbol[] = []
+
 export function menuItems(menu: HTMLElement | null): HTMLElement[] {
   return [...(menu?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? [])].filter((el) => el.offsetParent !== null)
 }
 
-/** A menu's onKeyDown: arrows walk its items in reading order, Home and End jump to either end. */
 export function walkMenu(e: React.KeyboardEvent<HTMLElement>) {
   const all = menuItems(e.currentTarget)
   const at = all.indexOf(e.currentTarget.ownerDocument.activeElement as HTMLElement)
@@ -131,12 +121,10 @@ export function walkMenu(e: React.KeyboardEvent<HTMLElement>) {
   all[(to + all.length) % all.length].focus()
 }
 
-/** A menu button: opened from the keyboard its first item takes focus, and closing hands focus back. */
 export function useMenuButton() {
   const [open, setOpen] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
-  // A click leaves focus on the button, as a mouse user expects.
   const byKey = useRef(false)
   const close = useCallback(() => {
     if (menu.current?.contains(menu.current.ownerDocument.activeElement)) trigger.current?.focus()
@@ -156,12 +144,10 @@ export function useMenuButton() {
   return { open, close, toggle, trigger, menu }
 }
 
-/** Where an open portal menu's trigger sits: measured on open, resize and scroll, never in render. */
 export function useAnchorBox<T extends HTMLElement>(trigger: React.RefObject<T | null>, open: boolean) {
   const [box, setBox] = useState<DOMRect>()
   useLayoutEffect(() => {
     if (!open) return
-    // Only a moved trigger is news: every scroll inside an open list re-rendered its whole owner.
     const measure = () => {
       const next = trigger.current?.getBoundingClientRect()
       setBox((prev) =>
@@ -189,10 +175,8 @@ export function useAnchorBox<T extends HTMLElement>(trigger: React.RefObject<T |
   return open ? box : undefined
 }
 
-/** Room above an anchor, under a sticky header, for a menu opening upward: on a phone its top was cut off. */
 export function useRoomAbove(anchor: React.RefObject<HTMLElement | null>, open: boolean, view: Window = window) {
   const [room, setRoom] = useState<number>()
-  // Measured after layout, as useAnchorBox does: the DOM is what this follows.
   useLayoutEffect(() => {
     const measure = () => {
       const el = anchor.current
@@ -203,28 +187,35 @@ export function useRoomAbove(anchor: React.RefObject<HTMLElement | null>, open: 
     }
     if (!open) return
     measure()
-    // A turned phone or a resized window moves the anchor; view is the one it is in (picture in picture's).
     view.addEventListener('resize', measure)
     return () => view.removeEventListener('resize', measure)
   }, [anchor, open, view])
   return open ? room : undefined
 }
 
-/** Whether a media query matches now, following it as the window changes. */
 export function useMediaQuery(query: string): boolean {
-  // Kept per query: a new subscribe each render would drop and re-add the listener every time.
+  const list = mediaList(query)
   const subscribe = useCallback(
     (changed: () => void) => {
-      const list = window.matchMedia(query)
       list.addEventListener('change', changed)
       return () => list.removeEventListener('change', changed)
     },
-    [query],
+    [list],
   )
-  return useSyncExternalStore(subscribe, () => window.matchMedia(query).matches)
+  return useSyncExternalStore(subscribe, () => list.matches)
 }
 
-/** The window's title, which the taskbar and the picture-in-picture window show. */
+const mediaLists = new Map<string, MediaQueryList>()
+
+function mediaList(query: string): MediaQueryList {
+  let list = mediaLists.get(query)
+  if (!list) {
+    list = window.matchMedia(query)
+    mediaLists.set(query, list)
+  }
+  return list
+}
+
 export function useDocumentTitle(title?: string) {
   useEffect(() => {
     if (!title) return
@@ -235,7 +226,6 @@ export function useDocumentTitle(title?: string) {
   }, [title])
 }
 
-/** Debounced value, for search-as-you-type against a rate-limited API. */
 export function useDebounced<T>(value: T, delay = 300): T {
   const [debounced, setDebounced] = useState(value)
   useEffect(() => {

@@ -9,7 +9,7 @@ import (
 )
 
 type Piece struct {
-	Info *Info // Can we embed the fields here instead, or is it something to do with saving memory?
+	Info *Info
 	i    PieceIndex
 }
 
@@ -25,7 +25,6 @@ func (p Piece) Length() int64 {
 		pieceLength := p.Info.PieceLength
 		lastFileEnd := int64(0)
 		for fi := range p.Info.FileTree.upvertedFiles(pieceLength) {
-			// I don't think we need to track offset ourselves.
 			panicif.NotEq(offset, fi.TorrentOffset)
 			fileStartPiece := int(offset / pieceLength)
 			if fileStartPiece > p.i {

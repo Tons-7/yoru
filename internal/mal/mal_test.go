@@ -28,7 +28,6 @@ func newClient(t *testing.T, h http.HandlerFunc) (*Client, *httptest.Server) {
 	return c, srv
 }
 
-// A transient 5xx should not surface; MAL returns them under load.
 func TestTransientServerErrorIsRetried(t *testing.T) {
 	var attempts atomic.Int32
 	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -52,7 +51,6 @@ func TestTransientServerErrorIsRetried(t *testing.T) {
 	}
 }
 
-// Retries are bounded; a permanently broken upstream must surface.
 func TestRetriesAreBounded(t *testing.T) {
 	var attempts atomic.Int32
 	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +84,6 @@ func TestVerifierMeetsPKCELength(t *testing.T) {
 	}
 }
 
-// MAL takes only the plain challenge method, so the challenge is the verifier (S256 fails).
 func TestAuthURLUsesPlainChallenge(t *testing.T) {
 	c, srv := newClient(t, nil)
 	raw := c.AuthURL("verifier-value", "state-value", "http://localhost:4321/mal/callback")
@@ -155,7 +152,6 @@ func TestExchangeStoresTokenAndNotifies(t *testing.T) {
 	}
 }
 
-// A refresh may omit refresh_token; the old one stays valid and must be kept.
 func TestRefreshKeepsExistingRefreshToken(t *testing.T) {
 	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"token_type":"Bearer","expires_in":3600,"access_token":"acc-2"}`)
@@ -183,7 +179,6 @@ func TestRefreshWithoutRefreshTokenFails(t *testing.T) {
 	}
 }
 
-// Tokens last an hour, so a long-running install has to renew mid-request.
 func TestExpiringTokenIsRefreshedBeforeUse(t *testing.T) {
 	var refreshes, calls atomic.Int32
 	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +208,6 @@ func TestExpiringTokenIsRefreshedBeforeUse(t *testing.T) {
 	}
 }
 
-// Two requests inside the refresh window must spend the refresh token once.
 func TestConcurrentCallsRefreshOnce(t *testing.T) {
 	var refreshes atomic.Int32
 	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -302,7 +296,6 @@ func TestListFollowsPaging(t *testing.T) {
 	}
 }
 
-// Writes take num_watched_episodes; the read spelling returns 200 and changes nothing.
 func TestSetProgressUsesTheWriteSpelling(t *testing.T) {
 	var form url.Values
 	var method, path string
@@ -361,8 +354,6 @@ func TestSetProgressRejectsBadID(t *testing.T) {
 	}
 }
 
-// MAL has no rewatching status: a rewatch is "watching" with is_rewatching,
-// and finished rewatches are a count, both sent with every update.
 func TestSetProgressSendsRewatchFields(t *testing.T) {
 	var form url.Values
 	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -408,7 +399,6 @@ func TestStatusMapping(t *testing.T) {
 		}
 	}
 
-	// Rewatching collapses into watching; the is_rewatching flag carries it back.
 	for _, s := range []string{"CURRENT", "COMPLETED", "PAUSED", "DROPPED", "PLANNING"} {
 		if got := StatusToAniList(Status(s)); got != s {
 			t.Errorf("round trip of %s produced %s", s, got)
@@ -420,7 +410,6 @@ func TestStatusMapping(t *testing.T) {
 	if got := (Entry{Status: StatusWatching}).ListStatus(); got != "CURRENT" {
 		t.Errorf("plain watching = %q, want CURRENT", got)
 	}
-	// A stale flag on a finished entry does not make it a rewatch in progress.
 	if got := (Entry{Status: StatusCompleted, Rewatching: true}).ListStatus(); got != "COMPLETED" {
 		t.Errorf("completed + is_rewatching = %q, want COMPLETED", got)
 	}
@@ -445,7 +434,6 @@ func TestUnauthorizedClassification(t *testing.T) {
 	}
 }
 
-// An expired refresh token is a 400, not a 401, and still means reconnect.
 func TestInvalidGrantIsUnauthorized(t *testing.T) {
 	c, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

@@ -1,8 +1,7 @@
 import { useMemo } from 'react'
 import type { UpNextItem } from './api'
-import { useUpNext } from './queries'
+import { useUpNextQuiet } from './queries'
 
-/** "3 episodes · about 1 h 12 min", from what the catalogue knows of each episode's length. */
 export function upNextSummary(items: UpNextItem[]): string {
   if (items.length === 0) return 'Empty'
   const count = items.length === 1 ? '1 episode' : `${items.length} episodes`
@@ -14,9 +13,8 @@ export function upNextSummary(items: UpNextItem[]): string {
   return `${count} · about ${length}`
 }
 
-/** The episodes of a show on the list, for the + toggles on its rows. */
 export function useInUpNext(animeId: number): Set<number> {
-  const list = useUpNext()
+  const list = useUpNextQuiet()
   return useMemo(
     () => new Set((list.data?.items ?? []).filter((it) => it.animeId === animeId).map((it) => it.episode)),
     [list.data, animeId],

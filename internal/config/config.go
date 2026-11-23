@@ -15,10 +15,8 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Name is the app's name in folders and files.
 const Name = "yoru"
 
-// Env reads YORU_<key>.
 func Env(key string) string { return os.Getenv("YORU_" + key) }
 
 type Config struct {
@@ -29,22 +27,26 @@ type Config struct {
 	MAL      MAL       `toml:"mal"`
 	Torrent  Torrent   `toml:"torrent"`
 	Indexers []Indexer `toml:"indexer"`
-	// Data is where the database and window profile go; empty means AppData. Relative to the exe folder.
-	Data string `toml:"data_dir"`
-	// VLC is the player's binary or install folder; empty means the usual places.
-	VLC string `toml:"vlc_path"`
-	// TLSCert and TLSKey turn on HTTPS beside plain HTTP; both or neither.
-	TLSCert string `toml:"tls_cert"`
-	TLSKey  string `toml:"tls_key"`
+	Data     string    `toml:"data_dir"`
+	VLC      string    `toml:"vlc_path"`
+	TLSCert  string    `toml:"tls_cert"`
+	TLSKey   string    `toml:"tls_key"`
 
 	dataDir   string
 	root      string
 	temporary bool
+	unknown   []string
+	unwritten error
 }
+
+var writeTemplate = os.WriteFile
+
+func (c Config) UnwrittenConfig() error { return c.unwritten }
 
 func (c Config) ConfigPath() string { return filepath.Join(c.root, "config.toml") }
 
-// StrayConfig is a "config.toml.txt" from Notepad's Save As, which Yoru never reads.
+func (c Config) UnknownKeys() []string { return c.unknown }
+
 func (c Config) StrayConfig() string {
 	p := c.ConfigPath() + ".txt"
 	if exists(p) {
@@ -53,37 +55,25 @@ func (c Config) StrayConfig() string {
 	return ""
 }
 
-// Temporary: the root is in the temp directory (an exe run from a zip), where nothing written survives.
 func (c Config) Temporary() bool { return c.temporary }
 
-// Indexer is one torrent search site. None ship with Yoru.
 type Indexer struct {
-	// Type is the feed format: "nyaa" or "tokyotosho".
-	Type string `toml:"type"`
-	URL  string `toml:"url"`
-	// Adult sources are searched only for titles the catalogue marks adult.
-	Adult bool `toml:"adult"`
+	Type  string `toml:"type"`
+	URL   string `toml:"url"`
+	Adult bool   `toml:"adult"`
 }
 
-// DefaultListenPort is the peer port when none is set.
 const DefaultListenPort = 4240
 
-// Torrent tunes the built-in engine. The defaults favour download speed.
 type Torrent struct {
-	// UploadLimitBytes caps upload in bytes/sec; some upload keeps peers unchoking us.
-	UploadLimitBytes int `toml:"upload_limit_bytes"`
-	// ListenPort is the peer port, DefaultListenPort when 0.
-	ListenPort int `toml:"listen_port"`
-	// PeerLimit is the max peers per torrent; 0 is the engine's default.
-	PeerLimit int `toml:"peer_limit"`
-	// UPnP forwards ListenPort on the router so peers can reach us. Nil is on.
-	UPnP *bool `toml:"upnp"`
+	UploadLimitBytes int   `toml:"upload_limit_bytes"`
+	ListenPort       int   `toml:"listen_port"`
+	PeerLimit        int   `toml:"peer_limit"`
+	UPnP             *bool `toml:"upnp"`
 }
 
-// UPnPEnabled reports the port-forward setting, on unless explicitly disabled.
 func (t Torrent) UPnPEnabled() bool { return t.UPnP == nil || *t.UPnP }
 
-// PeerPort is the port peers connect to.
 func (t Torrent) PeerPort() int {
 	if t.ListenPort > 0 {
 		return t.ListenPort
@@ -101,8 +91,6 @@ type MAL struct {
 	ClientSecret string `toml:"client_secret"`
 }
 
-// LocalURL is where the interface lives for this machine. A wildcard bind is
-// reachable at every address, but only loopback is meaningful to open here.
 func (c Config) LocalURL() string {
 	_, port, err := net.SplitHostPort(c.Addr)
 	if err != nil {
@@ -118,16 +106,15 @@ func exists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// ResolveDataDir is where data_dir points: AppData when empty, else the path, relative to the exe.
 func (c Config) ResolveDataDir(dir string) string { return c.resolve(dir, dataDir()) }
 
-// within reports dir at or under parent.
+func (c Config) InDownloads(dir string) bool { return within(c.CacheDir, dir) }
+
 func within(parent, dir string) bool {
 	rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(dir))
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// resolve reads a folder setting; relative paths are beside the exe.
 func (c Config) resolve(dir, fallback string) string {
 	switch {
 	case dir == "":
@@ -138,7 +125,6 @@ func (c Config) resolve(dir, fallback string) string {
 	return filepath.Join(c.root, dir)
 }
 
-// SetDataDir writes data_dir into config.toml (before the first table, as a top-level key); used next start.
 func (c Config) SetDataDir(dir string) error {
 	raw, err := os.ReadFile(c.ConfigPath())
 	if err != nil {
@@ -148,7 +134,7 @@ func (c Config) SetDataDir(dir string) error {
 	lines := strings.Split(string(raw), "\n")
 	placed := false
 	for i, l := range lines {
-		if strings.HasPrefix(strings.TrimSpace(l), "data_dir") {
+		if key, _, ok := strings.Cut(l, "="); ok && strings.TrimSpace(key) == "data_dir" {
 			lines[i], placed = line, true
 			break
 		}
@@ -163,10 +149,31 @@ func (c Config) SetDataDir(dir string) error {
 		}
 		lines = append(lines[:at], append([]string{line, ""}, lines[at:]...)...)
 	}
-	return os.WriteFile(c.ConfigPath(), []byte(strings.Join(lines, "\n")), 0o600)
+	return replaceFile(c.ConfigPath(), []byte(strings.Join(lines, "\n")))
 }
 
-// VLCPath is the vlc_path setting, empty when unset.
+func replaceFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
 func (c Config) VLCPath() string {
 	if c.VLC == "" {
 		return ""
@@ -174,7 +181,6 @@ func (c Config) VLCPath() string {
 	return c.resolve(c.VLC, "")
 }
 
-// TLSFiles are the certificate and key paths, empty unless both are set.
 func (c Config) TLSFiles() (cert, key string) {
 	if c.TLSCert == "" || c.TLSKey == "" {
 		return "", ""
@@ -190,13 +196,11 @@ func (c Config) Path(name string) string {
 	return filepath.Join(c.BinDir, name)
 }
 
-// WithDataDir is c holding its data in dir, for tests.
 func (c Config) WithDataDir(dir string) Config {
 	c.dataDir = dir
 	return c
 }
 
-// ExeName is the platform's filename for an executable: ffmpeg.exe on Windows, ffmpeg elsewhere.
 func ExeName(base string) string {
 	if runtime.GOOS == "windows" {
 		return base + ".exe"
@@ -204,9 +208,7 @@ func ExeName(base string) string {
 	return base
 }
 
-// Tool finds a binary: Yoru's bin/ copy, else one on PATH, else the bin/ path so an error says where.
 func (c Config) Tool(base string) string {
-	// ffprobe from the same install as ffmpeg: a mixed pair disagrees on streams and codecs.
 	if base == "ffprobe" {
 		if sibling := filepath.Join(filepath.Dir(c.Tool("ffmpeg")), ExeName("ffprobe")); exists(sibling) {
 			return sibling
@@ -222,11 +224,8 @@ func (c Config) Tool(base string) string {
 	return p
 }
 
-// Must match the redirect URL registered on AniList exactly, including port.
-// Served by the main listener so there is no second server to coordinate.
 func (c Config) RedirectURI() string { return c.redirect("/callback") }
 
-// MyAnimeList's redirect URL, on its own path so the callback knows which provider answered.
 func (c Config) MALRedirectURI() string { return c.redirect("/mal/callback") }
 
 func (c Config) redirect(path string) string {
@@ -237,7 +236,6 @@ func (c Config) redirect(path string) string {
 	return "http://localhost:" + port + path
 }
 
-// Load reads config.toml beside the exe, writing a template on first run; secrets live here, not the DB.
 func Load() (Config, error) {
 	root, err := rootDir()
 	if err != nil {
@@ -247,24 +245,37 @@ func Load() (Config, error) {
 	cfg := Config{Addr: "127.0.0.1:4321", dataDir: dataDir()}
 
 	path := filepath.Join(root, "config.toml")
-	switch _, err := toml.DecodeFile(path, &cfg); {
+	meta, err := toml.DecodeFile(path, &cfg)
+	folders := root
+	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		if err := os.WriteFile(path, []byte(template), 0o600); err != nil {
-			return Config{}, err
+		if err := writeTemplate(path, []byte(template), 0o600); err != nil {
+			cfg.unwritten, folders = err, cfg.dataDir
 		}
 	case err != nil:
 		return Config{}, fmt.Errorf("%s: %w", path, err)
 	}
+	for _, key := range meta.Undecoded() {
+		cfg.unknown = append(cfg.unknown, key.String())
+	}
+	if strings.TrimSpace(cfg.Addr) == "" {
+		cfg.Addr = "127.0.0.1:4321"
+	}
 
-	cfg.root, cfg.temporary = root, underTemp(root)
+	cfg.root, cfg.temporary = root, underTemp(root) || translocated()
 	if cfg.Data != "" {
 		cfg.dataDir = cfg.ResolveDataDir(cfg.Data)
 	}
-	cfg.CacheDir = cfg.resolve(cfg.CacheDir, filepath.Join(root, "cache"))
-	cfg.BinDir = cfg.resolve(cfg.BinDir, filepath.Join(root, "bin"))
-	// The orphan cleanup deletes whatever in cache_dir is not a download: Yoru's own folders can't be there.
+	cfg.CacheDir = cfg.resolve(cfg.CacheDir, filepath.Join(folders, "cache"))
+	cfg.BinDir = cfg.resolve(cfg.BinDir, filepath.Join(folders, "bin"))
+	real := func(path string) string {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			return resolved
+		}
+		return path
+	}
 	for _, dir := range []string{root, cfg.dataDir, cfg.BinDir} {
-		if within(cfg.CacheDir, dir) {
+		if within(cfg.CacheDir, dir) || within(real(cfg.CacheDir), real(dir)) {
 			return Config{}, fmt.Errorf("cache_dir %s holds %s; downloads need a folder of their own", cfg.CacheDir, dir)
 		}
 	}
@@ -276,10 +287,9 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-// rootDir holds config.toml, bin/ and cache/: beside the program, or YORU_ROOT.
 func rootDir() (string, error) {
 	if root := Env("ROOT"); root != "" {
-		return root, nil
+		return filepath.Abs(root)
 	}
 
 	exe, err := os.Executable()
@@ -288,18 +298,16 @@ func rootDir() (string, error) {
 	}
 	dir := filepath.Dir(exe)
 
-	// `go run` and `go test` build into temp, where a config would vanish; use the working tree.
-	if underTemp(dir) {
-		return os.Getwd()
-	}
 	home, _ := os.UserHomeDir()
 	if support, ok := bundleRoot(dir, home); ok {
 		return support, os.MkdirAll(support, 0o755)
 	}
+	if underTemp(dir) {
+		return os.Getwd()
+	}
 	return dir, nil
 }
 
-// bundleRoot: inside a macOS app, files beside the program would sit in the bundle and go with a reinstall.
 func bundleRoot(dir, home string) (string, bool) {
 	if home == "" || !strings.HasSuffix(filepath.ToSlash(dir), ".app/Contents/MacOS") {
 		return "", false
@@ -307,8 +315,6 @@ func bundleRoot(dir, home string) (string, bool) {
 	return filepath.Join(home, "Library", "Application Support", "Yoru"), true
 }
 
-// FinderPath adds the package managers' folders to PATH on macOS: an app opened from Finder gets only
-// /usr/bin:/bin:/usr/sbin:/sbin, and Homebrew's ffmpeg and mpv would go unseen.
 func FinderPath() {
 	if runtime.GOOS == "darwin" {
 		os.Setenv("PATH", withPackageDirs(os.Getenv("PATH")))
@@ -334,11 +340,9 @@ func underTemp(dir string) bool {
 	if err != nil {
 		return false
 	}
-	rel, err := filepath.Rel(tmp, resolved)
-	return err == nil && !strings.HasPrefix(rel, "..")
+	return within(tmp, resolved)
 }
 
-// DefaultDataDir is where the data lives when data_dir is empty: Local, since Roaming would sync the DB.
 func DefaultDataDir() string { return dataDir() }
 
 func dataDir() string {
@@ -349,9 +353,8 @@ func dataDir() string {
 	return filepath.Join(home, "."+Name)
 }
 
-const template = `# Register an application at https://anilist.co/settings/developer
-# and set its redirect URL to exactly: http://localhost:4321/callback
-# Then visit http://localhost:4321/api/auth/login to connect your account.
+const template = `# AniList connects in one step from the setup guide or Settings -> Accounts.
+# Your own AniList app is optional: its redirect URL is http://localhost:4321/callback
 
 # Use 0.0.0.0:4321 to reach Yoru from a phone or TV on the same network.
 # Off the host machine a token is required; GET /api/access prints the URL and
@@ -394,3 +397,8 @@ client_secret = ""
 # type = "nyaa"
 # url = ""
 `
+
+func translocated() bool {
+	exe, err := os.Executable()
+	return err == nil && strings.Contains(filepath.ToSlash(exe), "/AppTranslocation/")
+}

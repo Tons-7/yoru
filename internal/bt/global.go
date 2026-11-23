@@ -8,10 +8,8 @@ import (
 
 const (
 	pieceHash        = crypto.SHA1
-	defaultChunkSize = 0x4000 // 16KiB
+	defaultChunkSize = 0x4000
 
-	// A chosen cap on BEP 9 "metadata_size": libtorrent-rasterbar's is 4 MiB, but real torrents reach 14 MB
-	// (3597f16e239aeb8f8524a1a1c4e4725a0a96b470).
 	maxMetadataSize uint32 = 16 * 1024 * 1024
 )
 

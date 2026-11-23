@@ -19,13 +19,9 @@ const (
 	DefaultNumPieces = 16
 )
 
-// This writes chunks to the storage concurrently, and waits for them all to complete. This matches
-// the behaviour from the peer connection read loop.
 func BenchmarkPieceMarkComplete(
 	b *testing.B, ci storage.ClientImpl,
 	pieceSize int64, numPieces int,
-	// This drives any special handling around capacity that may be configured into the storage
-	// implementation.
 	capacity int64,
 ) {
 	info := &metainfo.Info{
@@ -65,7 +61,6 @@ func BenchmarkPieceMarkComplete(
 			if capacity == 0 {
 				pi.MarkNotComplete()
 			}
-			// This might not apply if users of this benchmark don't cache with the expected capacity.
 			qt.Assert(b, qt.Equals(pi.Completion(), storage.Completion{Complete: false, Ok: true}))
 			qt.Assert(b, qt.IsNil(pi.MarkComplete()))
 			qt.Assert(b, qt.Equals(pi.Completion(), storage.Completion{Complete: true, Ok: true}))
@@ -76,7 +71,6 @@ func BenchmarkPieceMarkComplete(
 			qt.Assert(b, qt.IsTrue(bytes.Equal(readData[:n], data)))
 		}
 	}
-	// Fill the cache
 	if capacity > 0 {
 		iterN := int((capacity + info.TotalLength() - 1) / info.TotalLength())
 		for range iterN {

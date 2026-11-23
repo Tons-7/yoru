@@ -14,8 +14,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// The callback installs the new token only once the account is known and saved: a failure halfway
-// leaves the client as it was, not carrying a token Settings says is not connected.
 func TestAniListCallbackInstallsTheTokenOnlyOnceSaved(t *testing.T) {
 	viewerFails := true
 	h := newHarness(t, config.Config{Addr: "127.0.0.1:4321"}, func(w http.ResponseWriter, r *http.Request) {
@@ -64,8 +62,6 @@ func TestAniListCallbackInstallsTheTokenOnlyOnceSaved(t *testing.T) {
 	}
 }
 
-// A token pasted from AniList's pin page connects in one step, whole address and all, with the expiry the
-// token carries; one AniList refuses, or text that isn't one, leaves the login as it was.
 func TestPastedAniListTokenConnects(t *testing.T) {
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+jwt {
@@ -98,11 +94,8 @@ func TestPastedAniListTokenConnects(t *testing.T) {
 	}
 }
 
-// jwt is a token whose claims say it expires at the start of 2100.
 var jwt = "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString([]byte(`{"exp":4102444800}`)) + ".sig"
 
-// The reaper taking a session nobody closed releases the episode the way a close does: unpinned, so the
-// cache may take it, and the queue's hold is given back.
 func TestIdleSessionReleasesTheEpisode(t *testing.T) {
 	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"torrents":[]}`)

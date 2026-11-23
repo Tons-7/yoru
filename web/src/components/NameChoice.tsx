@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { cx } from '../lib/format'
 import { useTrackers } from '../lib/queries'
 import { useNameFrom, useProfile, type NameFrom } from '../lib/profile'
+import { SaveHint } from './ui'
 
 const card = 'flex min-h-16 items-center gap-3 rounded-xl border px-3.5 py-2.5 transition-colors'
 const radio = 'size-[18px] shrink-0 accent-accent-400'
@@ -15,18 +16,18 @@ export function NameChoice({ host }: { host: boolean }) {
   const [name, setName] = useState(saved)
   const [seen, setSeen] = useState(saved)
   const [ownPicked, setOwnPicked] = useState(false)
-  if (seen !== saved) {
+  if (seen !== saved && !ownPicked) {
     setSeen(saved)
     setName(saved)
   }
   const user = (provider: string) => trackers.find((t) => t.provider === provider && t.connected)?.user
-  const chosen = profile?.nameFrom ?? 'anilist'
+  const chosen = (choose.isPending && choose.variables?.from) || profile?.nameFrom || 'anilist'
   const from: NameFrom =
     chosen === 'own' ? 'own' : (([chosen, 'anilist', 'mal'] as const).find((source) => user(source)) ?? 'own')
 
   const site = (value: NameFrom, title: string, site: string) => {
     const name = user(value)
-    const active = from === value
+    const active = from === value && !ownPicked
     return (
       <label
         className={cx(
@@ -81,7 +82,7 @@ export function NameChoice({ host }: { host: boolean }) {
               onFocus={() => setOwnPicked(true)}
               onBlur={() => {
                 setOwnPicked(false)
-                if (name.trim() !== saved) choose.mutate(name.trim() ? { from: 'own', name } : { name: '' })
+                if (name.trim() !== saved) choose.mutate(name.trim() ? { from: 'own', name: name.trim() } : { name: '' })
               }}
               onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
               placeholder="Type it here"
@@ -94,7 +95,9 @@ export function NameChoice({ host }: { host: boolean }) {
           </span>
         </div>
       </div>
-      {choose.isError && <p className="mt-2 text-xs text-recap">{(choose.error as Error).message}</p>}
+      <div className="mt-2 flex justify-end">
+        <SaveHint state={choose} />
+      </div>
     </div>
   )
 }

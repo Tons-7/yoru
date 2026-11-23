@@ -133,7 +133,7 @@ function Rail({ screen, guide }: { screen: Screen; guide: Guide }) {
 
 function TopSteps({ screen, guide }: { screen: Screen; guide: Guide }) {
   return (
-    <nav aria-label="Setup steps" className="flex flex-col gap-3 border-b border-base-850 px-5 pt-5 pb-4 sm:px-8 lg:hidden">
+    <nav aria-label="Setup steps" className="flex flex-col gap-3 border-b border-base-850 px-5 pt-[max(1.25rem,env(safe-area-inset-top))] pb-4 sm:px-8 lg:hidden">
       <div className="flex items-baseline justify-between gap-3">
         <Logo />
         <p className={cx('text-[13px] font-medium', screen === 'done' ? 'text-emerald-300' : 'text-base-400')}>{caption(screen)}</p>
@@ -168,6 +168,11 @@ function TopSteps({ screen, guide }: { screen: Screen; guide: Guide }) {
           )
         })}
       </ol>
+      {screen !== 'done' && screen !== 'welcome' && screen !== 'computer' && (
+        <Link to={stepPath('done')} className="self-end text-[13px] text-base-400 transition-colors hover:text-white pointer-coarse:py-2">
+          Skip the rest of setup
+        </Link>
+      )}
     </nav>
   )
 }
@@ -222,11 +227,14 @@ function PhoneCard() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['access'] }),
   })
   const [copied, setCopied] = useState('')
+  const copiedTimer = useRef(0)
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), [])
   if (!access) return null
   const url = access.reachable ? access.urls[0] : undefined
   const copy = async (text: string) => {
     setCopied((await copyText(text)) ? 'Copied' : "Couldn't copy")
-    window.setTimeout(() => setCopied(''), 1500)
+    window.clearTimeout(copiedTimer.current)
+    copiedTimer.current = window.setTimeout(() => setCopied(''), 1500)
   }
   return (
     <Card label="Other devices" className="flex flex-wrap items-center gap-x-5 gap-y-3 px-5 py-4 sm:px-6">
@@ -246,7 +254,7 @@ function PhoneCard() {
                 ? 'Off for now: only this computer can open Yoru. Turn it on and a code to scan appears here.'
                 : 'Only this computer can open Yoru right now.'}
         </p>
-        {allow.isError && <p className="mt-1 text-xs text-recap">{(allow.error as Error).message}</p>}
+        {allow.isError && <p className="mt-1 text-xs text-red-300">{(allow.error as Error).message}</p>}
       </div>
       {url && (
         <button type="button" onClick={() => void copy(url)} className={buttonClass()}>

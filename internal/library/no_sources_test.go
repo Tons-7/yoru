@@ -8,7 +8,6 @@ import (
 	"yoru/internal/score"
 )
 
-// With no site configured a search is refused with the fix named, not "nobody released it".
 func TestFindWithoutSitesSaysSo(t *testing.T) {
 	st := bleachStore(t)
 	f := NewFinder(st, nil, discard())

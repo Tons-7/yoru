@@ -1,7 +1,5 @@
 package dht
 
-// get_peers and announce_peers.
-
 import (
 	"context"
 	"fmt"
@@ -18,12 +16,11 @@ import (
 	"yoru/internal/bt/dht/traversal"
 )
 
-// Announce is a running Server.Announce.
 type Announce struct {
 	Peers chan PeersValues
 
 	server   *Server
-	infoHash int160.T // Target
+	infoHash int160.T
 
 	announcePeerOpts *AnnouncePeerOpts
 	scrape           bool
@@ -38,7 +35,6 @@ func (a *Announce) String() string {
 	return fmt.Sprintf("%[1]T %[1]p of %v on %v", a, a.infoHash, a.server)
 }
 
-// Returns the number of distinct remote addresses the announce has queried.
 func (a *Announce) NumContacted() uint32 {
 	return atomic.LoadUint32(&a.traversal.Stats().NumAddrsTried)
 }
@@ -47,32 +43,25 @@ func (a *Announce) TraversalStats() TraversalStats {
 	return *a.traversal.Stats()
 }
 
-// Server.Announce option
 type AnnounceOpt func(a *Announce)
 
-// Scrape BEP 33 bloom filters in queries.
 func Scrape() AnnounceOpt {
 	return func(a *Announce) {
 		a.scrape = true
 	}
 }
 
-// Arguments for announce_peer from a Server.Announce.
 type AnnouncePeerOpts struct {
-	// The peer port that we're announcing.
-	Port int
-	// The peer port should be determined by the receiver to be the source port of the query packet.
+	Port        int
 	ImpliedPort bool
 }
 
-// Finish an Announce get_peers traversal with an announce of a local peer.
 func AnnouncePeer(opts AnnouncePeerOpts) AnnounceOpt {
 	return func(a *Announce) {
 		a.announcePeerOpts = &opts
 	}
 }
 
-// Deprecated: Use Server.AnnounceTraversal; this also announces us to answering nodes (port or impliedPort).
 func (s *Server) Announce(infoHash [20]byte, port int, impliedPort bool, opts ...AnnounceOpt) (_ *Announce, err error) {
 	if port != 0 || impliedPort {
 		opts = append([]AnnounceOpt{AnnouncePeer(AnnouncePeerOpts{
@@ -83,7 +72,6 @@ func (s *Server) Announce(infoHash [20]byte, port int, impliedPort bool, opts ..
 	return s.AnnounceTraversal(infoHash, opts...)
 }
 
-// AnnounceTraversal walks toward the nodes holding the infohash's peers, streaming them to the caller.
 func (s *Server) AnnounceTraversal(infoHash [20]byte, opts ...AnnounceOpt) (_ *Announce, err error) {
 	infoHashInt160 := int160.FromByteArray(infoHash)
 	a := &Announce{
@@ -160,7 +148,7 @@ func (a *Announce) getPeers(ctx context.Context, addr krpc.NodeAddr) traversal.Q
 	res := a.server.GetPeers(ctx, NewAddr(addr.UDP()), a.infoHash, a.scrape, QueryRateLimiting{})
 	if r := res.Reply.R; r != nil {
 		peersValues := PeersValues{
-			Peers: r.Values,
+			Peers: replyPeers(addr, r.Values),
 			NodeInfo: krpc.NodeInfo{
 				Addr: addr,
 				ID:   r.ID,
@@ -175,17 +163,40 @@ func (a *Announce) getPeers(ctx context.Context, addr krpc.NodeAddr) traversal.Q
 	return res.TraversalQueryResult(addr)
 }
 
-// PeersValues is a get_peers reply's "values": peers a node says are in the infohash's swarm.
+const maxPeersPerReply = 100
+
+func replyPeers(from krpc.NodeAddr, values []Peer) []Peer {
+	local := !traversal.PublicAddr(from.ToNodeAddrPort().Addr())
+	seen := make(map[string]bool, min(len(values), maxPeersPerReply))
+	kept := make([]Peer, 0, min(len(values), maxPeersPerReply))
+	for _, p := range values {
+		if len(kept) == maxPeersPerReply {
+			break
+		}
+		if p.Port <= 0 || p.Port > 65535 {
+			continue
+		}
+		if !local && !traversal.PublicAddr(p.ToNodeAddrPort().Addr()) {
+			continue
+		}
+		key := p.String()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		kept = append(kept, p)
+	}
+	return kept
+}
+
 type PeersValues struct {
-	Peers         []Peer // Peers given in get_peers response.
-	krpc.NodeInfo        // The node that gave the response.
+	Peers []Peer
+	krpc.NodeInfo
 	krpc.Return
 }
 
-// Stop the announce.
 func (a *Announce) Close() {
 	a.StopTraversing()
-	// This will prevent peer announces from proceeding.
 	a.closed.Set()
 }
 
@@ -193,13 +204,10 @@ func (a *Announce) logger() log.Logger {
 	return a.server.logger()
 }
 
-// Halts traversal, but won't block peer announcing.
 func (a *Announce) StopTraversing() {
 	a.traversal.Stop()
 }
 
-// Traversal and peer announcing steps are done.
 func (a *Announce) Finished() events.Done {
-	// This is the last step in an announce.
 	return a.peerAnnounced.Done()
 }

@@ -13,8 +13,6 @@ import (
 	"yoru/internal/library"
 )
 
-// With Auto next on the TV gets what plays after, no more than Still watching lets play unasked, each a link
-// for the episode with the shown subtitles' language; with it off, nothing past the episode cast.
 func TestCastQueueFollowsAutoNext(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	ctx := context.Background()
@@ -46,8 +44,6 @@ func TestCastQueueFollowsAutoNext(t *testing.T) {
 	}
 }
 
-// A queued episode opens on the TV's first ask, as a page would open it: playlist, init, subtitles in the
-// cast one's language, and a segment, which notes where the TV has got to.
 func TestTheTVOpensAQueuedEpisodeItself(t *testing.T) {
 	h, _ := streamHarness(t)
 	h.server.playback = library.NewPlayback(h.store, nil, nil, nil, t.TempDir(), slog.New(slog.DiscardHandler))
@@ -60,7 +56,6 @@ func TestTheTVOpensAQueuedEpisodeItself(t *testing.T) {
 	if code, _, init := h.fetch(t, "GET", root+"/init.mp4"); code != http.StatusOK || !bytes.Contains(init[:min(len(init), 64)], []byte("ftyp")) {
 		t.Errorf("init answered %d", code)
 	}
-	// By its first cue's time: this file's short ASS format leaves WebVTT's text empty, on every track route.
 	if code, _, vtt := h.fetch(t, "GET", root+"/sub-auto.vtt"); code != http.StatusOK || !bytes.Contains(vtt, []byte("00:01.000 --> 00:05.000")) {
 		t.Errorf("its English subtitles answered %d: %.120s", code, vtt)
 	}
@@ -73,16 +68,13 @@ func TestTheTVOpensAQueuedEpisodeItself(t *testing.T) {
 	if !noted {
 		t.Error("the TV's ask wasn't noted for its progress")
 	}
-	// Asked again, the same session: opened once.
 	if code, _, _ := h.fetch(t, "GET", root+"/playlist.m3u8"); code != http.StatusOK || len(h.server.tvOpens) != 1 {
 		t.Errorf("asked again: %d, %d opens", code, len(h.server.tvOpens))
 	}
-	// The language tagged another way still finds it.
 	short := "/c/" + h.server.signGrant(grant{Source: castEpisodePrefix + "1-1:en", Expires: time.Now().Add(time.Hour).Unix()})
 	if code, _, vtt := h.fetch(t, "GET", short+"/sub-auto.vtt"); code != http.StatusOK || !bytes.Contains(vtt, []byte("00:01.000")) {
 		t.Errorf(`"en" asked of an "eng" track answered %d: %.80s`, code, vtt)
 	}
-	// Another language than the episode has: an empty track rather than the wrong one, or one that fails.
 	other := "/c/" + h.server.signGrant(grant{Source: castEpisodePrefix + "1-1:fre", Expires: time.Now().Add(time.Hour).Unix()})
 	if code, _, vtt := h.fetch(t, "GET", other+"/sub-auto.vtt"); code != http.StatusOK || string(vtt) != "WEBVTT\n" {
 		t.Errorf("French asked of an English-only episode answered %d: %q, want an empty track", code, vtt)
@@ -101,8 +93,6 @@ func TestSameLanguage(t *testing.T) {
 	}
 }
 
-// The TV's place moves from its second ask, no oftener than every 10 s and never faster than the clock; back
-// to an earlier place it counts on from there; and a page's recent report stands instead.
 func TestTheTVsPlaceIsEstimatedFromWhatItReads(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	s, now := h.server, time.Now()
@@ -121,7 +111,6 @@ func TestTheTVsPlaceIsEstimatedFromWhatItReads(t *testing.T) {
 	if played, save := s.tvEstimate("7-2", 105, now.Add(42*time.Second)); !save || played != 12 {
 		t.Errorf("after a seek back: played %v, save %v; want it counted on from there", played, save)
 	}
-	// The same episode again, the same evening.
 	s.tvEstimate("7-2", 0, now.Add(60*time.Second))
 	if played, save := s.tvEstimate("7-2", 15, now.Add(75*time.Second)); !save || played != 15 {
 		t.Errorf("watched again: played %v, save %v", played, save)

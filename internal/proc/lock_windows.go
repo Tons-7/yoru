@@ -8,8 +8,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Lock takes an exclusive lock on path for the life of the process; a second Yoru on the same data gets
-// an error. The port alone did not tell: a listener on every address lets a loopback claim through.
 func Lock(path string) (func(), error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
@@ -27,9 +25,8 @@ func Lock(path string) (func(), error) {
 	}, nil
 }
 
-// Alert shows a fatal error in a box: a double-clicked console closes before anyone can read it.
 func Alert(title, text string) {
 	t, _ := windows.UTF16PtrFromString(title)
 	m, _ := windows.UTF16PtrFromString(text)
-	windows.MessageBox(0, m, t, windows.MB_OK|windows.MB_ICONERROR)
+	windows.MessageBox(0, m, t, windows.MB_OK|windows.MB_ICONERROR|windows.MB_SETFOREGROUND|windows.MB_TOPMOST)
 }

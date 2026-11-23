@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// A corpus of real release names from a public tracker: curated cases prove the
-// parser handles what it was written for, this proves it survives what it wasn't.
 func corpus(t *testing.T) []string {
 	t.Helper()
 
@@ -22,7 +20,7 @@ func corpus(t *testing.T) []string {
 	scan := bufio.NewScanner(f)
 	scan.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scan.Scan() {
-		if line := strings.TrimSpace(scan.Text()); line != "" {
+		if line := strings.TrimSpace(strings.TrimPrefix(scan.Text(), string(rune(0xFEFF)))); line != "" {
 			names = append(names, line)
 		}
 	}
@@ -76,7 +74,6 @@ func TestCorpusExtractionRates(t *testing.T) {
 	}
 }
 
-// The title is what gets matched against AniList, so leaking quality tags into it breaks episode lookup.
 func TestCorpusTitlesAreClean(t *testing.T) {
 	leaks := []string{
 		"1080p", "720p", "480p", "2160p", "x265", "x264", "HEVC", "AVC",

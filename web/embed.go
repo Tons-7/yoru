@@ -1,4 +1,3 @@
-// Package web embeds the built app (npm run build into dist, committed since go build can't run npm).
 package web
 
 import (
@@ -9,7 +8,6 @@ import (
 //go:embed all:dist
 var dist embed.FS
 
-// FS returns the built app rooted at dist, or false while dist holds only its placeholder.
 func FS() (fs.FS, bool) {
 	sub, err := fs.Sub(dist, "dist")
 	if err != nil {

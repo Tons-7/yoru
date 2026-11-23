@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/anacrolix/log"
-	"github.com/anacrolix/missinggo/v2/iter"
 	qt "github.com/go-quicktest/qt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,8 +22,6 @@ import (
 	"yoru/internal/bt/internal/testutil"
 )
 
-// Check that after completing leeching, a leecher transitions to a seeding
-// correctly. Connected in a chain like so: Seeder <-> Leecher <-> LeecherLeecher.
 func TestHolepunchConnect(t *testing.T) {
 	greetingTempDir, mi := testutil.GreetingTestTorrent()
 	defer os.RemoveAll(greetingTempDir)
@@ -36,11 +33,7 @@ func TestHolepunchConnect(t *testing.T) {
 	cfg.DisablePEX = true
 	cfg.Debug = true
 	cfg.AcceptPeerConnections = false
-	// Listening, even without accepting, still means the leecher-leecher completes the dial to the
-	// seeder, and so it won't attempt to holepunch.
 	cfg.DisableTCP = true
-	// Ensure that responding to holepunch connects don't wait around for the dial limit. We also
-	// have to allow the initial connection to the leecher though, so it can rendezvous for us.
 	cfg.DialRateLimiter = rate.NewLimiter(0, 1)
 	cfg.Logger = cfg.Logger.WithContextText("seeder")
 	seeder, err := NewClient(cfg)
@@ -70,7 +63,6 @@ func TestHolepunchConnect(t *testing.T) {
 	cfg.Debug = true
 	cfg.NominalDialTimeout = time.Second
 	cfg.Logger = cfg.Logger.WithContextText("leecher-leecher")
-	//cfg.DisableUTP = true
 	leecherLeecher, _ := NewClient(cfg)
 	require.NoError(t, err)
 	defer leecherLeecher.Close()
@@ -137,7 +129,6 @@ func waitForConns(t *Torrent) {
 	}
 }
 
-// Show that dialling TCP will complete before the other side accepts.
 func TestDialTcpNotAccepting(t *testing.T) {
 	l, err := net.Listen("tcp", "localhost:0")
 	qt.Check(t, qt.IsNil(err))
@@ -153,7 +144,6 @@ func TestTcpSimultaneousOpen(t *testing.T) {
 	makeDialer := func(localPort int, remoteAddr string) func() (net.Conn, error) {
 		dialer := net.Dialer{
 			LocalAddr: &net.TCPAddr{
-				//IP:   net.IPv6loopback,
 				Port: localPort,
 			},
 		}
@@ -161,9 +151,7 @@ func TestTcpSimultaneousOpen(t *testing.T) {
 			return dialer.DialContext(ctx, network, remoteAddr)
 		}
 	}
-	// I really hate doing this in unit tests, but we would need to pick apart Dialer to get
-	// perfectly synchronized simultaneous dials.
-	for range iter.N(10) {
+	for range 10 {
 		first, second := randPortPair()
 		t.Logf("ports are %v and %v", first, second)
 		err := testSimultaneousOpen(
@@ -174,14 +162,11 @@ func TestTcpSimultaneousOpen(t *testing.T) {
 		if err == nil {
 			return
 		}
-		// This proves that the connections are not the same.
 		if errors.Is(err, errMsgNotReceived) {
 			t.Fatal(err)
 		}
-		// Could be a timing issue, so try again.
 		t.Log(err)
 	}
-	// If we weren't able to get a simultaneous dial to occur, then we can't call it a failure.
 	t.Skip("couldn't synchronize dials")
 }
 
@@ -205,7 +190,6 @@ func randPortPair() (first int, second int) {
 
 func writeMsg(conn net.Conn) {
 	conn.Write([]byte(defaultMsg))
-	// Writing must be closed so the reader will get EOF and stop reading.
 	conn.Close()
 }
 
@@ -223,8 +207,6 @@ func readMsg(conn net.Conn) error {
 
 var errMsgNotReceived = errors.New("msg not received in time")
 
-// Runs two dialers simultaneously, then sends a message on one connection and check it reads from
-// the other, thereby showing that both dials obtained endpoints to the same connection.
 func testSimultaneousOpen(
 	cleanup func(func()),
 	firstDialer, secondDialer func() (net.Conn, error),
@@ -276,14 +258,14 @@ func testSimultaneousOpen(
 		},
 	)
 	dialsDone.Wait()
-	for range iter.N(numDials) {
+	for range numDials {
 		err := <-errs
 		if err != nil {
 			return err
 		}
 	}
 	close(signal)
-	for range iter.N(numDials) {
+	for range numDials {
 		err := <-errs
 		if err != nil {
 			return err
@@ -295,8 +277,6 @@ func testSimultaneousOpen(
 
 const defaultMsg = "hello"
 
-// uTP has no simultaneous open: two sockets dialling each other get a connection each, so a holepunch
-// connect may end in an accept (and a dial) on either peer or both.
 func TestUtpSimultaneousOpen(t *testing.T) {
 	t.Parallel()
 	const network = "udp"
@@ -305,9 +285,6 @@ func TestUtpSimultaneousOpen(t *testing.T) {
 		socket, err := NewUtpSocket(
 			network,
 			addr,
-			func(net.Addr) bool {
-				return false
-			},
 			log.Default,
 		)
 		qt.Assert(t, qt.IsNil(err))
@@ -323,7 +300,7 @@ func TestUtpSimultaneousOpen(t *testing.T) {
 		}
 	}
 	t.Logf("first addr is %v. second addr is %v", first.Addr().String(), second.Addr().String())
-	for range iter.N(10) {
+	for range 10 {
 		err := testSimultaneousOpen(
 			t.Cleanup,
 			getDial(first, second.Addr().String()),
@@ -353,20 +330,16 @@ func skipGoUtpDialIssue(t *testing.T, err error) {
 	}
 }
 
-// Show that dialling one socket and accepting from the other results in them having ends of the
-// same connection.
 func TestUtpDirectDialMsg(t *testing.T) {
 	t.Parallel()
 	const network = "udp4"
 	ctx := context.Background()
 	newUtpSocket := func(addr string) utpSocket {
-		socket, err := NewUtpSocket(network, addr, func(net.Addr) bool {
-			return false
-		}, log.Default)
+		socket, err := NewUtpSocket(network, addr, log.Default)
 		qt.Assert(t, qt.IsNil(err))
 		return socket
 	}
-	for range iter.N(10) {
+	for range 10 {
 		err := func() error {
 			first := newUtpSocket("localhost:0")
 			defer first.Close()

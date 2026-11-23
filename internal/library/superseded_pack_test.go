@@ -63,7 +63,9 @@ func TestAReplacedEpisodeLeavesThePackItSharedAndTheDisk(t *testing.T) {
 
 	delete(engine.ids, 52)
 	engine.ids[50] = otherHash
-	dropSuperseded(ctx, st, torrent.NewClient(srv.URL), discard(), 1, "2")
+	if _, err := NewCache(st, torrent.NewClient(srv.URL), t.TempDir(), discard()).Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	if !slices.Equal(removed, []string{"50/2"}) {
 		t.Errorf("file deletes %v; want episode 2's file of the pack, alone", removed)

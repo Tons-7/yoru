@@ -12,7 +12,6 @@ import (
 	"testing"
 )
 
-// probedKeyframes is every video keyframe time ffprobe sees, the truth the index is held to.
 func probedKeyframes(t *testing.T, ffprobe, file string) []float64 {
 	t.Helper()
 	out, err := exec.Command(ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time,flags",
@@ -42,7 +41,6 @@ func sameTimes(a, b []float64) bool {
 	return true
 }
 
-// An index whose last pieces have not arrived reads as zeros past some point; it must not plan the episode.
 func TestHalfArrivedIndexIsRefused(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	file := filepath.Join(t.TempDir(), "clip.mkv")
@@ -77,7 +75,6 @@ func TestHalfArrivedIndexIsRefused(t *testing.T) {
 	}
 }
 
-// Segments start at 0 and on keyframes at least SegmentSeconds apart, never on one too near the end.
 func TestPlanSegmentsAndLookups(t *testing.T) {
 	starts := planSegments([]float64{0, 2, 4, 6.5, 8, 13, 14, 24, 31, 35.5}, 36)
 	if want := []float64{0, 6.5, 13, 24, 31}; !sameTimes(starts, want) {
@@ -101,7 +98,6 @@ func TestPlanSegmentsAndLookups(t *testing.T) {
 	}
 }
 
-// Real releases, when named: YORU_REAL_MKV="a.mkv;b.mkv" holds each one's index to its packets.
 func TestRealMatroskaKeyframes(t *testing.T) {
 	files := os.Getenv("YORU_REAL_MKV")
 	if files == "" {
@@ -122,7 +118,6 @@ func TestRealMatroskaKeyframes(t *testing.T) {
 	}
 }
 
-// The Cues give every keyframe ffprobe finds, wherever the muxer put them; a file without them says so.
 func TestMatroskaKeyframesMatchThePackets(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	dir := t.TempDir()
@@ -158,7 +153,6 @@ func TestMatroskaKeyframesMatchThePackets(t *testing.T) {
 		}
 	}
 
-	// A file whose index was never written, as a muxer that could not seek leaves it.
 	piped := filepath.Join(dir, "piped.mkv")
 	src := build("source.mkv")
 	f, err := os.Create(piped)

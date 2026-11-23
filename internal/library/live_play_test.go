@@ -10,14 +10,11 @@ import (
 	"yoru/internal/score"
 )
 
-// Hitting play on the kinds that break differently: long-runner, split cour,
-// film. Opt-in: YORU_LIVE=1 go test ./internal/library -run LivePlays -v
 func TestLivePlaysAcrossShows(t *testing.T) {
 	if os.Getenv("YORU_LIVE") == "" {
 		t.Skip("set YORU_LIVE=1 to search the live indexers")
 	}
 
-	// numbers a release may carry for the episode (a later cour also goes by its absolute one).
 	shows := []struct {
 		id      int
 		episode int
@@ -88,7 +85,6 @@ func TestLivePlaysAcrossShows(t *testing.T) {
 			if !identifiesShow(best.Release, best.Torrent.Title, s.titles) {
 				t.Errorf("picked %q, which does not name %s", best.Torrent.Title, s.name)
 			}
-			// The wrong episode is as dead an end as none; a film is the whole entry.
 			rel := best.Release
 			right := s.episode == 1 && rel.Episode == 0 && !rel.Batch
 			for _, n := range s.numbers {

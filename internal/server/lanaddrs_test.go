@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// The default route's address leads the pairing list, even on a virtual switch, but never a VPN's.
 func TestOrderAddrs(t *testing.T) {
 	for _, c := range []struct {
 		name          string

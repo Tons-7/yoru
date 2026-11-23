@@ -10,7 +10,6 @@ import (
 	"testing"
 )
 
-// Every page is fetched in order at the largest size, anime only: the studio query has no filter to narrow by.
 func TestStudioWorksFetchesEveryPage(t *testing.T) {
 	var mu sync.Mutex
 	var pages []int
@@ -47,7 +46,6 @@ func TestStudioWorksFetchesEveryPage(t *testing.T) {
 	}
 }
 
-// The largest studios run to hundreds of works; the fetch stops at the cap rather than paging forever.
 func TestStudioWorksStopsAtTheCap(t *testing.T) {
 	old := studioPagesCap
 	studioPagesCap = 2

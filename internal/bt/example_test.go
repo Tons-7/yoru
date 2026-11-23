@@ -18,8 +18,6 @@ func Example() {
 
 func Example_fileReader() {
 	var f bt.File
-	// Accesses the parts of the torrent pertaining to f. Data will be
-	// downloaded as required, per the configuration of the bt.Reader.
 	r := f.NewReader()
 	defer r.Close()
 }

@@ -13,7 +13,7 @@ import { historyUpNext, outDay, timeLeft, type UpNext } from '../lib/libraryText
 import { refreshListState, useNow } from '../lib/queries'
 import { episodeCount } from '../lib/shelf'
 import { toast, TOAST_MS } from '../lib/toast'
-import { buttonClass } from '../lib/ui'
+import { buttonClass, focusRing } from '../lib/ui'
 
 interface HistoryEntry {
   animeId: number
@@ -69,7 +69,7 @@ export function History() {
 
 export function HistoryView({ switcher }: { switcher: ReactNode }) {
   const [params, setParams] = useSearchParams()
-  const page = Number(params.get('page') ?? 1)
+  const page = Math.max(1, Math.floor(Number(params.get('page') ?? 1)) || 1)
   const qc = useQueryClient()
   const [confirmClear, setConfirmClear] = useState(false)
 
@@ -82,7 +82,7 @@ export function HistoryView({ switcher }: { switcher: ReactNode }) {
     for (const key of FORGET_REFRESHES) void qc.invalidateQueries({ queryKey: [key] })
   }
 
-  const [hidden, setHidden] = useState<Set<string>>(() => new Set())
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set(pendingForgets.keys()))
   const forgetSoon = (key: string, body: { animeId: number; epKey?: string }, what: string) => {
     const unhide = () =>
       setHidden((h) => {
@@ -92,10 +92,16 @@ export function HistoryView({ switcher }: { switcher: ReactNode }) {
       })
     const send = () => {
       pendingForgets.delete(key)
-      api.post('/api/history/forget', body).then(refresh, () => {
-        unhide()
-        toast(`Couldn't remove ${what} from history`)
-      })
+      api.post('/api/history/forget', body).then(
+        () => {
+          refresh()
+          void qc.refetchQueries({ queryKey: ['history'] }).then(unhide)
+        },
+        () => {
+          unhide()
+          toast(`Couldn't remove ${what} from history`)
+        },
+      )
     }
     setHidden((h) => new Set(h).add(key))
     pendingForgets.set(key, { timer: window.setTimeout(send, TOAST_MS), body })
@@ -176,7 +182,7 @@ export function HistoryView({ switcher }: { switcher: ReactNode }) {
               <div className="space-y-6">
                 {days.map(([label, group]) => (
                   <section key={label}>
-                    <h2 className="mb-2 text-[13px] font-semibold text-base-300">{label}</h2>
+                    <h2 className="mb-2 px-1 text-[13px] font-semibold text-base-400">{label}</h2>
                     <ul className="space-y-2">
                       {byShow(group).map((entries) => {
                         const id = entries[0].animeId
@@ -209,6 +215,9 @@ export function HistoryView({ switcher }: { switcher: ReactNode }) {
           onClose={() => setConfirmClear(false)}
           onCleared={() => {
             setConfirmClear(false)
+            for (const pending of pendingForgets.values()) window.clearTimeout(pending.timer)
+            pendingForgets.clear()
+            setHidden(new Set())
             refreshListState(qc)
             refresh()
           }}
@@ -227,7 +236,7 @@ function ClearDialog({ episodes, onClose, onCleared }: { episodes: number; onClo
     onSuccess: onCleared,
   })
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex items-end justify-center p-4 sm:items-center">
+    <div className="fixed inset-0 z-60 flex items-end justify-center p-4 sm:items-center">
       <div aria-hidden className="absolute inset-0 animate-fade-in bg-black/70" />
       <div
         ref={panel}
@@ -286,6 +295,7 @@ function hours(seconds: number) {
 
 function Stats() {
   const [open, setOpen] = useState(false)
+  const [picked, setPicked] = useState<string | null>(null)
   const { data } = useQuery({
     queryKey: ['watch-stats'],
     queryFn: () => api.get<WatchStats>('/api/history/stats'),
@@ -293,6 +303,7 @@ function Stats() {
   })
   if (!data || data.totalSeconds === 0) return null
   const peak = Math.max(1, ...data.days.map((d) => d.seconds))
+  const shownDay = data.days.find((d) => d.day === picked)
 
   return (
     <div className="space-y-2">
@@ -322,14 +333,19 @@ function Stats() {
           <Stat label="Episodes finished" value={String(data.episodes)} />
           <Stat label="Shows completed" value={String(data.completed)} />
         </div>
-        <div className="mt-4 flex h-10 items-end gap-0.5">
+        <div role="group" aria-label="Watch time, last 30 days" className="mt-4 flex h-10 items-end gap-0.5">
           {data.days.map((d, i) => (
-            <div
+            <button
               key={d.day}
+              type="button"
               title={`${d.day}: ${hours(d.seconds)}`}
+              aria-label={`${d.day}: ${hours(d.seconds)}`}
+              aria-pressed={picked === d.day}
+              onClick={() => setPicked(picked === d.day ? null : d.day)}
               className={cx(
                 'flex-1 rounded-sm',
                 d.seconds === 0 ? 'bg-base-800' : i === data.days.length - 1 ? 'bg-accent-400' : 'bg-accent-500/70',
+                picked === d.day && 'ring-2 ring-white',
               )}
               style={{ height: `${Math.max(8, (d.seconds / peak) * 100)}%` }}
             />
@@ -337,8 +353,19 @@ function Stats() {
         </div>
         <div className="mt-1 flex justify-between text-xs text-base-500">
           <span>30 days ago</span>
+          {shownDay && (
+            <span className="text-base-200 tabular-nums">
+              {shownDay.day}: {hours(shownDay.seconds)}
+            </span>
+          )}
           <span>Today</span>
         </div>
+        <Link
+          to="/stats"
+          className="tap relative mt-3 inline-flex min-h-11 items-center text-sm font-medium text-accent-300 hover:text-accent-200 sm:min-h-0"
+        >
+          All statistics ›
+        </Link>
       </section>
     </div>
   )
@@ -376,7 +403,7 @@ function ShowGroup({
 }) {
   const latest = entries[0]
   const art = latest.cover ?? latest.thumb
-  const episodes = [...entries].sort((a, b) => b.episode - a.episode)
+  const episodes = entries.toSorted((a, b) => b.episode - a.episode)
   const show = `/anime/${latest.animeId}`
 
   return (
@@ -384,9 +411,9 @@ function ShowGroup({
       <div className="flex items-center gap-3 p-3">
         <Link to={show} tabIndex={-1} aria-hidden className="shrink-0">
           {art ? (
-            <img src={art} alt="" loading="lazy" className="aspect-[2/3] w-12 rounded-md object-cover" />
+            <img src={art} alt="" loading="lazy" className="aspect-2/3 w-12 rounded-md object-cover" />
           ) : (
-            <div className="aspect-[2/3] w-12 rounded-md bg-base-850" />
+            <div className="aspect-2/3 w-12 rounded-md bg-base-850" />
           )}
         </Link>
         <div className="min-w-0 flex-1">
@@ -402,7 +429,6 @@ function ShowGroup({
           <EpisodeRow
             key={e.epKey}
             entry={e}
-            last={episodes.length === 1}
             onForget={() => onForget(e)}
             onForgetShow={() => onForgetShow(e)}
           />
@@ -434,7 +460,7 @@ function UpNextLine({ upNext, total }: { upNext: UpNext; total?: number }) {
 
 function PlayNext({ upNext, entry }: { upNext: Exclude<UpNext, { kind: 'done' }>; entry: HistoryEntry }) {
   const label = `Play episode ${upNext.episode} of ${entry.title}`
-  const look = 'grid size-11 shrink-0 place-items-center rounded-full'
+  const look = `grid size-11 shrink-0 place-items-center rounded-full ${focusRing}`
   if (upNext.kind === 'waiting') {
     return (
       <button
@@ -461,12 +487,10 @@ function PlayNext({ upNext, entry }: { upNext: Exclude<UpNext, { kind: 'done' }>
 
 function EpisodeRow({
   entry,
-  last,
   onForget,
   onForgetShow,
 }: {
   entry: HistoryEntry
-  last: boolean
   onForget: () => void
   onForgetShow: () => void
 }) {
@@ -522,18 +546,15 @@ function EpisodeRow({
         detail={entry.title}
         className="mr-1 size-11 rounded-full"
         items={[
-          { label: 'Remove from history', danger: true, run: onForget },
-          ...(last
-            ? [{ label: 'Remove the whole show', note: 'Every episode of it in History', danger: true, run: onForgetShow }]
-            : []),
           {
             label: 'Mark watched',
             disabled: ticked || mark.isPending,
             note: ticked ? 'Already counted on your list' : undefined,
             run: () => mark.mutate(),
-            divider: true,
           },
           { label: 'Go to show', to: `/anime/${entry.animeId}` },
+          { label: 'Remove from history', danger: true, run: onForget, divider: true },
+          { label: 'Remove the whole show', note: 'Every episode of it in History', danger: true, run: onForgetShow },
         ]}
       />
     </li>

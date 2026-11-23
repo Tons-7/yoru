@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"math"
 	"slices"
 	"strconv"
 	"time"
@@ -68,10 +67,12 @@ func (s *Store) MarkWatched(ctx context.Context, animeID, episode int) (bool, er
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE list_entry SET
 		    repeat_count = repeat_count + CASE WHEN status = 'REPEATING' THEN 1 ELSE 0 END,
-		    status = 'COMPLETED', completed_at = ?, dirty = 1,
+		    completed_from_repeat = CASE WHEN status = 'REPEATING' THEN 1 ELSE 0 END,
+		    completed_at = CASE WHEN status = 'REPEATING' AND completed_at IS NOT NULL THEN completed_at ELSE ?1 END,
+		    status = 'COMPLETED', dirty = 1,
 		    local_updated_at = max(?, local_updated_at + 1)
 		WHERE anime_id = ?
-		  AND status NOT IN ('COMPLETED')
+		  AND status NOT IN ('COMPLETED', 'DROPPED', 'PAUSED')
 		  AND progress > 0
 		  AND progress >= (SELECT episode_count FROM anime WHERE id = ? AND episode_count > 0)`,
 		today, now, animeID, animeID); err != nil {
@@ -114,6 +115,12 @@ func (s *Store) DismissResume(ctx context.Context, animeID int, epKey string) er
 	return err
 }
 
+func (s *Store) UndismissResume(ctx context.Context, animeID int, epKey string) error {
+	_, err := s.w.ExecContext(ctx,
+		`UPDATE playback SET dismissed = 0 WHERE anime_id = ? AND ep_key = ?`, animeID, epKey)
+	return err
+}
+
 func (s *Store) Unwatch(ctx context.Context, animeID, episode int) error {
 	if animeID == 0 || episode <= 0 {
 		return nil
@@ -127,8 +134,13 @@ func (s *Store) Unwatch(ctx context.Context, animeID, episode int) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE list_entry SET
 		    progress = min(progress, ?2),
-		    completed_at = CASE WHEN status = 'COMPLETED' THEN NULL ELSE completed_at END,
-		    status = CASE WHEN status = 'COMPLETED' THEN 'CURRENT' ELSE status END,
+		    completed_at = CASE WHEN status = 'COMPLETED' AND completed_from_repeat = 0 THEN NULL ELSE completed_at END,
+		    repeat_count = repeat_count - CASE
+		        WHEN status = 'COMPLETED' AND completed_from_repeat = 1 AND repeat_count > 0 THEN 1 ELSE 0 END,
+		    status = CASE
+		        WHEN status = 'COMPLETED' AND completed_from_repeat = 1 THEN 'REPEATING'
+		        WHEN status = 'COMPLETED' THEN 'CURRENT' ELSE status END,
+		    completed_from_repeat = 0,
 		    local_updated_at = max(?3, local_updated_at + 1), dirty = 1
 		WHERE anime_id = ?1 AND (progress > ?2 OR status = 'COMPLETED')`,
 		animeID, episode-1, time.Now().Unix()); err != nil {
@@ -192,9 +204,12 @@ func (s *Store) ApplyRemote(ctx context.Context, r RemoteEntry) (bool, error) {
 		                        remote_updated_at, local_updated_at, dirty)
 		VALUES ((SELECT min(coalesce(min(id), 0), 0) - 1 FROM list_entry), ?1, nullif(?2, ''), ?3, ?4, ?5, ?6, 0, ?7, 1)
 		ON CONFLICT(anime_id) DO UPDATE SET
+		    completed_from_repeat = CASE WHEN coalesce(nullif(?2, ''), list_entry.status) IS list_entry.status
+		        THEN list_entry.completed_from_repeat ELSE 0 END,
 		    status = coalesce(nullif(?2, ''), list_entry.status),
 		    progress = ?3, score = ?4, repeat_count = max(list_entry.repeat_count, ?5),
-		    completed_at = coalesce(?6, list_entry.completed_at),
+		    completed_at = CASE WHEN list_entry.status IN ('COMPLETED', 'REPEATING') AND list_entry.completed_at IS NOT NULL
+		        THEN list_entry.completed_at ELSE coalesce(?6, list_entry.completed_at) END,
 		    local_updated_at = max(?7, list_entry.local_updated_at + 1), dirty = 1
 		WHERE list_entry.local_updated_at <= ?8`,
 		r.AnimeID, r.Status, r.Progress, r.Score, r.Repeat, completed, time.Now().Unix(), r.Since)
@@ -221,39 +236,53 @@ func (s *Store) SetListStatus(ctx context.Context, animeID int, status string, s
 		completed = today
 	}
 
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	var previous sql.NullString
-	if err := s.r.QueryRowContext(ctx,
+	if err := tx.QueryRowContext(ctx,
 		`SELECT status FROM list_entry WHERE anime_id = ?`, animeID).Scan(&previous); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	starting := status == StatusRepeating && previous.String != StatusRepeating
+	finishing := status == "COMPLETED" && previous.String == StatusRepeating
 
-	_, err := s.w.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO list_entry (id, anime_id, status, progress, score, completed_at,
 		                        remote_updated_at, local_updated_at, dirty)
-		VALUES ((SELECT min(coalesce(min(id), 0), 0) - 1 FROM list_entry), ?, ?, 0,
-		        CASE WHEN ?3 < 0 THEN 0 ELSE ?3 END, ?, 0, ?, 1)
+		VALUES ((SELECT min(coalesce(min(id), 0), 0) - 1 FROM list_entry), ?1, ?2, 0,
+		        CASE WHEN ?3 < 0 THEN 0 ELSE ?3 END, ?4, 0, ?5, 1)
 		ON CONFLICT(anime_id) DO UPDATE SET
 		    status = excluded.status,
 		    progress = CASE WHEN ?6 THEN 0 ELSE list_entry.progress END,
 		    score = CASE WHEN ?3 < 0 THEN list_entry.score ELSE ?3 END,
 		    score_cleared = CASE WHEN ?3 = 0 THEN 1 WHEN ?3 > 0 THEN 0 ELSE list_entry.score_cleared END,
-		    completed_at = coalesce(excluded.completed_at, list_entry.completed_at),
+		    repeat_count = list_entry.repeat_count + CASE WHEN ?7 THEN 1 ELSE 0 END,
+		    completed_from_repeat = CASE WHEN ?7 THEN 1 WHEN excluded.status IS list_entry.status
+		        THEN list_entry.completed_from_repeat ELSE 0 END,
+		    completed_at = CASE WHEN list_entry.status IN ('COMPLETED', 'REPEATING') AND list_entry.completed_at IS NOT NULL
+		        THEN list_entry.completed_at ELSE coalesce(excluded.completed_at, list_entry.completed_at) END,
 		    local_updated_at = max(excluded.local_updated_at, list_entry.local_updated_at + 1),
 		    dirty = 1`,
-		animeID, status, score, completed, now, starting)
-	if err != nil {
+		animeID, status, score, completed, now, starting, finishing); err != nil {
 		return err
 	}
 
 	if starting {
-		_, err = s.w.ExecContext(ctx,
-			`UPDATE playback SET watched = 0, position_s = 0, played_s = 0, dismissed = 0 WHERE anime_id = ?`, animeID)
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE playback SET watched = 0, position_s = 0, played_s = 0, dismissed = 0 WHERE anime_id = ?`, animeID); err != nil {
+			return err
+		}
 	}
 	if status == "COMPLETED" && previous.String != "COMPLETED" {
-		_, err = s.w.ExecContext(ctx, `UPDATE playback SET dismissed = 1 WHERE anime_id = ?`, animeID)
+		if _, err := tx.ExecContext(ctx, `UPDATE playback SET dismissed = 1 WHERE anime_id = ?`, animeID); err != nil {
+			return err
+		}
 	}
-	return err
+	return tx.Commit()
 }
 
 func (s *Store) DirtyEntries(ctx context.Context, limit int) ([]DirtyEntry, error) {
@@ -283,10 +312,6 @@ func (s *Store) DirtyEntries(ctx context.Context, limit int) ([]DirtyEntry, erro
 		out = append(out, d)
 	}
 	return out, rows.Err()
-}
-
-func (s *Store) ClearDirty(ctx context.Context, animeID, remoteID, remoteUpdatedAt int) error {
-	return s.ClearDirtyAt(ctx, animeID, remoteID, remoteUpdatedAt, math.MaxInt64)
 }
 
 func (s *Store) ClearDirtyAt(ctx context.Context, animeID, remoteID, remoteUpdatedAt int, changed int64) error {

@@ -5,7 +5,6 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/anacrolix/missinggo/v2/iter"
 	"github.com/cespare/xxhash"
 
 	"yoru/internal/bt/smartban"
@@ -18,7 +17,7 @@ func benchmarkSmartBanRecordBlock[Sum comparable](b *testing.B, hash func([]byte
 	var data [defaultChunkSize]byte
 	var addr netip.Addr
 	b.SetBytes(int64(len(data)))
-	for i := range iter.N(b.N) {
+	for i := range b.N {
 		cache.RecordBlock(addr, RequestIndex(i), data[:])
 	}
 }
@@ -28,8 +27,6 @@ func BenchmarkSmartBanRecordBlock(b *testing.B) {
 		var salt [8]byte
 		benchmarkSmartBanRecordBlock(b, func(block []byte) uint64 {
 			h := xxhash.New()
-			// xxHash is not cryptographic, and so we're salting it so attackers can't know a priori
-			// where block data collisions are.
 			h.Write(salt[:])
 			h.Write(block)
 			return h.Sum64()

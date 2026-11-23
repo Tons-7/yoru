@@ -95,6 +95,7 @@ export function outDay(unix: number, now: number): string {
     d.setHours(0, 0, 0, 0)
     return d.getTime()
   }
+  if (unix <= now) return 'soon'
   const ahead = Math.round((day(unix) - day(now)) / 86_400_000)
   if (ahead <= 0) return 'today'
   if (ahead === 1) return 'tomorrow'

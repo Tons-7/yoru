@@ -45,7 +45,6 @@ func TestFavouriteMadeHereReachesAniList(t *testing.T) {
 		t.Error("the local favourite was cleared by its own sync")
 	}
 
-	// Settled: a second run must not flip it back off.
 	if _, err := sync.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +99,6 @@ func TestUnfavouritingOnTheSiteClearsItHere(t *testing.T) {
 	}
 }
 
-// The merge must never undo a local change that has not been pushed yet.
 func TestUnfavouritingHereSurvivesTheMerge(t *testing.T) {
 	sync, st, up := favSync(t, 400)
 	ctx := context.Background()
@@ -126,7 +124,6 @@ func TestUnfavouritingHereSurvivesTheMerge(t *testing.T) {
 	}
 }
 
-// Notes and pins live in the same row and have no tracker equivalent.
 func TestSyncLeavesTheRestOfTheBookmarkAlone(t *testing.T) {
 	sync, st, _ := favSync(t, 500)
 	ctx := context.Background()
@@ -149,7 +146,6 @@ func TestSyncLeavesTheRestOfTheBookmarkAlone(t *testing.T) {
 	}
 }
 
-// Without a connected account the favourites stay exactly as they are.
 func TestFavouritesUntouchedWithoutAniList(t *testing.T) {
 	up := &aniServer{list: emptyList}
 	sync, st := newAniSync(t, up)

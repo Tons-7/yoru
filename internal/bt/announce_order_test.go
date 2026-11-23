@@ -9,8 +9,6 @@ import (
 	"yoru/internal/bt/tracker"
 )
 
-// Every per-tracker lookup starts from the minimum record with the tracker's url set; an announce of that
-// tracker ordered before it is skipped, and the index's own check panics (a zero When sorted last once did).
 func TestNextAnnounceMinRecordIsTheLeast(t *testing.T) {
 	const url trackerAnnouncerKey = "udp://tracker.test:80"
 	least := nextAnnounceMinRecord()
@@ -36,7 +34,6 @@ func TestNextAnnounceMinRecordIsTheLeast(t *testing.T) {
 	}
 }
 
-// Among announces not yet due, one with nothing left to do (a zero When) goes last, never at the head.
 func TestZeroWhenSortsAfterAPendingAnnounce(t *testing.T) {
 	pending := nextAnnounceInput{nextAnnounceStateInput: nextAnnounceStateInput{When: time.Now().Add(time.Minute)}}
 	done := nextAnnounceInput{}

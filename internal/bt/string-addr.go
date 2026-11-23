@@ -2,7 +2,6 @@ package bt
 
 import "net"
 
-// This adds a net.Addr interface to a string address that has no presumed Network.
 type StringAddr string
 
 var _ net.Addr = StringAddr("")

@@ -1,10 +1,9 @@
-//go:build go1.18
-
 package peer_protocol
 
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
 	"testing"
 
@@ -27,7 +26,7 @@ func FuzzDecoder(f *testing.F) {
 			var m Message
 			err := d.Decode(&m)
 			t.Log(err)
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err == nil {

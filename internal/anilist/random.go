@@ -9,10 +9,8 @@ import (
 	"time"
 )
 
-// popularityFloor keeps a uniform draw off forgotten OVAs.
 const popularityFloor = 5000
 
-// randomQuery asks for one anime at a random offset; pageInfo.total bounds the next draw.
 const randomQuery = `query Random($page: Int!, $format: MediaFormat, $genres: [String], $year: Int, $isAdult: Boolean, $floor: Int) {
   Page(page: $page, perPage: 1) {
     pageInfo { total }
@@ -20,8 +18,6 @@ const randomQuery = `query Random($page: Int!, $format: MediaFormat, $genres: [S
   }
 }`
 
-// totals caches how many anime match each filter so a draw is one request, not
-// two. Slight staleness only skews the distribution, never the result.
 type totals struct {
 	mu sync.Mutex
 	by map[string]total
@@ -32,12 +28,10 @@ type total struct {
 	at time.Time
 }
 
-// How long a filter nobody matches is answered without a request; a repeated click costs nothing.
 const noMatchFor = 10 * time.Minute
 
 var errNoMatch = fmt.Errorf("anilist: no anime matched")
 
-// get is the filter's last count; known is false for one never seen, or an empty one seen a while ago.
 func (t *totals) get(key string) (n int, known bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -57,7 +51,6 @@ func (t *totals) set(key string, n int) {
 	t.by[key] = total{n: n, at: time.Now()}
 }
 
-// Random returns one anime matching format, every genre and year; adult only with the Hentai genre.
 func (c *Client) Random(ctx context.Context, format string, genres []string, year int) (Media, error) {
 	vars := map[string]any{
 		"floor":   popularityFloor,
@@ -68,13 +61,11 @@ func (c *Client) Random(ctx context.Context, format string, genres []string, yea
 	if year > 0 {
 		vars["year"] = year
 	}
-	// Hentai never reaches the popularity floor.
 	if hasGenre(genres, "Hentai") {
 		vars["floor"] = 0
 	}
 	key := fmt.Sprint(format, "|", strings.Join(genres, ","), "|", year)
 
-	// The first draw for an unseen filter is a guess; the response corrects it.
 	bound, known := c.totals.get(key)
 	if known && bound == 0 {
 		return Media{}, errNoMatch
@@ -83,7 +74,7 @@ func (c *Client) Random(ctx context.Context, format string, genres []string, yea
 		bound = 500
 	}
 
-	for attempt := range 3 {
+	for range 8 {
 		var out struct {
 			Page struct {
 				PageInfo struct {
@@ -93,24 +84,28 @@ func (c *Client) Random(ctx context.Context, format string, genres []string, yea
 			} `json:"Page"`
 		}
 
-		vars["page"] = rand.IntN(bound) + 1
-		if err := c.Query(ctx, randomQuery, vars, &out); err != nil {
+		page := rand.IntN(bound) + 1
+		vars["page"] = page
+		if err := c.Query(ownAnswer(ctx), randomQuery, vars, &out); err != nil {
 			return Media{}, err
 		}
 
-		total := out.Page.PageInfo.Total
-		c.totals.set(key, total)
-		if total == 0 {
-			break
-		}
-		bound = total
 		if len(out.Page.Media) > 0 {
+			if t := out.Page.PageInfo.Total; t > 0 && (!known || t < bound) {
+				bound = t
+			}
+			c.totals.set(key, bound)
 			return out.Page.Media[0], nil
 		}
-		// An overshoot returns an empty page; the bound is now known, so the next attempt lands.
-		if attempt == 2 {
+		if page == 1 || out.Page.PageInfo.Total == 0 {
+			c.totals.set(key, 0)
 			break
 		}
+		bound, known = page-1, true
+		if t := out.Page.PageInfo.Total; t < bound {
+			bound = t
+		}
+		c.totals.set(key, bound)
 	}
 	return Media{}, errNoMatch
 }

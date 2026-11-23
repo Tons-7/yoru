@@ -5,12 +5,10 @@ import (
 	"testing"
 )
 
-// Evicting deletes a whole torrent, so a pack with one episode playing is left alone entirely.
 func TestClearKeepsEveryFileOfAPinnedTorrent(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
 
-	// One pack, two files: episode 3 is playing, episode 7 is idle.
 	cache(t, st, "pack", 3, 1<<30, true)
 	cache(t, st, "pack", 7, 1<<30, false)
 
@@ -22,7 +20,6 @@ func TestClearKeepsEveryFileOfAPinnedTorrent(t *testing.T) {
 		t.Fatalf("cleared %d entries (%d bytes) of a torrent that is playing", removed, freed)
 	}
 
-	// Both files are still known, so nothing was dropped from under the player.
 	entries, err := st.CacheEntries(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +29,6 @@ func TestClearKeepsEveryFileOfAPinnedTorrent(t *testing.T) {
 	}
 }
 
-// A torrent nobody is playing is still cleared, or the button does nothing.
 func TestClearRemovesIdleTorrents(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -47,4 +43,44 @@ func TestClearRemovesIdleTorrents(t *testing.T) {
 	if removed != 1 {
 		t.Fatalf("removed %d, want the one torrent counted once", removed)
 	}
+}
+
+func TestClearSparesADownloadBeingFetched(t *testing.T) {
+	c, st := newCache(t)
+	ctx := context.Background()
+	cacheState(t, st, "ahead", 1, 1<<30, false, false)
+	cacheState(t, st, "idle", 2, 1<<30, false, false)
+	c.WithClaimed(func(h string) bool { return h == "ahead" })
+
+	if _, _, err := c.Clear(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := st.CacheEntries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].InfoHash != "ahead" {
+		t.Fatalf("left %+v, want only the download being fetched", entries)
+	}
+}
+
+func TestSweepSparesADownloadBeingFetched(t *testing.T) {
+	c, st := newCache(t)
+	ctx := context.Background()
+	cache(t, st, "ahead", 1, 3<<30, false)
+	cache(t, st, "newer", 2, 3<<30, false)
+	c.WithClaimed(func(h string) bool { return h == "ahead" })
+	if err := st.SetSetting(ctx, "cache.budget_bytes", "1073741824"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := st.CacheEntries(ctx)
+	for _, e := range entries {
+		if e.InfoHash == "ahead" {
+			return
+		}
+	}
+	t.Fatal("the oldest entry was evicted while it was being fetched")
 }

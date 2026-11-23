@@ -12,8 +12,6 @@ import (
 	"yoru/internal/store"
 )
 
-// A feature is one long episode: against the per-episode cap every release of
-// it was rejected. Opt-in: YORU_LIVE=1 go test ./internal/library -run LiveMovie -v
 func TestLiveMovieIsNotRejectedForItsSize(t *testing.T) {
 	if os.Getenv("YORU_LIVE") == "" {
 		t.Skip("set YORU_LIVE=1 to search the live indexers")
@@ -60,7 +58,6 @@ func TestLiveMovieIsNotRejectedForItsSize(t *testing.T) {
 				t.Fatalf("nothing pickable among %d results for a %d-minute film", len(got.Results), f.minutes)
 			}
 
-			// What the fix bought: releases the flat cap would have thrown out.
 			var rescued int
 			for _, r := range got.Results {
 				if r.Blocked != "" {

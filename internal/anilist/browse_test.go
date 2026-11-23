@@ -32,7 +32,6 @@ func sentVars(t *testing.T, b Browse) map[string]any {
 	return vars
 }
 
-// The Hentai genre drops isAdult:false, which emptied the one filter asking for it.
 func TestBrowseHentaiGenreIncludesAdultTitles(t *testing.T) {
 	if got := sentVars(t, Browse{Genres: []string{"Action"}})["isAdult"]; got != false {
 		t.Fatalf("isAdult = %v for a normal genre, want false", got)
@@ -51,7 +50,6 @@ func sortVar(t *testing.T, vars map[string]any) string {
 	return list[0].(string)
 }
 
-// A chosen sort survives a search term; it was dropped once something was typed.
 func TestBrowseKeepsTheSortTheUserChose(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -73,8 +71,6 @@ func TestBrowseKeepsTheSortTheUserChose(t *testing.T) {
 	}
 }
 
-// AniList reports a fixed total of 5000 for any paged answer; the count comes
-// from one-result probes, found exactly in a couple of requests.
 func TestBrowseCountFindsTheRealTotal(t *testing.T) {
 	alias := regexp.MustCompile(`p(\d+): Page\(page: (\d+), perPage: 1\)`)
 	for _, real := range []int{1, 43, 84, 85, 300, 4999, 5000, 7000} {
@@ -148,7 +144,6 @@ func TestRandomSendsFiltersAsVariables(t *testing.T) {
 		t.Fatalf("page = %v", page)
 	}
 
-	// The total is remembered, so the next draw lands inside it.
 	c.Random(context.Background(), "tv", []string{"Romance", "Comedy"}, 2019)
 	if page := vars["page"].(float64); page < 1 || page > 40 {
 		t.Fatalf("second page = %v, want within the known total of 40", page)

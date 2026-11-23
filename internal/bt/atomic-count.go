@@ -26,10 +26,9 @@ func (me *Count) String() string {
 }
 
 func (me *Count) MarshalJSON() ([]byte, error) {
-	return json.Marshal(me.n)
+	return json.Marshal(me.Int64())
 }
 
-// TODO: Can this use more generics to speed it up? Should we be checking the field types?
 func copyCountFields[T any](src *T) (dst T) {
 	srcValue := reflect.ValueOf(src).Elem()
 	dstValue := reflect.ValueOf(&dst).Elem()

@@ -1,5 +1,3 @@
-// Casting: the button, what the TV is sent (signed HLS link, fMP4, subtitles, the time reached), the remote
-// panel, and stopping back to the video here. Google's SDK is stood in for.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -20,8 +18,6 @@ const check = (ok, label, detail = '') => {
 
 check(await prepareLocalEpisode({ base: BASE, lib: process.env.YORU_LIB, anime: ANIME }), 'test episode ready')
 
-// The SDK's surface as the player uses it: one device, a session that records what it is asked to load.
-// window.__castNoTV before it loads: no device about until __castFound().
 const fakeSdk = `(() => {
   const listeners = {}
   const on = (t, f) => (listeners[t] ??= []).push(f)
@@ -130,7 +126,6 @@ try {
   const castButton = page.getByRole('button', { name: 'Cast to a TV' })
   check(await until(() => castButton.isVisible(), 15_000), 'the player offers a Cast button where a device is about')
 
-  // This instance answers on this machine only, out of a TV's reach: the button says what casting needs.
   await castButton.click()
   const needs = page.getByRole('dialog', { name: 'Cast to a TV' })
   check(await until(() => needs.isVisible()), 'with Yoru unreachable from the TV, Cast lists what casting needs')
@@ -142,7 +137,6 @@ try {
   await page.keyboard.press('Escape')
   check(await until(async () => !(await needs.isVisible())), 'Escape closes it')
 
-  // Reachable: the link the server signs is what the TV is given.
   await page.route('**/api/access', (route) => route.fulfill({ json: { reachable: true, urls: [], canSwitch: true, host: true } }))
   await page.route('**/api/stream/*/cast*', (route) => route.fulfill({ json: {
     url: `${BASE}/c/signed/playlist.m3u8`, subtitles: [{ index: 2, language: 'eng', url: `${BASE}/c/signed/sub-2.vtt` }],
@@ -172,7 +166,6 @@ try {
   await page.getByRole('button', { name: 'Stop casting', exact: true }).click()
   check(await until(async () => !(await panel.isVisible())), 'Stop casting hands back to this device')
 
-  // The session stays, but something else now plays on the TV: not this episode's remote, nor its progress.
   await video.hover()
   await castButton.click()
   check(await until(() => panel.isVisible()), 'cast again')
@@ -182,7 +175,6 @@ try {
     String(await video.evaluate((v) => v.currentTime)))
   await page.evaluate(() => window.cast.framework.CastContext.getInstance().endCurrentSession(true))
 
-  // With Auto next on, the TV is given what plays after too, and goes on by itself; this page follows it.
   await page.unroute('**/api/stream/*/cast*')
   const queued = (n) => ({
     key: `${ANIME}-${n}`, url: `${BASE}/c/next${n}/playlist.m3u8`, title: 'Show', subtitle: `Episode ${n}`,
@@ -216,14 +208,12 @@ try {
   })
   await page.evaluate(() => window.__castTVAt(150))
   await sleep(300)
-  // The next one's time and length first, then which it is: the last report for this one keeps its own.
   await page.evaluate(() => window.__castTVAt(1, 1300))
   await sleep(300)
   await page.evaluate(() => window.__castNextItem())
   check(await until(async () => page.url().endsWith(`/watch/${ANIME}/2`), 10_000), 'the TV going on to episode 2 takes this page there',
     page.url())
   check(await page.evaluate(() => [...document.querySelectorAll('video')].every((v) => v.paused)), "and nothing plays here while the TV does")
-  // Both of them: the TV's, and the page's on leaving the episode to follow it.
   const ones = reports.filter((r) => r.episode === 1)
   check(ones.length > 0 && ones.every((r) => Math.abs(r.position - 150) < 1 && Math.abs(r.duration - 180) < 1),
     "episode 1's last reports are where the TV left it, not the next one's place or where casting began", JSON.stringify(reports))
@@ -233,7 +223,6 @@ try {
   await video.waitFor({ timeout: 30_000 })
   await page.waitForFunction(() => (document.querySelector('video')?.readyState ?? 0) >= 2, null, { timeout: 30_000 }).catch(() => {})
 
-  // Drawn in, with the setting on: the track shown here goes into the picture, and no text track beside it.
   await fetch(`${BASE}/api/prefs`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ key: 'cast.burn_subtitles', value: 'true' }),
@@ -257,7 +246,6 @@ try {
   await page.getByRole('button', { name: 'Stop casting', exact: true }).click()
   check(await until(async () => !(await panel.isVisible())), 'Stop casting hands the drawn-in cast back')
 
-  // No TV about: the button stays, and says what it is looking for; one turning up makes it ready.
   await page.addInitScript(() => (window.__castNoTV = true))
   await page.reload({ waitUntil: 'domcontentloaded' })
   await video.waitFor({ timeout: 30_000 })
@@ -271,7 +259,6 @@ try {
   await sleep(400)
   let box = await needs.boundingBox()
   check(!!box && box.y >= 0, 'turned to a phone with the list open, it stays on screen', JSON.stringify(box))
-  // Opened on the phone itself, Look for TVs taller in it.
   await page.keyboard.press('Escape')
   await video.hover()
   await castButton.click()
@@ -279,7 +266,6 @@ try {
   await page.screenshot({ path: `${SHOTS}/cast-needs-phone.png` })
   box = await needs.boundingBox()
   check(!!box && box.x >= 0 && box.x + box.width <= 390 && box.y >= 0, 'on a phone the list fits the screen', JSON.stringify(box))
-  // The bar's last button stays on screen beside Cast, with two audio tracks and subtitles in it too.
   for (const width of [390, 360]) {
     await page.setViewportSize({ width, height: 844 })
     let fs = null
@@ -294,8 +280,6 @@ try {
   await page.evaluate(() => window.__castFound())
   check(await until(() => needs.getByRole('button', { name: 'Choose a TV' }).isVisible()), 'a TV turning up makes it ready to cast')
 
-  // Chrome on a Mac searches only once something asks (a friend's TV appeared only after YouTube's button did):
-  // Look for TVs opens Chrome's list. Closed without a pick, nothing goes to a TV.
   await page.evaluate(() => window.__castLost())
   asked = ''
   await page.evaluate(() => {
@@ -306,11 +290,9 @@ try {
   const look = () => need('A TV on this Wi-Fi').getByRole('button', { name: 'Look for TVs' })
   check(await until(() => look().isVisible()), 'with none found, the list offers to look for TVs')
   await look().click()
-  // Counted from the list closing, not the click: anything sent after it shows within this.
   check(await until(() => page.evaluate(() => window.__castClosed), 5000), "Look for TVs opens Chrome's list")
   const sentAnyway = await until(async () => asked !== '', 1500)
   check(!sentAnyway && (await page.evaluate(() => !window.__castLoaded)), "closing Chrome's list without a TV sends nothing", asked)
-  // A TV picked there gets the episode.
   await page.evaluate(() => (window.__castCancel = false))
   await castButton.click()
   await look().click()
@@ -318,16 +300,14 @@ try {
   await page.getByRole('button', { name: 'Stop casting', exact: true }).click()
   check(await until(async () => !(await panel.isVisible())), 'and Stop casting hands it back')
 
-  // A browser with casting turned off (Brave's Media Router): the button says how to turn it on.
   await page.unroute('https://www.gstatic.com/cv/js/sender/**')
   await page.route('https://www.gstatic.com/cv/js/sender/**', (route) =>
     route.fulfill({ contentType: 'text/javascript', body: 'setTimeout(() => window.__onGCastApiAvailable?.(false), 50)' }))
-  await page.addInitScript(() => Object.defineProperty(navigator, 'brave', { value: { isBrave: async () => true } }))
   await page.reload({ waitUntil: 'domcontentloaded' })
   await video.waitFor({ timeout: 30_000 })
   await video.hover()
   await castButton.click()
-  check(await until(() => need('A browser that can cast').getByText(/turn on Media Router/).isVisible()), "in Brave with casting off, it names Brave's switch")
+  check(await until(() => need('A browser that can cast').getByText(/Turn on Media Router/).isVisible()), 'with casting off, it names the switch')
   check(await need('A TV on this Wi-Fi').getByLabel('Not known yet').isVisible(), 'and cannot say yet whether a TV is about')
   check(errors.length === 0, 'no page errors', errors.join(' | '))
 } finally {

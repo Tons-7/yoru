@@ -1,4 +1,3 @@
-// Subtitles after a reaped session and through fullscreen and tab switches, read off the marker episode.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -42,7 +41,6 @@ if (!file) process.exit(1)
 await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: EP })
 await post('/api/prefs', { key: 'playback.autoplay', value: 'true' })
 
-// Headed: a headless tab is never hidden, and fullscreen needs a real window.
 const browser = await chromium.launch({
   headless: process.env.HEADLESS === '1',
   args: ['--autoplay-policy=no-user-gesture-required'],
@@ -69,7 +67,6 @@ const state = () =>
     err: v.error?.code ?? null, src: (v.currentSrc || '').slice(-40),
   })).catch(() => null)
 
-// Every reset of the element's timeline, with what caused it.
 await page.addInitScript(() => {
   window.__events = []
   const note = (what) => window.__events.push(`${(performance.now() / 1000).toFixed(1)}s ${what}`)
@@ -123,7 +120,6 @@ const readSubtitle = () =>
   })
 const drift = (r) => (!r.ok || r.blank ? null : r.cue * 2 + 0.95 - r.time)
 
-// Worst drift over a few samples; null when nothing was ever painted.
 const measure = async (label) => {
   let worst = null
   let blank = 0
@@ -148,13 +144,11 @@ let m = await measure('baseline')
 check(m.worst !== null && m.worst < 1.6, 'subtitles in sync at the start', `${m.worst}`)
 check(m.canvases === 1, 'one subtitle canvas', `${m.canvases}`)
 
-// ---- the long AFK: paused, session reaped by the server, tab away and back
 console.log('\n-- paused, session reaped, tab away, back and play --')
 const pausedAt = await video.evaluate((v) => {
   v.pause()
   return v.currentTime
 })
-// What the idle reaper does after ten minutes, without the wait.
 await page.evaluate(() => (window.__events.length = 0))
 const closed = await api(`/api/stream/${ANIME}-${EP}`, { method: 'DELETE' })
 check(closed.body?.closed === true, 'session closed server-side, as the reaper would', JSON.stringify(closed.body))
@@ -164,7 +158,6 @@ await other.bringToFront()
 await sleep(5000)
 await page.bringToFront()
 await sleep(1500)
-// Where it was paused, read before the reopen can reset the element.
 const before = pausedAt
 t0 = Date.now()
 timeline.length = 0
@@ -181,7 +174,6 @@ console.log('     element events since the session was closed:')
 for (const l of await page.evaluate(() => window.__events.slice(-14))) console.log('       ' + l)
 const resumed = await until(() => video.evaluate((v, at) => !v.paused && v.currentTime > at + 1, before).catch(() => false), 52000)
 check(resumed, `playback resumes from where it was paused (${pausedAt.toFixed(1)}s)`, JSON.stringify(await state()))
-// Does it keep going once it has moved? Media time gained over 20 s of wall clock.
 const t1 = (await state())?.t ?? 0
 await sleep(20000)
 const gained = ((await state())?.t ?? 0) - t1
@@ -193,7 +185,6 @@ m = await measure('after recovery')
 check(m.worst !== null && m.worst < 1.6, 'subtitles in sync after recovery', `${m.worst}`)
 check(m.canvases === 1, 'still one subtitle canvas', `${m.canvases}`)
 
-// ---- the things people try: fullscreen in and out, tab away and back
 console.log('\n-- fullscreen toggles and tab switches --')
 for (let i = 0; i < 3; i++) {
   await page.mouse.move(640, 400)
@@ -211,7 +202,6 @@ check(m.worst !== null && m.worst < 1.6, 'subtitles in sync after fullscreen and
 check(m.blank < 6, 'subtitles still being drawn', `${m.blank}/6 blank`)
 check(m.canvases === 1, 'no leaked subtitle canvases', `${m.canvases}`)
 
-// Still tracking: the painted cue advances with the clock (each reading waits for a painted frame).
 const painted = async () => {
   for (let i = 0; i < 12; i++) {
     const r = await readSubtitle()
@@ -224,7 +214,6 @@ const a = await painted()
 await sleep(4500)
 const b = await painted()
 check(!!a && !!b && b.cue > a.cue, 'the painted cue keeps advancing', `${a?.cue} → ${b?.cue} video=${JSON.stringify(await state())}`)
-// The one 404 is the reaped playlist, which is how the player learns to reopen.
 const unexpected = failed.filter((f) => !/404 GET \/api\/stream\/[^/]+\/playlist\.m3u8/.test(f))
 check(unexpected.length === 0, 'no failed requests beyond the reaped playlist', unexpected.join(' | '))
 check(errors.filter((e) => !/404/.test(e)).length === 0, 'no console errors', [...new Set(errors)].slice(0, 4).join(' | '))

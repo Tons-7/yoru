@@ -23,14 +23,14 @@ $nets = @(Get-NetConnectionProfile | ForEach-Object {
 function Shape($r) { $pf = $r | Get-NetFirewallPortFilter; [pscustomobject]@{ name = $r.DisplayName; action = $r.Action.ToString(); profiles = $r.Profile.ToString(); enabled = ($r.Enabled.ToString() -eq 'True'); localPort = (@($pf.LocalPort) -join ','); protocol = [string]$pf.Protocol } }
 $port = @(Get-NetFirewallRule -DisplayName %s | ForEach-Object { Shape $_ })
 $prog = @(Get-NetFirewallApplicationFilter -Program %s | Get-NetFirewallRule | Where-Object { $_.Direction.ToString() -eq 'Inbound' } | ForEach-Object { Shape $_ })
-[pscustomobject]@{ networks = $nets; port = $port; program = $prog } | ConvertTo-Json -Depth 4 -Compress`
+$profiles = @(Get-NetFirewallProfile | ForEach-Object {
+  [pscustomobject]@{ name = $_.Name; enabled = ($_.Enabled.ToString() -eq 'True'); inbound = $_.DefaultInboundAction.ToString() } })
+[pscustomobject]@{ networks = $nets; port = $port; program = $prog; profiles = $profiles } | ConvertTo-Json -Depth 4 -Compress`
 
-// Check reads the network categories and every rule that decides whether a device on them reaches the port.
 func Check(ctx context.Context, port int, exe string) (Status, error) {
 	return check(ctx, port, []string{RuleName(port)}, exe)
 }
 
-// CheckPeers is Check for the torrent peer port; PortRule is Yoru's peer rule.
 func CheckPeers(ctx context.Context, port int, exe string) (Status, error) {
 	return check(ctx, port, []string{PeerRuleName(port)}, exe)
 }
@@ -49,29 +49,31 @@ func check(ctx context.Context, port int, rules []string, exe string) (Status, e
 		Networks []Network `json:"networks"`
 		Port     []Rule    `json:"port"`
 		Program  []Rule    `json:"program"`
+		Profiles []Profile `json:"profiles"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return Status{Supported: true}, fmt.Errorf("read firewall: %w", err)
 	}
-	st := Status{Supported: true, Port: port, Networks: raw.Networks, Program: raw.Program}
-	if len(raw.Port) > 0 {
-		st.PortRule = &raw.Port[0]
+	st := Status{Supported: true, Port: port, Networks: raw.Networks, Program: raw.Program, Profiles: raw.Profiles}
+	for i := range raw.Port {
+		if st.PortRule == nil || (raw.Port[i].Enabled && !st.PortRule.Enabled) {
+			st.PortRule = &raw.Port[i]
+		}
 	}
 	return st, nil
 }
 
 const allowScript = `$ErrorActionPreference = 'Stop'
-Remove-NetFirewallRule -DisplayName %[1]s -ErrorAction SilentlyContinue
+Remove-NetFirewallRule -DisplayName 'Yoru (LAN, TCP *)' -ErrorAction SilentlyContinue
 New-NetFirewallRule -DisplayName %[1]s -Description 'Lets devices on this network open Yoru.' -Direction Inbound -Action Allow -Protocol TCP -LocalPort %[2]d -RemoteAddress LocalSubnet -Profile %[3]s | Out-Null
-Get-NetFirewallApplicationFilter -Program %[4]s -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object { $_.Direction.ToString() -eq 'Inbound' -and $_.Action.ToString() -eq 'Block' } | Remove-NetFirewallRule`
+Get-NetFirewallApplicationFilter -Program %[4]s -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object { $_.Direction.ToString() -eq 'Inbound' -and $_.Action.ToString() -eq 'Block' -and (%[5]s -or $_.Profile.ToString() -ne 'Public') } | Remove-NetFirewallRule`
 
-// Allow adds Yoru's subnet rule and drops a declined prompt's block rules, as administrator.
 func Allow(ctx context.Context, port int, exe string, public bool) error {
-	profiles := "Private,Domain"
+	profiles, publicToo := "Private,Domain", "$false"
 	if public {
-		profiles = "Private,Domain,Public"
+		profiles, publicToo = "Private,Domain,Public", "$true"
 	}
-	return elevated(ctx, fmt.Sprintf(allowScript, quote(RuleName(port)), port, profiles, quote(exe)))
+	return elevated(ctx, fmt.Sprintf(allowScript, quote(RuleName(port)), port, profiles, quote(exe), publicToo))
 }
 
 const allowPeersScript = `$ErrorActionPreference = 'Stop'
@@ -81,16 +83,12 @@ foreach ($proto in 'TCP', 'UDP') {
 }
 Get-NetFirewallApplicationFilter -Program %[3]s -ErrorAction SilentlyContinue | Get-NetFirewallRule | Where-Object { $_.Direction.ToString() -eq 'Inbound' -and $_.Action.ToString() -eq 'Block' } | Remove-NetFirewallRule`
 
-// AllowPeers lets torrent peers reach yoru.exe on the peer port from anywhere, TCP and UDP, and removes block
-// rules a declined prompt left.
 func AllowPeers(ctx context.Context, port int, exe string) error {
 	return elevated(ctx, fmt.Sprintf(allowPeersScript, quote(PeerRuleName(port)), port, quote(exe)))
 }
 
-// elevated runs script through Windows' administrator prompt.
 func elevated(ctx context.Context, script string) error {
-	// The elevated child cannot report back directly; its exit code can.
-	launcher := fmt.Sprintf(`try { $p = Start-Process powershell -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','%s'; exit $p.ExitCode } catch { exit 1223 }`,
+	launcher := fmt.Sprintf(`try { $p = Start-Process powershell -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','%s'; exit $p.ExitCode } catch { $e = $_.Exception; while ($e) { if ($e.NativeErrorCode -eq 1223) { exit 1223 }; $e = $e.InnerException }; exit 1 }`,
 		encoded(script))
 	err := powershell(ctx, "-Command", launcher).Run()
 	var exit *exec.ExitError
@@ -103,8 +101,11 @@ func elevated(ctx context.Context, script string) error {
 	return nil
 }
 
-// OpenNetworkSettings shows where a network is switched from Public to Private.
 func OpenNetworkSettings() error {
 	cmd := exec.Command("explorer", "ms-settings:network-status")
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
 }

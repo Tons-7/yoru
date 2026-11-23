@@ -17,7 +17,6 @@ var shownCode = regexp.MustCompile(`class="code">([A-Z2-9]{3})-([A-Z2-9]{3})<`)
 
 const tvAgent = "Mozilla/5.0 (Linux; Android 9; BRAVIA 4K) AppleWebKit/537.36 Chrome/108.0 Safari/537.36"
 
-// pairingCode opens Yoru on a TV without the token and reads the code it is shown.
 func pairingCode(t *testing.T, tv *device) string {
 	t.Helper()
 	res := tv.get("/", true)
@@ -38,7 +37,6 @@ func waitStatus(t *testing.T, tv *device) string {
 	return out.Status
 }
 
-// A TV shown a code is let in once a device with the token enters it, typed any way; until then it isn't.
 func TestATVPairsWithACode(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -79,7 +77,6 @@ func TestATVPairsWithACode(t *testing.T) {
 	}
 }
 
-// With device approval on only the host pairs, and the TV it pairs is accepted, not asked to wait again.
 func TestPairingWithApprovalOnIsTheHosts(t *testing.T) {
 	h := approvalHarness(t, approvalOnce)
 	tv := newDevice(t, h)
@@ -109,8 +106,6 @@ func TestPairingWithApprovalOnIsTheHosts(t *testing.T) {
 	}
 }
 
-// Pages fetched without keeping cookies (a scanner, a link preview) take their own address's 3 places,
-// leaving a TV elsewhere its code.
 func TestPairingIsLimitedPerAddress(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -131,7 +126,6 @@ func TestPairingIsLimitedPerAddress(t *testing.T) {
 	pairingCode(t, tv)
 }
 
-// Codes last 10 minutes, and no more than 20 wait at once.
 func TestPairingCodesExpireAndAreLimited(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"

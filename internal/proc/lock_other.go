@@ -3,11 +3,14 @@
 package proc
 
 import (
+	"context"
 	"os"
+	"os/exec"
+	"runtime"
 	"syscall"
+	"time"
 )
 
-// Lock holds an exclusive lock on path for the process's life; a second Yoru on the same data gets an error.
 func Lock(path string) (func(), error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
@@ -23,5 +26,25 @@ func Lock(path string) (func(), error) {
 	}, nil
 }
 
-// Alert: a terminal keeps the message on screen; nothing more to do.
-func Alert(string, string) {}
+func Alert(title, text string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if runtime.GOOS == "darwin" {
+		exec.CommandContext(ctx, "osascript",
+			"-e", "on run argv",
+			"-e", "display alert (item 1 of argv) message (item 2 of argv) as critical",
+			"-e", "end run", title, text).Run()
+		return
+	}
+	for _, try := range [][]string{
+		{"zenity", "--error", "--no-markup", "--title", title, "--text", text},
+		{"kdialog", "--title", title, "--error", text},
+		{"notify-send", "--urgency=critical", title, text},
+	} {
+		if _, err := exec.LookPath(try[0]); err != nil {
+			continue
+		}
+		exec.CommandContext(ctx, try[0], try[1:]...).Run()
+		return
+	}
+}

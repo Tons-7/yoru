@@ -15,8 +15,8 @@ type nodeKey struct {
 type node struct {
 	nodeKey
 
-	lastGotQuery    time.Time // From the remote node
-	lastGotResponse time.Time // From the remote node
+	lastGotQuery    time.Time
+	lastGotResponse time.Time
 
 	numReceivesFrom            int
 	failedLastQuestionablePing bool
@@ -46,7 +46,6 @@ func (n *node) NodeInfo() (ret krpc.NodeInfo) {
 	return
 }
 
-// Per the spec in BEP 5.
 func (s *Server) IsGood(n *node) bool {
 	if s.nodeIsBad(n) {
 		return false

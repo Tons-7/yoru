@@ -10,8 +10,6 @@ import (
 	"yoru/internal/bt/segments"
 )
 
-// Returns the minimum file lengths required for the given extent to exist on disk. Returns false if
-// the extent is not covered by the files in the index.
 func minFileLengthsForTorrentExtent(
 	fileSegmentsIndex segments.Index,
 	off, n int64,
@@ -39,11 +37,9 @@ func fsync(filePath string) (err error) {
 	return f.Close()
 }
 
-// Creates a zero-length file, which file storage never writes and so never makes; name must be safe.
 func CreateNativeZeroLengthFile(name string) error {
 	os.MkdirAll(filepath.Dir(name), dirPerm)
 	var f io.Closer
-	// Must request write perms to create and trunc. But we don't need those for a zero-length file.
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_TRUNC, filePerm)
 	if err != nil {
 		stat, statErr := os.Stat(name)
@@ -55,11 +51,8 @@ func CreateNativeZeroLengthFile(name string) error {
 	return f.Close()
 }
 
-// Combines data from different locations required to handle files in file storage.
 type file struct {
-	// Required for piece length.
 	*metainfo.Info
-	// Enumerated when info is provided.
 	*metainfo.FileInfo
 	*fileExtra
 }
@@ -80,14 +73,10 @@ func (f *file) torrentOffset() int64 {
 	return f.FileInfo.TorrentOffset
 }
 
-// Extra state in the file storage for each file.
 type fileExtra struct {
-	// This protects high level OS file state like partial file name, permission mod, renaming etc.
-	mu sync.RWMutex
-	// The safe, OS-local file path.
+	mu         sync.RWMutex
 	safeOsPath string
-	// Utility value to help the race detector find issues for us.
-	race byte
+	race       byte
 }
 
 func (f *fileExtra) partFilePath() string {

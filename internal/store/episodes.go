@@ -380,7 +380,7 @@ func (s *Store) asScheduled(ctx context.Context, animeID int, out []EpisodeRow) 
 			e.AirDate = &at
 		case e.Number < next && e.AirDate != nil && *e.AirDate > now:
 			e.AirDate = &now
-		case e.Number > next && e.AirDate != nil && *e.AirDate < at:
+		case e.Number > next && (e.AirDate == nil || *e.AirDate < at):
 			e.AirDate = &at
 		}
 	}
@@ -867,9 +867,6 @@ func (s *Store) EpisodesFromReleasesOnly(ctx context.Context, animeID int) bool 
 }
 
 func (s *Store) SaveDerivedEpisodes(ctx context.Context, animeID int, numbers []int) (int, error) {
-	if err := s.MarkSource(ctx, derivedKey(animeID), len(numbers)); err != nil {
-		return 0, err
-	}
 	if limit, firm := s.EpisodeLimit(ctx, animeID); limit > 0 {
 		if _, err := s.w.ExecContext(ctx, `
 			DELETE FROM episode
@@ -877,13 +874,15 @@ func (s *Store) SaveDerivedEpisodes(ctx context.Context, animeID int, numbers []
 			  AND NOT EXISTS (SELECT 1 FROM torrent_file tf
 			                  WHERE tf.anime_id = episode.anime_id AND tf.ep_key = episode.ep_key AND tf.selected = 1)
 			  AND NOT EXISTS (SELECT 1 FROM local_file lf
-			                  WHERE lf.anime_id = episode.anime_id AND lf.episode = episode.number AND lf.missing = 0)`,
+			                  WHERE lf.anime_id = episode.anime_id AND lf.episode = episode.number AND lf.missing = 0)
+			  AND NOT EXISTS (SELECT 1 FROM playback p
+			                  WHERE p.anime_id = episode.anime_id AND p.ep_key = episode.ep_key)`,
 			animeID, limit+Slack(firm)); err != nil {
 			return 0, err
 		}
 	}
 	if len(numbers) == 0 {
-		return 0, nil
+		return 0, s.MarkSource(ctx, derivedKey(animeID), 0)
 	}
 	if err := s.EnsureAnime(ctx, animeID); err != nil {
 		return 0, err
@@ -914,7 +913,10 @@ func (s *Store) SaveDerivedEpisodes(ctx context.Context, animeID int, numbers []
 		}
 		saved++
 	}
-	return saved, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return saved, s.MarkSource(ctx, derivedKey(animeID), len(numbers))
 }
 
 func (s *Store) FillEpisodes(ctx context.Context, animeID int, eps []metadata.Episode) (int, error) {

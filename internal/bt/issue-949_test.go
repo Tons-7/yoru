@@ -9,7 +9,6 @@ import (
 )
 
 func TestIssue949LastPieceZeroPadding(t *testing.T) {
-	// This torrent has a padding file after the last file listed in the v2 info file tree.
 	mi, err := metainfo.LoadFromFile("testdata/issue-949.torrent")
 	if err != nil {
 		panic(err)
@@ -20,8 +19,6 @@ func TestIssue949LastPieceZeroPadding(t *testing.T) {
 	}
 	lastPiece := info.Piece(info.NumPieces() - 1)
 	qt.Assert(t, qt.IsTrue(info.FilesArePieceAligned()))
-	// Check the v1 piece length includes the trailing padding file.
 	qt.Check(t, qt.Equals(lastPiece.V1Length(), info.PieceLength))
-	// The v2 piece holds only the file's data, which fits in one piece length here.
 	qt.Check(t, qt.Equals(lastPiece.Length(), int64(3677645)))
 }

@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// Subtitle files named after the video are its tracks, the language read from the name; another episode's
-// file, or one for another video, is not.
 func TestSidecarsAreTheFilesNamedAfterTheVideo(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{

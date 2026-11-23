@@ -1,7 +1,6 @@
 package bt
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/anacrolix/log"
 	"github.com/anacrolix/missinggo/v2"
-	"github.com/anacrolix/missinggo/v2/filecache"
 	"github.com/go-quicktest/qt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,7 +23,6 @@ import (
 
 	"yoru/internal/bt/bencode"
 	"yoru/internal/bt/internal/testutil"
-	"yoru/internal/bt/iplist"
 	"yoru/internal/bt/metainfo"
 	"yoru/internal/bt/storage"
 )
@@ -134,15 +131,6 @@ func TestAddDropManyTorrents(t *testing.T) {
 		assert.True(t, new)
 		defer tt.Drop()
 	}
-}
-
-func fileCachePieceResourceStorage(fc *filecache.Cache) storage.ClientImpl {
-	return storage.NewResourcePiecesOpts(
-		fc.AsResourceProvider(),
-		storage.ResourcePiecesOpts{
-			LeaveIncompleteChunks: true,
-		},
-	)
 }
 
 func TestMergingTrackersByAddingSpecs(t *testing.T) {
@@ -330,24 +318,6 @@ func TestTorrentDroppedDuringResponsiveRead(t *testing.T) {
 	assert.EqualValues(t, 0, n)
 }
 
-func TestDhtInheritBlocklist(t *testing.T) {
-	ipl := iplist.New(nil)
-	require.NotNil(t, ipl)
-	cfg := TestingConfig(t)
-	cfg.IPBlocklist = ipl
-	cfg.NoDHT = false
-	cl, err := NewClient(cfg)
-	require.NoError(t, err)
-	defer cl.Close()
-	numServers := 0
-	cl.eachDhtServer(func(s DhtServer) {
-		t.Log(s)
-		assert.Equal(t, ipl, s.(DhtServerWrapper).Server.IPBlocklist())
-		numServers++
-	})
-	qt.Assert(t, qt.Not(qt.Equals(numServers, 0)))
-}
-
 func TestAddTorrentSpecMerging(t *testing.T) {
 	cl, err := NewClient(TestingConfig(t))
 	require.NoError(t, err)
@@ -382,59 +352,6 @@ func TestTorrentDroppedBeforeGotInfo(t *testing.T) {
 	}
 }
 
-func writeTorrentData(ts *storage.Torrent, info metainfo.Info, b []byte) {
-	for i := 0; i < info.NumPieces(); i += 1 {
-		p := info.Piece(i)
-		ts.Piece(p).WriteAt(b[p.Offset():p.Offset()+p.Length()], 0)
-	}
-}
-
-func testAddTorrentPriorPieceCompletion(t *testing.T, alreadyCompleted bool, csf func(*filecache.Cache) storage.ClientImpl) {
-	fileCacheDir := t.TempDir()
-	fileCache, err := filecache.NewCache(fileCacheDir)
-	require.NoError(t, err)
-	greetingDataTempDir, greetingMetainfo := testutil.GreetingTestTorrent()
-	defer os.RemoveAll(greetingDataTempDir)
-	filePieceStore := csf(fileCache)
-	info, err := greetingMetainfo.UnmarshalInfo()
-	require.NoError(t, err)
-	ih := greetingMetainfo.HashInfoBytes()
-	greetingData, err := storage.NewClient(filePieceStore).OpenTorrent(context.Background(), &info, ih)
-	require.NoError(t, err)
-	writeTorrentData(greetingData, info, []byte(testutil.GreetingFileContents))
-	for i := 0; i < info.NumPieces(); i++ {
-		p := info.Piece(i)
-		if alreadyCompleted {
-			require.NoError(t, greetingData.Piece(p).MarkComplete())
-		}
-	}
-	cfg := TestingConfig(t)
-	cfg.DisableTCP = true
-	cfg.DisableUTP = true
-	cfg.DefaultStorage = filePieceStore
-	cl, err := NewClient(cfg)
-	require.NoError(t, err)
-	defer cl.Close()
-	tt, err := cl.AddTorrent(greetingMetainfo)
-	require.NoError(t, err)
-	psrs := tt.PieceStateRuns()
-	assert.Len(t, psrs, 1)
-	assert.EqualValues(t, 3, psrs[0].Length)
-	assert.Equal(t, alreadyCompleted, psrs[0].Complete)
-	if alreadyCompleted {
-		r := tt.NewReader()
-		qt.Check(t, qt.IsNil(iotest.TestReader(r, []byte(testutil.GreetingFileContents))))
-	}
-}
-
-func TestAddTorrentPiecesAlreadyCompleted(t *testing.T) {
-	testAddTorrentPriorPieceCompletion(t, true, fileCachePieceResourceStorage)
-}
-
-func TestAddTorrentPiecesNotAlreadyCompleted(t *testing.T) {
-	testAddTorrentPriorPieceCompletion(t, false, fileCachePieceResourceStorage)
-}
-
 func TestAddMetainfoWithNodes(t *testing.T) {
 	cfg := TestingConfig(t)
 	cfg.NoDHT = false
@@ -458,9 +375,7 @@ func TestAddMetainfoWithNodes(t *testing.T) {
 }
 
 type testDownloadCancelParams struct {
-	SetLeecherStorageCapacity bool
-	LeecherStorageCapacity    int64
-	Cancel                    bool
+	Cancel bool
 }
 
 func testDownloadCancel(t *testing.T, ps testDownloadCancelParams) {
@@ -476,12 +391,9 @@ func testDownloadCancel(t *testing.T, ps testDownloadCancelParams) {
 	seederTorrent, _, _ := seeder.AddTorrentSpec(TorrentSpecFromMetaInfo(mi))
 	seederTorrent.VerifyData()
 	leecherDataDir := t.TempDir()
-	fc, err := filecache.NewCache(leecherDataDir)
-	require.NoError(t, err)
-	if ps.SetLeecherStorageCapacity {
-		fc.SetCapacity(ps.LeecherStorageCapacity)
-	}
-	cfg.DefaultStorage = storage.NewResourcePieces(fc.AsResourceProvider())
+	leecherStorage := storage.NewFile(leecherDataDir)
+	defer leecherStorage.Close()
+	cfg.DefaultStorage = leecherStorage
 	cfg.DataDir = leecherDataDir
 	leecher, err := NewClient(cfg)
 	require.NoError(t, err)
@@ -754,7 +666,7 @@ func TestObfuscatedHeaderFallbackSeederRequiresLeecherPrefersNot(t *testing.T) {
 }
 
 func TestClientAddressInUse(t *testing.T) {
-	s, _ := NewUtpSocket("udp", "localhost:50007", nil, log.Default)
+	s, _ := NewUtpSocket("udp", "localhost:50007", log.Default)
 	if s != nil {
 		defer s.Close()
 	}
@@ -816,26 +728,30 @@ func TestBadPeerIpPort(t *testing.T) {
 			},
 		},
 		{
-			"in IP block list",
-			net.ParseIP("10.0.0.1"),
-			2322,
-			true,
-			func(cl *Client) {
-				cl.ipBlockList = iplist.New([]iplist.Range{
-					{First: net.ParseIP("10.0.0.1"), Last: net.ParseIP("10.0.0.255")},
-				})
-			},
-		},
-		{
 			"in bad peer IPs",
 			net.ParseIP("10.0.0.1"),
 			2322,
 			true,
 			func(cl *Client) {
-				ipAddr, ok := netip.AddrFromSlice(net.ParseIP("10.0.0.1"))
-				require.True(t, ok)
-				cl.badPeerIPs = map[netip.Addr]time.Time{}
-				cl.badPeerIPs[ipAddr] = time.Now().Add(time.Hour)
+				cl.banPeerIP(net.ParseIP("10.0.0.1"))
+			},
+		},
+		{
+			"banned as 4 bytes, offered as 16",
+			net.ParseIP("10.0.0.1"),
+			2322,
+			true,
+			func(cl *Client) {
+				cl.banPeerIP(netip.MustParseAddr("10.0.0.1").AsSlice())
+			},
+		},
+		{
+			"banned as 16 bytes, offered as 4",
+			net.IPv4(10, 0, 0, 1).To4(),
+			2322,
+			true,
+			func(cl *Client) {
+				cl.banPeerIP(net.ParseIP("10.0.0.1"))
 			},
 		},
 		{
@@ -844,9 +760,7 @@ func TestBadPeerIpPort(t *testing.T) {
 			2322,
 			false,
 			func(cl *Client) {
-				ipAddr, ok := netip.AddrFromSlice(net.ParseIP("10.0.0.1"))
-				require.True(t, ok)
-				cl.badPeerIPs = map[netip.Addr]time.Time{ipAddr: time.Now().Add(-time.Second)}
+				cl.badPeerIPs = map[netip.Addr]time.Time{netip.MustParseAddr("10.0.0.1"): time.Now().Add(-time.Second)}
 			},
 		},
 		{

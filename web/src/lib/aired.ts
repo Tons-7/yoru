@@ -61,7 +61,7 @@ export function byShow(items: ScheduleItem[]): ShowRelease[] {
   const shows = new Map<number, ScheduleItem[]>()
   for (const item of items) shows.set(item.animeId, [...(shows.get(item.animeId) ?? []), item])
   return [...shows.values()].map((group) => {
-    const episodes = [...group].sort((a, b) => a.episode - b.episode)
+    const episodes = group.toSorted((a, b) => a.episode - b.episode)
     const newest = episodes[episodes.length - 1]
     const first = episodes.find((it) => !it.watched) ?? newest
     return { key: `${newest.animeId}-${newest.episode}`, first, newest, episodes }

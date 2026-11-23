@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// Reopening from a hand-picked source ends the old encoder; the new session owns the directory.
 func TestReopenOnAnotherSourceReplacesTheSession(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	first := testMKV(t, ffmpeg, 20)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -18,19 +19,18 @@ import (
 	"yoru/internal/sound"
 )
 
-// VLC is the other desktop player, driven through its loopback HTTP interface.
 type VLC struct {
 	binary string
 	log    *slog.Logger
 	http   *http.Client
 
+	playMu sync.Mutex
 	mu     sync.Mutex
 	cmd    *exec.Cmd
 	ctl    control
 	events chan Event
 }
 
-// control is one instance's HTTP interface; the password is per launch.
 type control struct {
 	port     int
 	password string
@@ -45,8 +45,6 @@ func NewVLC(binary string, log *slog.Logger) *VLC {
 	}
 }
 
-// ResolveVLC is the VLC vlc_path names — its folder or its binary — else
-// wherever it is installed. Empty when the setting points at nothing.
 func ResolveVLC(configured string) string {
 	if configured == "" {
 		return FindVLC()
@@ -71,7 +69,6 @@ func insideInstall(dir string) string {
 	return filepath.Join(dir, name)
 }
 
-// FindVLC is where VLC is on this machine, or empty. PATH first, then the places its installer uses.
 func FindVLC() string {
 	if p, err := exec.LookPath("vlc"); err == nil {
 		return p
@@ -95,8 +92,6 @@ func FindVLC() string {
 	return ""
 }
 
-// No --play-and-exit: the end is read from the interface. --no-one-instance
-// keeps a VLC the user already has open from swallowing the launch.
 func (v *VLC) args(opts Options, ctl control) []string {
 	args := []string{
 		"--no-one-instance",
@@ -111,6 +106,9 @@ func (v *VLC) args(opts Options, ctl control) []string {
 	}
 	if alang := AudioLanguages(opts.Audio); alang != "" {
 		args = append(args, "--audio-language="+alang)
+	}
+	if slang := SubtitleLanguages(opts.SubLanguages); slang != "" {
+		args = append(args, "--sub-language="+slang)
 	}
 	args = append(args, sound.VLCArgs(opts.Sound)...)
 	return append(args, opts.URL)
@@ -132,7 +130,9 @@ func newControl() (control, error) {
 }
 
 func (v *VLC) Play(_ context.Context, opts Options) error {
-	v.Stop()
+	v.playMu.Lock()
+	defer v.playMu.Unlock()
+	v.stop()
 	if v.binary == "" {
 		return fmt.Errorf("VLC is not installed")
 	}
@@ -148,7 +148,6 @@ func (v *VLC) Play(_ context.Context, opts Options) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start VLC: %w", err)
 	}
-	// Own channel per instance: a tracker still draining the old one never sees the new episode's events.
 	events := make(chan Event, 8)
 	v.mu.Lock()
 	v.cmd, v.ctl, v.events = cmd, ctl, events
@@ -166,7 +165,6 @@ type vlcStatus struct {
 	Position float64 `json:"position"`
 }
 
-// watch polls until the process exits, closing the channel after it.
 func (v *VLC) watch(cmd *exec.Cmd, ctl control, opts Options, events chan Event) {
 	defer close(events)
 	exited := make(chan struct{})
@@ -205,8 +203,6 @@ func (v *VLC) watch(cmd *exec.Cmd, ctl control, opts Options, events chan Event)
 		}
 		st, err := v.status(ctl)
 		if err != nil {
-			// The port is picked then released before VLC binds it; if another
-			// process took it, say so rather than poll a dead interface silently.
 			if failures++; failures == unreachableAfter && !reached {
 				v.log.Warn("VLC control interface unreachable; this episode will not be tracked",
 					"port", ctl.port, "err", err)
@@ -235,13 +231,11 @@ func (v *VLC) watch(cmd *exec.Cmd, ctl control, opts Options, events chan Event)
 					if err := v.seek(ctl, r.End); err != nil {
 						v.log.Warn("VLC seek", "err", err)
 					} else {
-						// An ending skip stops VLC before the next poll: the end, not a stop.
 						lastPos = r.End
 					}
 				}
 			}
 		case "stopped":
-			// Stopped after playing: the end, or the user's own stop.
 			if !started {
 				continue
 			}
@@ -251,7 +245,14 @@ func (v *VLC) watch(cmd *exec.Cmd, ctl control, opts Options, events chan Event)
 				reason = "eof"
 			}
 			deliver(events, Event{Kind: EventEnd, Position: lastPos, Duration: lastLen, Reason: reason})
-			v.Stop()
+			v.mu.Lock()
+			if v.cmd == cmd {
+				v.cmd = nil
+			}
+			v.mu.Unlock()
+			if cmd.Process != nil {
+				cmd.Process.Kill()
+			}
 		}
 	}
 }
@@ -268,7 +269,7 @@ func (v *VLC) status(ctl control) (vlcStatus, error) {
 }
 
 func (v *VLC) seek(ctl control, seconds float64) error {
-	res, err := v.request(ctl, fmt.Sprintf("?command=seek&val=%d", int(seconds)))
+	res, err := v.request(ctl, fmt.Sprintf("?command=seek&val=%d", int(math.Ceil(seconds))))
 	if err != nil {
 		return err
 	}
@@ -307,6 +308,12 @@ func (v *VLC) Running() bool {
 }
 
 func (v *VLC) Stop() {
+	v.playMu.Lock()
+	defer v.playMu.Unlock()
+	v.stop()
+}
+
+func (v *VLC) stop() {
 	v.mu.Lock()
 	cmd := v.cmd
 	v.cmd = nil

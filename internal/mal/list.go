@@ -2,6 +2,7 @@ package mal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -124,8 +125,17 @@ func (c *Client) List(ctx context.Context) ([]Entry, error) {
 			})
 		}
 		next = page.Paging.Next
+		if next != "" && !sameHost(next, c.api) {
+			return out, fmt.Errorf("mal: the list's next page points away from MyAnimeList (%s)", next)
+		}
 	}
 	return out, nil
+}
+
+func sameHost(a, b string) bool {
+	ua, err1 := url.Parse(a)
+	ub, err2 := url.Parse(b)
+	return err1 == nil && err2 == nil && ua.Scheme == ub.Scheme && strings.EqualFold(ua.Host, ub.Host)
 }
 
 func (c *Client) SetProgress(ctx context.Context, animeID, watched int, status string, rewatched, score int, clearScore bool) error {
@@ -142,7 +152,7 @@ func (c *Client) SetProgress(ctx context.Context, animeID, watched int, status s
 	}
 	if s := Status(status); s != "" {
 		form.Set("status", s)
-		form.Set("is_rewatching", strconv.FormatBool(status == "REPEATING"))
+		form.Set("is_rewatching", strconv.FormatBool(strings.EqualFold(status, "REPEATING")))
 	}
 
 	endpoint := fmt.Sprintf("%s/anime/%d/my_list_status", c.api, animeID)
@@ -151,8 +161,7 @@ func (c *Client) SetProgress(ctx context.Context, animeID, watched int, status s
 
 func (c *Client) DeleteEntry(ctx context.Context, animeID int) error {
 	err := c.do(ctx, http.MethodDelete, fmt.Sprintf("%s/anime/%d/my_list_status", c.api, animeID), nil, nil)
-	var e *Error
-	if asError(err, &e) && e.Status == http.StatusNotFound {
+	if e, ok := errors.AsType[*Error](err); ok && e.Status == http.StatusNotFound {
 		return nil
 	}
 	return err

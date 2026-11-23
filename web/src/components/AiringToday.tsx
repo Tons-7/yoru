@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import type { ScheduleItem } from '../lib/api'
 import { toCard } from '../lib/cards'
-import { airTime, cx } from '../lib/format'
+import { airTime, cx, playLabel } from '../lib/format'
 import { useNow, useSchedule } from '../lib/queries'
 import { releaseState, TONE_TEXT } from '../lib/aired'
 import { HoverInfo } from './HoverInfo'
@@ -15,7 +15,17 @@ const TO = '/schedule?view=coming'
 export function AiringToday({ folded, onUnfold }: { folded: boolean; onUnfold: () => void }) {
   const schedule = useSchedule(1)
   const now = useNow() / 1000
-  const today = schedule.data?.days.find((d) => d.today)
+  const here = new Date(now * 1000)
+  const localDate = `${here.getFullYear()}-${String(here.getMonth() + 1).padStart(2, '0')}-${String(here.getDate()).padStart(2, '0')}`
+  const today = schedule.data?.days.find((d) => d.date === localDate) ?? schedule.data?.days.find((d) => d.today)
+  const asked = useRef('')
+  const stale = !!schedule.data && today?.date !== localDate
+  const refetchSchedule = schedule.refetch
+  useEffect(() => {
+    if (!stale || asked.current === localDate) return
+    asked.current = localDate
+    void refetchSchedule()
+  }, [stale, localDate, refetchSchedule])
   const items = today?.items ?? []
   const next = items.find((item) => item.airingAt > now)
   const nextCard = useRef<HTMLDivElement>(null)
@@ -28,7 +38,7 @@ export function AiringToday({ folded, onUnfold }: { folded: boolean; onUnfold: (
     placed.current = today.date
     const left = track.scrollLeft + el.getBoundingClientRect().left - track.getBoundingClientRect().left - 4
     track.scrollTo({ left, behavior: 'instant' })
-  }, [today, next])
+  }, [today, next, folded])
 
   if (folded) return <Rail title={TITLE} to={TO} folded onUnfold={onUnfold}>{null}</Rail>
   if (schedule.isPending) return <RailSkeleton title={TITLE} to={TO} size="still" />
@@ -37,7 +47,12 @@ export function AiringToday({ folded, onUnfold }: { folded: boolean; onUnfold: (
   return (
     <Rail title={TITLE} to={TO} meta={items.length > 0 ? `${items.length} ${items.length === 1 ? 'episode' : 'episodes'}` : undefined}>
       {items.length === 0 ? (
-        <p className="py-2 text-sm text-base-400">Nothing airs today. The full week is in Schedule.</p>
+        <p className="py-2 text-sm text-base-400">
+          Nothing airs today.{' '}
+          <Link to={TO} className="font-medium text-accent-300 hover:underline">
+            See the full week
+          </Link>
+        </p>
       ) : (
         items.map((item) => (
           <RailItem key={`${item.animeId}-${item.episode}`} size="still">
@@ -68,7 +83,7 @@ function AiringCard({ item, next, aired, now }: { item: ScheduleItem; next: bool
         color: item.colour,
         cover: item.cover,
         progress: item.progress,
-        play: aired ? { to: `/watch/${item.animeId}/${item.episode}`, label: `Play ep ${item.episode}` } : undefined,
+        play: aired ? { to: `/watch/${item.animeId}/${item.episode}`, label: playLabel(item.episode, false) } : undefined,
       }}
     >
       <Link to={`/anime/${item.animeId}`} className="press group/airing block rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">

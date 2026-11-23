@@ -50,7 +50,7 @@ export function ChoiceRow({
       onClick={onClick}
       className={cx(
         'mx-2 flex min-h-10 w-[calc(100%-1rem)] items-center gap-3 rounded-lg px-2.5 py-1.5 text-left transition-colors pointer-coarse:min-h-12',
-        selected ? 'bg-white/[0.08]' : 'hover:bg-white/[0.05]',
+        selected ? 'bg-white/8' : 'hover:bg-white/5',
       )}
     >
       <Label label={label} caption={caption} selected={selected} />
@@ -136,7 +136,7 @@ export function ActionRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-12 w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-white/[0.05]"
+      className="flex min-h-12 w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-white/5"
     >
       <Label label={label} caption={caption} />
       <span className="min-w-0 truncate text-xs text-base-300">{value}</span>

@@ -23,7 +23,6 @@ func spoilerFlags(t *testing.T, s *Store) string {
 	return out
 }
 
-// By default the episodes after the next one are held back; watched ones, and a finished show, never are.
 func TestSpoilersHideWhatComesAfterTheNextEpisode(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

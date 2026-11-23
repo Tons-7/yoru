@@ -18,10 +18,8 @@ import (
 	"yoru/internal/torrent"
 )
 
-// Extras, trailers and samples are video too, so size separates an episode from them.
 const minEpisodeBytes = 20 << 20
 
-// Directories that hold anything but episodes.
 var skipDir = map[string]bool{
 	"extras": true, "specials.disabled": true, "sample": true,
 	"samples": true, "trailers": true, "featurettes": true,
@@ -30,16 +28,14 @@ var skipDir = map[string]bool{
 }
 
 type Scanner struct {
-	store *store.Store
-	log   *slog.Logger
-	// cacheDir is never walked: a part-downloaded torrent there is not a library file.
+	store    *store.Store
+	log      *slog.Logger
 	cacheDir string
 
 	mu   sync.Mutex
 	last *ScanReport
 }
 
-// WithCacheDir names Yoru's own download folder, which a library root may contain.
 func (s *Scanner) WithCacheDir(dir string) *Scanner {
 	if abs, err := filepath.Abs(dir); err == nil {
 		s.cacheDir = abs
@@ -47,7 +43,6 @@ func (s *Scanner) WithCacheDir(dir string) *Scanner {
 	return s
 }
 
-// LastReport is the last scan's report, nil before any.
 func (s *Scanner) LastReport() *ScanReport {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -69,7 +64,6 @@ type ScanReport struct {
 	Errors    []string `json:"errors,omitempty"`
 }
 
-// Roots reads the configured folders, a JSON array so a comma or semicolon can't split a path.
 func (s *Scanner) Roots(ctx context.Context) ([]string, error) {
 	raw, err := s.store.Setting(ctx, "library.paths")
 	if err != nil || strings.TrimSpace(raw) == "" {
@@ -90,8 +84,6 @@ func (s *Scanner) Roots(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// Scan walks the configured roots and records every episode it can identify.
-// Unmatched files are still stored so they can be assigned by hand.
 func (s *Scanner) Scan(ctx context.Context, ix *match.Index) (ScanReport, error) {
 	start := time.Now()
 
@@ -116,7 +108,6 @@ func (s *Scanner) Scan(ctx context.Context, ix *match.Index) (ScanReport, error)
 		if err := ctx.Err(); err != nil {
 			return rep, err
 		}
-		// Through a junction or symlink: WalkDir would see no folder and sweep everything under it.
 		real := root
 		if r, err := filepath.EvalSymlinks(root); err == nil {
 			real = r
@@ -129,7 +120,6 @@ func (s *Scanner) Scan(ctx context.Context, ix *match.Index) (ScanReport, error)
 			continue
 		}
 		found = append(found, files...)
-		// A folder that could not be read this time keeps its rows: sweeping them would drop hand assignments.
 		if len(failed) > 0 {
 			for _, f := range failed {
 				rep.Errors = append(rep.Errors, f+": not readable; its files were left as they were")
@@ -148,37 +138,42 @@ func (s *Scanner) Scan(ctx context.Context, ix *match.Index) (ScanReport, error)
 		}
 	}
 
-	// One stamp per scan, so anything older is exactly what wasn't seen.
 	stamp, err := s.store.NextScanStamp(ctx)
 	if err != nil {
 		return rep, err
 	}
+	failed := func(err error) (ScanReport, error) {
+		rep.Errors = append(rep.Errors, "saving the scan: "+err.Error())
+		rep.Took = time.Since(start).Round(time.Millisecond).String()
+		published := rep
+		s.mu.Lock()
+		s.last = &published
+		s.mu.Unlock()
+		return rep, err
+	}
 	if _, err := s.store.SaveLocalFiles(ctx, stamp, found); err != nil {
-		return rep, err
+		return failed(err)
 	}
-	// Only the roots that walked: one that failed contributed no files, and
-	// sweeping it would mark an unplugged drive's whole library missing.
 	if rep.Missing, err = s.store.SweepLocal(ctx, stamp, walked); err != nil {
-		return rep, err
+		return failed(err)
 	}
-	// Rows under no configured root: a folder taken out of the library takes its files with it.
 	if outside, err := s.store.SweepOutside(ctx, resolved); err != nil {
-		return rep, err
+		return failed(err)
 	} else {
 		rep.Missing += outside
 	}
+	rep.Took = time.Since(start).Round(time.Millisecond).String()
+	published := rep
 	s.mu.Lock()
-	s.last = &rep
+	s.last = &published
 	s.mu.Unlock()
 
-	rep.Took = time.Since(start).Round(time.Millisecond).String()
 	s.log.Info("library scan", "roots", len(roots), "video", rep.Video,
 		"matched", rep.Matched, "unmatched", rep.Unmatched,
 		"missing", rep.Missing, "took", rep.Took)
 	return rep, nil
 }
 
-// walk lists the videos under root; failed names the folders inside it that could not be read.
 func (s *Scanner) walk(ctx context.Context, root string) (out []store.LocalFile, seen int, failed []string, err error) {
 	visited := map[string]bool{}
 	err = s.walkInto(ctx, root, root, visited, &out, &seen, &failed)
@@ -192,7 +187,6 @@ func (s *Scanner) walkInto(ctx context.Context, root, dir string, visited map[st
 	visited[dir] = true
 	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			// An unreadable root is a configuration problem worth surfacing; a folder inside it is only noted.
 			if path == root {
 				return err
 			}
@@ -207,7 +201,6 @@ func (s *Scanner) walkInto(ctx context.Context, root, dir string, visited map[st
 			return ctx.Err()
 		}
 
-		// Junctions and symlinks are walked where they point; a root one, via a trailing separator.
 		if d.Type()&(fs.ModeSymlink|fs.ModeIrregular) != 0 {
 			sep := string(filepath.Separator)
 			if path == dir {
@@ -217,8 +210,9 @@ func (s *Scanner) walkInto(ctx context.Context, root, dir string, visited map[st
 				return nil
 			}
 			if target, err := filepath.EvalSymlinks(path); err == nil {
-				if info, err := os.Stat(target); err == nil && info.IsDir() {
-					return s.walkInto(ctx, root, target, visited, out, seen, failed)
+				if info, err := os.Stat(target); err == nil && info.IsDir() && !visited["target:"+target] {
+					visited["target:"+target] = true
+					return s.walkInto(ctx, root, path+sep, visited, out, seen, failed)
 				}
 			}
 			return nil
@@ -253,8 +247,6 @@ func (s *Scanner) walkInto(ctx context.Context, root, dir string, visited map[st
 	})
 }
 
-// bareEpisode reports a file named only for its episode number, like "05".
-// The parser reads that as a title, which no index will ever match.
 func bareEpisode(name string) (int, bool) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" || len(trimmed) > 4 {
@@ -269,7 +261,6 @@ func bareEpisode(name string) (int, bool) {
 	return n, err == nil && n > 0
 }
 
-// identify parses the file name, else its folder's, which is usually named for the show.
 func identify(f *store.LocalFile, ix *match.Index, boosts map[int]float64) bool {
 	name := strings.TrimSuffix(filepath.Base(f.Path), filepath.Ext(f.Path))
 	rel := parse.Parse(name)
@@ -284,7 +275,6 @@ func identify(f *store.LocalFile, ix *match.Index, boosts map[int]float64) bool 
 		f.Title, f.Episode = "", n
 	}
 
-	// The folder names what the file does not: the show, or the season of a bare "Show - 05".
 	parent := parse.Parse(filepath.Base(filepath.Dir(f.Path)))
 	if f.Title == "" && parent.Title != "" {
 		f.Title = parent.Title
@@ -299,20 +289,17 @@ func identify(f *store.LocalFile, ix *match.Index, boosts map[int]float64) bool 
 		return false
 	}
 
-	// The download path's confidence threshold, so a weak guess waits for review.
 	res, ok := ix.Match(match.Query{
 		Title:   f.Title,
 		Season:  f.Season,
 		Episode: f.Episode,
 		Boost:   boosts,
 	})
-	// A toss-up between seasons is left for a hand assignment, not played as whichever ranked first.
 	if !ok || res.Ambiguous() {
 		return false
 	}
 
 	f.AnimeID = res.MediaID
-	// Below 1: confidence 1 is a hand assignment, which rescans never touch.
 	f.Confidence = scanConfidence(res.Score)
 	return true
 }

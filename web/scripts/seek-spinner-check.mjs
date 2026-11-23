@@ -1,6 +1,5 @@
-// A short arrow-key seek is instant, so it must not flash the buffering
-// spinner â€” least of all while paused, where the frame just sat there anyway.
 import { chromium } from 'playwright'
+import { prepareLocalEpisode } from './harness-lib.mjs'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const LIB = process.env.YORU_LIB
@@ -21,36 +20,10 @@ const until = async (fn, ms = 20000) => {
   }
   return false
 }
-const api = async (p, init) => {
-  const res = await fetch(BASE + p, {
-    ...init,
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
-  })
-  let body
-  try {
-    body = await res.json()
-  } catch {}
-  return { ok: res.ok, body }
-}
-const post = (p, b) => api(p, { method: 'POST', body: JSON.stringify(b) })
 
-for (let i = 0; i < 60; i++) {
-  try {
-    if ((await api('/api/setup')).ok) break
-  } catch {}
-  await sleep(1000)
-}
-await post('/api/local/paths', { paths: [LIB] })
-await post('/api/local/scan', {})
-let file
-for (let i = 0; i < 30 && !file; i++) {
-  await sleep(1000)
-  file = (await api('/api/local/files')).body?.items?.find((f) => String(f.path ?? '').includes('Yoru Test Show'))
-}
-check(!!file, 'test file listed')
-if (!file) process.exit(1)
-await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: 1 })
-await post('/api/prefs', { key: 'playback.autoplay', value: 'true' })
+const prepared = await prepareLocalEpisode({ base: BASE, lib: LIB, anime: ANIME })
+check(prepared, 'test file listed')
+if (!prepared) process.exit(1)
 
 const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] })
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
@@ -59,7 +32,6 @@ page.on('pageerror', (e) => errors.push(e.message.split('\n')[0].slice(0, 160)))
 
 const video = page.locator('video')
 const spinner = page.locator('.group\\/player .animate-spin')
-// Sampled fast: the old bug was a flash, not a lasting spinner.
 const spinnerDuring = async (ms) => {
   const end = Date.now() + ms
   let seen = false
@@ -74,7 +46,6 @@ await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'episode loads')
 check(await until(() => video.evaluate((v) => !v.paused), 20_000), 'it starts playing')
 
-// Far enough in that a ten-second step back stays inside what is buffered.
 await video.evaluate((v) => {
   v.currentTime = 40
 })
@@ -96,7 +67,6 @@ check(after < before - 3, 'and it actually moved back', `${before.toFixed(1)} â†
 check(await video.evaluate((v) => v.paused), 'and it stayed paused')
 await page.screenshot({ path: `${SHOTS}/paused-seek.png` })
 
-// Playing, the same seek is just as quiet.
 await page.keyboard.press('k')
 check(await until(() => video.evaluate((v) => !v.paused), 5000), 'k resumed it')
 await page.keyboard.press('ArrowRight')

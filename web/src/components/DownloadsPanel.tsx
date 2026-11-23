@@ -10,7 +10,7 @@ import { savedKey, useSaved } from '../lib/offline'
 import { refreshDownloads, useAccess, useDownloadQueue, useDownloads, useSpeedUnit, type Download, type Queued } from '../lib/queries'
 import { ActivityMark } from './ActivityRing'
 import { SavingJob } from './SavingJob'
-import { ProgressBar } from './ui'
+import { Badge, ProgressBar } from './ui'
 import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 import { useHiddenKeys } from '../lib/undo'
 import { plainKey, usePortalHome } from './keys'
@@ -26,7 +26,7 @@ export function DownloadsPanel() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (plainKey(e) !== 'd') return
+      if (plainKey(e) !== 'd' || e.repeat || document.querySelector('[aria-modal="true"]')) return
       setGlance(true)
       setOpen((v) => !v)
     }
@@ -63,9 +63,12 @@ export function DownloadsPanel() {
     onSuccess: () => refreshDownloads(qc),
   })
 
+  const copiedTimer = useRef(0)
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), [])
   const copy = async () => {
     setCopied(await copyText(downloadsReport(sections, unit), home))
-    window.setTimeout(() => setCopied(false), 2000)
+    window.clearTimeout(copiedTimer.current)
+    copiedTimer.current = window.setTimeout(() => setCopied(false), 2000)
   }
 
   const anchored = useAnchorBox(trigger, open)
@@ -89,7 +92,7 @@ export function DownloadsPanel() {
           setOpen((v) => !v)
         }}
         className={cx(
-          'tap relative grid size-9 place-items-center rounded-md transition-colors hover:bg-base-800 hover:text-white',
+          'tap relative grid size-9 place-items-center rounded-full transition-colors hover:bg-base-800 hover:text-white',
           here ? 'bg-base-800 text-accent-300' : 'text-base-300',
         )}
       >
@@ -111,10 +114,14 @@ export function DownloadsPanel() {
             }}
             className="fixed z-50 w-96 max-w-[calc(100vw-1rem)] animate-rise overflow-hidden rounded-sheet bg-base-750 shadow-panel"
           >
-            <div className="flex items-center justify-between gap-2 border-b border-base-750 px-3 py-2">
+            <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
               <p className="text-sm font-medium text-base-100">
                 Downloads
-                {paused && <span className="ml-1.5 rounded bg-amber-400/15 px-1.5 text-xs text-amber-300">Paused</span>}
+                {paused && (
+                  <span className="ml-1.5">
+                    <Badge tone="warning">Paused</Badge>
+                  </span>
+                )}
               </p>
               <div className="flex items-center gap-1">
                 {(paused || busy + held.length + waitingQueue.length > 0) && (
@@ -122,7 +129,7 @@ export function DownloadsPanel() {
                     onClick={() => pauseAll.mutate(!paused)}
                     disabled={pauseAll.isPending}
                     title={paused ? 'Start downloading again' : 'Stop every download until you resume'}
-                    className="rounded px-1.5 py-0.5 text-xs text-base-300 transition-colors hover:bg-base-800 hover:text-white"
+                    className="rounded px-1.5 py-0.5 text-xs text-base-300 transition-colors hover:bg-base-800 hover:text-white pointer-coarse:min-h-11 pointer-coarse:px-3"
                   >
                     {paused ? 'Resume' : 'Pause all'}
                   </button>
@@ -130,7 +137,7 @@ export function DownloadsPanel() {
                 <button
                   onClick={copy}
                   title="Copy this list as text, to paste into a report"
-                  className="rounded px-1.5 py-0.5 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white"
+                  className="rounded px-1.5 py-0.5 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white pointer-coarse:min-h-11 pointer-coarse:px-3"
                 >
                   {copied ? 'Copied' : 'Copy details'}
                 </button>
@@ -138,12 +145,12 @@ export function DownloadsPanel() {
             </div>
 
             {watching && (
-              <div className="flex items-center justify-between gap-3 border-b border-base-750 px-3 py-2 text-xs text-base-300">
+              <div className="flex items-center justify-between gap-3 border-b border-line px-3 py-2 text-xs text-base-300">
                 <p>Waiting until the episode you're watching has downloaded.</p>
                 <button
                   onClick={() => proceed.mutate()}
                   disabled={proceed.isPending}
-                  className="shrink-0 rounded bg-base-800 px-2 py-1 text-xs font-medium text-base-100 transition-colors hover:bg-base-750"
+                  className="shrink-0 rounded bg-base-800 px-2 py-1 text-xs font-medium text-base-100 transition-colors hover:bg-base-750 pointer-coarse:min-h-11"
                 >
                   Download anyway
                 </button>
@@ -279,12 +286,26 @@ function EpisodeLine({ d }: { d: Download }) {
 
 function QueuedLine({ q, note, failed }: Entry) {
   const got = q!.torrent
+  const qc = useQueryClient()
+  const retry = useMutation({
+    mutationFn: () => api.post('/api/download', { animeId: q!.animeId, episode: q!.episode }),
+    onSuccess: () => refreshDownloads(qc),
+  })
   return (
     <li>
       <p className="flex items-baseline gap-2 text-xs">
         <span className="shrink-0 font-medium text-base-200">Episode {q!.episode}</span>
         {got && <span className="shrink-0 text-base-500">{Math.round(got.percent)}% on disk</span>}
-        {note && <span className={cx('min-w-0 truncate', failed ? 'text-recap' : 'text-base-500')}>{note}</span>}
+        {note && <span className={cx('min-w-0 truncate', failed ? 'text-red-300' : 'text-base-500')}>{note}</span>}
+        {failed && (
+          <button
+            onClick={() => retry.mutate()}
+            disabled={retry.isPending}
+            className="tap ml-auto shrink-0 rounded px-1.5 text-xs font-medium text-accent-300 hover:text-accent-200 pointer-coarse:min-h-11"
+          >
+            {retry.isPending ? 'Trying…' : 'Try again'}
+          </button>
+        )}
       </p>
       {got && <ProgressBar value={got.percent} className="mt-1.5" />}
     </li>

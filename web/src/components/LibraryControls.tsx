@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from 'react'
 import { statusLabel } from '../lib/api'
 import { cx } from '../lib/format'
-import { countFor, sortLabel, SORTS, STATUS_ORDER, type Counts, type Layout } from '../lib/library'
+import { countFor, moreFiltersOn, sortLabel, SORTS, STATUS_ORDER, type Counts, type Layout, type MoreFilters } from '../lib/library'
+import { useFilters } from '../lib/queries'
 import { BottomSheet } from './BottomSheet'
 import { FilterToggle, SearchInput, Segmented, Select, Switch } from './ui'
 
@@ -17,6 +18,98 @@ export interface ControlProps {
   onFav: (on: boolean) => void
   onSort: (sort: string) => void
   onLayout: (layout: Layout) => void
+  more: MoreFilters
+  onMore: (key: keyof MoreFilters, value: string | boolean) => void
+  onClearMore: () => void
+}
+
+const FORMATS: Array<{ value: string; label: string }> = [
+  { value: 'TV', label: 'TV' },
+  { value: 'MOVIE', label: 'Films' },
+  { value: 'OVA', label: 'OVA' },
+  { value: 'ONA', label: 'ONA' },
+  { value: 'SPECIAL', label: 'Specials' },
+]
+const THIS_YEAR = new Date().getFullYear()
+const FALLBACK_YEARS = Array.from({ length: THIS_YEAR - 1979 }, (_, i) => THIS_YEAR + 1 - i)
+
+const SEASONS: Array<{ value: string; label: string }> = [
+  { value: 'WINTER', label: 'Winter' },
+  { value: 'SPRING', label: 'Spring' },
+  { value: 'SUMMER', label: 'Summer' },
+  { value: 'FALL', label: 'Fall' },
+]
+
+function MoreFilterFields({ more, onMore, onClearMore, stacked = false }: Pick<ControlProps, 'more' | 'onMore' | 'onClearMore'> & { stacked?: boolean }) {
+  const vocab = useFilters().data as { genres?: string[]; years?: number[] } | undefined
+  const years = vocab?.years?.length ? vocab.years : FALLBACK_YEARS
+  const field = stacked ? 'w-full' : ''
+  return (
+    <div className={cx('flex flex-wrap items-center gap-2', stacked && 'flex-col items-stretch')}>
+      <Select value={more.format} onChange={(v) => onMore('format', v)} aria-label="Format" className={field}>
+        <option value="">Any format</option>
+        {FORMATS.map((f) => (
+          <option key={f.value} value={f.value}>
+            {f.label}
+          </option>
+        ))}
+      </Select>
+      <Select value={more.season} onChange={(v) => onMore('season', v)} aria-label="Season" className={field}>
+        <option value="">Any season</option>
+        {SEASONS.map((s) => (
+          <option key={s.value} value={s.value}>
+            {s.label}
+          </option>
+        ))}
+      </Select>
+      <Select value={more.year} onChange={(v) => onMore('year', v)} aria-label="Year" className={field}>
+        <option value="">Any year</option>
+        {years.map((y) => (
+          <option key={y} value={String(y)}>
+            {y}
+          </option>
+        ))}
+      </Select>
+      <Select value={more.genre} onChange={(v) => onMore('genre', v)} aria-label="Genre" className={field}>
+        <option value="">Any genre</option>
+        {(vocab?.genres ?? []).map((g) => (
+          <option key={g} value={g}>
+            {g}
+          </option>
+        ))}
+      </Select>
+      {stacked ? (
+        <>
+          <label className="flex min-h-[52px] cursor-pointer items-center justify-between gap-3 px-1 text-[15px] text-base-100">
+            Airing now
+            <Switch on={more.airing} onChange={(v) => onMore('airing', v)} aria-label="Airing now" />
+          </label>
+          <label className="flex min-h-[52px] cursor-pointer items-center justify-between gap-3 px-1 text-[15px] text-base-100">
+            Downloaded
+            <Switch on={more.disk} onChange={(v) => onMore('disk', v)} aria-label="Downloaded" />
+          </label>
+        </>
+      ) : (
+        <>
+          <FilterToggle on={more.airing} onChange={(v) => onMore('airing', v)}>
+            Airing now
+          </FilterToggle>
+          <FilterToggle on={more.disk} onChange={(v) => onMore('disk', v)}>
+            Downloaded
+          </FilterToggle>
+        </>
+      )}
+      {moreFiltersOn(more) && (
+        <button
+          type="button"
+          onClick={onClearMore}
+          className="tap relative min-h-11 rounded-lg px-2 text-sm font-medium text-accent-300 hover:text-accent-200 sm:min-h-0"
+        >
+          Clear filters
+        </button>
+      )}
+    </div>
+  )
 }
 
 const STATUS_CHOICES = ['', ...STATUS_ORDER]
@@ -27,11 +120,11 @@ function choiceLabel(status: string) {
 
 export function DesktopControls(props: ControlProps) {
   const { status, fav, sort, layout, counts, text, onText, onStatus, onFav, onSort, onLayout } = props
-  const sorts: Array<{ value: string; label: string }> = [...SORTS]
-  if (!sorts.some((s) => s.value === sort)) sorts.push({ value: sort, label: sortLabel(sort) })
+  const sorts = sortsWith(sort)
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Segmented
+        label="Library status"
         options={STATUS_CHOICES.map((s) => ({ value: s, label: choiceLabel(s), count: countFor(counts, s, fav) }))}
         value={status}
         onChange={onStatus}
@@ -56,6 +149,9 @@ export function DesktopControls(props: ControlProps) {
           ))}
         </Select>
         <LayoutToggle layout={layout} onLayout={onLayout} />
+      </div>
+      <div className="basis-full">
+        <MoreFilterFields more={props.more} onMore={props.onMore} onClearMore={props.onClearMore} />
       </div>
     </div>
   )
@@ -110,7 +206,7 @@ export function PhoneControls(props: ControlProps) {
                   }}
                   aside={
                     n !== undefined && (
-                      <span className={cx('tabular-nums', n === 0 ? 'text-base-600' : 'text-base-400')}>{n}</span>
+                      <span className={cx('tabular-nums', n === 0 ? 'text-base-500' : 'text-base-400')}>{n}</span>
                     )
                   }
                   dim={n === 0}
@@ -124,12 +220,15 @@ export function PhoneControls(props: ControlProps) {
             Favourites only
             <Switch on={fav} onChange={onFav} aria-label="Favourites only" />
           </label>
+          <div className="border-t border-base-700 px-2 pt-3 pb-1">
+            <MoreFilterFields more={props.more} onMore={props.onMore} onClearMore={props.onClearMore} stacked />
+          </div>
         </BottomSheet>
       )}
       {sheet === 'sort' && (
         <BottomSheet title="Sort by" onClose={close}>
           <div role="radiogroup" aria-label="Sort by">
-            {SORTS.map((s) => (
+            {sortsWith(sort).map((s) => (
               <Radio
                 key={s.value}
                 checked={s.value === sort}
@@ -275,4 +374,10 @@ function ListGlyph() {
       <path d="M9 6h11M9 12h11M9 18h11M4 6h1M4 12h1M4 18h1" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   )
+}
+
+function sortsWith(sort: string): Array<{ value: string; label: string }> {
+  const sorts: Array<{ value: string; label: string }> = [...SORTS]
+  if (!sorts.some((s) => s.value === sort)) sorts.push({ value: sort, label: sortLabel(sort) })
+  return sorts
 }

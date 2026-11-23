@@ -15,7 +15,6 @@ func TestHeadcountReportsWhoJoinedAndLeft(t *testing.T) {
 		t.Fatalf("first look: joined %v left %v due %v, want both peers joined", joined, left, due)
 	}
 
-	// Nothing changed: no line, however long it has been.
 	if _, _, due := h.note(at.Add(10*censusEvery), []string{"a:1", "b:1"}); due {
 		t.Fatal("a line was due with the same peers as before")
 	}
@@ -26,7 +25,6 @@ func TestHeadcountReportsWhoJoinedAndLeft(t *testing.T) {
 	}
 }
 
-// A swarm that churns every few seconds gets one line per interval, and that line still names everyone.
 func TestHeadcountHoldsChangesUntilALineIsDue(t *testing.T) {
 	var h headcount
 	at := time.Now()
@@ -35,7 +33,6 @@ func TestHeadcountHoldsChangesUntilALineIsDue(t *testing.T) {
 	if _, _, due := h.note(at.Add(censusEvery/3), []string{"a:1", "b:1"}); due {
 		t.Fatal("a second line inside the interval")
 	}
-	// b came and went between lines: it is reported as both, not lost.
 	if _, _, due := h.note(at.Add(2*censusEvery/3), []string{"c:1"}); due {
 		t.Fatal("a second line inside the interval")
 	}

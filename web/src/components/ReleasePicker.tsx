@@ -4,10 +4,10 @@ import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, query, type ReleaseCandidate } from '../lib/api'
 import { bytes, cx } from '../lib/format'
-import { Badge, Button, Skeleton, TextInput } from './ui'
+import { Badge, Button, CloseButton, Skeleton, TextInput } from './ui'
 import { useDismiss, useModalFocus } from '../lib/hooks'
+import { usePortalHome } from './keys'
 
-/** Every release the finder saw, best first; ineligible ones greyed with the reason. */
 export function ReleasePicker({
   animeId,
   episode,
@@ -16,18 +16,18 @@ export function ReleasePicker({
   purpose,
   onPick,
   onClose,
+  onAuto,
 }: {
   animeId: number
   episode: number
-  /** Sub or dub chosen for this episode, so the list is ranked for it. */
   audio?: string
-  /** Info hash of what is playing or downloading now, to mark the row. */
   current?: string
-  /** What picking does: plays the episode (default) or downloads it in place of the current release. */
   purpose?: 'play' | 'download'
   onPick: (infoHash: string, title: string) => void
   onClose: () => void
+  onAuto?: () => void
 }) {
+  const home = usePortalHome()
   const close = useCallback(() => onClose(), [onClose])
   const panel = useDismiss<HTMLDivElement>(close)
   useModalFocus(panel)
@@ -68,13 +68,14 @@ export function ReleasePicker({
                 : 'Picking one plays it now; the choice is not remembered.'}
             </p>
           </div>
-          <button
-            onClick={close}
-            aria-label="Close"
-            className="tap relative grid size-9 shrink-0 place-items-center rounded-md text-base-400 hover:bg-base-800 hover:text-base-100"
-          >
-            ✕
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {onAuto && (
+              <Button size="sm" onClick={onAuto}>
+                Back to automatic
+              </Button>
+            )}
+            <CloseButton onClick={close} />
+          </div>
         </div>
 
         <form
@@ -91,8 +92,8 @@ export function ReleasePicker({
             aria-label="Search the sites, or paste a magnet link"
             className="min-w-0 flex-1"
           />
-          <Button type="submit" size="sm" disabled={!typed.trim() || sources.isFetching}>
-            {typed.trim().startsWith('magnet:') ? 'Add' : 'Search'}
+          <Button type="submit" size="sm" disabled={(!typed.trim() && !asked) || sources.isFetching}>
+            {typed.trim().startsWith('magnet:') ? 'Add' : !typed.trim() && asked ? 'Show all' : 'Search'}
           </Button>
         </form>
 
@@ -105,15 +106,26 @@ export function ReleasePicker({
             </div>
           ) : sources.isError ? (
             <div className="flex flex-wrap items-center gap-3 p-4">
-              <p className="text-sm text-recap">{(sources.error as Error).message}</p>
+              <p className="text-sm text-red-300">{(sources.error as Error).message}</p>
               <Button size="sm" onClick={() => void sources.refetch()}>
                 Try again
               </Button>
             </div>
           ) : results.length === 0 ? (
-            <p className="p-6 text-center text-sm text-base-500">
-              No release found under any of the show's titles.
-            </p>
+            <div className="flex flex-col items-center gap-3 p-6 text-center text-sm text-base-500">
+              <p>{asked ? `Nothing found for “${asked}”.` : "No release found under any of the show's titles."}</p>
+              {asked && (
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setTyped('')
+                    setAsked('')
+                  }}
+                >
+                  Back to the found releases
+                </Button>
+              )}
+            </div>
           ) : (
             <ul className="space-y-1">
               {results.map((r) => (
@@ -139,7 +151,7 @@ export function ReleasePicker({
         </div>
       </div>
     </div>,
-    document.fullscreenElement ?? document.body,
+    home,
   )
 }
 
@@ -178,7 +190,6 @@ function Row({
     >
       <button
         onClick={onPick}
-        title={r.reasons?.join('\n')}
         className={cx('block w-full rounded-lg px-3 py-2 text-left', !active && 'hover:bg-base-850')}
       >
         <p className="line-clamp-2 text-sm text-base-100">{r.Torrent.title}</p>
@@ -191,11 +202,10 @@ function Row({
           {r.Torrent.seedersKnown === false ? (
             <span>peers unknown</span>
           ) : (
-            <span className={cx(r.Torrent.seeders === 0 && 'text-recap')}>
+            <span className={cx(r.Torrent.seeders === 0 && 'text-red-300')}>
               {r.Torrent.seeders} {r.Torrent.seeders === 1 ? 'seeder' : 'seeders'}
             </span>
           )}
-          <span className="ml-auto tabular-nums text-base-500">{Math.round(r.score)}</span>
           {active && <Badge tone="accent">{activeLabel}</Badge>}
           {r.SeaDexBest && <Badge tone="accent">SeaDex</Badge>}
           {!r.SeaDexBest && r.SeaDexListed && <Badge>SeaDex alt</Badge>}
@@ -204,8 +214,32 @@ function Row({
           {r.blocked && <Badge tone="recap">{r.blocked}</Badge>}
         </div>
       </button>
+      {(r.reasons?.length ?? 0) > 0 && <Why reasons={r.reasons!} />}
       {(notes || compare.length > 0) && <CuratorNotes notes={notes} compare={compare} long={longNotes} />}
     </li>
+  )
+}
+
+function Why({ reasons }: { reasons: string[] }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="px-3 pb-2 text-xs text-base-400">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="tap relative py-1 font-medium text-accent-300 hover:underline"
+      >
+        {open ? 'Hide why' : 'Why this rank'}
+      </button>
+      {open && (
+        <ul className="mt-1 list-disc space-y-0.5 pl-4">
+          {reasons.map((reason) => (
+            <li key={reason}>{reason}</li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 

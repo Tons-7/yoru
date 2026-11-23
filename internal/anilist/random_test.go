@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// A guess past the real total comes back empty with the total; the next attempt lands inside it.
 func TestRandomRetriesInsideTheLearnedTotal(t *testing.T) {
 	var pages []float64
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -26,7 +25,6 @@ func TestRandomRetriesInsideTheLearnedTotal(t *testing.T) {
 	})
 
 	for i := range 20 {
-		// Force an overshooting first guess every time.
 		c.totals.set("|Rare|0", 400)
 		m, err := c.Random(context.Background(), "", []string{"Rare"}, 0)
 		if err != nil {
@@ -41,7 +39,29 @@ func TestRandomRetriesInsideTheLearnedTotal(t *testing.T) {
 	}
 }
 
-// A filter nobody matches is answered by its first response, and a repeated click asks nothing for a while.
+func TestRandomFindsANarrowFilterBehindAPlaceholderTotal(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Variables map[string]any `json:"variables"`
+		}
+		decode(t, r, &req)
+		if req.Variables["page"].(float64) > 150 {
+			io.WriteString(w, `{"data":{"Page":{"pageInfo":{"total":5000},"media":[]}}}`)
+			return
+		}
+		io.WriteString(w, `{"data":{"Page":{"pageInfo":{"total":5000},"media":[{"id":7}]}}}`)
+	})
+	misses := 0
+	for range 20 {
+		if _, err := c.Random(context.Background(), "", []string{"Sports"}, 0); err != nil {
+			misses++
+		}
+	}
+	if misses > 2 {
+		t.Errorf("%d of 20 draws found nothing although 150 shows match", misses)
+	}
+}
+
 func TestRandomStopsAtAnEmptyTotal(t *testing.T) {
 	requests := 0
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +78,6 @@ func TestRandomStopsAtAnEmptyTotal(t *testing.T) {
 		t.Fatalf("%d requests for a filter the first answer already emptied", requests)
 	}
 
-	// Once the memory of the empty answer has aged, the filter is asked again.
 	c.totals.by["MOVIE|Mecha|2026"] = total{n: 0, at: time.Now().Add(-noMatchFor - time.Second)}
 	c.Random(context.Background(), "MOVIE", []string{"Mecha"}, 2026)
 	if requests != 2 {

@@ -9,7 +9,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// A write goes through while the reader waits on a silent Discord.
 func TestPipeWritesWhileReading(t *testing.T) {
 	name := fmt.Sprintf(`\\.\pipe\yoru-test-%d`, os.Getpid())
 	path, _ := windows.UTF16PtrFromString(name)

@@ -5,14 +5,13 @@ import (
 	"time"
 )
 
-// PushSubscription is one device's Web Push subscription.
 type PushSubscription struct {
 	Endpoint string `json:"endpoint"`
 	P256dh   string `json:"p256dh"`
 	Auth     string `json:"auth"`
 	Origin   string `json:"origin"`
-	Device   string `json:"device"` // the approval id it asked with, if any
-	Paired   bool   `json:"paired"` // came in with the pairing token rather than from the host machine
+	Device   string `json:"device"`
+	Paired   bool   `json:"paired"`
 }
 
 func (s *Store) SavePushSubscription(ctx context.Context, sub PushSubscription) error {
@@ -29,13 +28,16 @@ func (s *Store) DeletePushSubscription(ctx context.Context, endpoint string) err
 	return err
 }
 
-// DeleteDevicePush stops a declined or removed device's alerts.
 func (s *Store) DeleteDevicePush(ctx context.Context, device string) error {
 	_, err := s.w.ExecContext(ctx, `DELETE FROM push_subscription WHERE device = ? AND device != ''`, device)
 	return err
 }
 
-// DeletePairedPush stops every paired device's alerts when pairing is reset; the host machine's stay.
+func (s *Store) DeleteAnonymousPairedPush(ctx context.Context) error {
+	_, err := s.w.ExecContext(ctx, `DELETE FROM push_subscription WHERE paired = 1 AND device = ''`)
+	return err
+}
+
 func (s *Store) DeletePairedPush(ctx context.Context) error {
 	_, err := s.w.ExecContext(ctx, `DELETE FROM push_subscription WHERE paired = 1`)
 	return err

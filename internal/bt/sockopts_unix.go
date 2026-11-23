@@ -1,4 +1,4 @@
-//go:build !windows && !wasm
+//go:build !windows
 
 package bt
 
@@ -9,7 +9,6 @@ import (
 )
 
 func setReusePortSockOpts(fd uintptr) (err error) {
-	// REUSEPORT alone does on Darwin, likely BSDs and Linux too (libp2p/go-reuseport gets this wrong).
 	if false {
 		err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 		if err != nil {

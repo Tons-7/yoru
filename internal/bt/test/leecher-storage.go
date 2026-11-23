@@ -28,13 +28,11 @@ type LeecherStorageTestCase struct {
 type StorageFactory func(string) storage.ClientImplCloser
 
 func TestLeecherStorage(t *testing.T, ls LeecherStorageTestCase) {
-	// Seeder storage
 	for _, ss := range []struct {
 		name string
 		f    StorageFactory
 	}{
 		{"File", storage.NewFile},
-		{"Mmap", storage.NewMMap},
 	} {
 		t.Run(fmt.Sprintf("%sSeederStorage", ss.name), func(t *testing.T) {
 			for _, responsive := range []bool{false, true} {
@@ -71,12 +69,10 @@ type ConfigureClient struct {
 }
 
 type testClientTransferParams struct {
-	Responsive     bool
-	Readahead      int64
-	SetReadahead   bool
-	LeecherStorage func(string) storage.ClientImplCloser
-	// TODO: Use a generic option type. This is the capacity of the leecher storage for determining
-	// whether it's possible for the leecher to be Complete. 0 currently means no limit.
+	Responsive                 bool
+	Readahead                  int64
+	SetReadahead               bool
+	LeecherStorage             func(string) storage.ClientImplCloser
 	LeecherStorageCapacity     int64
 	SeederStorage              func(string) storage.ClientImplCloser
 	SeederUploadRateLimiter    *rate.Limiter
@@ -88,7 +84,6 @@ type testClientTransferParams struct {
 	LeecherStartsWithoutMetadata bool
 }
 
-// A seeder and a leecher: reading on the leecher brings the data across.
 func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	prevGOMAXPROCS := runtime.GOMAXPROCS(ps.GOMAXPROCS)
 	newGOMAXPROCS := prevGOMAXPROCS
@@ -101,18 +96,13 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 
 	greetingTempDir, mi := testutil.GreetingTestTorrent()
 	defer os.RemoveAll(greetingTempDir)
-	// Create seeder and a Torrent.
 	cfg := bt.TestingConfig(t)
-	// cfg.Debug = true
 	cfg.Seed = true
-	// Less than a piece, more than a single request.
 	cfg.MaxAllocPeerRequestDataPerConn = 4
-	// Some test instances don't like this being on, even when there's no cache involved.
 	cfg.DropMutuallyCompletePeers = false
 	if ps.SeederUploadRateLimiter != nil {
 		cfg.UploadRateLimiter = ps.SeederUploadRateLimiter
 	}
-	// cfg.ListenAddr = "localhost:4000"
 	if ps.SeederStorage != nil {
 		storage := ps.SeederStorage(greetingTempDir)
 		defer storage.Close()
@@ -130,17 +120,11 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	}
 	defer testutil.ExportStatusWriter(seeder, "s", t)()
 	seederTorrent, _, _ := seeder.AddTorrentSpec(bt.TorrentSpecFromMetaInfo(mi))
-	// Run a Stats right after Closing the Client. This will trigger the Stats
-	// panic in #214 caused by RemoteAddr on Closed uTP sockets.
 	defer seederTorrent.Stats()
 	defer seeder.Close()
-	// Adding a torrent and setting the info should trigger piece checks for everything
-	// automatically. Wait until the seed Torrent agrees that everything is available.
 	<-seederTorrent.Complete().On()
-	// Create leecher and a Torrent.
 	leecherDataDir := t.TempDir()
 	cfg = bt.TestingConfig(t)
-	// See the seeder client config comment.
 	cfg.DropMutuallyCompletePeers = false
 	if ps.LeecherStorage == nil {
 		cfg.DataDir = leecherDataDir
@@ -153,7 +137,6 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 		cfg.DownloadRateLimiter = ps.LeecherDownloadRateLimiter
 	}
 	cfg.Seed = false
-	// cfg.Debug = true
 	if ps.ConfigureLeecher.Config != nil {
 		ps.ConfigureLeecher.Config(cfg)
 	}
@@ -176,11 +159,8 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	assert.False(t, leecherTorrent.Complete().Bool())
 	assert.True(t, new)
 
-	// Now do some things with leecher and seeder.
 	added := leecherTorrent.AddClientPeer(seeder)
 	assert.False(t, leecherTorrent.Seeding())
-	// The leecher will use peers immediately if it doesn't have the metadata. Otherwise, they
-	// should be sitting idle until we demand data.
 	if !ps.LeecherStartsWithoutMetadata {
 		assert.EqualValues(t, added, leecherTorrent.Stats().PendingPeers)
 	}
@@ -201,8 +181,6 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	require.NoError(t, err)
 	canComplete := ps.LeecherStorageCapacity == 0 || ps.LeecherStorageCapacity >= info.TotalLength()
 	if !canComplete {
-		// Reading from a cache doesn't refresh older pieces until we fail to read those, so we need
-		// to force a refresh since we just read the contents from start to finish.
 		go leecherTorrent.VerifyData()
 	}
 	if canComplete {
@@ -213,8 +191,6 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	assert.NotEmpty(t, seederTorrent.PeerConns())
 	leecherPeerConns := leecherTorrent.PeerConns()
 	if cfg.DropMutuallyCompletePeers {
-		// I don't think we can assume it will be empty already, due to timing.
-		// assert.Empty(t, leecherPeerConns)
 	} else {
 		assert.NotEmpty(t, leecherPeerConns)
 	}
@@ -238,7 +214,6 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	assert.True(t, 13 <= leecherStats.BytesReadData.Int64())
 	assert.True(t, 8 <= leecherStats.ChunksRead.Int64())
 
-	// Again, for torrents bigger than the cache.
 	assertReadAllGreeting(t, r)
 }
 

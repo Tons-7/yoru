@@ -42,7 +42,6 @@ type ListEntry struct {
 	Media       Media     `json:"media"`
 }
 
-// An explicit score format: a bare `score` inherits an earlier aliased score's format.
 const listQuery = `query List($userId: Int!) {
   MediaListCollection(userId: $userId, type: ANIME) {
     hasNextChunk
@@ -60,19 +59,20 @@ const listQuery = `query List($userId: Int!) {
   }
 }`
 
-// List returns one entry per anime. AniList repeats an entry once per custom
-// list it belongs to, so the same MediaList.id arriving twice is expected.
 func (c *Client) List(ctx context.Context, userID int) ([]ListEntry, error) {
 	var out struct {
 		MediaListCollection struct {
-			Lists []struct {
+			HasNextChunk bool `json:"hasNextChunk"`
+			Lists        []struct {
 				Entries []ListEntry `json:"entries"`
 			} `json:"lists"`
 		} `json:"MediaListCollection"`
 	}
-	// Fresh: a cached list from before our last push reads as undoing it.
 	if err := c.QueryFresh(ctx, listQuery, map[string]any{"userId": userID}, &out); err != nil {
 		return nil, err
+	}
+	if out.MediaListCollection.HasNextChunk {
+		c.log.Warn("anilist sent only part of the list")
 	}
 
 	seen := make(map[int]struct{})
@@ -95,7 +95,6 @@ const saveQuery = `mutation Save($mediaId: Int!, $progress: Int, $status: MediaL
   }
 }`
 
-// Only set fields go, and score (0-100) and repeat only when non-zero, so a local row can't wipe the site's.
 func (c *Client) SetProgress(ctx context.Context, mediaID, progress int, status string, completed *FuzzyDate, repeat, score int, clearScore bool) (ListEntry, error) {
 	vars := map[string]any{"mediaId": mediaID, "progress": progress}
 	if repeat > 0 {
@@ -124,7 +123,6 @@ const deleteQuery = `mutation Delete($id: Int!) {
   DeleteMediaListEntry(id: $id) { deleted }
 }`
 
-// DeleteEntry takes a MediaList entry off the account; one already gone (404) counts as done.
 func (c *Client) DeleteEntry(ctx context.Context, entryID int) error {
 	var out struct {
 		DeleteMediaListEntry struct {

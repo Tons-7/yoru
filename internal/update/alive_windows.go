@@ -2,7 +2,6 @@ package update
 
 import "golang.org/x/sys/windows"
 
-// A handle opens on any live process; a finished one has no object to open.
 func alive(pid int) bool {
 	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
 	if err != nil {

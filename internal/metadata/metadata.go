@@ -608,10 +608,16 @@ func parseDate(s string) int64 {
 	if s == "" {
 		return 0
 	}
-	for _, layout := range []string{time.RFC3339, "2006-01-02", "2006-01-02T15:04:05Z"} {
+	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
 		if t, err := time.Parse(layout, s); err == nil {
+			if t.UTC().Hour() == 0 && t.Minute() == 0 && t.Second() == 0 {
+				d := t.UTC()
+				return time.Date(d.Year(), d.Month(), d.Day(), dateOnlyHour, 0, 0, 0, time.UTC).Unix()
+			}
 			return t.Unix()
 		}
 	}
 	return 0
 }
+
+const dateOnlyHour = 15

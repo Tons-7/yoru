@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// quietEpisode is 10 s of one tune, half a second of silence from 10 s, then 10 s of another.
 func quietEpisode(t *testing.T, ff string) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "episode.mka")
@@ -22,7 +21,6 @@ func quietEpisode(t *testing.T, ff string) string {
 	return out
 }
 
-// A mark a second or so off lands on the song's edge: a start where sound resumes, an end where it stops.
 func TestSnapFindsTheSongsEdge(t *testing.T) {
 	ff := ffmpeg(t)
 	path := quietEpisode(t, ff)
@@ -43,17 +41,14 @@ func TestSnapFindsTheSongsEdge(t *testing.T) {
 	}
 }
 
-// Dialogue's pauses come seconds apart; a song's edge has unbroken sound on its side.
 func TestSnapSkipsPausesInDialogue(t *testing.T) {
 	quiet := []Quiet{{Start: 16.8, End: 17.2}, {Start: 18.6, End: 19.2}, {Start: 20.1, End: 20.5}, {Start: 22.5, End: 23}}
-	// 20.5 has a pause 2 s after it; 23 has 3 s of sound after it, but is 3 s past the mark.
 	if got, ok := Snap(quiet, 20, true, 14.5, 25.5); !ok || got != 23 {
 		t.Errorf("start = %v, %v; want 23, the only edge with a song after it", got, ok)
 	}
 	if got, ok := Snap(quiet, 21, false, 15.5, 26.5); ok {
 		t.Errorf("end = %v; want none: every quiet is close to another", got)
 	}
-	// Cut off by the window: the quiet may have begun earlier.
 	if got, ok := Snap([]Quiet{{Start: 10, End: 10.4}}, 11, false, 10, 16); ok {
 		t.Errorf("end at the window's edge = %v; want the mark kept", got)
 	}

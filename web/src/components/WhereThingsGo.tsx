@@ -72,6 +72,7 @@ export function WhereThingsGo({ setup }: { setup: SetupState }) {
   const host = useAccess().data?.host === true
   const used = useDriveRoom().data
   const [moving, setMoving] = useState(false)
+  const [moved, setMoved] = useState(false)
   const show = useMutation({
     meta: { inline: true },
     mutationFn: (which: Which) => api.post('/api/setup/show', { which }),
@@ -98,14 +99,24 @@ export function WhereThingsGo({ setup }: { setup: SetupState }) {
             host && (
               <>
                 {open('data')}
-                <button type="button" aria-expanded={moving} onClick={() => setMoving((v) => !v)} className={small}>
-                  {moving ? 'Cancel' : 'Move'}
+                <button
+                  type="button"
+                  aria-expanded={moving}
+                  onClick={() => {
+                    setMoving((v) => !v)
+                    setMoved(false)
+                  }}
+                  className={small}
+                >
+                  {moving ? (moved ? 'Done' : 'Cancel') : 'Move'}
                 </button>
               </>
             )
           }
         >
-          {moving && <DataDirPicker fallback={setup.defaultDataDir ?? setup.dataDir} current={setup.dataDir} />}
+          {moving && (
+            <DataDirPicker fallback={setup.defaultDataDir ?? setup.dataDir} current={setup.dataDir} onMoved={() => setMoved(true)} />
+          )}
         </Place>
         <Place
           icon="cache"
@@ -145,7 +156,7 @@ export function WhereThingsGo({ setup }: { setup: SetupState }) {
           }
         />
       </ul>
-      {show.isError && <p className="pb-2 text-xs text-recap">{(show.error as Error).message}</p>}
+      {show.isError && <p className="pb-2 text-xs text-red-300">{(show.error as Error).message}</p>}
       {setup.strayConfig && (
         <div className="mb-3 rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-[13px] text-amber-100">
           <p>
@@ -155,6 +166,12 @@ export function WhereThingsGo({ setup }: { setup: SetupState }) {
           <p className="mt-1 truncate font-mono text-xs text-amber-200/70" title={setup.strayConfig}>
             {setup.strayConfig}
           </p>
+        </div>
+      )}
+      {!!setup.unknownConfig?.length && (
+        <div className="mb-3 rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-[13px] text-amber-100">
+          <p>Yoru ignored these lines in config.toml. Check their spelling.</p>
+          <p className="mt-1 font-mono text-xs break-all text-amber-200/70">{setup.unknownConfig.join(', ')}</p>
         </div>
       )}
       {host && (
@@ -172,12 +189,22 @@ export function WhereThingsGo({ setup }: { setup: SetupState }) {
   )
 }
 
-function DataDirPicker({ fallback, current }: { fallback: string; current: string }) {
+function DataDirPicker({ fallback, current, onMoved }: { fallback: string; current: string; onMoved: () => void }) {
   const [path, setPath] = useState('')
   const move = useMutation({
     meta: { inline: true },
     mutationFn: (v: { path: string; useExisting?: boolean }) =>
-      api.post<{ dataDir: string; copied: boolean; restart: boolean }>('/api/setup/data-dir', v),
+      api.post<{ dataDir: string; copied: boolean; restart: boolean; same?: boolean }>('/api/setup/data-dir', v),
+    onSuccess: async (res) => {
+      onMoved()
+      if (!res.restart) return
+      await new Promise((r) => setTimeout(r, 2500))
+      for (let i = 0; i < 120; i++) {
+        if (await fetch('/api/access', { cache: 'no-store' }).then((r) => r.ok, () => false)) break
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+      window.location.reload()
+    },
   })
   const existing =
     move.error instanceof ApiError && move.error.status === 409
@@ -186,10 +213,12 @@ function DataDirPicker({ fallback, current }: { fallback: string; current: strin
 
   if (move.isSuccess) {
     return (
-      <p className="text-[13px] text-accent-300">
-        {move.data.restart === false
+      <p role="status" className="text-[13px] text-accent-300">
+        {move.data.same
           ? 'Already using that folder.'
-          : `Saved: ${move.data.dataDir}. Restart Yoru to use it${move.data.copied ? '. Your history was copied there.' : '.'}`}
+          : move.data.restart
+            ? `Saved: ${move.data.dataDir}${move.data.copied ? ', with your history copied there' : ''}. Restarting Yoru…`
+            : `Saved: ${move.data.dataDir}. Exit Yoru from the tray and open it again to use it${move.data.copied ? '. Your history was copied there.' : '.'}`}
       </p>
     )
   }
@@ -242,6 +271,7 @@ function DataDirPicker({ fallback, current }: { fallback: string; current: strin
             <button
               type="button"
               onClick={() => move.mutate({ path: move.variables?.path ?? path.trim(), useExisting: true })}
+              disabled={move.isPending}
               className={buttonClass('primary', 'sm')}
             >
               Use that history
@@ -252,7 +282,7 @@ function DataDirPicker({ fallback, current }: { fallback: string; current: strin
           </div>
         </div>
       ) : (
-        move.isError && <p className="text-recap">{(move.error as Error).message}</p>
+        move.isError && <p className="text-red-300">{(move.error as Error).message}</p>
       )}
     </div>
   )

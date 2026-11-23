@@ -7,13 +7,11 @@ import (
 	"sync"
 )
 
-// Maintains a mapping of transaction IDs to handlers.
 type Dispatcher struct {
 	mu           sync.RWMutex
 	transactions map[TransactionId]Transaction
 }
 
-// The caller owns b.
 func (me *Dispatcher) Dispatch(b []byte, addr net.Addr) error {
 	buf := bytes.NewBuffer(b)
 	var rh ResponseHeader
@@ -22,17 +20,17 @@ func (me *Dispatcher) Dispatch(b []byte, addr net.Addr) error {
 		return err
 	}
 	me.mu.RLock()
-	defer me.mu.RUnlock()
-	if t, ok := me.transactions[rh.TransactionId]; ok {
-		t.h(DispatchedResponse{
-			Header: rh,
-			Body:   append([]byte(nil), buf.Bytes()...),
-			Addr:   addr,
-		})
-		return nil
-	} else {
+	t, ok := me.transactions[rh.TransactionId]
+	me.mu.RUnlock()
+	if !ok {
 		return fmt.Errorf("unknown transaction id %v", rh.TransactionId)
 	}
+	t.h(DispatchedResponse{
+		Header: rh,
+		Body:   append([]byte(nil), buf.Bytes()...),
+		Addr:   addr,
+	})
+	return nil
 }
 
 func (me *Dispatcher) forgetTransaction(id TransactionId) {
@@ -64,8 +62,6 @@ func (me *Dispatcher) NewTransaction(h TransactionResponseHandler) Transaction {
 
 type DispatchedResponse struct {
 	Header ResponseHeader
-	// Response payload, after the header.
-	Body []byte
-	// Response source address
-	Addr net.Addr
+	Body   []byte
+	Addr   net.Addr
 }

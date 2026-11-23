@@ -1,7 +1,6 @@
 import { Select } from './ui'
 import { WAITS, waitLabel } from '../lib/format'
 
-/** The wait, or with inherit set the choice to follow Settings (value ""), named with what Settings say. */
 export function WaitSelect({
   value,
   onChange,

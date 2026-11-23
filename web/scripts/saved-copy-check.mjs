@@ -1,4 +1,3 @@
-// Saved-copy answers (marked as the server does) show a banner; the next live answer clears it.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -23,7 +22,6 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 160)))
 
-// Browsing saves what it shows: that is what the fallback later stands on.
 const live = await fetch(`${BASE}/api/browse?sort=popular&perPage=42`)
 check(live.headers.get('x-yoru-live') === '1', 'a live answer is marked live')
 const first = (await live.json()).items?.[0]
@@ -47,7 +45,6 @@ check(await until(() => banner.isVisible()), 'the banner shows while answers are
 check(/1d ago/.test(await banner.innerText().catch(() => '')), 'and says how old', await banner.innerText().catch(() => ''))
 await page.screenshot({ path: `${SHOTS}/saved-copy-banner.png` })
 
-// Still down: Try now asks AniList once and says so, rather than seeming to do nothing.
 await page.route('**/api/anilist/recheck', (route) =>
   route.fulfill({ status: 200, contentType: 'application/json', body: '{"live":false}' }),
 )
@@ -58,7 +55,6 @@ check(
 )
 await page.unroute('**/api/anilist/recheck')
 
-// AniList back: the next live answer clears it (requests still in the handler are let finish).
 await page.unrouteAll({ behavior: 'ignoreErrors' })
 await banner.getByRole('button', { name: /Try again|Try now/ }).click()
 check(await until(async () => !(await banner.isVisible())), 'a live answer clears the banner')

@@ -3,6 +3,7 @@ package bt
 import (
 	"bytes"
 	"io"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -41,6 +42,11 @@ func (pc *PeerConn) startMessageWriter() {
 }
 
 func (pc *PeerConn) messageWriterRunner() {
+	defer func() {
+		if r := recover(); r != nil {
+			pc.logger.Levelf(log.Error, "peer writer panicked, dropping the peer: %v\n%s", r, debug.Stack())
+		}
+	}()
 	defer pc.locker().Unlock()
 	defer pc.close()
 	defer pc.locker().Lock()
@@ -48,23 +54,19 @@ func (pc *PeerConn) messageWriterRunner() {
 }
 
 type peerConnMsgWriterBuffer struct {
-	// The number of bytes in the buffer that are part of a piece message. When
-	// the whole buffer is written, we can count this many bytes.
 	pieceDataBytes int
 	bytes.Buffer
 }
 
 type peerConnMsgWriter struct {
-	// Must not be called with the local mutex held, as it will call back into the write method.
 	fillWriteBuffer func()
 	closed          *chansync.SetOnce
 	logger          log.Logger
 	w               io.Writer
 	keepAlive       func() bool
 
-	mu        sync.Mutex
-	writeCond chansync.BroadcastCond
-	// Pointer so we can swap with the "front buffer".
+	mu          sync.Mutex
+	writeCond   chansync.BroadcastCond
 	writeBuffer *peerConnMsgWriterBuffer
 
 	totalWriteDuration    time.Duration
@@ -73,7 +75,6 @@ type peerConnMsgWriter struct {
 	dataUploadRate        float64
 }
 
-// Writes to the peer: what the Client buffered, and what is decided here once the connection is writable.
 func (cn *peerConnMsgWriter) run(keepAliveTimeout time.Duration) {
 	lastWrite := time.Now()
 	keepAliveTimer := time.NewTimer(keepAliveTimeout)
@@ -82,15 +83,14 @@ func (cn *peerConnMsgWriter) run(keepAliveTimeout time.Duration) {
 		if cn.closed.IsSet() {
 			return
 		}
+		writeCond := cn.writeCond.Signaled()
 		cn.fillWriteBuffer()
 		keepAlive := cn.keepAlive()
 		cn.mu.Lock()
 		if cn.writeBuffer.Len() == 0 && time.Since(lastWrite) >= keepAliveTimeout && keepAlive {
 			cn.writeBuffer.Write(pp.Message{Keepalive: true}.MustMarshalBinary())
-			torrent.Add("written keepalives", 1)
 		}
 		if cn.writeBuffer.Len() == 0 {
-			writeCond := cn.writeCond.Signaled()
 			cn.mu.Unlock()
 			select {
 			case <-cn.closed.Done():
@@ -99,7 +99,6 @@ func (cn *peerConnMsgWriter) run(keepAliveTimeout time.Duration) {
 			}
 			continue
 		}
-		// Flip the buffers.
 		frontBuf, cn.writeBuffer = cn.writeBuffer, frontBuf
 		cn.mu.Unlock()
 		if frontBuf.Len() == 0 {
@@ -124,7 +123,6 @@ func (cn *peerConnMsgWriter) run(keepAliveTimeout time.Duration) {
 			cn.logger.WithDefaultLevel(log.Debug).Printf("error writing: %v", err)
 			return
 		}
-		// Track what was sent and how long it took.
 		writeDuration := time.Since(startedWriting)
 		cn.mu.Lock()
 		cn.dataUploadRate = float64(frontBuf.pieceDataBytes) / writeDuration.Seconds()
@@ -142,7 +140,6 @@ func (cn *peerConnMsgWriter) writeToBuffer(msg pp.Message) (err error) {
 	originalLen := cn.writeBuffer.Len()
 	defer func() {
 		if err != nil {
-			// A failed write leaves the buffer as it was before it.
 			cn.writeBuffer.Truncate(originalLen)
 		}
 	}()
@@ -163,4 +160,10 @@ func (cn *peerConnMsgWriter) write(msg pp.Message) bool {
 
 func (cn *peerConnMsgWriter) writeBufferFull() bool {
 	return cn.writeBuffer.Len() >= writeBufferHighWaterLen
+}
+
+func (cn *peerConnMsgWriter) backedUp() bool {
+	cn.mu.Lock()
+	defer cn.mu.Unlock()
+	return cn.writeBufferFull()
 }

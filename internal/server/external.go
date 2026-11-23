@@ -18,9 +18,6 @@ import (
 	"time"
 )
 
-// Player apps (VLC, mpv, Outplayer) get links of their own: they can't carry the browser's cookie, and the
-// access token kept in their history would open all of Yoru. A link reads one file, for externalFor.
-
 const externalFor = 12 * time.Hour
 
 type grant struct {
@@ -28,8 +25,6 @@ type grant struct {
 	Expires int64  `json:"e"`
 }
 
-// grantKey changes with the access token, so resetting pairing ends every link; grantSecret, with a restart;
-// grantEpoch, when a device is denied or removed (a link doesn't say which device made it).
 func (s *Server) grantKey() []byte {
 	m := hmac.New(sha256.New, s.grantSecret)
 	m.Write([]byte(s.accessToken()))
@@ -66,7 +61,6 @@ func (s *Server) openGrant(token string, now time.Time) (grant, bool) {
 
 var engineFileRoute = regexp.MustCompile(`^/torrents/(\d+)/stream/(\d+)$`)
 
-// externalLink makes a player app's link to the file the player streams, at the address this device used.
 func (s *Server) externalLink(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Source string `json:"source"`
@@ -99,16 +93,11 @@ func (s *Server) externalLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	expires := time.Now().Add(externalFor)
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	link := scheme + "://" + r.Host + "/x/" + s.signGrant(grant{Source: body.Source, Expires: expires.Unix()}) +
+	link := requestOrigin(r) + "/x/" + s.signGrant(grant{Source: body.Source, Expires: expires.Unix()}) +
 		"/" + url.PathEscape(name)
 	send(w, http.StatusOK, map[string]any{"url": link, "name": name, "expires": expires.UTC().Format(time.RFC3339)})
 }
 
-// externalStream serves a link's file, ranged, to whatever app holds the link; the guard lets it through.
 func (s *Server) externalStream(w http.ResponseWriter, r *http.Request) {
 	g, ok := s.openGrant(r.PathValue("grant"), time.Now())
 	if !ok {
@@ -116,7 +105,6 @@ func (s *Server) externalStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.serving()()
-	// ?download=1 is Save to this device: a file under the link's name, not played in the tab.
 	save := func(h http.Header) {
 		if r.URL.Query().Get("download") == "1" {
 			h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": r.PathValue("name")}))
@@ -142,7 +130,6 @@ func (s *Server) externalStream(w http.ResponseWriter, r *http.Request) {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL = target
 			pr.Out.Host = target.Host
-			// The engine turns away anything that looks like a web page.
 			for _, h := range []string{"Origin", "Referer", "Cookie", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest"} {
 				pr.Out.Header.Del(h)
 			}

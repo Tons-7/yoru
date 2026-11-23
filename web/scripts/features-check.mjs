@@ -142,10 +142,10 @@ if (listed) {
 
   const scoreButton = page.getByRole('button', { name: 'Your score' })
   await scoreButton.click()
-  const eight = page.getByRole('menuitemradio', { name: '8', exact: true })
+  const eight = page.getByRole('button', { name: 'Score 8', exact: true })
   check(await eight.isVisible(), 'score menu opens with numbers')
   const colour = await eight.evaluate((el) => getComputedStyle(el).color)
-  const bg = await eight.evaluate((el) => getComputedStyle(el.closest('[role=menu]')).backgroundColor)
+  const bg = await eight.evaluate((el) => getComputedStyle(el.closest('[role=group]')?.parentElement ?? el).backgroundColor)
   check(colour !== bg && !/255, 255, 255/.test(bg), 'score menu is not white on white', `${colour} on ${bg}`)
   await eight.click()
   check(await until(() => scoreButton.innerText().then((t) => t.includes('8/10'))), 'button shows 8/10')
@@ -154,7 +154,7 @@ if (listed) {
   await page.reload({ waitUntil: 'domcontentloaded' })
   check(await until(() => scoreButton.innerText().then((t) => t.includes('8/10')), 45_000), 'score survives a reload')
   await scoreButton.click()
-  await page.getByRole('menuitemradio', { name: 'Unrated' }).click()
+  await page.getByRole('button', { name: 'No score' }).click()
   check(await until(() => scoreButton.innerText().then((t) => t.includes('Rate'))), 'score can be cleared')
 
   const fav = page.getByRole('button', { name: /favourite/i })
@@ -204,7 +204,7 @@ check(await until(() => !!randomRequest), 'filtered random asks the server')
 check(/genres=Romance%2CComedy/.test(randomRequest ?? '') && /format=TV/.test(randomRequest ?? ''), 'random carries the genre and format filters', randomRequest)
 
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
-await page.getByRole('tab', { name: 'Storage' }).click()
+await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Storage' }).click()
 const find = page.getByRole('button', { name: 'Find', exact: true })
 check(await until(() => find.isVisible()), 'orphan clean-up is offered')
 await find.click()
@@ -217,7 +217,7 @@ check(
   'clean-up says what it found',
 )
 
-await page.getByRole('tab', { name: 'Downloads' }).click()
+await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Downloads' }).click()
 const groups = page.getByLabel('Preferred release groups')
 await groups.fill('SubsPlease, Erai-raws')
 await groups.blur()
@@ -297,7 +297,7 @@ if (offered) {
     }),
     'file assigned to episode 9 by hand',
   )
-  check(await until(() => row.getByRole('link', { name: 'Play ep 9' }).isVisible()), 'row now offers to play it')
+  check(await until(() => row.getByRole('link', { name: 'Play Ep 9' }).isVisible()), 'row now offers to play it')
 }
 const ep1 = (await api('/api/local/files')).body?.items?.find((f) => String(f.path ?? '').includes('Yoru Test Show - 01'))
 check(ep1?.animeId === ANIME && ep1?.episode === 1, 'hand assignment survives a rescan', JSON.stringify(ep1 ?? {}).slice(0, 120))
@@ -373,7 +373,7 @@ if (await trailerBtn.isVisible()) {
   await page.keyboard.press('Escape')
   check(await until(() => trailer.isVisible().then((v) => !v)), 'Escape closes the trailer')
 } else {
-  console.log('skip trailer: none listed for this show')
+  console.log('SKIP trailer: none listed for this show')
 }
 
 await post('/api/score', { animeId: ANIME, score: 80 })
@@ -399,11 +399,11 @@ check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'epis
 await video.evaluate((v) => {
   v.currentTime = v.duration - 0.5
 })
-const upNext = page.getByRole('dialog', { name: 'Up next' })
+const upNext = page.getByRole('region', { name: 'Up next' })
 check(await until(() => upNext.isVisible(), 20_000), 'up-next card appears at the end')
 check(
   await page.evaluate(() => {
-    const card = document.querySelector('[role="dialog"][aria-label="Up next"]')
+    const card = document.querySelector('[role="region"][aria-label="Up next"]')
     return !!card && !!document.querySelector('.group\\/player')?.contains(card)
   }),
   'up-next card sits inside the player',
@@ -449,7 +449,7 @@ check(
 if (wentFullscreen) {
   check(await page.evaluate(() => !!document.fullscreenElement), 'still fullscreen on the next episode')
 } else {
-  console.log('ok   (fullscreen not available in this browser; element continuity checked instead)')
+  console.log('SKIP fullscreen is not available in this browser; element continuity checked instead')
 }
 check(await until(() => video.evaluate((v) => !v.paused), 20_000), 'the next episode plays rather than sitting paused')
 
@@ -578,9 +578,9 @@ check(
   'the link plays from its first byte, ranged',
   String(firstBytes.status),
 )
-const saveHref = (await ap.getByRole('link', { name: 'Save to this device' }).getAttribute('href')) ?? ''
+const saveHref = (await ap.getByRole('link', { name: 'Download the file' }).getAttribute('href')) ?? ''
 const saved = await fetch(saveHref, { headers: { Range: 'bytes=0-15' } })
-check(/^attachment; filename=/.test(saved.headers.get('content-disposition') ?? ''), 'Save to this device downloads the file',
+check(/^attachment; filename=/.test(saved.headers.get('content-disposition') ?? ''), 'Download the file downloads it',
   `${saved.status} ${saved.headers.get('content-disposition')}`)
 await android.close()
 
@@ -691,7 +691,8 @@ check(await until(async () => (await upNextKeys()) === ''), 'Clear list empties 
 await page.keyboard.press('Escape')
 check(
   await until(async () =>
-    !(await upNextRail.isVisible()) || (await upNextRail.getByRole('button', { name: 'Line up episodes' }).isVisible())),
+    (await upNextKeys()) === '' &&
+    (!(await upNextRail.isVisible()) || (await upNextRail.getByRole('button', { name: 'Line up episodes' }).isVisible()))),
   'an empty list leaves no queued episodes on Home',
 )
 await post('/api/prefs', { key: 'playback.autonext', value: 'true' })

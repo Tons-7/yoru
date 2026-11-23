@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// A hand match survives every later scan, whatever the parser makes of the name.
 func TestRescanKeepsHandAssignments(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -29,7 +28,6 @@ func TestRescanKeepsHandAssignments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The next scan parses both names again and guesses differently.
 	second, _ := s.NextScanStamp(ctx)
 	if _, err := s.SaveLocalFiles(ctx, second, []LocalFile{
 		{Path: `D:\lib\mystery.mkv`, Size: 2, Modified: 2},

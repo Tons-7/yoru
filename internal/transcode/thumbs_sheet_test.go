@@ -11,12 +11,10 @@ import (
 	"time"
 )
 
-// Keyframes only: the stretch after an episode's last keyframe must still show a picture, not black tiles.
 func TestSheetFillsTheTilesAfterTheLastKeyframe(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	dir := t.TempDir()
 	clip := filepath.Join(dir, "clip.mkv")
-	// 61 s, keyframes at 0, 25 and 50 s: tiles every 2 s run to 58 s, past the last keyframe.
 	if b, err := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
 		"-f", "lavfi", "-i", "testsrc2=size=320x180:rate=10:duration=61",
 		"-c:v", "libx264", "-preset", "ultrafast", "-g", "250", "-sc_threshold", "0", clip).CombinedOutput(); err != nil {

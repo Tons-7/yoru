@@ -5,7 +5,6 @@ import { cx, personName } from '../lib/format'
 import { initials, realImage } from '../lib/people'
 import { Skeleton } from './ui'
 
-/** A portrait card: the picture and name open one page, the line under them another. */
 export function PortraitCard({
   to,
   image,
@@ -19,7 +18,6 @@ export function PortraitCard({
   name: string
   badge?: ReactNode
   under?: ReactNode
-  /** Show titles get three: a franchise's run the same for two lines. */
   lines?: 2 | 3
 }) {
   const picture = realImage(image)
@@ -31,11 +29,11 @@ export function PortraitCard({
             src={picture}
             alt=""
             loading="lazy"
-            className="aspect-[2/3] w-full object-cover transition-transform duration-300 group-hover/portrait:scale-105"
+            className="aspect-2/3 w-full object-cover transition-transform duration-300 group-hover/portrait:scale-105"
           />
         ) : (
-          <div className="grid aspect-[2/3] w-full place-items-center font-display text-2xl font-semibold text-base-600">
-            {initials(name)}
+          <div className="grid aspect-2/3 w-full place-items-center font-display text-2xl font-semibold text-base-600">
+            {initials(personName(name))}
           </div>
         )}
         {badge && <span className="pointer-events-none absolute top-1.5 left-1.5">{badge}</span>}
@@ -54,7 +52,6 @@ export function PortraitCard({
   )
 }
 
-/** A face, or its initials where MyAnimeList has none. */
 export function Face({ image, name, className }: { image?: string; name: string; className: string }) {
   const picture = realImage(image)
   return picture ? (
@@ -88,7 +85,6 @@ export function PersonRow({ id, name, image }: { id?: number; name: string; imag
   )
 }
 
-/** On the list: its status on the card, as the Library would say it. */
 export function ListBadge({ status }: { status?: string }) {
   if (!status) return null
   return (
@@ -99,11 +95,9 @@ export function ListBadge({ status }: { status?: string }) {
 }
 
 export function PortraitGrid({ children }: { children: ReactNode }) {
-  // Three across on a phone, more as the width allows.
   return <div className="grid grid-cols-3 gap-x-3 gap-y-5 sm:grid-cols-[repeat(auto-fill,minmax(7.25rem,1fr))]">{children}</div>
 }
 
-/** A section of a person page, its count beside the heading; long ones show the first part until asked. */
 export function PeopleSection<T>({
   title,
   items,
@@ -133,7 +127,6 @@ export function PeopleSection<T>({
   )
 }
 
-/** A people page's header: portrait, names, a line of facts, and the about text folded to a few lines. */
 export function PeopleHeader({
   image,
   name,
@@ -163,9 +156,9 @@ export function PeopleHeader({
     <header className="flex flex-col gap-5 sm:flex-row sm:items-start">
       <div className="w-36 shrink-0 overflow-hidden rounded-card bg-base-850 shadow-card sm:w-44">
         {realImage(image) ? (
-          <img src={image} alt="" className="aspect-[2/3] w-full object-cover" />
+          <img src={image} alt="" className="aspect-2/3 w-full object-cover" />
         ) : (
-          <div className="grid aspect-[2/3] w-full place-items-center font-display text-4xl font-semibold text-base-600">
+          <div className="grid aspect-2/3 w-full place-items-center font-display text-4xl font-semibold text-base-600">
             {initials(personName(name))}
           </div>
         )}
@@ -195,7 +188,7 @@ export function PeopleSkeleton() {
   return (
     <div className="space-y-8">
       <div className="flex gap-5">
-        <Skeleton className="aspect-[2/3] w-36 shrink-0 sm:w-44" />
+        <Skeleton className="aspect-2/3 w-36 shrink-0 sm:w-44" />
         <div className="flex-1 space-y-3">
           <Skeleton className="h-9 w-64" />
           <Skeleton className="h-4 w-40" />
@@ -205,7 +198,7 @@ export function PeopleSkeleton() {
       <div className="max-h-[calc(100dvh-24rem)] overflow-hidden">
         <PortraitGrid>
           {Array.from({ length: 40 }, (_, i) => (
-            <Skeleton key={i} className="aspect-[2/3] w-full" />
+            <Skeleton key={i} className="aspect-2/3 w-full" />
           ))}
         </PortraitGrid>
       </div>

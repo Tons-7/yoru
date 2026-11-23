@@ -12,7 +12,6 @@ import (
 	"yoru/internal/store"
 )
 
-// Only the browsers' push services are accepted: a subscription is an address Yoru posts to.
 func TestPushSubscriptionsOnlyToPushServices(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	keys := map[string]string{
@@ -48,7 +47,6 @@ func TestPushSubscriptionsOnlyToPushServices(t *testing.T) {
 	}
 }
 
-// A device's alerts end with its access: declined, removed, or all paired ones when pairing is reset.
 func TestPushStopsWithTheDevicesAccess(t *testing.T) {
 	h := approvalHarness(t, approvalOnce)
 	keys := `"keys":{"p256dh":"` + base64.RawURLEncoding.EncodeToString(append([]byte{4}, make([]byte, 64)...)) +
@@ -95,7 +93,6 @@ func TestPushStopsWithTheDevicesAccess(t *testing.T) {
 	}
 }
 
-// A release alert names the show and opens the episode, tagged as the open tab's own alert is.
 func TestReleaseAlert(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	seedShow(t, h, 7, 12)

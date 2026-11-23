@@ -148,6 +148,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		"configPath":     s.cfg.ConfigPath(),
 		"dataDir":        s.cfg.DataDir(),
 		"strayConfig":    s.cfg.StrayConfig(),
+		"unknownConfig":  s.cfg.UnknownKeys(),
 		"vlc":            player.ResolveVLC(s.cfg.VLCPath()),
 		"temporary":      s.cfg.Temporary(),
 		"binDir":         s.cfg.BinDir,
@@ -161,6 +162,16 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.streams != nil {
 		body["encoder"], body["toneMapper"] = s.streams.Converter()
+	}
+	if !fromHost(r) {
+		for _, key := range []string{"defaultDataDir", "configPath", "dataDir", "strayConfig", "binDir", "cacheDir"} {
+			body[key] = ""
+		}
+		if body["vlc"] != "" {
+			body["vlc"] = "installed"
+		}
+		body["unknownConfig"] = []string{}
+		body["libraryPaths"] = []string{}
 	}
 	send(w, http.StatusOK, body)
 }
@@ -247,13 +258,17 @@ func (s *Server) setDataDir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.TrimSpace(body.Path)
-	if strings.Contains(path, "..") {
+	if slices.Contains(strings.FieldsFunc(path, func(c rune) bool { return c == '/' || c == '\\' }), "..") {
 		send(w, http.StatusBadRequest, map[string]any{"error": "Choose the folder by its full path, without \"..\"."})
 		return
 	}
 	dir := s.cfg.ResolveDataDir(path)
+	if s.cfg.InDownloads(dir) {
+		send(w, http.StatusBadRequest, map[string]any{"error": "That folder is inside the episodes folder. Pick one outside it."})
+		return
+	}
 	if dir == s.cfg.DataDir() {
-		send(w, http.StatusOK, map[string]any{"dataDir": dir, "copied": false, "restart": false})
+		send(w, http.StatusOK, map[string]any{"dataDir": dir, "copied": false, "restart": false, "same": true})
 		return
 	}
 	existing := ""
@@ -368,7 +383,7 @@ func (s *Server) describeSystemFFmpeg(ctx context.Context, c *Component) {
 	t, ok := s.systemFF[path]
 	s.systemMu.Unlock()
 	if !ok || !t.modTime.Equal(info.ModTime()) {
-		probe, cancel := context.WithTimeout(ctx, time.Minute)
+		probe, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		t = systemTool{
 			modTime:   info.ModTime(),
 			version:   transcode.Version(probe, path),

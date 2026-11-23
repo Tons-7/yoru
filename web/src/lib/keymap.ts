@@ -26,6 +26,7 @@ export type KeyAction =
   | 'subBigger'
   | 'subSmaller'
   | 'info'
+  | 'screenshot'
   | 'markStart'
   | 'markEnd'
 
@@ -61,6 +62,7 @@ export const KEY_ACTIONS: KeyActionInfo[] = [
   { id: 'subBigger', does: 'Bigger subtitles', key: '+', fixed: ['='] },
   { id: 'subSmaller', does: 'Smaller subtitles', key: '-' },
   { id: 'info', does: 'Playback info', key: 'i' },
+  { id: 'screenshot', does: 'Screenshot', key: 'g' },
   { id: 'markStart', does: 'Mark where the opening or ending starts', key: '[' },
   { id: 'markEnd', does: 'Mark where it ends, and save it', key: ']' },
 ]
@@ -138,8 +140,10 @@ export function setKey(action: KeyAction, key: string) {
   write({ ...saved, keys })
 }
 
-export function resetKeys() {
+export function resetKeys(): () => void {
+  const before = saved.keys
   write({ ...saved, keys: {} })
+  return () => write({ ...saved, keys: before })
 }
 
 export function setKeyScope(scope: Saved['scope']) {

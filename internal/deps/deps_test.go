@@ -17,7 +17,6 @@ import (
 	"time"
 )
 
-// The binary is moved aside, never truncated, and a copy that fails leaves the old one in place.
 func TestInstallReplacesWholeOrNotAtAll(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "ffmpeg.exe")
@@ -58,7 +57,6 @@ func TestKnownComponents(t *testing.T) {
 	}
 }
 
-// Another algorithm's digest compared as sha256 would refuse every install.
 func TestSha256OfIgnoresOtherAlgorithms(t *testing.T) {
 	if got := sha256Of("sha256:ab12"); got != "ab12" {
 		t.Errorf("sha256 digest = %q", got)
@@ -70,7 +68,6 @@ func TestSha256OfIgnoresOtherAlgorithms(t *testing.T) {
 	}
 }
 
-// Git and MSYS both put GNU tar ahead of Windows' own on PATH.
 func TestSystemTarIsNotWhateverIsOnPath(t *testing.T) {
 	got := systemTar()
 	if runtime.GOOS != "windows" {
@@ -117,7 +114,7 @@ func TestUnzipWritesNestedEntries(t *testing.T) {
 	})
 
 	dest := filepath.Join(dir, "out")
-	if err := unzip(archive, dest); err != nil {
+	if err := unzip(archive, dest, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,8 +132,6 @@ func TestUnzipWritesNestedEntries(t *testing.T) {
 	}
 }
 
-// An archive naming ../ paths would otherwise write anywhere on disk.
-// Windows 10's tar has no LZMA codec; the fixture comes from this machine's bsdtar.
 func TestUn7zReadsLZMAWithoutTar(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("bsdtar writes the 7z fixture")
@@ -156,7 +151,7 @@ func TestUn7zReadsLZMAWithoutTar(t *testing.T) {
 	}
 
 	dest := filepath.Join(dir, "out")
-	if err := extract(context.Background(), filepath.Join(dir, "mpv.7z"), dest); err != nil {
+	if err := extract(context.Background(), filepath.Join(dir, "mpv.7z"), dest, nil); err != nil {
 		t.Fatal(err)
 	}
 	for name, want := range map[string]string{
@@ -178,7 +173,7 @@ func TestUnzipRefusesToEscapeTheTarget(t *testing.T) {
 	archive := filepath.Join(dir, "evil.zip")
 	writeZip(t, archive, map[string]string{"../escaped.txt": "nope"})
 
-	if err := unzip(archive, filepath.Join(dir, "out")); err == nil {
+	if err := unzip(archive, filepath.Join(dir, "out"), nil); err == nil {
 		t.Fatal("expected an error for an entry outside the target")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "escaped.txt")); err == nil {
@@ -206,7 +201,6 @@ func TestFindAllMatchesByPattern(t *testing.T) {
 	}
 }
 
-// versions.json is shared with fetch-deps.ps1, so recording one component must leave the others alone.
 func TestRecordKeepsOtherVersions(t *testing.T) {
 	dir := t.TempDir()
 	m := New(dir, nil)
@@ -229,7 +223,6 @@ func TestRecordKeepsOtherVersions(t *testing.T) {
 	}
 }
 
-// A leftover rqbit and its version are cleared; other components are kept.
 func TestRemoveObsolete(t *testing.T) {
 	dir := t.TempDir()
 	m := New(dir, nil)
@@ -251,20 +244,20 @@ func TestRemoveObsolete(t *testing.T) {
 	}
 }
 
-// An install a kill interrupted leaves its staging folder; the startup sweep takes it, and only it.
 func TestRemoveObsoleteSweepsInterruptedInstalls(t *testing.T) {
 	dir := t.TempDir()
 	m := New(dir, nil)
 	os.MkdirAll(filepath.Join(dir, ".install-123", "ffmpeg"), 0o755)
+	stale := time.Now().Add(-2 * installInFlight)
+	os.Chtimes(filepath.Join(dir, ".install-123"), stale, stale)
+	os.MkdirAll(filepath.Join(dir, ".install-456", "ffmpeg"), 0o755)
 	os.WriteFile(filepath.Join(dir, "mpv.exe.new"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(dir, "ffmpeg.exe"), []byte("x"), 0o755)
 	os.MkdirAll(filepath.Join(dir, "shaders"), 0o755)
 	os.WriteFile(filepath.Join(dir, "shaders", "Anime4K_Clamp.glsl.old"), []byte("x"), 0o644)
-	// bin_dir may be the user's own tools folder: what Yoru didn't make stays.
 	os.WriteFile(filepath.Join(dir, "backup.old"), []byte("x"), 0o644)
 	os.MkdirAll(filepath.Join(dir, "notes.new"), 0o755)
 	os.WriteFile(filepath.Join(dir, "rqbit.exe"), []byte("x"), 0o755)
-	// bin_dir = '.': the copy an update's rollback needs.
 	os.WriteFile(filepath.Join(dir, "yoru.exe.old"), []byte("x"), 0o755)
 
 	m.RemoveObsolete()
@@ -273,14 +266,13 @@ func TestRemoveObsoleteSweepsInterruptedInstalls(t *testing.T) {
 			t.Errorf("%s was left behind", gone)
 		}
 	}
-	for _, kept := range []string{"ffmpeg.exe", "shaders", "backup.old", "notes.new", "rqbit.exe", "yoru.exe.old"} {
+	for _, kept := range []string{".install-456", "ffmpeg.exe", "shaders", "backup.old", "notes.new", "rqbit.exe", "yoru.exe.old"} {
 		if _, err := os.Stat(filepath.Join(dir, kept)); err != nil {
 			t.Errorf("%s was removed", kept)
 		}
 	}
 }
 
-// A slow line that keeps delivering finishes however long it takes; one gone silent fails, named as a stall.
 func TestDownloadEndsOnlyOnSilence(t *testing.T) {
 	old := stallAfter
 	stallAfter = 150 * time.Millisecond
@@ -300,12 +292,33 @@ func TestDownloadEndsOnlyOnSilence(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	m := New(t.TempDir(), slog.New(slog.NewTextHandler(io.Discard, nil)))
-	m.http.Timeout = 200 * time.Millisecond // the old whole-response deadline, shorter than the slow download
+	m.http.Timeout = 200 * time.Millisecond
 	dest := filepath.Join(t.TempDir(), "file")
 	if err := m.download(context.Background(), "ffmpeg", srv.URL+"/slow", dest, ""); err != nil {
 		t.Fatalf("a slow but steady download failed: %v", err)
 	}
 	if err := m.download(context.Background(), "ffmpeg", srv.URL+"/silent", dest, ""); !errors.Is(err, errStalled) {
 		t.Fatalf("a silent download: %v, want the stall named", err)
+	}
+}
+
+func TestComponentKeepsOnlyItsFiles(t *testing.T) {
+	ffmpeg := component{files: []string{"ffmpeg.exe", "ffprobe.exe"}}
+	shaders := component{glob: "*.glsl"}
+	for _, c := range []struct {
+		c    *component
+		name string
+		want bool
+	}{
+		{&ffmpeg, "ffmpeg-7.1/bin/ffmpeg.exe", true},
+		{&ffmpeg, `ffmpeg-7.1\bin\ffprobe.exe`, true},
+		{&ffmpeg, "ffmpeg-7.1/doc/ffmpeg.html", false},
+		{&ffmpeg, "ffmpeg-7.1/bin/ffplay.exe", false},
+		{&shaders, "glsl/Upscale/Anime4K_Upscale_CNN_x2_M.glsl", true},
+		{&shaders, "README.md", false},
+	} {
+		if got := c.c.wants(c.name); got != c.want {
+			t.Errorf("wants(%q) = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

@@ -183,7 +183,7 @@ func TestPlaybackPathOverTheEngine(t *testing.T) {
 		t.Errorf("an inspected torrent was listed as downloading: %v", live)
 	}
 
-	file, idx, ok := torrent.PickEpisode(inspected.Details.Files, 2)
+	file, idx, ok := torrent.PickInPack(inspected.Details.Files, 2, []int{2}, torrent.Scope{})
 	if !ok || idx != 1 {
 		t.Fatalf("picked %d %v", idx, ok)
 	}

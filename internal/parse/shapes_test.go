@@ -2,8 +2,6 @@ package parse
 
 import "testing"
 
-// Names the parser used to misread: the episode title after the number, a span of the marked form, a
-// number that is the show's name, and Chinese groups' bracketed numbering.
 func TestEpisodeTitleAfterTheNumberIsNotTheShow(t *testing.T) {
 	for name, want := range map[string]string{
 		"[CBM]_Monster_-_02_-_Downfall_[78722558].mkv":                     "Monster",
@@ -18,7 +16,6 @@ func TestEpisodeTitleAfterTheNumberIsNotTheShow(t *testing.T) {
 	}
 }
 
-// Names that came from real sites and were read wrong: what each must give.
 func TestAuditedShapes(t *testing.T) {
 	type want struct {
 		season, episode, end, version, part int

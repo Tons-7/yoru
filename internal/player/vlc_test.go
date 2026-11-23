@@ -15,7 +15,10 @@ import (
 func TestVLCArgs(t *testing.T) {
 	v := NewVLC("", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ctl := control{port: 8089, password: "pw"}
-	args := v.args(Options{URL: "http://127.0.0.1:3030/s", Title: "Ep 3", StartAt: 61.5, Audio: "dub"}, ctl)
+	args := v.args(Options{URL: "http://127.0.0.1:3030/s", Title: "Ep 3", StartAt: 61.5, Audio: "dub", SubLanguages: []string{"en"}}, ctl)
+	if !slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "--sub-language=") && strings.Contains(a, "en") }) {
+		t.Errorf("no subtitle language in %v", args)
+	}
 
 	if last := args[len(args)-1]; last != "http://127.0.0.1:3030/s" {
 		t.Errorf("the stream must come last, got %q", last)

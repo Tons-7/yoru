@@ -5,7 +5,7 @@ import { cx } from '../lib/format'
 import { discoverQuery, useDiscover } from '../lib/queries'
 import { PosterCard } from './PosterCard'
 import { Rail, RailFailed } from './Rail'
-import { Segmented, Skeleton } from './ui'
+import { Button, Segmented, Skeleton } from './ui'
 
 const PERIODS = [
   { value: 'trending', label: 'Today' },
@@ -23,7 +23,7 @@ const count = (period: Period) => (period === 'trending' ? 20 : 10)
 
 export function TopTen({ folded, onUnfold }: { folded: boolean; onUnfold: () => void }) {
   const [period, setPeriod] = useState<Period>('trending')
-  const ranked = useDiscover(period, count(period), true)
+  const ranked = useDiscover(period, count(period), true, !folded)
   const qc = useQueryClient()
   const loaded = ranked.isSuccess && !folded
   useEffect(() => {
@@ -35,14 +35,23 @@ export function TopTen({ folded, onUnfold }: { folded: boolean; onUnfold: () => 
   }, [loaded, qc])
 
   if (folded) return <Rail title={TITLE} to={TO} folded onUnfold={onUnfold}>{null}</Rail>
-  if (ranked.isError && !ranked.data) return <RailFailed title={TITLE} to={TO} retry={() => void ranked.refetch()} />
+  if (ranked.isError && !ranked.data && period === 'trending') {
+    return <RailFailed title={TITLE} to={TO} retry={() => void ranked.refetch()} />
+  }
 
   return (
-    <Rail title={TITLE} to={TO} action={<Segmented size="sm" options={PERIODS} value={period} onChange={setPeriod} />}>
-      {ranked.isPending
+    <Rail title={TITLE} to={period === 'popular' ? '/browse?sort=popular' : TO} action={<Segmented label="Top 10 period" size="sm" options={PERIODS} value={period} onChange={setPeriod} />}>
+      {ranked.isError && !ranked.data ? (
+        <div className="flex min-h-40 items-center gap-3 px-1 text-sm text-base-400">
+          This list didn't load.
+          <Button size="sm" onClick={() => void ranked.refetch()}>
+            Try again
+          </Button>
+        </div>
+      ) : ranked.isPending
         ? Array.from({ length: 10 }, (_, i) => (
             <div key={i} className="w-[7.5rem] shrink-0 pl-12 box-content sm:w-[8.75rem]">
-              <Skeleton className="aspect-[2/3] w-full" />
+              <Skeleton className="aspect-2/3 w-full" />
               <Skeleton className="mt-2 h-4 w-3/4" />
               <Skeleton className="mt-1.5 h-3 w-1/2" />
             </div>

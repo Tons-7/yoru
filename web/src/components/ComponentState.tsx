@@ -2,7 +2,6 @@ import { bytes } from '../lib/format'
 import type { SetupProgress } from '../lib/queries'
 import { ProgressBar } from './ui'
 
-/** One external program's install state: a command to run by hand, a download under way, or the button. */
 export function ComponentState({
   progress,
   present,
@@ -20,14 +19,14 @@ export function ComponentState({
   latest?: string
   onInstall: () => void
   pending: boolean
-  /** The install request itself was refused, before any progress existed. */
   requestError?: string
 }) {
   const update = present && !!latest && !!version && latest !== version
   if (present && progress?.stage !== 'failed' && !update) return null
+  if (progress?.stage === 'done' && (!update || progress.version === latest)) {
+    return <p className="mt-2 text-xs text-emerald-300">Installed</p>
+  }
 
-  // No clean prebuilt binary on this OS: guide to the package manager, which
-  // puts it on PATH where Yoru looks, rather than a download that would fail.
   if (manual) {
     return (
       <div className="mt-2">
@@ -58,12 +57,12 @@ export function ComponentState({
       <button
         onClick={onInstall}
         disabled={pending}
-        className="rounded-md bg-base-800 px-3 py-1 text-xs font-medium text-base-100 hover:bg-base-750 disabled:opacity-50"
+        className="rounded-md bg-base-800 px-3 py-1 text-xs font-medium text-base-100 hover:bg-base-750 disabled:opacity-50 pointer-coarse:min-h-11"
       >
         {progress?.stage === 'failed' ? 'Try again' : update ? `Update to ${latest}` : 'Install'}
       </button>
       {(progress?.error ?? requestError) && (
-        <span className="text-xs text-recap" title={progress?.error ?? requestError}>
+        <span className="text-xs text-red-300" title={progress?.error ?? requestError}>
           {(progress?.error ?? requestError)!.slice(0, 80)}
         </span>
       )}

@@ -37,7 +37,7 @@ export function StartingSteps({
   return (
     <div
       className={cx(
-        'absolute inset-0 flex flex-col items-center justify-center overflow-hidden bg-black px-4 pt-12 pb-3 text-center sm:p-6',
+        'absolute inset-0 flex flex-col items-center justify-center-safe overflow-y-auto overscroll-contain bg-black px-4 pt-12 pb-3 text-center sm:p-6',
         className,
       )}
     >

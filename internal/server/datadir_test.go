@@ -13,7 +13,6 @@ import (
 	"yoru/internal/store"
 )
 
-// A chosen data folder gets the database and config.toml's entry; one already holding a database is kept.
 func TestSetDataDirCopiesTheDatabaseAndWritesConfig(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("YORU_ROOT", root)
@@ -54,8 +53,6 @@ func TestSetDataDirCopiesTheDatabaseAndWritesConfig(t *testing.T) {
 		t.Errorf("config.toml not updated: %q", again.DataDir())
 	}
 
-	// A second folder with its own database keeps it, and switching to it
-	// has to be confirmed: it would open that history instead of this one.
 	other := filepath.Join(root, "other")
 	os.Mkdir(other, 0o755)
 	os.WriteFile(filepath.Join(other, "yoru.db"), []byte("theirs"), 0o600)

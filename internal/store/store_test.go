@@ -19,7 +19,31 @@ func newTestStore(t *testing.T) *Store {
 	if err := conn.Migrate(); err != nil {
 		t.Fatal(err)
 	}
-	return New(conn)
+	s := New(conn)
+	if err := s.Pulled(context.Background(), "mal"); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestMALPushesWaitForAFirstRead(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedTracked(t, s, 1, 101, 12)
+	s.MarkWatched(ctx, 1, 3)
+	if err := s.ForgetPushed(ctx, "mal"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s.PendingMALPushes(ctx, "mal", 0); len(p) != 0 {
+		t.Fatalf("pending before MAL was read: %v", p)
+	}
+	if p, _ := s.PendingMALPush(ctx, "mal", 1); p.AnimeID != 1 {
+		t.Fatal("a single edit the user just made was held back")
+	}
+	s.Pulled(ctx, "mal")
+	if p, _ := s.PendingMALPushes(ctx, "mal", 0); len(p) != 1 {
+		t.Fatalf("pending after the read: %v", p)
+	}
 }
 
 func TestMigrationsSeedDefaults(t *testing.T) {
@@ -31,8 +55,6 @@ func TestMigrationsSeedDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Compared against the compiled-in defaults rather than literals, so a
-	// migration that changes a value cannot silently disagree with the code.
 	for _, key := range []string{
 		"cache.budget_bytes", "quality.max_auto_bytes",
 		"sync.progress_at", "autodownload.enabled",
@@ -109,13 +131,11 @@ func TestImportListAndRead(t *testing.T) {
 	if len(filtered.Items) != 1 || filtered.Items[0].ID != 100 {
 		t.Fatalf("status filter returned %+v", filtered.Items)
 	}
-	// The count must reflect the filter, not the whole table.
 	if filtered.Total != 1 {
 		t.Errorf("filtered total = %d, want 1", filtered.Total)
 	}
 }
 
-// A remote import must not overwrite a local change that has not been pushed.
 func TestImportSkipsDirtyRows(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -149,7 +169,6 @@ func TestImportSkipsDirtyRows(t *testing.T) {
 	}
 }
 
-// Replace makes the local list match the tracker, unpushed edits included, as merge won't.
 func TestReplaceOverwritesDirtyRows(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -192,7 +211,6 @@ func TestReplaceDropsEntriesTheTrackerNoLongerHas(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Bebop was removed upstream.
 	res, err := s.ImportList(ctx, both,
 		[]Entry{{ID: 1, AnimeID: 100, Progress: 8, UpdatedAt: 2000}}, ImportReplace)
 	if err != nil {
@@ -212,7 +230,6 @@ func TestReplaceDropsEntriesTheTrackerNoLongerHas(t *testing.T) {
 	}
 }
 
-// Merge, the safe default, never deletes a show added locally and not yet pushed.
 func TestMergeKeepsEntriesTheTrackerDoesNotHave(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -248,7 +265,6 @@ func TestImportIsAtomic(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
-	// The second entry's anime was never inserted, so the foreign key rolls back the batch.
 	_, err := s.ImportList(ctx, []Anime{anime(100, "Frieren")},
 		[]Entry{
 			{ID: 1, AnimeID: 100, Progress: 7},
@@ -282,7 +298,6 @@ func TestFullTextSearchIndexesEveryTitle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Latin terms take FTS, CJK and short ones LIKE; all resolve to the same row.
 	for _, q := range []string{"sousou", "frier", "beyond", "funeral", "葬送", "フリーレン", "no"} {
 		got, err := s.SearchLocal(ctx, q, 0)
 		if err != nil {
@@ -306,7 +321,6 @@ func TestSearchLocalRejectsNothingAndNonsense(t *testing.T) {
 		t.Fatalf("blank query: %d results, err %v", len(got), err)
 	}
 
-	// FTS5 treats these as operators; unescaped they are a syntax error.
 	for _, q := range []string{`"unbalanced`, "AND OR NOT", "a*b(c)"} {
 		if _, err := s.SearchLocal(ctx, q, 0); err != nil {
 			t.Fatalf("%q should not error: %v", q, err)
@@ -319,7 +333,6 @@ func TestSearchLocalPutsListShowsFirst(t *testing.T) {
 	ctx := context.Background()
 
 	status := "CURRENT"
-	// The shorter title scores better on text alone.
 	if _, err := s.ImportList(ctx,
 		[]Anime{anime(1, "Chainsaw Days"), anime(2, "Chainsaw Man the Long Title")},
 		[]Entry{{ID: 1, AnimeID: 2, Status: &status, UpdatedAt: 1000}}, ImportMerge); err != nil {

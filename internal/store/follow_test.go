@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// A dozen groups sub the same episode; it is announced once, not per group.
 func TestNotifiedOncePerEpisode(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -31,6 +30,24 @@ func TestNotifiedOncePerEpisode(t *testing.T) {
 	}
 }
 
+func TestADoubleEpisodeReleaseCountsForBoth(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedAnime(t, s, 1)
+	if err := s.RecordNotified(ctx, "hash-0102", 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if seen, _ := s.AlreadyNotified(ctx, "hash-0102", 1, 2); seen {
+		t.Fatal("episode 2 was skipped because its release already announced episode 1")
+	}
+	if err := s.RecordNotified(ctx, "hash-0102", 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	if !s.EpisodeFetched(ctx, 1, 2) {
+		t.Error("episode 2 is not recorded under the shared release")
+	}
+}
+
 func TestUnknownEpisodeStillDedupesByHash(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -44,7 +61,6 @@ func TestUnknownEpisodeStillDedupesByHash(t *testing.T) {
 	}
 }
 
-// Planning to watch something is not asking to hear about every episode of it.
 func TestFollowIsOnlyForShowsBeingWatched(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -65,8 +81,6 @@ func TestFollowIsOnlyForShowsBeingWatched(t *testing.T) {
 	}
 }
 
-// A show being watched is followed by that fact alone: statuses synced from the tracker never set a
-// follow, so nobody with a synced list ever got a notification.
 func TestAShowBeingWatchedIsFollowedWithoutAsking(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -78,7 +92,6 @@ func TestAShowBeingWatchedIsFollowedWithoutAsking(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// As the sync leaves it: the status alone, no follow row.
 	for id := 1; id <= 3; id++ {
 		if err := s.Unfollow(ctx, id); err != nil {
 			t.Fatal(err)

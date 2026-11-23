@@ -1,7 +1,5 @@
 package bt
 
-// Helpers for testing
-
 import (
 	"testing"
 
@@ -21,13 +19,11 @@ func newTestingClient(t testing.TB) *Client {
 
 var testingTorrentInfoHash = metainfo.Hash{1}
 
-// Basic opts for testing adding torrents I guess.
 var testingAddTorrentOpts = AddTorrentOpts{
 	InfoHash:                 testingTorrentInfoHash,
 	DisableInitialPieceCheck: true,
 }
 
-// Why would you call this? It doesn't add it to the Client...
 func (cl *Client) newTorrentForTesting() *Torrent {
 	return cl.newTorrentOpt(testingAddTorrentOpts)
 }

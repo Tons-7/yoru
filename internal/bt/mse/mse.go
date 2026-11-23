@@ -1,5 +1,3 @@
-// https://wiki.vuze.com/w/Message_Stream_Encryption
-
 package mse
 
 import (
@@ -24,27 +22,21 @@ import (
 const (
 	maxPadLen = 512
 
-	CryptoMethodPlaintext CryptoMethod = 1 // After header obfuscation, drop into plaintext
-	CryptoMethodRC4       CryptoMethod = 2 // After header obfuscation, use RC4 for the rest of the stream
+	CryptoMethodPlaintext CryptoMethod = 1
+	CryptoMethodRC4       CryptoMethod = 2
 	AllSupportedCrypto                 = CryptoMethodPlaintext | CryptoMethodRC4
 )
 
 type CryptoMethod uint32
 
 var (
-	// Prime P according to the spec, and G, the generator.
-	p, specG big.Int
-	// The rand.Int max arg for use in newPadLen()
-	newPadLenMax big.Int
-	// For use in initer's hashes
-	req1 = []byte("req1")
-	req2 = []byte("req2")
-	req3 = []byte("req3")
-	// Verification constant "VC", all zeroes in the BitTorrent implementation.
-	vc [8]byte
-	// Zero padding
-	zeroPad [512]byte
-	// Tracks counts of received crypto_provides
+	p, specG            big.Int
+	newPadLenMax        big.Int
+	req1                = []byte("req1")
+	req2                = []byte("req2")
+	req3                = []byte("req3")
+	vc                  [8]byte
+	zeroPad             [512]byte
 	cryptoProvidesCount = expvar.NewMap("mseCryptoProvides")
 )
 
@@ -122,7 +114,6 @@ func (cr *cipherWriter) Write(b []byte) (n int, err error) {
 	cr.c.XORKeyStream(be, b)
 	n, err = cr.w.Write(be[:len(b)])
 	if n != len(b) {
-		// The cipher has run past the caller's stream position, so it can't be used any more.
 		cr.c = nil
 	}
 	if len(be) > len(cr.b) {
@@ -155,7 +146,6 @@ func paddedLeft(b []byte, _len int) []byte {
 	return ret
 }
 
-// Calculate, and send Y, our public key.
 func (h *handshake) postY(x *big.Int) error {
 	var y big.Int
 	y.Exp(&specG, x, &p)
@@ -164,7 +154,9 @@ func (h *handshake) postY(x *big.Int) error {
 
 func (h *handshake) establishS() error {
 	x := newX()
-	h.postY(&x)
+	if err := h.postY(&x); err != nil {
+		return err
+	}
 	var b [96]byte
 	_, err := io.ReadFull(h.ctxConn, b[:])
 	if err != nil {
@@ -190,19 +182,15 @@ func newPadLen() int64 {
 	return ret
 }
 
-// Manages state for both initiating and receiving handshakes.
 type handshake struct {
-	conn io.ReadWriter
-	// The conn with Reads and Writes wrapped to the context given in handshake.Do.
-	ctxConn io.ReadWriter
-	s       [96]byte
-	initer  bool          // Whether we're initiating or receiving.
-	skeys   SecretKeyIter // Skeys we'll accept if receiving.
-	skey    []byte        // Skey we're initiating with.
-	ia      []byte        // Initial payload. Only used by the initiator.
-	// Return the bit for the crypto method the receiver wants to use.
-	chooseMethod CryptoSelector
-	// Sent to the receiver.
+	conn           io.ReadWriter
+	ctxConn        io.ReadWriter
+	s              [96]byte
+	initer         bool
+	skeys          SecretKeyIter
+	skey           []byte
+	ia             []byte
+	chooseMethod   CryptoSelector
 	cryptoProvides CryptoMethod
 
 	writeMu    sync.Mutex
@@ -305,14 +293,11 @@ func unmarshal(r io.Reader, data ...any) (err error) {
 	return
 }
 
-// Looking for b at the end of a.
 func suffixMatchLen(a, b []byte) int {
 	if len(b) > len(a) {
 		b = b[:len(a)]
 	}
-	// i is how much of b to try to match
 	for i := len(b); i > 0; i-- {
-		// j is how many chars we've compared
 		j := 0
 		for ; j < i; j++ {
 			if b[i-1-j] != a[len(a)-1-j] {
@@ -325,7 +310,6 @@ func suffixMatchLen(a, b []byte) int {
 	return 0
 }
 
-// Reads from r until b has been seen, holding as little as it can.
 func readUntil(r io.Reader, b []byte) error {
 	b1 := make([]byte, len(b))
 	i := 0
@@ -374,7 +358,6 @@ func (h *handshake) initerSteps(ctx context.Context) (ret io.ReadWriter, selecte
 	bC := h.newEncrypt(false)
 	var eVC [8]byte
 	bC.XORKeyStream(eVC[:], vc[:])
-	// To the all-zero VC: past the 96-byte public key Y, up to 512 bytes of padding come before its 8 bytes.
 	err = readUntil(io.LimitReader(h.ctxConn, 520), eVC[:])
 	if err != nil {
 		if err == io.EOF {
@@ -388,6 +371,10 @@ func (h *handshake) initerSteps(ctx context.Context) (ret io.ReadWriter, selecte
 	var method CryptoMethod
 	err = unmarshal(ctxReader, &method, &padLen)
 	if err != nil {
+		return
+	}
+	if padLen > maxPadLen {
+		err = fmt.Errorf("padding of %d bytes", padLen)
 		return
 	}
 	_, err = io.CopyN(io.Discard, ctxReader, int64(padLen))
@@ -412,7 +399,6 @@ func (h *handshake) initerSteps(ctx context.Context) (ret io.ReadWriter, selecte
 var ErrNoSecretKeyMatch = errors.New("no skey matched")
 
 func (h *handshake) receiverSteps(ctx context.Context) (ret io.ReadWriter, chosen CryptoMethod, err error) {
-	// There is up to 512 bytes of padding, then the 20 byte hash.
 	err = readUntil(io.LimitReader(h.ctxConn, 532), hash(req1, h.s[:]))
 	if err != nil {
 		if err == io.EOF {
@@ -457,18 +443,29 @@ func (h *handshake) receiverSteps(ctx context.Context) (ret io.ReadWriter, chose
 	if err != nil {
 		return
 	}
-	// The peer picks this uint32; only the defined bits get a key of their own.
 	cryptoProvidesCount.Add(strconv.FormatUint(uint64(provides&(CryptoMethodPlaintext|CryptoMethodRC4)), 16), 1)
 	chosen = h.chooseMethod(provides)
+	if chosen&provides == 0 {
+		err = fmt.Errorf("peer offered no usable crypto method (%#x)", provides)
+		return
+	}
+	if padLen > maxPadLen {
+		err = fmt.Errorf("padding of %d bytes", padLen)
+		return
+	}
 	_, err = io.CopyN(io.Discard, ctxReader, int64(padLen))
 	if err != nil {
 		return
 	}
 	var lenIA uint16
-	unmarshal(ctxReader, &lenIA)
+	if err = unmarshal(ctxReader, &lenIA); err != nil {
+		return
+	}
 	if lenIA != 0 {
 		h.ia = make([]byte, lenIA)
-		unmarshal(ctxReader, h.ia)
+		if err = unmarshal(ctxReader, h.ia); err != nil {
+			return
+		}
 	}
 	buf := &bytes.Buffer{}
 	w := cipherWriter{h.newEncrypt(false), buf, nil}
@@ -547,12 +544,13 @@ func InitiateHandshakeContext(
 ) {
 	h := handshake{
 		conn:           rw,
-		ctxConn:        ctxrw.WrapReadWriter(ctx, rw),
+		ctxConn:        rw,
 		initer:         true,
 		skey:           skey,
 		ia:             initialPayload,
 		cryptoProvides: cryptoProvides,
 	}
+	defer ctxrw.Bind(ctx, rw)()
 	return h.Do(ctx)
 }
 
@@ -581,21 +579,20 @@ func ReceiveHandshakeEx(
 ) (ret HandshakeResult) {
 	h := handshake{
 		conn:         rw,
-		ctxConn:      ctxrw.WrapReadWriter(ctx, rw),
+		ctxConn:      rw,
 		initer:       false,
 		skeys:        skeys,
 		chooseMethod: selectCrypto,
 	}
+	defer ctxrw.Bind(ctx, rw)()
 	ret.ReadWriter, ret.CryptoMethod, ret.error = h.Do(ctx)
 	ret.SecretKey = h.skey
 	return
 }
 
-// Calls the callback with each secret key until it returns false or the keys run out.
 type SecretKeyIter func(callback func(skey []byte) (more bool))
 
 func DefaultCryptoSelector(provided CryptoMethod) CryptoMethod {
-	// We prefer plaintext for performance reasons.
 	if provided&CryptoMethodPlaintext != 0 {
 		return CryptoMethodPlaintext
 	}

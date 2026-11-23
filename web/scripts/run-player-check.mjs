@@ -1,5 +1,5 @@
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
-import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, openSync, readdirSync } from 'node:fs'
+import { copyFileSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, openSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { basename, delimiter, dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -275,14 +275,21 @@ try {
   stage(`scratch instance at ${scratch}`)
   for (const d of [scratch, root, appdata, lib, shots]) mkdirSync(d, { recursive: true })
   linkBin(join(repo, 'bin'), join(root, 'bin'), process.env.BIN_ONLY ? process.env.BIN_ONLY.split(',') : null)
+  let tls = ''
+  const certHost = process.env.YORU_TEST_CERT
+  if (certHost) {
+    const certs = join(root, 'certs')
+    run('go', ['run', './scripts/devcert', certHost, certs], { cwd: repo })
+    tls = `tls_cert = '${join(certs, `${certHost}.crt`)}'\ntls_key = '${join(certs, `${certHost}.key`)}'\n`
+  }
   writeFileSync(
     join(root, 'config.toml'),
-    `addr = "127.0.0.1:${PORT}"\n${process.env.YORU_EXTRA_CONFIG ?? ''}\n[torrent]\nlisten_port = ${PEER_PORT}\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:${Number(PORT) + 2000}"\n`,
+    `addr = "127.0.0.1:${PORT}"\n${tls}${process.env.YORU_EXTRA_CONFIG ?? ''}\n[torrent]\nlisten_port = ${PEER_PORT}\nupnp = false\n\n[[indexer]]\ntype = "nyaa"\nurl = "http://127.0.0.1:${Number(PORT) + 2000}"\n`,
   )
 
   if (!SKIP_BUILD) {
     stage('building web (vite)')
-    run('npm run build', [], { cwd: webDir, shell: true })
+    run('pnpm run build', [], { cwd: webDir, shell: true })
     stage('building server (go)')
     mkdirSync(binCache, { recursive: true })
     const gui = process.platform === 'win32' ? ['-ldflags', '-H windowsgui'] : []
@@ -295,7 +302,10 @@ try {
 
   const upstream = {}
   if (process.env.ANILIST_LIVE !== '1') {
-    anilist = spawn(process.execPath, [join(scriptDir, 'anilist-cache.mjs'), String(ANILIST_PORT)], { stdio: 'ignore' })
+    anilist = spawn(process.execPath, [join(scriptDir, 'anilist-cache.mjs'), String(ANILIST_PORT)], {
+      stdio: 'ignore',
+      detached: process.platform !== 'win32',
+    })
     upstream.YORU_ANILIST_API = `http://127.0.0.1:${ANILIST_PORT}`
   }
 
@@ -327,6 +337,13 @@ try {
 } finally {
   killTree(server)
   killTree(anilist)
+  if (process.exitCode && existsSync(serverLog)) {
+    const kept = join(tmpdir(), 'yoru-release-check')
+    try {
+      if (existsSync(kept)) copyFileSync(serverLog, join(kept, CHECK.replace(/\.mjs$/, '.server.log')))
+    } catch {
+    }
+  }
   if (KEEP) {
     console.log(`\nscratch kept at ${scratch} (server log: ${serverLog})`)
   } else {

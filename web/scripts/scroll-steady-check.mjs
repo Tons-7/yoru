@@ -54,6 +54,7 @@ const under = await page.evaluate(() => {
   return true
 })
 await page.waitForTimeout(200)
+check(!!under, 'found a control in the list to focus')
 if (under) {
   await page.locator('[data-probe]').first().focus()
   await page.waitForTimeout(200)

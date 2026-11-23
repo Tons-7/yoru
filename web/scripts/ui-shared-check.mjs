@@ -18,20 +18,20 @@ const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
-const tab = (name) => page.getByRole('tab', { name, exact: true })
+const tab = (name) => page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name, exact: true })
 
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
 await tab('Downloads').click()
 check(await until(async () => new URL(page.url()).searchParams.get('tab') === 'Downloads'), 'a picked tab is in the URL', page.url())
 await page.reload({ waitUntil: 'domcontentloaded' })
-check(await until(() => tab('Downloads').getAttribute('aria-selected').then((v) => v === 'true')), 'a reload keeps the tab')
+check(await until(() => tab('Downloads').getAttribute('aria-current').then((v) => v === 'page')), 'a reload keeps the tab')
 await page.goto(`${BASE}/settings?tab=About`, { waitUntil: 'domcontentloaded' })
 await tab('Playback').click()
 await page.evaluate(() => {
   history.pushState(null, '', '/settings?tab=About')
   dispatchEvent(new PopStateEvent('popstate'))
 })
-check(await until(() => tab('About').getAttribute('aria-selected').then((v) => v === 'true')), 'the same ?tab= link again switches back')
+check(await until(() => tab('About').getAttribute('aria-current').then((v) => v === 'page')), 'the same ?tab= link again switches back')
 
 let rotated = 0
 await page.route('**/api/access', (route) =>

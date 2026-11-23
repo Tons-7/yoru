@@ -29,14 +29,12 @@ func testMarshalUnmarshalMsg(t *testing.T, m Msg, expected string) {
 }
 
 func TestMarshalUnmarshalMsg(t *testing.T) {
-	// BEP 51: a reply's interval, num and samples.
 	testMarshalUnmarshalMsg(t, Msg{
 		R: &Return{
 			ID: IdFromString("hellohellohellohello"),
 			Bep51Return: Bep51Return{
 				Interval: func() *int64 { var ret int64 = 420; return &ret }(),
-				// Num:      func() *int64 { var ret int64 = 69; return &ret }(),
-				Samples: func() *CompactInfohashes { var ret CompactInfohashes; return &ret }(),
+				Samples:  func() *CompactInfohashes { var ret CompactInfohashes; return &ret }(),
 			},
 		},
 		T: "hello",

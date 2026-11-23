@@ -26,14 +26,11 @@ import (
 const (
 	accessCookie  = "yoru_access"
 	accessSetting = "access.token"
-	// Whether the listener is open to the network; in the database so it can be a switch.
-	lanSetting = "access.lan"
+	lanSetting    = "access.lan"
 )
 
-// OnRebind lets the server move its listener, so opening to the network needs no restart.
 func (s *Server) OnRebind(rebind func(addr string) error) { s.rebind = rebind }
 
-// LANAddr is the address when open to the network: the configured port, another host.
 func LANAddr(configured string) string {
 	_, port, err := net.SplitHostPort(configured)
 	if err != nil {
@@ -42,19 +39,17 @@ func LANAddr(configured string) string {
 	return net.JoinHostPort("0.0.0.0", port)
 }
 
-// NewAccessToken is made once and persisted, so paired devices survive a restart.
 func NewAccessToken() string {
 	b := make([]byte, 24)
 	rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// installAssets are what a phone reads to install Yoru as an app.
 var installAssets = map[string]bool{
 	"/manifest.webmanifest": true, "/icon.svg": true,
 	"/icon-192.png": true, "/icon-512.png": true, "/icon-maskable-512.png": true,
-	// The worker, which browsers re-fetch for updates without cookies, and its "can't reach Yoru" page.
 	"/sw.js": true, "/offline.html": true,
+	"/screenshots/home.jpg": true, "/screenshots/player.jpg": true,
 }
 
 func isLoopback(remoteAddr string) bool {
@@ -66,7 +61,6 @@ func isLoopback(remoteAddr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// loopbackHost: addressed by a loopback name, since any name resolving to 127.0.0.1 reaches this socket.
 func loopbackHost(host string) bool {
 	h, _, err := net.SplitHostPort(host)
 	if err != nil {
@@ -80,11 +74,9 @@ func loopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// proxyHeaders mark a request a proxy passed on; from a proxy on this machine it arrives on loopback.
 var proxyHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto",
 	"X-Real-Ip", "Cf-Connecting-Ip", "True-Client-Ip", "Via"}
 
-// relayed: sent on by a proxy. nginx's bare proxy_pass adds no header but speaks HTTP/1.0, as browsers don't.
 func relayed(r *http.Request) bool {
 	for _, h := range proxyHeaders {
 		if len(r.Header.Values(h)) > 0 {
@@ -94,13 +86,10 @@ func relayed(r *http.Request) bool {
 	return r.ProtoMajor == 1 && r.ProtoMinor == 0 && isLoopback(r.RemoteAddr)
 }
 
-// fromHost: the machine Yoru runs on, addressing it directly; the one caller that needs no token.
 func fromHost(r *http.Request) bool {
 	return isLoopback(r.RemoteAddr) && loopbackHost(r.Host) && !relayed(r)
 }
 
-// clientAddr is the device's address, through a proxy on this machine the one it names, "" when it names none.
-// Headers from anywhere else are ignored: a LAN device could name any address and slip a deny.
 func clientAddr(r *http.Request) string {
 	if relayed(r) && isLoopback(r.RemoteAddr) {
 		return forwardedFor(r.Header)
@@ -112,8 +101,6 @@ func clientAddr(r *http.Request) string {
 	return host
 }
 
-// forwardedFor is the client a proxy names. X-Forwarded-For's last entry first, as the proxy appends it; the
-// single-address headers can be the client's own, passed through, so they count only without it.
 func forwardedFor(h http.Header) string {
 	ip := func(s string) string {
 		s = strings.Trim(strings.TrimSpace(s), `"`)
@@ -150,19 +137,15 @@ func forwardedFor(h http.Header) string {
 	return ""
 }
 
-// secureRequest: reached over HTTPS, here or at a proxy in front.
 func secureRequest(r *http.Request) bool {
-	return r.TLS != nil || relayed(r) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return r.TLS != nil || isLoopback(r.RemoteAddr) && relayed(r) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
-// proxySeen is the last request a proxy on this machine passed on: when, for whom, and its public address.
 type proxySeen struct {
 	at           time.Time
 	client, site string
 }
 
-// noteProxy records a relayed request; its public address only from one with the token, as the header is the
-// client's to forge and the address goes into a link carrying the token.
 func (s *Server) noteProxy(r *http.Request, authorized bool) {
 	site := ""
 	if host := cmp.Or(r.Header.Get("X-Forwarded-Host"), r.Host); authorized && !loopbackHost(host) {
@@ -180,22 +163,20 @@ func (s *Server) noteProxy(r *http.Request, authorized bool) {
 	s.proxy = proxySeen{at: time.Now(), client: clientAddr(r), site: cmp.Or(site, s.proxy.site)}
 }
 
-// presented pulls the token from whichever channel the caller could use: media
-// elements and mpv cannot set headers, so query parameter and cookie must work.
-func presented(r *http.Request) string {
+func presented(r *http.Request, token string) bool {
+	match := 0
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		return strings.TrimPrefix(h, "Bearer ")
+		match |= subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(h, "Bearer ")), []byte(token))
 	}
 	if t := r.URL.Query().Get("token"); t != "" {
-		return t
+		match |= subtle.ConstantTimeCompare([]byte(t), []byte(token))
 	}
 	if c, err := r.Cookie(accessCookie); err == nil {
-		return c.Value
+		match |= subtle.ConstantTimeCompare([]byte(c.Value), []byte(token))
 	}
-	return ""
+	return match == 1
 }
 
-// keepCookie sets a year-long cookie.
 func keepCookie(w http.ResponseWriter, r *http.Request, name, value string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: name, Value: value, Path: "/",
@@ -203,26 +184,23 @@ func keepCookie(w http.ResponseWriter, r *http.Request, name, value string) {
 	})
 }
 
-// guard leaves loopback alone so the local browser and mpv need no setup, and
-// requires the token from everything else, failing closed when it is missing.
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Never inside another site's frame, where a click on top could hit host-only buttons.
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
-		// Watch-together friends come from their own Yoru, another site; the room's key is checked there.
+		if dotSegments(r.URL.Path) {
+			send(w, http.StatusBadRequest, map[string]any{"error": "bad path"})
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/together/") || strings.HasPrefix(r.URL.Path, "/together/") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Any open page can POST here, and loopback needs no token.
 		if !safeMethod(r.Method) && !sameOrigin(r) {
 			send(w, http.StatusForbidden, map[string]any{"error": "cross-site request refused"})
 			return
 		}
 		if fromHost(r) {
-			// Another site's page can't read the answers, but it could still make Yoru search, spawn
-			// processes or spend the AniList budget on its say-so; opening a link to Yoru is fine.
 			if !sameOrigin(r) && !topLevelNavigation(r) {
 				send(w, http.StatusForbidden, map[string]any{"error": "cross-site request refused"})
 				return
@@ -234,18 +212,14 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		if proxied {
 			s.noteProxy(r, false)
 		}
-		// Closing the listener leaves kept-alive connections, so network off shuts them out too.
 		if !isLoopback(r.RemoteAddr) && s.rebind != nil && !s.bound() {
 			send(w, http.StatusForbidden, map[string]any{"error": "network access is off"})
 			return
 		}
-		// Fetched by the browser's installer without the cookie, and no secret.
 		if r.Method == http.MethodGet && installAssets[r.URL.Path] {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// A player app's or a TV's link carries its own signed, expiring grant, checked by its handler; a
-		// device pairing with a code asks with its pairing cookie.
 		if safeMethod(r.Method) && (strings.HasPrefix(r.URL.Path, "/x/") || strings.HasPrefix(r.URL.Path, "/c/") ||
 			r.URL.Path == "/api/pair/wait") {
 			next.ServeHTTP(w, r)
@@ -259,8 +233,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			return
 		}
 
-		if subtle.ConstantTimeCompare([]byte(presented(r)), []byte(token)) != 1 {
-			// A TV opening Yoru's address is shown a code to pair with, not a refusal it can do nothing with.
+		if !presented(r, token) {
 			if r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html") {
 				s.pairPage(w, r)
 				return
@@ -283,8 +256,15 @@ func (s *Server) guard(next http.Handler) http.Handler {
 	})
 }
 
-// hostOnly keeps a route to the machine Yoru runs on: a paired device holds
-// the token, but must not reconfigure the host or link its accounts.
+func dotSegments(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 func hostOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !fromHost(r) {
@@ -299,24 +279,34 @@ func safeMethod(m string) bool {
 	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
 }
 
-// sameOrigin: Yoru's own page, or a non-browser client (no Origin).
 func sameOrigin(r *http.Request) bool {
+	if r.Header.Get("Sec-Fetch-Site") == "same-origin" {
+		return true
+	}
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		site := r.Header.Get("Sec-Fetch-Site")
-		return site == "" || site == "same-origin" || site == "none"
+		return site == "" || site == "none"
 	}
 	u, err := url.Parse(origin)
-	return err == nil && strings.EqualFold(u.Host, r.Host)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	if isLoopback(r.RemoteAddr) && relayed(r) {
+		forwarded, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Host"), ",")
+		return forwarded != "" && strings.EqualFold(u.Host, strings.TrimSpace(forwarded))
+	}
+	return false
 }
 
-// topLevelNavigation: the browser opening a page (a link, a sign-in redirect), not a page's subrequest.
 func topLevelNavigation(r *http.Request) bool {
 	dest := r.Header.Get("Sec-Fetch-Dest")
 	return safeMethod(r.Method) && r.Header.Get("Sec-Fetch-Mode") == "navigate" && (dest == "document" || dest == "")
 }
 
-// lanAddrs lists the addresses a phone on the same network can actually reach.
 func lanAddrs() []string {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -356,8 +346,6 @@ func lanAddrs() []string {
 	return orderAddrs(real, virtual, vpn, OutboundIP())
 }
 
-// orderAddrs puts first what the QR code and DuckDNS name use: the default route's address, even on a virtual
-// switch (Hyper-V's external one carries the LAN), never a full-tunnel VPN's, which no phone can reach.
 func orderAddrs(real, virtual []string, vpn map[string]bool, main string) []string {
 	if main != "" && !vpn[main] {
 		if i := slices.Index(virtual, main); i >= 0 {
@@ -370,10 +358,8 @@ func orderAddrs(real, virtual []string, vpn map[string]bool, main string) []stri
 	return append(real, virtual...)
 }
 
-// Hyper-V, WSL, VirtualBox and VMware adapters: private addresses on this machine, unreachable from a phone.
 var virtualName = regexp.MustCompile(`(?i)vethernet|hyper-v|wsl|virtualbox|vmware|vboxnet|docker|vmnet`)
 
-// PairingIP is the address the pairing link and the DuckDNS name point at.
 func PairingIP() string {
 	if addrs := lanAddrs(); len(addrs) > 0 {
 		return addrs[0]
@@ -381,7 +367,6 @@ func PairingIP() string {
 	return OutboundIP()
 }
 
-// OutboundIP is the address the default route leaves from. UDP "dial" sends nothing.
 func OutboundIP() string {
 	conn, err := net.Dial("udp4", "192.0.2.1:9")
 	if err != nil {
@@ -402,7 +387,6 @@ func (s *Server) port() string {
 	return port
 }
 
-// bound reports whether the listener can be reached from off the machine.
 func (s *Server) bound() bool {
 	host, _, err := net.SplitHostPort(s.listening())
 	if err != nil {
@@ -422,7 +406,6 @@ func (s *Server) accessToken() string {
 }
 
 func (s *Server) accessURLs() []string {
-	// Never nil: with no address at all the page gets an empty list, not null.
 	secure, plain := []string{}, []string{}
 	token := s.accessToken()
 	for _, name := range s.httpsNames() {
@@ -431,15 +414,12 @@ func (s *Server) accessURLs() []string {
 	for _, host := range lanAddrs() {
 		plain = append(plain, fmt.Sprintf("http://%s:%s/?token=%s", host, s.port(), token))
 	}
-	// HTTPS first, so the QR code is the address a phone can install from; last while this network won't
-	// answer its name, as a QR code leading nowhere helps no one.
 	if s.certs != nil && s.certs.HomeBlocked() {
 		return append(plain, secure...)
 	}
 	return append(secure, plain...)
 }
 
-// PairingURLs is empty unless bound beyond loopback, the only case a phone could use them.
 func (s *Server) PairingURLs() []string {
 	if !s.bound() {
 		return nil
@@ -448,7 +428,6 @@ func (s *Server) PairingURLs() []string {
 }
 
 func (s *Server) access(w http.ResponseWriter, r *http.Request) {
-	// Host-only controls aren't offered to a paired device, which would only get a 403.
 	host := fromHost(r)
 	out := map[string]any{
 		"listening": s.listening(),
@@ -467,7 +446,6 @@ func (s *Server) access(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, out)
 }
 
-// awayFromHome: a device reaching Yoru from outside the home network, through the router (or a carrier's NAT).
 func awayFromHome(addr string) bool {
 	ip := net.ParseIP(addr)
 	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
@@ -476,7 +454,6 @@ func awayFromHome(addr string) bool {
 	return !onOwnNetwork(ip)
 }
 
-// onOwnNetwork: inside one of this machine's networks, as a phone at home is with its global IPv6 address.
 func onOwnNetwork(ip net.IP) bool {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -490,7 +467,6 @@ func onOwnNetwork(ip net.IP) bool {
 	return false
 }
 
-// listening is where the app is bound: the configured address unless the switch moved it.
 func (s *Server) listening() string {
 	if s.lanEnabled(context.Background()) {
 		return LANAddr(s.cfg.Addr)
@@ -506,8 +482,6 @@ func (s *Server) lanEnabled(ctx context.Context) bool {
 	return v == "true"
 }
 
-// setAccessNetwork opens or closes the app to the network and moves the listener.
-// Restricted to loopback: a paired device must not open the port for the owner.
 func (s *Server) setAccessNetwork(w http.ResponseWriter, r *http.Request) {
 	if s.rebind == nil {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "this build cannot move its listener"})
@@ -530,7 +504,6 @@ func (s *Server) setAccessNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Recorded only once the move worked, so a busy port leaves the setting true.
 	if err := s.store.SetSetting(r.Context(), lanSetting, strconv.FormatBool(body.LAN)); err != nil {
 		s.fail(w, "save access setting", err)
 		return
@@ -556,12 +529,10 @@ func (s *Server) firewallStatus(ctx context.Context) (firewall.Status, error) {
 	return st.Keep(phoneNetwork).Lists(), err
 }
 
-// phoneNetwork: a network a phone could be on, not a VPN's or a virtual machine's (often Public, by design).
 func phoneNetwork(n firewall.Network) bool {
 	return !vpnName.MatchString(n.Interface) && !virtualName.MatchString(n.Interface)
 }
 
-// LogFirewall logs why a phone would or wouldn't get in, the first thing to check.
 func (s *Server) LogFirewall(ctx context.Context) {
 	st, err := s.firewallStatus(ctx)
 	if err != nil {
@@ -600,8 +571,6 @@ func (s *Server) accessFirewall(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// allowFirewall asks Windows (through its administrator prompt) for Yoru's
-// port rule. Private networks only unless public is asked for explicitly.
 func (s *Server) allowFirewall(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Public bool `json:"public"`
@@ -621,11 +590,10 @@ func (s *Server) allowFirewall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("firewall rule added", "rule", firewall.RuleName(port), "public", body.Public)
-	s.LogFirewall(r.Context())
+	go s.LogFirewall(context.WithoutCancel(r.Context()))
 	s.accessFirewall(w, r)
 }
 
-// peersFirewall says whether torrent peers can connect in. Downloads work without it, from fewer peers.
 func (s *Server) peersFirewall(w http.ResponseWriter, r *http.Request) {
 	port := s.cfg.Torrent.PeerPort()
 	exe, _ := os.Executable()
@@ -636,6 +604,19 @@ func (s *Server) peersFirewall(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "firewall", err)
 		return
 	}
+	bound := ""
+	if s.engine != nil {
+		bound = s.engine.Network().Adapter
+	}
+	st = st.Keep(func(n firewall.Network) bool {
+		if virtualName.MatchString(n.Interface) {
+			return false
+		}
+		if vpnName.MatchString(n.Interface) {
+			return bound != "" && strings.EqualFold(n.Interface, bound)
+		}
+		return true
+	})
 	send(w, http.StatusOK, map[string]any{
 		"status":  st.Lists(),
 		"port":    port,
@@ -668,7 +649,6 @@ func (s *Server) openNetworkSettings(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"opened": true})
 }
 
-// accessQR renders the pairing URL as SVG, sparing a 32-character token on a TV remote.
 func (s *Server) accessQR(w http.ResponseWriter, r *http.Request) {
 	target := r.URL.Query().Get("url")
 	if target == "" {
@@ -693,7 +673,6 @@ func (s *Server) accessQR(w http.ResponseWriter, r *http.Request) {
 	w.Write(svg)
 }
 
-// rotate unpairs every device; loopback only, so a stolen token can't lock the owner out.
 func (s *Server) rotateAccess(w http.ResponseWriter, r *http.Request) {
 	token := NewAccessToken()
 	if err := s.store.SetSetting(r.Context(), accessSetting, token); err != nil {
@@ -703,7 +682,9 @@ func (s *Server) rotateAccess(w http.ResponseWriter, r *http.Request) {
 	s.tokenMu.Lock()
 	s.token = token
 	s.tokenMu.Unlock()
-	// Unpaired devices get no more alerts either; they subscribe again once paired.
+	s.pairMu.Lock()
+	clear(s.pairs)
+	s.pairMu.Unlock()
 	if err := s.store.DeletePairedPush(r.Context()); err != nil {
 		s.log.Warn("stop unpaired devices' alerts", "err", err)
 	}
@@ -716,7 +697,6 @@ type bitmapWriter struct{ cells [][]bool }
 func (b *bitmapWriter) Write(m qrcode.Matrix) error { b.cells = m.Bitmap(); return nil }
 func (b *bitmapWriter) Close() error                { return nil }
 
-// qrCells returns the modules row-major, matching Matrix.Bitmap.
 func qrCells(content string) ([][]bool, error) {
 	code, err := qrcode.New(content)
 	if err != nil {
@@ -733,7 +713,6 @@ func qrCells(content string) ([][]bool, error) {
 	return bm.cells, nil
 }
 
-// qrSVG keeps the output vector and free of image encoders: the browser scales it to whatever the screen is.
 func qrSVG(content string) ([]byte, error) {
 	cells, err := qrCells(content)
 	if err != nil {

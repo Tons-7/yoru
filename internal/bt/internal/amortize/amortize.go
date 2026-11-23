@@ -5,8 +5,6 @@ import (
 	"sync/atomic"
 )
 
-// A test that progressively returns less and less often, to spread expensive checks out over time
-// and interesting values.
 type Atomic struct {
 	herp atomic.Int64
 	derp atomic.Int32

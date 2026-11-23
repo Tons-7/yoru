@@ -5,7 +5,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/davecgh/go-spew/spew"
 	qt "github.com/go-quicktest/qt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,7 +25,6 @@ func init() {
 	hex.Decode(exampleMagnet.InfoHash[:], []byte("51340689c960f0778a4387aef9b4b52fd08390cd"))
 }
 
-// Converting from our Magnet type to URL string.
 func TestMagnetString(t *testing.T) {
 	m, err := ParseMagnetUri(exampleMagnet.String())
 	require.NoError(t, err)
@@ -38,38 +36,49 @@ func TestParseMagnetURI(t *testing.T) {
 	var m Magnet
 	var err error
 
-	// parsing the legit Magnet URI with btih-formatted xt should not return errors
 	uri = "magnet:?xt=urn:btih:ZOCMZQIPFFW7OLLMIC5HUB6BPCSDEOQU"
 	_, err = ParseMagnetUri(uri)
 	if err != nil {
 		t.Errorf("Attempting parsing the proper Magnet btih URI:\"%v\" failed with err: %v", uri, err)
 	}
 
-	// Checking if the magnet instance struct is built correctly from parsing
 	m, err = ParseMagnetUri(exampleMagnetURI)
 	assert.EqualValues(t, exampleMagnet, m)
 	assert.NoError(t, err)
 
-	// empty string URI case
 	_, err = ParseMagnetUri("")
 	if err == nil {
 		t.Errorf("Parsing empty string as URI should have returned an error but didn't")
 	}
 
-	// only BTIH (BitTorrent info hash)-formatted magnet links are currently supported
-	// must return error correctly when encountering other URN formats
 	uri = "magnet:?xt=urn:sha1:YNCKHTQCWBTRNJIV4WNAE52SJUQCZO5C"
 	_, err = ParseMagnetUri(uri)
 	if err == nil {
 		t.Errorf("Magnet URI with non-BTIH URNs (like \"%v\") are not supported and should return an error", uri)
 	}
 
-	// resilience to the broken hash
 	uri = "magnet:?xt=urn:btih:this hash is really broken"
 	_, err = ParseMagnetUri(uri)
 	if err == nil {
 		t.Errorf("Failed to detect broken Magnet URI: %v", uri)
 	}
+}
+
+func TestPaddedBase32MagnetIsAnError(t *testing.T) {
+	assert.NotPanics(t, func() {
+		_, err := ParseMagnetUri("magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+		assert.Error(t, err)
+	})
+}
+
+func TestMagnetEdgeCases(t *testing.T) {
+	upper, err := ParseMagnetUri("magnet:?xt=urn:btih:CI2UACNJ4CA7G2J3QWNPX6EH2DPCGF6D")
+	require.NoError(t, err)
+	lower, err := ParseMagnetUri("magnet:?xt=urn:btih:ci2uacnj4ca7g2j3qwnpx6eh2dpcgf6d")
+	require.NoError(t, err)
+	assert.Equal(t, upper.InfoHash, lower.InfoHash)
+	_, err = ParseMagnetV2Uri("magnet:?dn=nothing")
+	assert.Error(t, err)
 }
 
 func TestMagnetize(t *testing.T) {
@@ -111,8 +120,6 @@ func contains(haystack []string, needle string) bool {
 	return slices.Contains(haystack, needle)
 }
 
-// Check that we can parse the magnet link generated from a real-world torrent. This was added due
-// to a regression in copyParams.
 func TestParseSintelMagnet(t *testing.T) {
 	mi, err := LoadFromFile("../testdata/sintel.torrent")
 	qt.Assert(t, qt.IsNil(err))
@@ -121,10 +128,7 @@ func TestParseSintelMagnet(t *testing.T) {
 	t.Logf("magnet link: %q", ms)
 	m, err = ParseMagnetUri(ms)
 	qt.Check(t, qt.IsNil(err))
-	spewCfg := spew.NewDefaultConfig()
-	spewCfg.DisableMethods = true
-	spewCfg.Dump(m)
 	m2, err := ParseMagnetV2Uri(ms)
-	spewCfg.Dump(m2)
 	qt.Check(t, qt.IsNil(err))
+	qt.Check(t, qt.Equals(m2.InfoHash.Value, m.InfoHash))
 }

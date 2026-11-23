@@ -1,5 +1,3 @@
-// Alerts: a pushed alert's buttons, picture and count; Out and Delayed; Notify me; "not out yet"; the bell.
-// AniList's and the sites' answers are fed to the page where the instance can't have them.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -27,7 +25,6 @@ for (let i = 0; i < 60; i++) {
   await sleep(1000)
 }
 
-// Full Chromium: the headless shell reports notifications as blocked whatever is granted.
 const browser = await chromium.launch({ channel: 'chromium' })
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
 await context.grantPermissions(['notifications'], { origin: BASE })
@@ -35,7 +32,6 @@ const page = await context.newPage()
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 
-// A release alert as Yoru sends it: the worker shows its picture and buttons and sets the icon's count.
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
 await page.evaluate(async () => {
   await navigator.serviceWorker.register('/sw.js')
@@ -64,7 +60,6 @@ check(await until(async () => (alert = (await shown()).find((n) => n.tag === 'yo
 check(alert?.actions.join(',') === 'Download,Up next', 'with Download and Up next', JSON.stringify(alert?.actions))
 check(alert?.image === 'https://img.example/banner.jpg', 'and the show\'s picture')
 
-// Up next from the alert: done without opening Yoru, and said.
 const [worker] = context.serviceWorkers()
 await worker.evaluate(({ id }) => act('upnext', { animeId: id, episode: 6 }, 'yoru-71'), { id: ANIME })
 check(await until(async () => (await api('/api/upnext')).items?.some((u) => u.animeId === ANIME && u.episode === 6)),
@@ -73,7 +68,6 @@ check(await until(async () => (await shown()).some((n) => n.tag === 'yoru-71' &&
   'and says so in its place')
 await fetch(`${BASE}/api/upnext/${ANIME}`, { method: 'DELETE' })
 
-// A new season's alert offers Follow and Add to Planning.
 await push({
   web_push: 8030,
   notification: { title: 'Frieren Season 2 is on AniList', body: 'Follows Frieren · from Jan 2027', tag: 'yoru-72', navigate: `${BASE}/anime/${ANIME}` },
@@ -82,7 +76,6 @@ await push({
 check(await until(async () => (await shown()).find((n) => n.tag === 'yoru-72')?.actions.join(',') === 'Follow,Add to Planning'),
   'a new-season alert offers Follow and Add to Planning')
 
-// The schedule: an episode out on the sites, and one AniList moved later.
 const now = Math.floor(Date.now() / 1000)
 const today = new Date().toISOString().slice(0, 10)
 const item = (animeId, title, episode, airingAt, more) => ({
@@ -103,10 +96,18 @@ const rowOf = (title) => page.locator('li', { hasText: title })
 check(await until(() => page.getByRole('button', { name: /^Earlier today · 1 out/ }).isVisible()), 'what aired earlier today folds into one row')
 check(await rowOf('Early Show').getByText('Ready to play', { exact: true }).first().isVisible(), 'the schedule marks an episode already out before its time')
 check(await rowOf('Late Show').getByText(/^Delayed, was due/).first().isVisible(), 'and one AniList moved later')
-check(await rowOf('Late Show').getByText(/was due/).isVisible(), 'saying when it was due')
 await page.screenshot({ path: `${SHOTS}/notices-schedule.png` })
+await page.unroute('**/api/schedule*')
+await page.route('**/api/schedule*', (route) => route.fulfill({ json: {
+  items, count: items.length, start: now - 86400, end: now + 7 * 86400, partial: true,
+  days: [{ date: today, weekday: new Date().toLocaleDateString('en-US', { weekday: 'long' }), today: true, items }],
+} }))
+await page.goto(`${BASE}/schedule`, { waitUntil: 'domcontentloaded' })
+check(await until(() => page.getByText("Some days couldn't load.").isVisible()), 'a schedule missing some days says so')
+check(await page.getByRole('button', { name: 'Try again' }).isVisible(), 'with a way to try again')
+check(await rowOf('Late Show').first().isVisible(), 'and still shows the days it has')
+await page.unroute('**/api/schedule*')
 
-// The show page: a delay chip, and Notify me saying its state and why.
 await page.route(`**/api/anime/${ANIME}`, async (route) => {
   const res = await route.fetch()
   const body = await res.json()
@@ -127,7 +128,6 @@ if (await until(() => notify.isVisible(), 30_000)) {
   check(false, 'the show page loads', 'AniList unreachable?')
 }
 
-// The player, before the episode is out: an alert then, or the download.
 await page.route('**/api/play', (route) => route.fulfill({ status: 502, json: { error: 'episode 13 has not aired yet (airs in 2 days)', notOut: true } }))
 await page.goto(`${BASE}/watch/${ANIME}/13`, { waitUntil: 'domcontentloaded' })
 const tell = page.getByRole('button', { name: "Tell me when it's out" })
@@ -138,7 +138,6 @@ check(await until(async () => (await api(`/api/anime/${ANIME}`)).notify?.wanted 
 await page.screenshot({ path: `${SHOTS}/notices-not-out.png` })
 await fetch(`${BASE}/api/anime/${ANIME}/want`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"episode":0}' })
 
-// The bell: a delay and a new season open the show, not an episode.
 await page.route('**/api/notifications*', (route) => route.fulfill({ json: { unread: 2, items: [
   { id: 91, kind: 'delay', animeId: 2, episode: 8, title: 'Late Show · Episode 8 delayed', body: 'Now Sat 2 Nov, 01:30', createdAt: now, read: false },
   { id: 92, kind: 'season', animeId: 3, title: 'Next Show Season 2 is on AniList', body: 'Follows Next Show · from Jan 2027', createdAt: now, read: false },

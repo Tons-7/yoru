@@ -21,8 +21,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// A player app's link plays one file on another device with no token or cookie, seeking included; tampering,
-// age and a pairing reset end it, and it opens nothing else.
 func TestPlayerAppLinks(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -40,7 +38,6 @@ func TestPlayerAppLinks(t *testing.T) {
 		t.Fatalf("local files = %d", len(files.Items))
 	}
 
-	// Asked for by a paired phone, over the network.
 	mint := func(source string) (int, map[string]any) {
 		raw, _ := json.Marshal(map[string]any{"source": source})
 		req := httptest.NewRequest("POST", "/api/stream/external", strings.NewReader(string(raw)))
@@ -63,7 +60,6 @@ func TestPlayerAppLinks(t *testing.T) {
 		t.Errorf("link %s: want this device's address and the file's name", link)
 	}
 
-	// Opened by the video app: another client, no token, no cookie.
 	app := func(target string, header http.Header) (int, string) {
 		res := h.from(t, "192.168.1.60:5555", target, header)
 		body, _ := io.ReadAll(res.Body)
@@ -75,7 +71,6 @@ func TestPlayerAppLinks(t *testing.T) {
 	if code, body := app(link.EscapedPath(), http.Header{"Range": {"bytes=4-7"}}); code != http.StatusPartialContent || body != "4567" {
 		t.Errorf("seek: HTTP %d %q", code, body)
 	}
-	// Save to this device: the same link, as a file of the episode's name.
 	saved := h.from(t, "192.168.1.60:5555", link.EscapedPath()+"?download=1", nil)
 	if got := saved.Header.Get("Content-Disposition"); got != `attachment; filename="Show - 03.mkv"` {
 		t.Errorf("saved: Content-Disposition %q", got)
@@ -84,7 +79,12 @@ func TestPlayerAppLinks(t *testing.T) {
 		t.Errorf("played: Content-Disposition %q, want none", played.Header.Get("Content-Disposition"))
 	}
 	grantPart := strings.Split(link.Path, "/")[2]
-	tampered := strings.Replace(link.EscapedPath(), grantPart, grantPart[:len(grantPart)-2]+"xx", 1)
+	mid := len(grantPart) / 2
+	swap := byte('A')
+	if grantPart[mid] == 'A' {
+		swap = 'B'
+	}
+	tampered := strings.Replace(link.EscapedPath(), grantPart, grantPart[:mid]+string(swap)+grantPart[mid+1:], 1)
 	if code, _ := app(tampered, nil); code != http.StatusForbidden {
 		t.Errorf("tampered link: HTTP %d, want 403", code)
 	}
@@ -103,7 +103,6 @@ func TestPlayerAppLinks(t *testing.T) {
 	}
 }
 
-// A torrent's link relays the engine's ranged stream, named after the file, without the app's browser headers.
 func TestPlayerAppLinksRelayTheEngine(t *testing.T) {
 	var leaked []string
 	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

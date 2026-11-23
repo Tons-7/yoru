@@ -1,5 +1,3 @@
-// A running Yoru honours data_dir, cache_dir and bin_dir from config.toml.
-//   YORU_EXE=...\yoru.exe node scripts/folders-config-check.mjs
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -34,8 +32,15 @@ writeFileSync(
 
 const appdata = join(scratch, 'appdata')
 const app = spawn(exe, ['--no-window'], {
-  // APPDATA too, so nothing of this user's own is read.
-  env: { ...process.env, YORU_ROOT: root, LOCALAPPDATA: appdata, APPDATA: appdata, YORU_NO_WINDOW: '1' },
+  env: {
+    ...process.env,
+    YORU_ROOT: root,
+    LOCALAPPDATA: appdata,
+    APPDATA: appdata,
+    YORU_NO_WINDOW: '1',
+    YORU_UPDATE_API: 'http://127.0.0.1:9',
+    YORU_ANILIST_API: 'http://127.0.0.1:9',
+  },
   stdio: 'ignore',
 })
 try {
@@ -54,7 +59,9 @@ try {
   check(!existsSync(join(root, 'cache')) && !existsSync(join(scratch, 'appdata', 'yoru', 'yoru.db')), 'nothing went to the default folders')
 } finally {
   app.kill()
+  await new Promise((done) => (app.exitCode !== null ? done() : app.once('exit', done)))
+  await sleep(500)
+  rmSync(scratch, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
 }
-await sleep(1000)
 console.log(failures === 0 ? '\nall checks passed' : `\n${failures} check(s) failed`)
 process.exit(failures === 0 ? 0 : 1)

@@ -12,8 +12,6 @@ import (
 	"yoru/internal/store"
 )
 
-// The walk records ids; matching needs names. A sibling with no title anywhere
-// is invisible to the cour rules, and its episode 2 then passes for this one's.
 func TestEnsureNamesTheFranchiseMembersItFinds(t *testing.T) {
 	var queries int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +53,6 @@ func TestEnsureNamesTheFranchiseMembersItFinds(t *testing.T) {
 		t.Fatal("the sibling the walk found was left unnamed")
 	}
 
-	// Named once: a second visit asks AniList nothing.
 	before := queries
 	if err := r.Ensure(ctx, 1); err != nil {
 		t.Fatal(err)

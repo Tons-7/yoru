@@ -25,7 +25,6 @@ func TestWithin(t *testing.T) {
 	}
 }
 
-// Headers then nothing, or an error status, is not a release delivering.
 func TestPrewarmFailsWhenNothingArrives(t *testing.T) {
 	short := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "2097152")

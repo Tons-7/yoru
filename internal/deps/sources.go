@@ -61,11 +61,7 @@ func resolveFfmpeg(ctx context.Context, m *Manager) (Release, error) {
 		if err != nil {
 			return Release{}, err
 		}
-		sum := m.publishedSum(ctx, url+".md5", 32)
-		if sum == "" {
-			time.Sleep(2 * time.Second)
-			sum = m.publishedSum(ctx, url+".md5", 32)
-		}
+		sum := m.sumForInstall(ctx, url+".md5", 32)
 		rel := Release{Version: "static", URL: url, Archive: true}
 		if sum != "" {
 			rel.Digest = "md5:" + sum
@@ -98,12 +94,8 @@ func resolveFfmpegWindows(ctx context.Context, m *Manager) (Release, error) {
 		return Release{}, err
 	}
 	const url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z"
-	sum := m.publishedSum(ctx, url+".sha256", 64)
-	if sum == "" {
-		time.Sleep(2 * time.Second)
-		sum = m.publishedSum(ctx, url+".sha256", 64)
-	}
-	if sum == "" {
+	sum := m.sumForInstall(ctx, url+".sha256", 64)
+	if sum == "" && ctx.Value(versionOnlyKey{}) == nil {
 		m.log.Warn("ffmpeg checksum unavailable; installing unverified")
 	}
 	return Release{
@@ -112,6 +104,24 @@ func resolveFfmpegWindows(ctx context.Context, m *Manager) (Release, error) {
 		Archive: true,
 		Digest:  sum,
 	}, nil
+}
+
+type versionOnlyKey struct{}
+
+func (m *Manager) sumForInstall(ctx context.Context, url string, size int) string {
+	if ctx.Value(versionOnlyKey{}) != nil {
+		return ""
+	}
+	sum := m.publishedSum(ctx, url, size)
+	if sum == "" {
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(2 * time.Second):
+		}
+		sum = m.publishedSum(ctx, url, size)
+	}
+	return sum
 }
 
 func (m *Manager) publishedSum(ctx context.Context, url string, size int) string {
@@ -166,8 +176,8 @@ func resolveMpv(ctx context.Context, m *Manager) (Release, error) {
 }
 
 const (
-	FlyHighVersion = "0.3.7"
-	flyhighDigest  = "6365da772ac06b207846e179c3ee781ee4d2ec76a4f95b084febf3ac43149b2d"
+	FlyHighVersion = "0.5.1"
+	flyhighDigest  = "9db1aa6d9d8fdf46e080356d8e695d9084f894d864fd6cb0c93e03874226079a"
 	FlyHighDir     = "flyhigh"
 )
 

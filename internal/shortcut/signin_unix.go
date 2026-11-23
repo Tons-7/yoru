@@ -12,7 +12,6 @@ import (
 	"strings"
 )
 
-// signInFile is where the desktop finds programs to start at sign-in: a macOS LaunchAgent, else XDG autostart.
 func signInFile() (string, error) {
 	if runtime.GOOS == "darwin" {
 		home, err := os.UserHomeDir()
@@ -36,11 +35,11 @@ func signInEntry(exe string) string {
 </plist>
 `, esc, TrayArg)
 	}
-	return fmt.Sprintf("[Desktop Entry]\nType=Application\nName=Yoru\nExec=\"%s\" %s\nX-GNOME-Autostart-enabled=true\n",
-		strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(exe), TrayArg)
+	quoted := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`).Replace(exe)
+	field := strings.NewReplacer(`\`, `\\`, `%`, `%%`).Replace(quoted)
+	return fmt.Sprintf("[Desktop Entry]\nType=Application\nName=Yoru\nExec=\"%s\" %s\nX-GNOME-Autostart-enabled=true\n", field, TrayArg)
 }
 
-// AtSignIn: Yoru starts in the tray when this user signs in, as exe.
 func AtSignIn(exe string) (bool, error) {
 	path, err := signInFile()
 	if err != nil {
@@ -53,7 +52,6 @@ func AtSignIn(exe string) (bool, error) {
 	return err == nil && string(b) == signInEntry(exe), err
 }
 
-// SetAtSignIn writes Yoru's sign-in entry or removes it.
 func SetAtSignIn(exe string, on bool) error {
 	path, err := signInFile()
 	if err != nil {

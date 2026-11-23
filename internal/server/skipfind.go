@@ -11,14 +11,8 @@ import (
 	"yoru/internal/transcode"
 )
 
-// When neither the file's chapters nor AniSkip know an episode's opening or ending, Yoru finds it in the sound
-// it shares with another episode on disk, or with the show's kept print of it.
-
-// Neighbours tried, nearest first: the same opening runs through a cour.
 var neighbours = []int{-1, 1, -2, 2, -3, 3}
 
-// findSkipsSoon searches for the missing parts, hourly per episode, one show at a time; true while one runs.
-// Not counted as tried while it can't run: the episode still downloading, or a CPU conversion on screen.
 func (s *Server) findSkipsSoon(animeID, episode int, parts []string) bool {
 	if s.streams == nil || len(parts) == 0 || s.streams.Converting() || !s.canFind() {
 		return false
@@ -77,7 +71,6 @@ func (s *Server) findSkips(ctx context.Context, animeID, episode int, parts []st
 	at := func(start float64, from, to int) (float64, float64) {
 		return start + float64(from)*skipfind.Point, start + float64(to)*skipfind.Point
 	}
-	// Lined up with the music's edges as a mark is: a match's ends fall where the sound stops matching.
 	save := func(ep int, path, part string, from, to float64) {
 		r := player.SkipRange{Kind: part, Start: from, End: to, Source: "found"}
 		s.snapEdges(ctx, path, probed[path].Chapters, &r)
@@ -129,7 +122,6 @@ func (s *Server) findSkips(ctx context.Context, animeID, episode int, parts []st
 	}
 }
 
-// episodeOnDisk is the episode's whole file: a library one, or a download that has finished.
 func (s *Server) episodeOnDisk(ctx context.Context, animeID, episode int) (string, bool) {
 	if f, err := s.store.LocalEpisode(ctx, animeID, episode); err == nil && f.Path != "" {
 		return f.Path, true

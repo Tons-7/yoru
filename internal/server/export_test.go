@@ -104,7 +104,6 @@ func TestExportAsText(t *testing.T) {
 	}
 }
 
-// Yoru's files apply, and so do the ones kuro exported before the rename.
 func TestImportAppliesAFile(t *testing.T) {
 	for _, kind := range []string{libraryKind, legacyLibraryKind} {
 		t.Run(kind, func(t *testing.T) {
@@ -129,8 +128,6 @@ func TestImportAppliesAFile(t *testing.T) {
 	}
 }
 
-// A file with no kind is accepted (someone's hand-written list), but one that
-// names a different tool, or a newer format, is not applied blindly.
 func TestImportRejectsWhatItCannotRead(t *testing.T) {
 	h := exportHarness(t)
 
@@ -188,7 +185,6 @@ func TestKeepingOneEpisodeOfAPack(t *testing.T) {
 	}
 }
 
-// The entries a bare list carries still apply, so a file written by hand works.
 func TestImportAcceptsAFileWithoutAKind(t *testing.T) {
 	h := exportHarness(t)
 

@@ -7,14 +7,11 @@ import { useSetNotify, type Notification } from './queries'
 import { toast } from './toast'
 
 export function useAlertSwitch(animeId: number, title: string, onChange?: (on: boolean) => void) {
-  const qc = useQueryClient()
   const set = useSetNotify(animeId)
   const change = (on: boolean, undo = true) => {
     onChange?.(on)
-    set.mutate(on, {
-      onSuccess: (state) => {
-        qc.setQueryData(['alert', animeId], state.on)
-        void qc.invalidateQueries({ queryKey: ['alert-shows'], refetchType: 'none' })
+    set.mutateAsync(on).then(
+      () => {
         if (!undo) return
         toast(
           on ? `Alerts on for ${title}. You'll hear when each new episode is out.` : `Alerts off for ${title}.`,
@@ -22,14 +19,14 @@ export function useAlertSwitch(animeId: number, title: string, onChange?: (on: b
           { label: 'Undo', run: () => change(!on, false) },
         )
       },
-      onError: (e) => {
+      (e: Error) => {
         onChange?.(!on)
         toast(`Couldn't ${on ? 'turn on' : 'turn off'} the alert for ${title}: ${e.message}`, 'error', {
           label: 'Try again',
           run: () => change(on, undo),
         })
       },
-    })
+    )
   }
   return { change, pending: set.isPending, asked: set.isPending ? set.variables : undefined }
 }

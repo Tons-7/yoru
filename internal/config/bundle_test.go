@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// Inside a Mac app, Yoru's files go to Application Support; anywhere else they stay beside the program.
 func TestBundleRoot(t *testing.T) {
 	home := filepath.FromSlash("/Users/me")
 	if got, ok := bundleRoot(filepath.FromSlash("/Applications/Yoru.app/Contents/MacOS"), home); !ok ||
@@ -18,7 +17,6 @@ func TestBundleRoot(t *testing.T) {
 	}
 }
 
-// Finder's PATH gains Homebrew's and MacPorts' folders, after what it had, once each.
 func TestWithPackageDirs(t *testing.T) {
 	sep := string(filepath.ListSeparator)
 	got := withPackageDirs(strings.Join([]string{"/usr/bin", "/usr/local/bin"}, sep))

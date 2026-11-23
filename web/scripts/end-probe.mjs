@@ -1,5 +1,3 @@
-// Real episodes downloaded through nyaa as a viewer's Yoru would, each end played: the countdown must come.
-//   YORU_EXTRA_CONFIG='[[indexer]] ...' ANILIST_LIVE=1 YORU_SHOW_ID=<id> EPISODES=1,2 [HEADED=1 CHANNEL=chrome ANIME4K=1] node scripts/run-player-check.mjs end-probe.mjs
 import { readFileSync } from 'node:fs'
 import { chromium } from 'playwright'
 
@@ -28,10 +26,8 @@ for (const [key, value] of [['playback.autoplay', 'true'], ['playback.autonext',
   await api('/api/prefs', { key, value })
 }
 
-// Release search matches titles against the corpus, which a fresh instance seeds in its first seconds.
 if (LOG) check(await until(async () => /corpus seeded/.test(readFileSync(LOG, 'utf8')), 180_000), 'title corpus seeded')
 
-// Downloaded whole first, as an episode waiting in the queue is by the time it is watched.
 for (const ep of EPISODES) await api('/api/download', { animeId: ID, episode: ep })
 const t0 = Date.now()
 let last = 0
@@ -57,7 +53,7 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.split('\n')[0].slice(0, 160)))
 const video = page.locator('video')
-const card = page.getByRole('dialog', { name: 'Up next' })
+const card = page.getByRole('region', { name: 'Up next' })
 const state = () =>
   video.evaluate((v) => `t=${v.currentTime.toFixed(1)}/${v.duration.toFixed(1)} paused=${v.paused} ended=${v.ended} ready=${v.readyState}`)
 let opened
@@ -72,7 +68,6 @@ const notes = () => {
   return mine
 }
 
-// Watching late in the episode first, as a viewer reaches the end, then the drag.
 const cases = [['false', false], ['true', false], ['true', true]]
 for (const ep of EPISODES) {
   for (const [headphones, late] of cases) {
@@ -86,11 +81,9 @@ for (const ep of EPISODES) {
       await video.evaluate((v) => (v.currentTime = v.duration * 0.92))
       check(await until(() => video.evaluate((v) => v.currentTime > v.duration * 0.92 + 20), 90_000), `${label}: plays on there`, await state())
     }
-    // The player's length against the server's: far apart means the timeline was stretched.
     const lengths = await video.evaluate((v) => v.duration)
     const planned = opened?.duration ?? opened?.info?.duration
     check(planned > 0 && Math.abs(lengths - planned) < 2, `${label}: the player's length is the file's`, `${lengths.toFixed(1)} vs ${planned}`)
-    // Skipping the ending by hand: a click on the bar 10 s before the end, as a mouse does (the late case).
     if (late) {
       await page.mouse.move(640, 300)
       const bar = page.locator('.group\\/scrub')

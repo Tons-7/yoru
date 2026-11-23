@@ -16,9 +16,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// The viewer's moves around a prefetch: play arriving while the next episode is being fetched ahead,
-// a queued download of the same episode, the series page preparing it, and pressing next.
-
 const (
 	ep1Hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	ep2Hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -29,7 +26,6 @@ func frieren(hash string, episode int) indexer.Torrent {
 	return release(hash, "[Best] Sousou no Frieren - 0"+string(rune('0'+episode))+" [1080p].mkv", 900)
 }
 
-// pipeline is a playback and a prefetcher over one store, engine and indexer, as the app wires them.
 func pipeline(t *testing.T, engine *fakeEngine, results ...indexer.Torrent) (*Playback, *Prefetcher, *askedIndexer) {
 	t.Helper()
 	srv := httptest.NewServer(engine.handler())
@@ -61,7 +57,6 @@ func eventually(t *testing.T, what string, ok func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-// searchesFor counts the queries naming this episode: a start also resolves the next one in the background.
 func (a *askedIndexer) searchesFor(episode int) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -80,7 +75,6 @@ func torrentsAdded(engine *fakeEngine) int {
 	return len(engine.added)
 }
 
-// fetchInBackground starts a prefetch of episode 2 and returns its outcome once it ends.
 func fetchInBackground(pref *Prefetcher, keep bool) func() (int, bool, error) {
 	var (
 		id      int
@@ -94,8 +88,6 @@ func fetchInBackground(pref *Prefetcher, keep bool) func() (int, bool, error) {
 	return func() (int, bool, error) { wg.Wait(); return id, started, err }
 }
 
-// The viewer opens the next episode while its fetch ahead is still warming: play takes that torrent over,
-// and the fetch's record leaves the pin alone.
 func TestPlayTakesOverTheEpisodeBeingFetchedAhead(t *testing.T) {
 	engine := newFakeEngine()
 	engine.slow[ep2Hash] = 1500 * time.Millisecond
@@ -104,7 +96,6 @@ func TestPlayTakesOverTheEpisodeBeingFetchedAhead(t *testing.T) {
 
 	outcome := fetchInBackground(pref, false)
 	eventually(t, "the fetch to add its torrent", func() bool { _, ok := pref.Fetching(1, 2); return ok })
-	// The fetch's own search is done once its torrent is added; a Find may ask more than one query.
 	searched := idx.searchesFor(2)
 
 	session, err := play.Start(ctx, PlayRequest{AnimeID: 1, Episode: 2, Season: 1, Prefs: score.DefaultPreferences()})
@@ -120,7 +111,6 @@ func TestPlayTakesOverTheEpisodeBeingFetchedAhead(t *testing.T) {
 	if n := torrentsAdded(engine); n != 1 {
 		t.Errorf("added %d torrents, want the one", n)
 	}
-	// The stream opens and pins what is playing.
 	if err := play.store.PinCache(ctx, ep2Hash, 0, true); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +130,6 @@ func TestPlayTakesOverTheEpisodeBeingFetchedAhead(t *testing.T) {
 	}
 }
 
-// With no torrent added yet, play waits for the fetch as it waits for a resolve, instead of a second search.
 func TestPlayWaitsForAFetchToAddItsTorrent(t *testing.T) {
 	_, pref, _ := pipeline(t, newFakeEngine())
 	ctx := context.Background()
@@ -175,7 +164,6 @@ func TestPlayWaitsForAFetchToAddItsTorrent(t *testing.T) {
 	}
 }
 
-// Two fetches of one episode at once (a prefetch and the queue, or two prefetch runs) add one torrent.
 func TestTwoFetchesOfOneEpisodeAddOneTorrent(t *testing.T) {
 	engine := newFakeEngine()
 	engine.slow[ep2Hash] = 500 * time.Millisecond
@@ -199,7 +187,6 @@ func TestTwoFetchesOfOneEpisodeAddOneTorrent(t *testing.T) {
 	}
 }
 
-// The viewer queues an episode a prefetch is already fetching: the queue waits for that copy and keeps it.
 func TestDownloadKeepsTheCopyAPrefetchIsFetching(t *testing.T) {
 	engine := newFakeEngine()
 	engine.slow[ep2Hash] = 800 * time.Millisecond
@@ -225,7 +212,6 @@ func TestDownloadKeepsTheCopyAPrefetchIsFetching(t *testing.T) {
 	}
 }
 
-// Play recorded another release while the prefetch warmed: the prefetch yields rather than supersede it.
 func TestFetchYieldsToAReleasePlayRecordedMeanwhile(t *testing.T) {
 	engine := newFakeEngine()
 	engine.slow[ep2Hash] = 1000 * time.Millisecond
@@ -255,7 +241,6 @@ func TestFetchYieldsToAReleasePlayRecordedMeanwhile(t *testing.T) {
 	}
 }
 
-// The series page asks for an episode already being fetched: nothing to resolve, so no search.
 func TestPrepareSkipsAnEpisodeBeingFetched(t *testing.T) {
 	_, pref, idx := pipeline(t, newFakeEngine(), frieren(ep2Hash, 2))
 	flight, _ := pref.beginFetch(1, 2)
@@ -269,7 +254,6 @@ func TestPrepareSkipsAnEpisodeBeingFetched(t *testing.T) {
 	}
 }
 
-// The whole run: play, resolve and download ahead, the series page asks (nothing to do), next resumes it.
 func TestPressingNextResumesTheEpisodeDownloadedAhead(t *testing.T) {
 	engine := newFakeEngine()
 	play, pref, idx := pipeline(t, engine, frieren(ep1Hash, 1), frieren(ep2Hash, 2))
@@ -290,10 +274,8 @@ func TestPressingNextResumesTheEpisodeDownloadedAhead(t *testing.T) {
 		rec, ok, _ := play.store.TorrentForEpisode(ctx, 1, "2")
 		return ok && rec.InfoHash == ep2Hash
 	})
-	// The resolve of episode 2: the download ahead used it.
 	searched := idx.searchesFor(2)
 
-	// Back on the series page, which readies what Continue would play.
 	pref.PrepareTarget(1, 2, 1, prefs)
 	pref.AwaitPrepare(ctx, 1, 2)
 
@@ -313,5 +295,27 @@ func TestPressingNextResumesTheEpisodeDownloadedAhead(t *testing.T) {
 	entries, _ := play.store.CacheEntries(ctx)
 	if len(entries) != 2 {
 		t.Fatalf("entries = %+v, want one per episode", entries)
+	}
+}
+
+func TestAFailedTakeoverHandsTheTorrentBack(t *testing.T) {
+	engine := newFakeEngine()
+	engine.slow[ep2Hash] = 1500 * time.Millisecond
+	play, pref, _ := pipeline(t, engine, frieren(ep2Hash, 2))
+	ctx := context.Background()
+
+	outcome := fetchInBackground(pref, false)
+	eventually(t, "the fetch to add its torrent", func() bool { _, ok := pref.Fetching(1, 2); return ok })
+
+	prefs := score.DefaultPreferences()
+	prefs.Audio = "dub"
+	if session, err := play.Start(ctx, PlayRequest{AnimeID: 1, Episode: 2, Season: 1, Prefs: prefs, AudioChosen: true}); err == nil && session.InfoHash == ep2Hash {
+		t.Fatal("play took a release its own audio choice rules out")
+	}
+	if engine.wasDeleted(ep2Hash) {
+		t.Fatal("the fetch-ahead torrent was deleted when play let it go")
+	}
+	if _, started, err := outcome(); err != nil || !started {
+		t.Fatalf("the fetch did not finish after play handed it back: started=%v err=%v", started, err)
 	}
 }

@@ -57,7 +57,7 @@ func testLocater(t *testing.T, newLocater newLocater) {
 		2,
 		[]Extent{})
 	checkContiguous(t, newLocater,
-		[]Length{1652, 1514, 1554, 1618, 1546, 129241752, 1537}, // 128737588
+		[]Length{1652, 1514, 1554, 1618, 1546, 129241752, 1537},
 		Extent{0, 16384},
 		0,
 		[]Extent{
@@ -69,7 +69,7 @@ func testLocater(t *testing.T, newLocater newLocater) {
 			{0, 8500},
 		})
 	checkContiguous(t, newLocater,
-		[]Length{1652, 1514, 1554, 1618, 1546, 129241752, 1537, 1536, 1551}, // 128737588
+		[]Length{1652, 1514, 1554, 1618, 1546, 129241752, 1537, 1536, 1551},
 		Extent{129236992, 16384},
 		5,
 		[]Extent{
@@ -79,7 +79,7 @@ func testLocater(t *testing.T, newLocater newLocater) {
 			{0, 667},
 		})
 	checkContiguous(t, newLocater,
-		[]Length{0, 2, 0, 2, 0}, // 128737588
+		[]Length{0, 2, 0, 2, 0},
 		Extent{1, 2},
 		1,
 		[]Extent{
@@ -88,7 +88,7 @@ func testLocater(t *testing.T, newLocater newLocater) {
 			{0, 1},
 		})
 	checkContiguous(t, newLocater,
-		[]Length{2, 0, 2, 0}, // 128737588
+		[]Length{2, 0, 2, 0},
 		Extent{1, 3},
 		0,
 		[]Extent{

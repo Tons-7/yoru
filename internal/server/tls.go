@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -15,10 +16,8 @@ import (
 	"yoru/internal/certs"
 )
 
-// SetCerts gives the server its HTTPS certificates, for the pairing links and Settings.
 func (s *Server) SetCerts(src *certs.Source) { s.certs = src }
 
-// httpsNames are the hosts a phone can open over HTTPS; empty without a certificate.
 func (s *Server) httpsNames() []string {
 	if s.certs == nil {
 		return nil
@@ -26,7 +25,6 @@ func (s *Server) httpsNames() []string {
 	return s.certs.Names()
 }
 
-// dualListener serves HTTP and HTTPS on one port, split by the first byte, so http://localhost keeps working.
 type dualListener struct {
 	net.Listener
 	cfg   *tls.Config
@@ -36,7 +34,6 @@ type dualListener struct {
 	once  sync.Once
 }
 
-// DualListener wraps ln; plain HTTP passes through, a TLS hello is terminated with cfg.
 func DualListener(ln net.Listener, cfg *tls.Config) net.Listener {
 	d := &dualListener{
 		Listener: ln, cfg: cfg,
@@ -46,7 +43,6 @@ func DualListener(ln net.Listener, cfg *tls.Config) net.Listener {
 	return d
 }
 
-// accept keeps going after an error, as Serve asks again; only the listener closing ends it.
 func (d *dualListener) accept() {
 	for {
 		conn, err := d.Listener.Accept()
@@ -61,7 +57,6 @@ func (d *dualListener) accept() {
 			}
 			continue
 		}
-		// Sniffed off the accept loop: a client that connects and says nothing holds up no one.
 		go d.sniff(conn)
 	}
 }
@@ -105,7 +100,6 @@ func (d *dualListener) Close() error {
 	return d.Listener.Close()
 }
 
-// peeked replays the sniffed byte to whoever reads the connection next.
 type peeked struct {
 	net.Conn
 	r *bufio.Reader
@@ -113,12 +107,25 @@ type peeked struct {
 
 func (p *peeked) Read(b []byte) (int, error) { return p.r.Read(b) }
 
+func (p *peeked) CloseWrite() error {
+	if cw, ok := p.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+func (p *peeked) ReadFrom(r io.Reader) (int64, error) {
+	if rf, ok := p.Conn.(io.ReaderFrom); ok {
+		return rf.ReadFrom(r)
+	}
+	return io.Copy(struct{ io.Writer }{p.Conn}, r)
+}
+
 const (
 	duckDomainSetting = "https.duckdns.domain"
 	duckTokenSetting  = "https.duckdns.token"
 )
 
-// StartDuckDNS resumes the automatic certificate the owner set up, if any.
 func (s *Server) StartDuckDNS(ctx context.Context) {
 	if s.certs == nil {
 		return
@@ -141,7 +148,6 @@ func (s *Server) accessHTTPS(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, s.certs.Status())
 }
 
-// checkAccessHTTPS asks this network again whether it answers the name, after the router was changed.
 func (s *Server) checkAccessHTTPS(w http.ResponseWriter, r *http.Request) {
 	if s.certs == nil {
 		send(w, http.StatusOK, certs.Status{State: certs.StateOff})
@@ -150,7 +156,6 @@ func (s *Server) checkAccessHTTPS(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, s.certs.CheckHome(r.Context()))
 }
 
-// setAccessHTTPS saves the DuckDNS name and token (never sent back) and starts; an empty name turns it off.
 func (s *Server) setAccessHTTPS(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Domain string `json:"domain"`
@@ -169,17 +174,21 @@ func (s *Server) setAccessHTTPS(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusOK, s.certs.Status())
 		return
 	}
-	// A blank token keeps the saved one, so the name can be corrected without pasting it again.
 	token := strings.TrimSpace(body.Token)
 	if token == "" {
 		token, _ = s.store.Setting(r.Context(), duckTokenSetting)
 	}
+	oldDomain, _ := s.store.Setting(r.Context(), duckDomainSetting)
+	oldToken, _ := s.store.Setting(r.Context(), duckTokenSetting)
 	if err := s.certs.UseDuckDNS(body.Domain, token); err != nil {
 		send(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 	domain, _ := certs.DuckDomain(body.Domain)
 	if err := s.store.SetSettings(r.Context(), map[string]string{duckDomainSetting: domain, duckTokenSetting: token}); err != nil {
+		if oldDomain == "" || s.certs.UseDuckDNS(oldDomain, oldToken) != nil {
+			s.certs.StopDuckDNS()
+		}
 		s.fail(w, "save https", err)
 		return
 	}

@@ -13,6 +13,7 @@ export function StatusMenu({
   quiet,
   tile,
   onDone,
+  onNotInterested,
 }: {
   animeId: number
   current?: string | null
@@ -20,6 +21,7 @@ export function StatusMenu({
   quiet?: boolean
   tile?: boolean
   onDone?: () => void
+  onNotInterested?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
@@ -35,9 +37,12 @@ export function StatusMenu({
   const active = LIST_STATUSES.find((s) => s.value === current)
 
   const box = useAnchorBox(trigger, open)
+  const above = !!box && window.innerHeight - box.bottom < 430 && box.top > window.innerHeight - box.bottom
   const menu = box && {
-    top: Math.min(box.bottom + 6, window.innerHeight - 290),
-    left: Math.max(8, Math.min(box.right - 176, window.innerWidth - 184)),
+    top: above ? undefined : Math.max(8, box.bottom + 6),
+    bottom: above ? Math.max(8, window.innerHeight - box.top + 6) : undefined,
+    maxHeight: above ? box.top - 14 : window.innerHeight - box.bottom - 14,
+    left: Math.max(8, Math.min(box.right - 192, window.innerWidth - 200)),
   }
 
   return (
@@ -85,14 +90,14 @@ export function StatusMenu({
           ref={menuRef}
           role="menu"
           data-portal-menu
-          style={{ top: menu.top, left: menu.left }}
-          className="fixed z-50 w-48 origin-top-right animate-rise overflow-hidden rounded-xl bg-base-750 p-1 shadow-panel"
+          style={{ top: menu.top, bottom: menu.bottom, left: menu.left, maxHeight: menu.maxHeight }}
+          className="fixed z-50 w-48 origin-top-right animate-rise overflow-y-auto overscroll-contain rounded-xl bg-base-750 p-1 shadow-panel"
         >
           {LIST_STATUSES.map((status) => (
             <button
               key={status.value}
               role="menuitem"
-              disabled={setStatus.isPending}
+              disabled={setStatus.isPending || remove.isPending}
               onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
@@ -177,6 +182,20 @@ export function StatusMenu({
                 Remove from list
               </button>
             ))}
+          {onNotInterested && !current && (
+            <button
+              role="menuitem"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setOpen(false)
+                onNotInterested()
+              }}
+              className="mt-1 flex min-h-10 w-full items-center rounded-lg border-t border-base-700 px-2.5 text-left text-sm text-base-300 transition-colors hover:bg-base-700 hover:text-white pointer-coarse:min-h-11"
+            >
+              Not interested
+            </button>
+          )}
           {(setStatus.isError || remove.isError) && (
             <p className="mt-1 border-t border-base-700 px-2.5 pt-1.5 pb-1 text-xs text-red-300">
               {((setStatus.error ?? remove.error) as Error).message}

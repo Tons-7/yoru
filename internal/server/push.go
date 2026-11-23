@@ -14,9 +14,7 @@ import (
 	"yoru/internal/store"
 )
 
-// pushHosts are the browsers' push services (Chrome and most others use Google's, then Firefox, Safari, Edge).
-// Only these: a subscription names the address Yoru posts to, and a paired device could name any.
-var pushHosts = []string{".googleapis.com", ".push.services.mozilla.com", ".push.apple.com", ".notify.windows.com"}
+var pushHosts = []string{".fcm.googleapis.com", ".android.googleapis.com", ".push.services.mozilla.com", ".push.apple.com", ".notify.windows.com"}
 
 func pushEndpointOK(endpoint string) bool {
 	u, err := url.Parse(endpoint)
@@ -48,7 +46,6 @@ func (s *Server) pushKey(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"publicKey": s.push.PublicKey()})
 }
 
-// pushSubscribe stores this device's subscription, with the address it used, where a tapped alert opens.
 func (s *Server) pushSubscribe(w http.ResponseWriter, r *http.Request) {
 	var body pushBody
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&body) != nil || !pushEndpointOK(body.Endpoint) {
@@ -66,7 +63,6 @@ func (s *Server) pushSubscribe(w http.ResponseWriter, r *http.Request) {
 		P256dh: base64.RawURLEncoding.EncodeToString(p256dh), Auth: base64.RawURLEncoding.EncodeToString(auth),
 		Paired: !fromHost(r),
 	}
-	// Who asked, so declining or removing the device stops its alerts too.
 	sub.Device = requestDevice(r)
 	if err := s.store.SavePushSubscription(r.Context(), sub); err != nil {
 		s.fail(w, "save push subscription", err)
@@ -88,10 +84,13 @@ func (s *Server) pushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"subscribed": false})
 }
 
-// pushTest sends one alert to the asking device only, so "it works" is checked where it matters.
 func (s *Server) pushTest(w http.ResponseWriter, r *http.Request) {
 	var body pushBody
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&body) != nil || s.push == nil {
+	if s.push == nil {
+		send(w, http.StatusServiceUnavailable, map[string]any{"error": "alerts aren't available here"})
+		return
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&body) != nil {
 		send(w, http.StatusBadRequest, map[string]any{"error": "endpoint is required"})
 		return
 	}
@@ -118,7 +117,6 @@ func (s *Server) pushTest(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusNotFound, map[string]any{"error": "this device is not subscribed"})
 }
 
-// requestOrigin is the address the request came in on, as the browser sees it.
 func requestOrigin(r *http.Request) string {
 	if o := r.Header.Get("Origin"); o != "" {
 		if u, err := url.Parse(o); err == nil && u.Host != "" {
@@ -132,7 +130,6 @@ func requestOrigin(r *http.Request) string {
 	return scheme + "://" + r.Host
 }
 
-// ReleaseAlert is the push for a notification, or false for one that belongs only to the open app.
 func ReleaseAlert(ctx context.Context, st *store.Store, n store.Notification) (push.Alert, bool) {
 	if n.AnimeID == nil {
 		return push.Alert{}, false
@@ -140,7 +137,6 @@ func ReleaseAlert(ctx context.Context, st *store.Store, n store.Notification) (p
 	switch n.Kind {
 	case store.NotifyRelease, store.NotifyAiring:
 	case store.NotifyDelay, store.NotifySeason:
-		// About the show, not an episode to play: they open its page, and their title names it.
 		unread, _ := st.UnreadCount(ctx)
 		a := push.Alert{
 			Title: n.Title, Body: n.Body, Tag: fmt.Sprintf("yoru-%d", n.ID),
@@ -162,13 +158,11 @@ func ReleaseAlert(ctx context.Context, st *store.Store, n store.Notification) (p
 		title = "Yoru"
 	}
 	unread, _ := st.UnreadCount(ctx)
-	// The tag and page an open tab's own alert uses, so the two show as one.
 	a := push.Alert{
 		Title: title, Body: n.Title, Tag: fmt.Sprintf("yoru-%d", n.ID),
 		Path:  fmt.Sprintf("/watch/%d/%d", *n.AnimeID, episode),
 		Image: st.BannerOf(ctx, *n.AnimeID), Badge: unread,
 	}
-	// A release can be downloaded or lined up from the alert itself; an airing one has nothing to fetch yet.
 	if n.Kind == store.NotifyRelease {
 		a.Actions, a.AnimeID, a.Episode = []string{"download", "upnext"}, *n.AnimeID, episode
 	}

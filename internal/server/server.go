@@ -34,6 +34,9 @@ import (
 )
 
 type Server struct {
+	hydrating    sync.Mutex
+	deriveFailed map[int]time.Time
+
 	cfg              config.Config
 	store            *store.Store
 	anilist          *anilist.Client
@@ -68,6 +71,8 @@ type Server struct {
 	exit, showWindow func()
 	watchingMu       sync.Mutex
 	watching         map[string]watching
+	castSubsMu       sync.Mutex
+	castSubs         map[string][]byte
 	linkReads        atomic.Int32
 	linkReadAt       atomic.Int64
 
@@ -117,6 +122,7 @@ type Server struct {
 	avatars       trackerAvatars
 
 	tvMu         sync.Mutex
+	tvHolds      map[*transcode.Session]bool
 	tvOpens      map[string]*tvOpen
 	tvSeen       map[string]*tvWatch
 	pageReported map[string]time.Time
@@ -294,7 +300,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/jobs/{name}", s.runJob)
 	mux.HandleFunc("GET /api/corpus", s.corpusStats)
 	mux.HandleFunc("POST /api/corpus/refresh", s.corpusRefresh)
-	mux.HandleFunc("GET /api/settings", s.settings)
+	mux.HandleFunc("GET /api/settings", hostOnly(s.settings))
 	mux.HandleFunc("GET /api/trackers", s.trackers)
 	mux.HandleFunc("GET /api/profile", s.profile)
 	mux.HandleFunc("PUT /api/profile/name", hostOnly(s.setProfileName))
@@ -326,6 +332,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/play", s.play)
 	mux.HandleFunc("GET /api/play/stage", s.playStage)
 	mux.HandleFunc("POST /api/stop", s.stopPlayback)
+	mux.HandleFunc("GET /api/player/external", s.externalPlayer)
 	mux.HandleFunc("POST /api/progress", s.progress)
 	mux.HandleFunc("POST /api/saved/progress", s.savedProgress)
 	mux.HandleFunc("GET /api/saved/ready", s.savedReady)
@@ -337,6 +344,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/app/startup", hostOnly(s.appStartup))
 	mux.HandleFunc("POST /api/app/startup", hostOnly(s.appStartup))
 	mux.HandleFunc("GET /api/log", hostOnly(s.logText))
+	mux.HandleFunc("POST /api/client-error", s.clientError)
 	mux.HandleFunc("POST /api/log/folder", hostOnly(s.logFolder))
 	mux.HandleFunc("POST /api/prepare", s.prepare)
 	mux.HandleFunc("GET /api/episode/skips", s.skips)
@@ -374,6 +382,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/downloads/{hash}/keep", s.keepDownload)
 	mux.HandleFunc("POST /api/downloads/{hash}/unkeep", s.unkeepDownload)
 	mux.HandleFunc("GET /api/downloads/{hash}/files", s.downloadFiles)
+	mux.HandleFunc("POST /api/downloads/{hash}/reveal", hostOnly(s.revealDownload))
 	mux.HandleFunc("POST /api/downloads/{hash}/files/{index}/keep", s.keepFile)
 	mux.HandleFunc("POST /api/downloads/{hash}/files/{index}/unkeep", s.unkeepFile)
 	mux.HandleFunc("POST /api/downloads/{hash}/files/{index}/pause", s.pauseFile)
@@ -397,7 +406,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/stream/{id}/jimaku", s.streamJimaku)
 	mux.HandleFunc("GET /api/stream/{id}/jimaku/{n}", s.streamJimakuFile)
 	mux.HandleFunc("GET /api/jimaku", s.jimakuState)
-	mux.HandleFunc("POST /api/jimaku/key", s.setJimakuKey)
+	mux.HandleFunc("POST /api/jimaku/key", hostOnly(s.setJimakuKey))
 	mux.HandleFunc("GET /api/stream/{id}/fonts", s.streamFonts)
 	mux.HandleFunc("GET /api/stream/{id}/thumbnails", s.streamThumbnails)
 	mux.HandleFunc("GET /api/stream/{id}/thumbs.jpg", s.streamThumbSheet)
@@ -412,9 +421,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/prefs", s.setPref)
 	mux.HandleFunc("GET /api/bookmarks", s.bookmarks)
 	mux.HandleFunc("POST /api/bookmarks", s.setBookmark)
+	mux.HandleFunc("GET /api/hidden", s.hiddenShows)
 	mux.HandleFunc("GET /api/recent", s.recent)
 	mux.HandleFunc("GET /api/history", s.history)
 	mux.HandleFunc("GET /api/history/stats", s.watchStats)
+	mux.HandleFunc("GET /api/stats", s.stats)
+	mux.HandleFunc("GET /api/own-subtitle/{anime}/{episode}", s.getOwnSubtitle)
+	mux.HandleFunc("PUT /api/own-subtitle/{anime}/{episode}", s.putOwnSubtitle)
+	mux.HandleFunc("DELETE /api/own-subtitle/{anime}/{episode}", s.deleteOwnSubtitle)
+	mux.HandleFunc("GET /api/backup/full", hostOnly(s.fullBackup))
+	mux.HandleFunc("POST /api/backup/full", hostOnly(s.fullRestore))
 	mux.HandleFunc("POST /api/history/forget", s.forgetHistory)
 	mux.HandleFunc("GET /api/push", s.pushKey)
 	mux.HandleFunc("POST /api/push/subscribe", s.pushSubscribe)
@@ -475,6 +491,10 @@ func (s *Server) Handler() http.Handler {
 			mux.ServeHTTP(w, r)
 			return
 		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
 		app.ServeHTTP(w, r)
 	})
 	return s.logging(s.guard(root))
@@ -518,9 +538,16 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) library(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	year, _ := strconv.Atoi(q.Get("year"))
 	page, err := s.store.Library(r.Context(), store.LibraryFilter{
 		Status: q.Get("status"), Query: q.Get("q"), Sort: q.Get("sort"),
-		Favourite: q.Get("fav") == "1" || q.Get("fav") == "true",
+		Favourite:  q.Get("fav") == "1" || q.Get("fav") == "true",
+		Format:     q.Get("format"),
+		Airing:     q.Get("airing") == "1",
+		Downloaded: q.Get("disk") == "1",
+		Year:       year,
+		Season:     q.Get("season"),
+		Genre:      q.Get("genre"),
 	}, store.ParsePaging(q, 60, 200))
 	if err != nil {
 		s.fail(w, "library", err)

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { Layout } from './components/Layout'
 import { Centered, LinkButton, Spinner } from './components/ui'
 import { resumeSaving } from './lib/offline'
@@ -25,6 +26,7 @@ const Person = lazy(() => import('./pages/Person').then((m) => ({ default: m.Per
 const CharacterPage = lazy(() => import('./pages/Character').then((m) => ({ default: m.CharacterPage })))
 const SavedWatch = lazy(() => import('./pages/SavedWatch').then((m) => ({ default: m.SavedWatch })))
 const You = lazy(() => import('./pages/You').then((m) => ({ default: m.You })))
+const StatsPage = lazy(() => import('./pages/Stats').then((m) => ({ default: m.StatsPage })))
 
 function Loading() {
   return (
@@ -37,17 +39,20 @@ function Loading() {
 const offline = window.location.pathname.startsWith('/saved') && new URLSearchParams(window.location.search).has('offline')
 
 export function App() {
+  const { pathname } = useLocation()
   useEffect(() => {
     if (!offline) resumeSaving()
   }, [])
   if (offline) {
     return (
-      <Suspense fallback={<Loading />}>
-        <Routes>
-          <Route path="saved/:key" element={<SavedWatch offline />} />
-          <Route path="*" element={<Downloads offline />} />
-        </Routes>
-      </Suspense>
+      <ErrorBoundary resetKey={pathname} back={{ href: '/saved?offline=1', label: 'Back to saved episodes' }}>
+        <Suspense fallback={<Loading />}>
+          <Routes>
+            <Route path="saved/:key" element={<SavedWatch offline />} />
+            <Route path="*" element={<Downloads offline />} />
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
     )
   }
   return (
@@ -66,6 +71,7 @@ export function App() {
           <Route path="library" element={<Library />} />
           <Route path="history" element={<History />} />
           <Route path="you" element={<You />} />
+          <Route path="stats" element={<StatsPage />} />
           <Route path="settings" element={<Settings />} />
           <Route path="notifications" element={<Notifications />} />
           <Route path="downloads" element={<Downloads />} />
@@ -90,7 +96,7 @@ function NotFound() {
   return (
     <Centered>
       <div className="text-center">
-        <p className="bg-gradient-to-b from-accent-400 to-accent-600/40 bg-clip-text text-7xl font-bold tracking-tight text-transparent">
+        <p className="bg-linear-to-b from-accent-400 to-accent-600/40 bg-clip-text text-7xl font-bold tracking-tight text-transparent">
           404
         </p>
         <p className="mt-2 text-base-200">That page does not exist.</p>

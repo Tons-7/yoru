@@ -8,13 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"yoru/internal/anilist"
 	"yoru/internal/store"
 )
 
-// Sync keeps the local database and AniList in agreement. Local is authoritative:
-// push before pull, so our writes come back reconciled and unpushed edits survive.
 type Sync struct {
 	store    *store.Store
 	al       *anilist.Client
@@ -22,7 +21,6 @@ type Sync struct {
 	importer *Importer
 	log      *slog.Logger
 
-	// One push at a time, or the job's older value can land last.
 	pushing sync.Mutex
 }
 
@@ -30,33 +28,27 @@ func NewSync(s *store.Store, al *anilist.Client, log *slog.Logger) *Sync {
 	return &Sync{store: s, al: al, log: log}
 }
 
-// WithMAL mirrors each episode to MyAnimeList as it is watched, rather than leaving it to the periodic job.
 func (s *Sync) WithMAL(m *MALSync) *Sync {
 	s.mal = m
 	return s
 }
 
-// WithImporter enables the pull half: without it Run only pushes.
 func (s *Sync) WithImporter(i *Importer) *Sync {
 	s.importer = i
 	return s
 }
 
 type SyncReport struct {
-	Pushed int `json:"pushed"`
-	Failed int `json:"failed"`
-	// Pulled is the size of the list as AniList holds it after the merge.
-	Pulled int `json:"pulled"`
-	// Favourites is how many the tracker holds after the merge.
+	Pushed     int `json:"pushed"`
+	Failed     int `json:"failed"`
+	Pulled     int `json:"pulled"`
 	Favourites int `json:"favourites"`
 }
 
-// AuthErrorSetting is set when AniList refuses the token, cleared by a sync or a new login.
 const AuthErrorSetting = "anilist.auth_error"
 
 var ErrReconnect = errors.New("anilist rejected the token; reconnect AniList in Settings")
 
-// pushBatch is how many dirty entries one run sends: a 300-entry import drains in a few runs, not a dozen.
 const pushBatch = 100
 
 func (s *Sync) Run(ctx context.Context) (SyncReport, error) {
@@ -74,10 +66,8 @@ func (s *Sync) run(ctx context.Context) (SyncReport, error) {
 	if !s.al.Authenticated() {
 		return rep, nil
 	}
-	// Behind people in AniList's line: pages someone is waiting for go first.
 	ctx = anilist.Background(ctx)
 
-	// Rows AniList refused come last, so they cannot take every slot of every run.
 	dirty, err := s.store.DirtyEntries(ctx, pushBatch)
 	if err != nil {
 		return rep, err
@@ -88,7 +78,6 @@ func (s *Sync) run(ctx context.Context) (SyncReport, error) {
 			rep.Failed++
 			s.log.Warn("push progress", "anime", d.AnimeID, "err", err)
 
-			// Retrying would only burn the rate limit; recorded so the tracker reads "reconnect".
 			if errs, ok := err.(anilist.Errors); ok && errs.Unauthorized() {
 				s.store.SetSetting(ctx, AuthErrorSetting, "true")
 				return rep, ErrReconnect
@@ -96,7 +85,6 @@ func (s *Sync) run(ctx context.Context) (SyncReport, error) {
 			if err := s.store.PushFailed(ctx, "anilist", d.AnimeID); err != nil {
 				return rep, err
 			}
-			// AniList is down: the rest stay dirty for the next run instead of spending the budget pages share.
 			if anilist.Unreachable(ctx, err) {
 				break
 			}
@@ -109,7 +97,6 @@ func (s *Sync) run(ctx context.Context) (SyncReport, error) {
 		s.log.Info("progress synced", "entries", rep.Pushed)
 	}
 
-	// After the push: the merge skips dirty rows, so a failed push is not reverted.
 	userID, _ := s.store.SettingInt(ctx, "anilist.user_id")
 	if s.importer != nil && userID > 0 {
 		res, err := s.importer.Run(ctx, userID, store.ImportMerge)
@@ -134,8 +121,6 @@ func (s *Sync) run(ctx context.Context) (SyncReport, error) {
 	return rep, nil
 }
 
-// favourites reconciles both directions. AniList only toggles, so the remote
-// list is read first and a change is sent only where the two disagree.
 func (s *Sync) favourites(ctx context.Context, userID int) (int, error) {
 	remote, err := s.al.Favourites(ctx, userID)
 	if err != nil {
@@ -153,7 +138,6 @@ func (s *Sync) favourites(ctx context.Context, userID int) (int, error) {
 	}
 
 	for _, change := range dirty {
-		// A MAL-only title AniList can't hold: settled here, or it would be refused every sync forever.
 		if change.AnimeID <= 0 {
 			if err := s.store.MarkFavouriteSynced(ctx, change.AnimeID, change.Favourite); err != nil {
 				return 0, err
@@ -183,7 +167,6 @@ func (s *Sync) favourites(ctx context.Context, userID int) (int, error) {
 		return 0, err
 	}
 
-	// A favourite the corpus never saw is an "Unknown" placeholder until fetched.
 	if s.importer != nil {
 		missing, err := s.store.Unhydrated(ctx, ids)
 		if err != nil {
@@ -196,7 +179,6 @@ func (s *Sync) favourites(ctx context.Context, userID int) (int, error) {
 	return held, nil
 }
 
-// PushOne sends one anime to every connected tracker now.
 func (s *Sync) PushOne(ctx context.Context, animeID int) error {
 	var errs []error
 	if s.mal != nil {
@@ -205,7 +187,6 @@ func (s *Sync) PushOne(ctx context.Context, animeID int) error {
 		}
 	}
 	if s.al.Authenticated() && animeID > 0 {
-		// Forced: a run's clear in the same second can mark this change clean.
 		if err := s.pushLatest(ctx, animeID, true); err != nil {
 			errs = append(errs, err)
 		}
@@ -213,7 +194,6 @@ func (s *Sync) PushOne(ctx context.Context, animeID int) error {
 	return errors.Join(errs...)
 }
 
-// pushLatest sends the entry as it is now, unless clean and not forced.
 func (s *Sync) pushLatest(ctx context.Context, animeID int, force bool) error {
 	s.pushing.Lock()
 	defer s.pushing.Unlock()
@@ -238,7 +218,6 @@ func (s *Sync) push(ctx context.Context, d store.DirtyEntry) error {
 	return s.store.ClearDirtyAt(ctx, d.AnimeID, saved.ID, saved.UpdatedAt, d.Changed)
 }
 
-// AniList wants year, month and day as separate integers.
 func fuzzyDate(s string) *anilist.FuzzyDate {
 	parts := strings.Split(s, "-")
 	if len(parts) != 3 {
@@ -250,11 +229,16 @@ func fuzzyDate(s string) *anilist.FuzzyDate {
 	if err1 != nil || err2 != nil || err3 != nil || year == 0 {
 		return nil
 	}
-	return &anilist.FuzzyDate{Year: &year, Month: &month, Day: &day}
+	date := &anilist.FuzzyDate{Year: &year}
+	if month > 0 {
+		date.Month = &month
+		if day > 0 {
+			date.Day = &day
+		}
+	}
+	return date
 }
 
-// Watched is called when playback passes the threshold. It records progress
-// locally and pushes immediately, so a quick app close still updates the list.
 func (s *Sync) Watched(ctx context.Context, animeID, episode int) error {
 	changed, err := s.store.MarkWatched(ctx, animeID, episode)
 	if err != nil || !changed {
@@ -262,11 +246,21 @@ func (s *Sync) Watched(ctx context.Context, animeID, episode int) error {
 	}
 	s.log.Info("episode watched", "anime", animeID, "episode", episode)
 
-	return s.PushOne(ctx, animeID)
+	if s.mal != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+			defer cancel()
+			if err := s.mal.PushOne(ctx, animeID); err != nil {
+				s.log.Warn("push to MyAnimeList", "anime", animeID, "err", err)
+			}
+		}()
+	}
+	if s.al.Authenticated() && animeID > 0 {
+		return s.pushLatest(ctx, animeID, true)
+	}
+	return nil
 }
 
-// Remove takes a show off the list on AniList, then MAL, then here; a tracker failing leaves it all on.
-// The push lock is held throughout, so a push already in flight can't recreate the entry after.
 func (s *Sync) Remove(ctx context.Context, animeID int) error {
 	s.pushing.Lock()
 	defer s.pushing.Unlock()
@@ -274,7 +268,6 @@ func (s *Sync) Remove(ctx context.Context, animeID int) error {
 	if err != nil {
 		return err
 	}
-	// A negative id is a row only Yoru has; AniList never saw it.
 	if entry.ID > 0 && s.al.Authenticated() {
 		if err := s.al.DeleteEntry(ctx, entry.ID); err != nil {
 			return fmt.Errorf("remove from AniList: %w", err)

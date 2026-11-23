@@ -133,7 +133,6 @@ func TestParseBatches(t *testing.T) {
 	}
 }
 
-// A resolution written as WxH must not be mistaken for a checksum once the brackets are stripped.
 func TestResolutionIsNotReadAsChecksum(t *testing.T) {
 	got := Parse("[Group] Some Show - 07 (1920x1080) [AABBCCDD].mkv")
 	if got.CRC32 != "AABBCCDD" {
@@ -144,7 +143,6 @@ func TestResolutionIsNotReadAsChecksum(t *testing.T) {
 	}
 }
 
-// Longest-first matching keeps "BD Remux" from being read as plain "BD".
 func TestRemuxOutranksBluRay(t *testing.T) {
 	if got := Parse("Show (BD Remux 1080p)").Source; got != "BDRemux" {
 		t.Fatalf("source = %q, want BDRemux", got)
@@ -154,7 +152,6 @@ func TestRemuxOutranksBluRay(t *testing.T) {
 	}
 }
 
-// Hi10P is H.264 High 10, settling codec and bit depth without "x264".
 func TestHi10PImpliesH264(t *testing.T) {
 	got := Parse("[Group] Some Show - 07 [1080p Hi10P AAC].mkv")
 	if got.Codec != "H264" {
@@ -164,7 +161,6 @@ func TestHi10PImpliesH264(t *testing.T) {
 		t.Errorf("bit depth = %d, want 10", got.BitDepth)
 	}
 
-	// An explicit codec still wins over the inference.
 	if got := Parse("[Group] Show - 07 [1080p HEVC 10bit]"); got.Codec != "HEVC" {
 		t.Errorf("codec = %q, want the explicit HEVC", got.Codec)
 	}
@@ -186,7 +182,6 @@ func TestSpecialsPackCarriesItsSeason(t *testing.T) {
 	}
 }
 
-// "E06" is episode 6; read as unnumbered it would pass for any episode.
 func TestMarkedEpisodeForms(t *testing.T) {
 	tests := []struct {
 		in      string
@@ -198,7 +193,6 @@ func TestMarkedEpisodeForms(t *testing.T) {
 		{"[Group] Some Show - Ep. 6 [1080p].mkv", 6, 0},
 		{"[Group] Some Show - Episode 6 [1080p].mkv", 6, 0},
 		{"[Group] Some Show E06v2 [1080p].mkv", 6, 2},
-		// A checksum and a codec both start with the same letter.
 		{"[Group] Some Show - 05 [1080p][E1234567].mkv", 5, 0},
 		{"[Group] Some Show - 05 [1080p x265 10bit E-AC-3 2.0].mkv", 5, 0},
 		{"[Group] Some Show - 05 [1080p EAC3].mkv", 5, 0},
@@ -215,7 +209,6 @@ func TestMarkedEpisodeForms(t *testing.T) {
 	}
 }
 
-// Episodes listed rather than ranged still say which ones are in the pack.
 func TestListedEpisodesAreAPack(t *testing.T) {
 	got := Parse("Some Show [E41 E42 E43] [1080p DCPrip][AV1][OPUS]")
 	if got.Episode != 41 || got.EpisodeEnd != 43 || !got.Batch {
@@ -226,7 +219,6 @@ func TestListedEpisodesAreAPack(t *testing.T) {
 	}
 }
 
-// A span is a pack, tagged or not, even from zero; only the spaced form is a title's number.
 func TestUntaggedRangeIsABatch(t *testing.T) {
 	for _, in := range []string{
 		"[Group] Some Show (01-12) [1080p]",

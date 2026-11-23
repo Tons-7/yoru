@@ -21,14 +21,12 @@ import (
 	"yoru/internal/torrent"
 )
 
-// bigFile is one size-byte file of random data in pieces of pieceLen, served by a seeder at each rate.
 func bigFile(t *testing.T, size, pieceLen int64, rates ...int) (metainfo.MetaInfo, []*net.TCPAddr) {
 	t.Helper()
 	mi, seeds, _ := bigFileSeeders(t, size, pieceLen, rates...)
 	return mi, seeds
 }
 
-// bigFileSeeders is bigFile with the seeding clients, to look at their peers.
 func bigFileSeeders(t *testing.T, size, pieceLen int64, rates ...int) (metainfo.MetaInfo, []*net.TCPAddr, []*bt.Client) {
 	t.Helper()
 	dir := t.TempDir()
@@ -62,13 +60,10 @@ func bigFileSeeders(t *testing.T, size, pieceLen int64, rates ...int) (metainfo.
 	return mi, seeds, clients
 }
 
-// A far read (a seek, MKV Cues) waited for the next refill, then behind the peer's queue: about 1 s at 2 MiB/s.
 func TestFarReadIsNotQueuedBehindOtherPieces(t *testing.T) { farReads(t, 2<<20) }
 
-// Whichever peer hears of a seek first takes it; a quicker one takes it over rather than wait on a slow one.
 func TestFarReadGoesToTheQuickerPeer(t *testing.T) { farReads(t, 64<<10, 2<<20) }
 
-// farReads seeks three times while the file downloads from seeders at rates, each read timed to its chunk.
 func farReads(t *testing.T, rates ...int) {
 	const pieceLen, size, chunk = 1 << 20, 96 << 20, 16 << 10
 	mi, seeds := bigFile(t, size, pieceLen, rates...)
@@ -86,7 +81,6 @@ func farReads(t *testing.T, rates ...int) {
 		})
 	})
 
-	// The file downloads at full speed, so the queues are as deep as they get.
 	time.Sleep(4 * time.Second)
 	en, _ := e.entryByID(id)
 	var bound int64
@@ -96,9 +90,7 @@ func farReads(t *testing.T, rates ...int) {
 	if outstanding.Load() > bound {
 		t.Errorf("%d requests queued; %s of the peers' speed is %d", outstanding.Load(), bt.RequestQueueTime, bound)
 	}
-	// Mid-piece, as seeks land, and at uneven gaps so they fall at different points of the refill rhythm.
 	for i, target := range []int64{80<<20 + 768<<10, 60<<20 + 304<<10, 88<<20 + 912<<10} {
-		// Pieces come in a spread order, so the nearest one with nothing of it here yet, wrapping round.
 		for tries := 0; ; tries++ {
 			if s := en.t.Piece(int(target / pieceLen)).State(); !s.Complete && !s.Partial {
 				break
@@ -130,7 +122,6 @@ func farReads(t *testing.T, rates ...int) {
 		}
 		t.Logf("seek %d: %d queued; took %.2fs with %.2f MiB arriving first; asked %s",
 			i, queued, took.Seconds(), float64(ahead)/(1<<20), at)
-		// Asked at once, ahead of the queue and from the seek on: only what was already on its way comes first.
 		if took > 250*time.Millisecond {
 			t.Errorf("seek %d took %s", i, took)
 		}
@@ -138,7 +129,6 @@ func farReads(t *testing.T, rates ...int) {
 	}
 }
 
-// The queue must cost no speed: a peer 150 ms away still gives nearly all its rate.
 func TestFarPeerKeepsItsSpeed(t *testing.T) {
 	const bps = 3 << 20
 	mi, seeds := bigFile(t, 64<<20, 256<<10, bps)
@@ -158,7 +148,6 @@ func TestFarPeerKeepsItsSpeed(t *testing.T) {
 	}
 }
 
-// Settings' download cap holds mid-download, and lifting it gives the speed back.
 func TestDownloadCap(t *testing.T) {
 	const bps, limit = 4 << 20, 1 << 20
 	mi, seeds := bigFile(t, 96<<20, 256<<10, bps)
@@ -169,7 +158,6 @@ func TestDownloadCap(t *testing.T) {
 		})
 	})
 	speed := func(over time.Duration) float64 {
-		// What was already on its way when the setting changed is not the new speed.
 		time.Sleep(time.Second)
 		from, at := useful.Load(), time.Now()
 		time.Sleep(over)
@@ -180,7 +168,6 @@ func TestDownloadCap(t *testing.T) {
 	e.SetLimits(torrent.Limits{Upload: torrent.UploadWhileDownloading})
 	free := speed(3 * time.Second)
 	t.Logf("%.2f MiB/s under a %.2f MiB/s cap, %.2f MiB/s without", capped/(1<<20), float64(limit)/(1<<20), free/(1<<20))
-	// The cap counts message overhead too, so useful data sits a little under it.
 	if capped > 1.1*limit || capped < 0.7*limit {
 		t.Errorf("%.2f MiB/s under a %.2f MiB/s cap", capped/(1<<20), float64(limit)/(1<<20))
 	}
@@ -189,8 +176,6 @@ func TestDownloadCap(t *testing.T) {
 	}
 }
 
-// seedEngine adds the file to an engine whose only peers are the seeders; dialer replaces the plain ones, and
-// setup runs before the engine starts.
 func seedEngine(t *testing.T, mi metainfo.MetaInfo, seeds []*net.TCPAddr, dialer bt.Dialer,
 	configure func(*bt.ClientConfig), setup ...func(*Engine)) (*Engine, int) {
 	t.Helper()
@@ -232,7 +217,6 @@ func seedEngine(t *testing.T, mi metainfo.MetaInfo, seeds []*net.TCPAddr, dialer
 	return e, added.ID
 }
 
-// delayDialer connects over TCP and holds every byte from the peer back by delay, as a distant line would.
 type delayDialer struct{ delay time.Duration }
 
 func (d delayDialer) DialerNetwork() string { return "tcp" }
@@ -251,7 +235,6 @@ type delayed struct {
 	err  error
 }
 
-// delayConn reads ahead into a line that releases each read only once delay has passed since it arrived.
 type delayConn struct {
 	net.Conn
 	line chan delayed

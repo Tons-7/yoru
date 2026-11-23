@@ -44,8 +44,6 @@ func findMonster(t *testing.T, results []indexer.Torrent, episode int) Candidate
 	return got
 }
 
-// The searches for a one-word title return other shows, and every one of them
-// used to outrank the show itself for being newer and higher resolution.
 func TestOtherShowsNeverWinTheEpisode(t *testing.T) {
 	got := findMonster(t, []indexer.Torrent{
 		release("1111111111111111111111111111111111111111",
@@ -64,7 +62,6 @@ func TestOtherShowsNeverWinTheEpisode(t *testing.T) {
 	}
 }
 
-// Derived episode rows are permanent, so another show's numbers must not become this one's episodes.
 func TestEpisodeNumbersIgnoreOtherShows(t *testing.T) {
 	st := monsterStore(t)
 	f := NewFinder(st, fixedIndexer{results: []indexer.Torrent{
@@ -83,7 +80,6 @@ func TestEpisodeNumbersIgnoreOtherShows(t *testing.T) {
 	}
 }
 
-// A later cour's list takes only releases naming its cour; a bare number counts on from the first.
 func TestEpisodeNumbersOfALaterCourSkipContinuedNumbering(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -97,7 +93,7 @@ func TestEpisodeNumbersOfALaterCourSkipContinuedNumbering(t *testing.T) {
 	if err := st.SaveRelations(ctx, nil, []store.Relation{{AnimeID: 49, RelatedID: 50, Kind: "SEQUEL"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.RebuildFranchises(ctx); err != nil {
+	if _, err := st.RebuildFranchisesFor(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	f := NewFinder(st, fixedIndexer{results: []indexer.Torrent{
@@ -114,7 +110,6 @@ func TestEpisodeNumbersOfALaterCourSkipContinuedNumbering(t *testing.T) {
 	}
 }
 
-// Rejected releases stay in the list so the manual picker can show what was found, with the reason.
 func TestOtherShowsAreKeptButBlocked(t *testing.T) {
 	got := findMonster(t, []indexer.Torrent{
 		release("1111111111111111111111111111111111111111",
@@ -149,7 +144,6 @@ func TestOtherShowsAreKeptButBlocked(t *testing.T) {
 	}
 }
 
-// A twelve-episode series has no episode 30, even from a pack stating no range.
 func TestUnnumberedPackOfAnotherShowCannotAnswer(t *testing.T) {
 	got := findMonster(t, []indexer.Torrent{
 		release("1111111111111111111111111111111111111111",
@@ -161,7 +155,6 @@ func TestUnnumberedPackOfAnotherShowCannotAnswer(t *testing.T) {
 	}
 }
 
-// Nothing found beats the wrong show: an episode without a release says so.
 func TestNothingIsPickedWhenOnlyOtherShowsAreFound(t *testing.T) {
 	got := findMonster(t, []indexer.Torrent{
 		release("1111111111111111111111111111111111111111",
@@ -197,8 +190,6 @@ func TestHeldReleaseOfAnotherShowIsNotReused(t *testing.T) {
 	}
 }
 
-// Download used to promote whatever was held to kept, then, finding it named
-// another show, return as if done: the wrong file pinned, nothing fetched.
 func TestDownloadFetchesAfreshWhenTheHeldReleaseIsAnotherShow(t *testing.T) {
 	engine := newFakeEngine()
 	srv := httptest.NewServer(engine.handler())
@@ -236,7 +227,6 @@ func TestDownloadFetchesAfreshWhenTheHeldReleaseIsAnotherShow(t *testing.T) {
 	}
 }
 
-// The queue used to commit to the best-ranked release and fail with it.
 func TestDownloadWalksPastADeadRelease(t *testing.T) {
 	engine := newFakeEngine(deadHash)
 	srv := httptest.NewServer(engine.handler())
@@ -260,7 +250,6 @@ func TestDownloadWalksPastADeadRelease(t *testing.T) {
 	}
 }
 
-// A release picked by hand past the heuristic sticks, or every play sends the user back.
 func TestAReleasePickedByHandIsNeverSecondGuessed(t *testing.T) {
 	st := monsterStore(t)
 	ctx := context.Background()
@@ -277,7 +266,6 @@ func TestAReleasePickedByHandIsNeverSecondGuessed(t *testing.T) {
 		t.Error("a hand-picked release was discarded for its name")
 	}
 
-	// Re-recorded by an automatic path later, it stays a hand pick.
 	if err := st.RecordTorrent(ctx, store.TorrentRecord{
 		InfoHash: "1111111111111111111111111111111111111111",
 		Name:     "[Group] Some Naming AniList Never Heard Of - 01 [1080p]",
@@ -291,7 +279,6 @@ func TestAReleasePickedByHandIsNeverSecondGuessed(t *testing.T) {
 	}
 }
 
-// Without titles there is nothing to check against, and refusing everything would strand playback.
 func TestHeldReleaseStandsWithoutTitles(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -303,7 +290,6 @@ func TestHeldReleaseStandsWithoutTitles(t *testing.T) {
 		t.Error("an unnamed record should stand")
 	}
 
-	// A placeholder row has a title in name only.
 	if err := st.EnsureAnime(ctx, 405); err != nil {
 		t.Fatal(err)
 	}

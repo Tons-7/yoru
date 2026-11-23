@@ -16,13 +16,10 @@ func init() {
 	log.SetFlags(log.Flags() | log.Lshortfile)
 }
 
-// I think these are mainly tests for bad metainfos that try to escape the client base directory.
 var safeFilePathTests = []struct {
 	input     []string
 	expectErr bool
 }{
-	// We might want a test for invalid chars inside components, or file maker opt funcs returning
-	// absolute paths (and thus presumably clobbering earlier "makers").
 	{input: []string{"a", filepath.FromSlash(`b/..`)}, expectErr: false},
 	{input: []string{"a", filepath.FromSlash(`b/../../..`)}, expectErr: true},
 	{input: []string{"a", filepath.FromSlash(`b/../.././..`)}, expectErr: true},
@@ -34,7 +31,6 @@ var safeFilePathTests = []struct {
 	},
 }
 
-// Tests the ToSafeFilePath func.
 func TestToSafeFilePath(t *testing.T) {
 	for _, _case := range safeFilePathTests {
 		actual, err := ToSafeFilePath(_case.input...)
@@ -47,7 +43,6 @@ func TestToSafeFilePath(t *testing.T) {
 	}
 }
 
-// Check that safe file path handling still exists for the newer file-opt-maker variants.
 func TestFileOptsSafeFilePathHandling(t *testing.T) {
 	for i, _case := range safeFilePathTests {
 		t.Run(fmt.Sprintf("Case%v", i), func(t *testing.T) {

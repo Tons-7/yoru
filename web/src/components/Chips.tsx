@@ -7,7 +7,7 @@ const chip =
 const tone = (on: boolean) =>
   on
     ? 'bg-accent-500/20 text-accent-300 ring-accent-400/50'
-    : 'bg-base-850 text-base-200 ring-white/[0.08] hover:bg-base-800 hover:text-white'
+    : 'bg-base-850 text-base-200 ring-white/8 hover:bg-base-800 hover:text-white'
 
 export function ChipRow({ children, className }: { children: ReactNode; className?: string }) {
   return (

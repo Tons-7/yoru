@@ -44,7 +44,7 @@ export function AlertPill({
         wide ? 'w-full rounded-lg' : 'tap rounded-full',
         on
           ? 'bg-accent-500/20 text-accent-300 ring-accent-400/40 hover:bg-accent-500/30'
-          : 'text-base-100 ring-white/15 hover:bg-white/[0.06]',
+          : 'text-base-100 ring-white/15 hover:bg-white/6',
         className,
       )}
     >

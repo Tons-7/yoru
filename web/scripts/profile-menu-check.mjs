@@ -43,7 +43,6 @@ async function open(viewport, trackers) {
   return { page, button, menu: page.getByRole('menu', { name: 'Profile' }) }
 }
 
-// Nobody signed in: the menu says so and where to fix it.
 {
   const { page, button, menu } = await open({ width: 1280, height: 900 })
   await button.click()
@@ -55,7 +54,6 @@ async function open(viewport, trackers) {
   await page.close()
 }
 
-// Signed in to both trackers: the initial on the button, the name, the counts.
 {
   const { page, button, menu } = await open({ width: 1280, height: 900 }, [
     tracker('anilist', 'AniList', { user: 'Yuki' }),
@@ -83,7 +81,6 @@ async function open(viewport, trackers) {
   check(page.url().includes('/library?status=CURRENT'), 'a status opens the library on it')
   check(!(await menu.isVisible()), 'and the menu closes')
 
-  // Keyboard: Enter opens on the first item, arrows walk, End reaches the last, Escape returns focus.
   await button.focus()
   await page.keyboard.press('Enter')
   await menu.waitFor()
@@ -101,14 +98,15 @@ async function open(viewport, trackers) {
   await page.close()
 }
 
-// A tracker that refused its login: amber on the button and the reason in the menu.
 {
   const { page, button, menu } = await open({ width: 1280, height: 900 }, [
     tracker('anilist', 'AniList', { user: 'Yuki', reconnect: true }),
     tracker('mal', 'MyAnimeList', { connected: false, configured: false }),
   ])
-  await page.waitForFunction(() => document.querySelector('[aria-label="Profile and settings"] .bg-amber-400'))
-  check(true, 'the button carries a dot when a tracker needs signing in again')
+  const dotted = await page
+    .waitForFunction(() => document.querySelector('[aria-label="Profile and settings"] .bg-amber-400'))
+    .then(() => true, () => false)
+  check(dotted, 'the button carries a dot when a tracker needs signing in again')
   await button.click()
   await menu.waitFor()
   check(await menu.getByText('Reconnect to resume syncing').isVisible(), 'and the menu says why')

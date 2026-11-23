@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// A show AniList no longer returns is marked dead; asking for it again every run would waste a request.
 func TestStaleAiringSkipsDeadShows(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -33,8 +32,6 @@ func TestStaleAiringSkipsDeadShows(t *testing.T) {
 	}
 }
 
-// Phone keyboards type a curly apostrophe; the stored title has a straight one, and accented Latin is
-// folded by the index, so both stay on the FTS path.
 func TestSearchLocalMatchesCurlyQuotesAndAccents(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -51,7 +48,6 @@ func TestSearchLocalMatchesCurlyQuotesAndAccents(t *testing.T) {
 	}
 }
 
-// Two-character and CJK queries take LIKE, keeping list shows first and the text literal.
 func TestSearchLocalLikePathKeepsListFirstAndLiteral(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -86,8 +82,6 @@ func TestSearchLocalLikePathKeepsListFirstAndLiteral(t *testing.T) {
 	}
 }
 
-// A sync brings every show back unchanged most of the time; a row that still says the same is left
-// alone until its stamp is an hour old, and an entry with the same stamp is not rewritten either.
 func TestImportListLeavesUnchangedRowsAlone(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

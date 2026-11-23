@@ -5,13 +5,11 @@ import (
 	"time"
 )
 
-// A read stuck behind a peer that stopped sending waited 40-120 s; these run at a tenth of Yoru's timings.
 func silentKnobsFast() silentKnobs {
 	return silentKnobs{mib: 32, pieceKiB: 256, healthyKiB: 384, slowKiB: 32, videoKiB: 96, reqq: 1024,
 		observe: 20 * time.Second, fast: true}
 }
 
-// dropLimit: a read held by a quiet peer waits for the drop and a janitor round, no more.
 func dropLimit() time.Duration { return shedAfter + 2*janitorEvery + time.Second }
 
 func TestSilentPeerBesideAHealthyOneHoldsNoReadUp(t *testing.T) {
@@ -32,7 +30,6 @@ func TestSilentPeerBesideAHealthyOneHoldsNoReadUp(t *testing.T) {
 	}
 }
 
-// The reader's peer goes quiet holding its next chunks; a newcomer may not take them, so the quiet one must go.
 func TestQuietPeerHoldingTheNextChunksIsDropped(t *testing.T) {
 	k := silentKnobsFast()
 	dir, mi, data := silentTorrent(t, k)
@@ -51,7 +48,6 @@ func TestQuietPeerHoldingTheNextChunksIsDropped(t *testing.T) {
 	}
 }
 
-// Slow is not silent: a peer still delivering is never dropped as silent (holding the read's piece may be).
 func TestSlowPeerIsKept(t *testing.T) {
 	k := silentKnobsFast()
 	dir, mi, data := silentTorrent(t, k)

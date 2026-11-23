@@ -2,12 +2,12 @@ package peer_protocol
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"math/bits"
 	"strings"
-	"unsafe"
 
 	"github.com/anacrolix/missinggo/v2/panicif"
 
@@ -17,22 +17,15 @@ import (
 
 type ExtensionBit uint
 
-// https://www.bittorrent.org/beps/bep_0004.html
-// https://wiki.theory.org/BitTorrentSpecification.html#Reserved_Bytes
 const (
-	ExtensionBitDht  = 0 // http://www.bittorrent.org/beps/bep_0005.html
-	ExtensionBitFast = 2 // http://www.bittorrent.org/beps/bep_0006.html
-	// Set by a dialler sending a v1 infohash to let the other end upgrade with the v2 one (BEP 52, BEP 4).
-	// TODO: on by default, cleared where it doesn't belong.
+	ExtensionBitDht                          = 0
+	ExtensionBitFast                         = 2
 	ExtensionBitV2Upgrade                    = 4
 	ExtensionBitAzureusExtensionNegotiation1 = 16
 	ExtensionBitAzureusExtensionNegotiation2 = 17
-	// LibTorrent Extension Protocol, http://www.bittorrent.org/beps/bep_0010.html
-	ExtensionBitLtep = 20
-	// https://wiki.theory.org/BitTorrent_Location-aware_Protocol_1
-	ExtensionBitLocationAwareProtocol    = 43
-	ExtensionBitAzureusMessagingProtocol = 63 // https://www.bittorrent.org/beps/bep_0004.html
-
+	ExtensionBitLtep                         = 20
+	ExtensionBitLocationAwareProtocol        = 43
+	ExtensionBitAzureusMessagingProtocol     = 63
 )
 
 func handshakeWriter(w io.Writer, bb <-chan []byte, done chan<- error) {
@@ -54,7 +47,6 @@ var bitTags = []struct {
 	bit ExtensionBit
 	tag string
 }{
-	// Ordered by their bit position left to right.
 	{ExtensionBitAzureusMessagingProtocol, "amp"},
 	{ExtensionBitLocationAwareProtocol, "loc"},
 	{ExtensionBitLtep, "ltep"},
@@ -74,7 +66,7 @@ func (pex PeerExtensionBits) String() string {
 			pex.SetBit(bitTag.bit, false)
 		}
 	}
-	unknownCount := bits.OnesCount64(*(*uint64)((unsafe.Pointer(&pex[0]))))
+	unknownCount := bits.OnesCount64(binary.LittleEndian.Uint64(pex[:]))
 	if unknownCount != 0 {
 		tags = append(tags, fmt.Sprintf("%v unknown", unknownCount))
 	}
@@ -119,8 +111,6 @@ type HandshakeResult struct {
 	metainfo.Hash
 }
 
-// Handshake with ih nil waits for the peer to name the InfoHash (a peer that dialled us). ok is success;
-// err is anything worse than the peer giving up.
 func Handshake(
 	ctx context.Context,
 	sock io.ReadWriter,
@@ -130,20 +120,16 @@ func Handshake(
 ) (
 	res HandshakeResult, err error,
 ) {
-	sock = ctxrw.WrapReadWriter(ctx, sock)
-	// Bytes to be sent to the peer. Should never block the sender.
+	defer ctxrw.Bind(ctx, sock)()
 	postCh := make(chan []byte, 4)
-	// A single error value sent when the writer completes.
 	writeDone := make(chan error, 1)
-	// Performs writes to the socket and ensures posts don't block.
 	go handshakeWriter(sock, postCh, writeDone)
 
 	defer func() {
-		close(postCh) // Done writing.
+		close(postCh)
 		if err != nil {
 			return
 		}
-		// Wait until writes complete before returning from handshake.
 		err = <-writeDone
 		if err != nil {
 			err = fmt.Errorf("error writing: %w", err)
@@ -156,21 +142,18 @@ func Handshake(
 
 	post(protocolBytes())
 	post(extensions[:])
-	if ih != nil { // We already know what we want.
+	if ih != nil {
 		post(ih[:])
 		post(peerID[:])
 	}
 
-	// Putting an array on the heap still escapes.
 	b := make([]byte, 68)
-	// Read in one hit to avoid potential overhead in underlying reader.
 	_, err = io.ReadFull(sock, b[:])
 	if err != nil {
 		return res, fmt.Errorf("while reading: %w", err)
 	}
 
 	p := b[:len(Protocol)]
-	// This gets optimized to runtime.memequal
 	if string(p) != Protocol {
 		return res, fmt.Errorf("unexpected protocol string %q", string(p))
 	}
@@ -184,10 +167,8 @@ func Handshake(
 	read(res.Hash[:])
 	read(res.PeerID[:])
 	panicif.NotEq(len(b), 0)
-	// peerExtensions.Add(res.PeerExtensionBits.String(), 1)
 
-	// TODO: drop peers we don't want here, so they don't retry thinking it went wrong.
-	if ih == nil { // We were waiting for the peer to tell us what they wanted.
+	if ih == nil {
 		post(res.Hash[:])
 		post(peerID[:])
 	}

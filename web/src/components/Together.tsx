@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import { copyText } from '../lib/downloads'
 import { cx } from '../lib/format'
 import { memberState, memberStatus, setOverlay, useRoomToasts, type Room, type RoomLine, type RoomPick } from '../lib/together'
 import { toast } from '../lib/toast'
-import { Badge, Button, Switch, TextInput } from './ui'
+import { Badge, Button, ConfirmInline, Switch, TextInput } from './ui'
 
 const REACTIONS = ['😂', '😮', '❤️', '👏']
 
@@ -32,7 +33,10 @@ export function TogetherPanel({
 }) {
   const [text, setText] = useState('')
   const [copied, setCopied] = useState(false)
+  const [leaving, setLeaving] = useState(false)
   const feed = useRef<HTMLOListElement>(null)
+  const isMine = (l: RoomLine) => (l.member ? l.member === room.me?.id : l.from === room.me?.name)
+  const heard = room.lines.findLast((l) => l.kind === 'chat' && !isMine(l))
   const atEnd = useRef(true)
   const last = room.lines[room.lines.length - 1]?.id
   useEffect(() => {
@@ -40,20 +44,22 @@ export function TogetherPanel({
   }, [last])
   const view = room.view
   const host = !!room.me?.host
-  if (room.status === 'pending') return <Notice>Waiting for the host to let you in…</Notice>
-  if (room.status === 'refused') return <Notice>The host didn't let you in this time.</Notice>
-  if (room.status === 'ended') return <Notice>The room has ended, or its Yoru can't be reached.</Notice>
-  if (!view) return <Notice>Connecting to the room…</Notice>
+  if (room.status === 'pending') return <Notice action={{ label: 'Cancel', run: onLeave }}>Waiting for the host to let you in…</Notice>
+  if (room.status === 'refused')
+    return <Notice action={{ label: 'Watch on my own', run: onLeave }}>The host didn't let you in this time.</Notice>
+  if (room.status === 'ended')
+    return <Notice action={{ label: 'Leave room', run: onLeave }}>The room has ended, or its Yoru can't be reached.</Notice>
+  if (!view) return <Notice action={{ label: 'Leave room', run: onLeave }}>Connecting to the room…</Notice>
 
   const say = () => {
     const t = text.trim()
     if (!t) return
     setText('')
     atEnd.current = true
-    void room.act('chat', { text: t }).catch(() => {})
+    void room.act('chat', { text: t }).catch(() => setText((now) => now || t))
   }
   const waiting = room.waitingFor.length > 0 && view.state.waiting
-  const copy = (link: string) => void navigator.clipboard.writeText(link).then(() => setCopied(true), () => {})
+  const copy = (link: string) => void copyText(link).then((ok) => ok && setCopied(true))
   const picks = view.picks ?? []
   const playing = [view.title, `Episode ${view.state.episode}`, view.state.audio === 'dub' ? 'English dub' : 'Japanese audio']
     .filter(Boolean)
@@ -68,9 +74,29 @@ export function TogetherPanel({
             {view.members.length} watching{host ? ' · you host' : ''}
           </p>
         </div>
-        <Button size="sm" variant="ghost" onClick={onLeave} className="text-red-300 hover:text-red-200">
-          Leave room
-        </Button>
+        {leaving ? (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <ConfirmInline
+              size="sm"
+              label="Leave"
+              note={(() => {
+                const next = view.members.find((m) => !m.host && m.connected)
+                return next ? `${next.name} hosts after you leave` : 'The room ends when everyone leaves'
+              })()}
+              onConfirm={onLeave}
+              onCancel={() => setLeaving(false)}
+            />
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => (host ? setLeaving(true) : onLeave())}
+            className="text-red-300 hover:text-red-200"
+          >
+            Leave room
+          </Button>
+        )}
       </header>
 
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-line px-4 py-3">
@@ -244,7 +270,6 @@ export function TogetherPanel({
           <ol
             ref={feed}
             aria-label="Room messages"
-            aria-live="polite"
             onScroll={(e) => {
               const el = e.currentTarget
               atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
@@ -256,9 +281,12 @@ export function TogetherPanel({
                 No messages yet. Pauses and jumps show up here too.
               </li>
             ) : (
-              room.lines.map((l) => <Line key={l.id} line={l} mine={l.from === room.me?.name} src={room.avatarOf(l.member)} />)
+              room.lines.map((l) => <Line key={l.id} line={l} mine={isMine(l)} src={room.avatarOf(l.member)} />)
             )}
           </ol>
+          <p className="sr-only" aria-live="polite">
+            {heard ? `${heard.from ?? 'Someone'}: ${heard.text}` : ''}
+          </p>
 
           <div className="space-y-2 border-t border-line px-4 py-3">
             <div className="flex gap-1" role="group" aria-label="Reactions">
@@ -385,7 +413,7 @@ export function StrayCard({
         <p className="text-xs text-base-500">
           {title ? `${title} · Episode ${episode}` : `Episode ${episode}`}
         </p>
-        {error && <p className="text-xs text-recap">{error}</p>}
+        {error && <p className="text-xs text-red-300">{error}</p>}
         <Button size="sm" variant="ghost" onClick={onLeave} className="text-red-300 hover:text-red-200">
           Leave the room and watch this
         </Button>
@@ -394,8 +422,17 @@ export function StrayCard({
   )
 }
 
-function Notice({ children }: { children: React.ReactNode }) {
-  return <p className="surface p-4 text-sm text-base-300">{children}</p>
+function Notice({ children, action }: { children: React.ReactNode; action?: { label: string; run: () => void } }) {
+  return (
+    <div className="surface flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-base-300">
+      <p>{children}</p>
+      {action && (
+        <Button size="sm" variant="secondary" onClick={action.run}>
+          {action.label}
+        </Button>
+      )}
+    </div>
+  )
 }
 
 export function JoinCard({
@@ -473,7 +510,7 @@ export function JoinCard({
         </div>
         <p className="text-xs text-base-500">How everyone in the room sees you. Left empty, you're {fallback}.</p>
       </form>
-      {error && <p className="text-sm text-recap">{error}</p>}
+      {error && <p className="text-sm text-red-300">{error}</p>}
     </section>
   )
 }

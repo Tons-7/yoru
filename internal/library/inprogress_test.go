@@ -7,8 +7,6 @@ import (
 	"yoru/internal/store"
 )
 
-// A finished film bigger than the budget, played a little and left for later: the
-// case that lost someone a film an hour after it finished downloading.
 func filmInCache(t *testing.T) (*Cache, *store.Store) {
 	t.Helper()
 	c, st := newCache(t)
@@ -82,13 +80,11 @@ func TestSweepSparesTheEpisodeBeingWatched(t *testing.T) {
 	if rep.Evicted != 0 || !stillThere(t, st, "film") {
 		t.Fatalf("the film being watched was evicted (report %+v)", rep)
 	}
-	// Over budget is the right answer while the film is in progress.
 	if rep.After <= rep.Budget {
 		t.Errorf("after = %d, expected to stay over the %d budget", rep.After, rep.Budget)
 	}
 }
 
-// Finished, it is an ordinary cached episode again and the budget applies.
 func TestSweepTakesTheFilmOnceItIsWatched(t *testing.T) {
 	c, st := filmInCache(t)
 	ctx := context.Background()
@@ -118,7 +114,6 @@ func TestSweepTakesTheFilmOnceDismissedFromContinueWatching(t *testing.T) {
 	}
 }
 
-// Only the episode last played is spared: moving on to another show gives the film back to the budget.
 func TestSweepTakesTheFilmOncePlayingSomethingElse(t *testing.T) {
 	c, st := filmInCache(t)
 	ctx := context.Background()

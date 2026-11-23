@@ -17,7 +17,6 @@ import (
 	"yoru/internal/bt/segments"
 )
 
-// Piece within File storage. This is created on demand.
 type filePieceImpl struct {
 	t *fileTorrentImpl
 	p metainfo.Piece
@@ -27,7 +26,6 @@ type filePieceImpl struct {
 
 var _ interface {
 	PieceImpl
-	//PieceReaderer
 	io.WriterTo
 } = (*filePieceImpl)(nil)
 
@@ -103,7 +101,6 @@ func (me *filePieceImpl) iterFileSegments() iter.Seq2[int, segments.Extent] {
 	}
 }
 
-// If a piece is complete, check constituent files have the minimum required sizes.
 func (me *filePieceImpl) checkCompleteFileSizes() (c Completion) {
 	c.Complete = true
 	c.Ok = true
@@ -112,7 +109,6 @@ func (me *filePieceImpl) checkCompleteFileSizes() (c Completion) {
 		file.mu.RLock()
 		s, err := os.Stat(file.safeOsPath)
 		if me.partFiles() && errors.Is(err, fs.ErrNotExist) {
-			// Can we use shared files for this? Is it faster?
 			s, err = os.Stat(file.partFilePath())
 		}
 		file.mu.RUnlock()
@@ -237,7 +233,6 @@ func (me *filePieceImpl) MarkNotComplete() (err error) {
 }
 
 func (me *filePieceImpl) promotePartFile(f file) (err error) {
-	// Flush file on completion, even if we don't promote it.
 	err = me.t.io.flush(f.partFilePath(), 0, f.length())
 	if err != nil {
 		me.logger().Warn("error flushing file before promotion", "file", f.partFilePath(), "err", err)
@@ -264,7 +259,6 @@ func (me *filePieceImpl) promotePartFile(f file) (err error) {
 	return
 }
 
-// Rename from if exists, and if so, to must not exist.
 func (me *filePieceImpl) exclRenameIfExists(from, to string) (renamed bool, err error) {
 	err = me.t.io.rename(from, to)
 	if err != nil {
@@ -293,19 +287,8 @@ func (me *filePieceImpl) onFileNotComplete(f file) (err error) {
 	return
 }
 
-func (me *filePieceImpl) pathForWrite(f *file) string {
-	return me.t.pathForWrite(f)
-}
-
 func (me *filePieceImpl) partFiles() bool {
 	return me.t.partFiles()
-}
-
-type zeroReader struct{}
-
-func (me zeroReader) Read(p []byte) (n int, err error) {
-	clear(p)
-	return len(p), nil
 }
 
 func (me *filePieceImpl) WriteTo(w io.Writer) (n int64, err error) {
@@ -352,7 +335,6 @@ func (me *filePieceImpl) writeFileTo(w io.Writer, fileIndex int, extent segments
 		return
 	}
 	file := me.t.file(fileIndex)
-	// Do we want io.WriterTo here, or are we happy to let that be type asserted in io.CopyN?
 	var f fileReader
 	f, err = me.t.openFile(file)
 	if err != nil {
@@ -371,11 +353,9 @@ func (me *filePieceImpl) writeFileTo(w io.Writer, fileIndex int, extent segments
 		return
 	}
 	if dataOffset < extent.Start {
-		// File is too short.
 		return
 	}
 	if dataOffset > extent.Start {
-		// Write zeroes until the end of the hole we're in.
 		var n1 int64
 		n := min(dataOffset-extent.Start, extent.Length)
 		n1, err = writeZeroes(w, n)

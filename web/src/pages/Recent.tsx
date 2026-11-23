@@ -6,7 +6,7 @@ import { byShow, RANGES, useOutNow, type Range } from '../lib/aired'
 import { ReleasedCard } from '../components/ReleasedCard'
 import { SwitchHeader } from '../components/ViewSwitch'
 import { ChipDivider, ChipRow, ChoiceChips, ToggleChip } from '../components/Chips'
-import { Empty, ErrorState, RefreshFailed, Skeleton } from '../components/ui'
+import { Button, Empty, ErrorState, RefreshFailed, Skeleton } from '../components/ui'
 
 export function RecentPage() {
   return <Navigate to="/schedule?view=out" replace />
@@ -31,6 +31,7 @@ export function RecentView({
   const days = groupByDay(items, (i) => i.airingAt).map(([label, group]) => [label, byShow(group)] as const)
   const shows = (list: typeof aired) => new Set(list.map((item) => item.animeId)).size
   const hidden = mine ? shows(aired) - shows(items) : 0
+  const wider = RANGES[RANGES.findIndex((r) => r.value === range) + 1]
 
   return (
     <div className="space-y-4">
@@ -75,7 +76,17 @@ export function RecentView({
       ) : items.length === 0 ? (
         <Empty
           title="Nothing has aired in this window"
-          hint={mine ? 'Nothing from your list, at least. Try a wider window, or show every show.' : 'Try a wider window.'}
+          hint={mine ? 'Nothing from your list, at least.' : undefined}
+          action={
+            <>
+              {wider && (
+                <Button onClick={() => onRange(wider.value)}>
+                  Look back {wider.value === '168' ? 'a week' : wider.label.toLowerCase()}
+                </Button>
+              )}
+              {mine && <Button onClick={() => setMine(false)}>Show every show</Button>}
+            </>
+          }
         />
       ) : (
         <div className="space-y-8">

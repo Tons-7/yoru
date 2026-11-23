@@ -8,7 +8,6 @@ import (
 	"yoru/internal/bt/dht/krpc"
 )
 
-// TODO: Use netip.Addr and Option[[20]byte].
 type Peer struct {
 	IP   net.IP `bencode:"ip"`
 	Port int    `bencode:"port"`
@@ -30,7 +29,6 @@ func (p Peer) String() string {
 	}
 }
 
-// Set from the non-compact form in BEP 3. The tracker is untrusted: any missing or mistyped field is an error.
 func (p *Peer) FromDictInterface(d map[string]any) error {
 	ip, ok := d["ip"].(string)
 	if !ok {

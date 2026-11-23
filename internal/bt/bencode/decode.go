@@ -12,27 +12,22 @@ import (
 	"sync"
 )
 
-// The default bencode string length limit. This is a poor attempt to prevent excessive memory
-// allocation when parsing, but also leaves the window open to implement a better solution.
-const DefaultDecodeMaxStrLen = 1<<27 - 1 // ~128MiB
+const DefaultDecodeMaxStrLen = 1<<27 - 1
 
 type MaxStrLen = int64
 
 type Decoder struct {
-	// Maximum parsed bencode string length. Defaults to DefaultMaxStrLen if zero.
 	MaxStrLen MaxStrLen
 
 	r interface {
 		io.ByteScanner
 		io.Reader
 	}
-	// Sum of bytes used to Decode values.
 	Offset int64
 	buf    bytes.Buffer
 	depth  int
 }
 
-// Deep enough for any real torrent, tracker or DHT message; a few bytes of "llll…" can't recurse past it.
 const maxDecodeDepth = 512
 
 func (d *Decoder) enter() {
@@ -60,8 +55,6 @@ func (d *Decoder) Decode(v any) (err error) {
 		if err, ok = r.(error); !ok {
 			panic(r)
 		}
-		// Errors thrown from deeper in parsing are unexpected. At value boundaries, errors should
-		// be returned directly (at least until all the panic nonsense is removed entirely).
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
@@ -82,7 +75,6 @@ func (d *Decoder) Decode(v any) (err error) {
 	return
 }
 
-// ReadEOF checks the input ends here, on a clean message boundary.
 func (d *Decoder) ReadEOF() error {
 	_, err := d.r.ReadByte()
 	if err == nil {
@@ -96,6 +88,27 @@ func (d *Decoder) ReadEOF() error {
 		return nil
 	}
 	return fmt.Errorf("expected EOF, got %w", err)
+}
+
+const (
+	eagerStringBytes = 1 << 20
+	maxBigIntDigits  = 64
+)
+
+func (d *Decoder) readChunked(length int) []byte {
+	b, err := io.ReadAll(io.LimitReader(d.r, int64(length)))
+	d.Offset += int64(len(b))
+	if err == nil && len(b) < length {
+		err = io.EOF
+	}
+	if err != nil {
+		checkForUnexpectedEOF(err, d.Offset)
+		panic(&SyntaxError{
+			Offset: d.Offset,
+			What:   errors.New("unexpected I/O error: " + err.Error()),
+		})
+	}
+	return b
 }
 
 func checkForUnexpectedEOF(err error, offset int64) {
@@ -118,8 +131,6 @@ func (d *Decoder) readByte() byte {
 	return b
 }
 
-// reads data writing it to 'd.buf' until 'sep' byte is encountered, 'sep' byte
-// is consumed, but not included into the 'd.buf'
 func (d *Decoder) readUntil(sep byte) {
 	for {
 		b := d.readByte()
@@ -146,19 +157,18 @@ func (d *Decoder) throwSyntaxError(offset int64, err error) {
 	})
 }
 
-// Assume the 'i' is already consumed. Read and validate the rest of an int into the buffer.
 func (d *Decoder) readInt() error {
 	d.readUntil('e')
 	return d.checkBufferedInt()
 }
 
-// called when 'i' was consumed, for the integer type in v.
 func (d *Decoder) parseInt(v reflect.Value) error {
 	start := d.Offset - 1
 
 	if err := d.readInt(); err != nil {
 		return err
 	}
+	defer d.buf.Reset()
 	s := bytesAsString(d.buf.Bytes())
 
 	switch v.Kind() {
@@ -211,17 +221,15 @@ func (d *Decoder) checkBufferedInt() error {
 }
 
 func (d *Decoder) parseStringLength() (int, error) {
-	// We should have already consumed the first byte of the length into the Decoder buf.
 	start := d.Offset - 1
 	d.readUntil(':')
 	if err := d.checkBufferedInt(); err != nil {
 		return 0, err
 	}
-	// Bounded by an int, not memory: Go can't cap allocation, short of decoding in place behind a view.
 	length, err := strconv.ParseInt(bytesAsString(d.buf.Bytes()), 10, 0)
 	checkForIntParseError(err, start)
 	if int64(length) > d.getMaxStrLen() {
-		err = fmt.Errorf("parsed string length %v exceeds limit (%v)", length, DefaultDecodeMaxStrLen)
+		err = fmt.Errorf("parsed string length %v exceeds limit (%v)", length, d.getMaxStrLen())
 	}
 	d.buf.Reset()
 	return int(length), err
@@ -245,33 +253,42 @@ func (d *Decoder) parseString(v reflect.Value) error {
 		}
 	}
 
-	switch v.Kind() {
-	case reflect.String:
+	fresh := func() []byte {
+		if length > eagerStringBytes {
+			return d.readChunked(length)
+		}
 		b := make([]byte, length)
 		read(b)
-		v.SetString(bytesAsString(b))
+		return b
+	}
+	scratch := func() []byte {
+		if length > eagerStringBytes {
+			return d.readChunked(length)
+		}
+		d.buf.Grow(length)
+		b := d.buf.Bytes()[:length]
+		read(b)
+		return b
+	}
+
+	switch v.Kind() {
+	case reflect.String:
+		v.SetString(bytesAsString(fresh()))
 		return nil
 	case reflect.Slice:
 		if v.Type().Elem().Kind() != reflect.Uint8 {
 			break
 		}
-		b := make([]byte, length)
-		read(b)
-		v.SetBytes(b)
+		v.SetBytes(fresh())
 		return nil
 	case reflect.Array:
 		if v.Type().Elem().Kind() != reflect.Uint8 {
 			break
 		}
-		d.buf.Grow(length)
-		b := d.buf.Bytes()[:length]
-		read(b)
-		reflect.Copy(v, reflect.ValueOf(b))
+		reflect.Copy(v, reflect.ValueOf(scratch()))
 		return nil
 	case reflect.Bool:
-		d.buf.Grow(length)
-		b := d.buf.Bytes()[:length]
-		read(b)
+		b := scratch()
 		x, err := strconv.ParseBool(bytesAsString(b))
 		if err != nil {
 			x = length != 0
@@ -279,27 +296,20 @@ func (d *Decoder) parseString(v reflect.Value) error {
 		v.SetBool(x)
 		return nil
 	}
-	// Can't move this into default clause because some cases above fail through to here after
-	// additional checks.
-	d.buf.Grow(length)
-	read(d.buf.Bytes()[:length])
-	// I believe we return here to support "ignore_unmarshal_type_error".
+	scratch()
 	return &UnmarshalTypeError{
 		BencodeTypeName:     "string",
 		UnmarshalTargetType: v.Type(),
 	}
 }
 
-// Info for parsing a dict value.
 type dictField struct {
 	Type reflect.Type
 	Get  func(value reflect.Value) func(reflect.Value)
 	Tags tag
 }
 
-// Returns specifics for parsing a dict field value.
 func getDictField(dict reflect.Type, key reflect.Value) (_ dictField, err error) {
-	// get valuev as a map value or as a struct field
 	switch k := dict.Kind(); k {
 	case reflect.Map:
 		return dictField{
@@ -309,14 +319,12 @@ func getDictField(dict reflect.Type, key reflect.Value) (_ dictField, err error)
 					if mapValue.IsNil() {
 						mapValue.Set(reflect.MakeMap(dict))
 					}
-					// Assigns the value into the map.
 					mapValue.SetMapIndex(key, value)
 				}
 			},
 		}, nil
 	case reflect.Struct:
 		if key.Kind() != reflect.String {
-			// A struct's fields are found by their string bencode tags.
 			panic(key)
 		}
 		return getStructFieldForKey(dict, key.String()), nil
@@ -409,11 +417,9 @@ func keyType(v reflect.Value) reflect.Type {
 }
 
 func (d *Decoder) parseDict(v reflect.Value) error {
-	// At this point 'd' byte was consumed, now read key/value pairs.
 	d.enter()
 	defer d.leave()
 
-	// The key type does not need to be a string for maps.
 	keyType := keyType(v)
 	if keyType == nil {
 		return fmt.Errorf("cannot parse dicts into %v", v.Type())
@@ -433,9 +439,7 @@ func (d *Decoder) parseDict(v reflect.Value) error {
 			return fmt.Errorf("parsing bencode dict into %v: %w", v.Type(), err)
 		}
 
-		// now we need to actually parse it
 		if df.Type == nil {
-			// Discard the value, there's nowhere to put it.
 			var if_ any
 			if_, ok = d.parseValueInterface()
 			if if_ == nil {
@@ -447,7 +451,6 @@ func (d *Decoder) parseDict(v reflect.Value) error {
 			continue
 		}
 		setValue := reflect.New(df.Type).Elem()
-		// log.Printf("parsing into %v", setValue.Type())
 		ok, err = d.parseValue(setValue)
 		if err != nil {
 			var target *UnmarshalTypeError
@@ -467,7 +470,6 @@ func (d *Decoder) parseList(v reflect.Value) error {
 	defer d.leave()
 	switch v.Kind() {
 	default:
-		// If the list is a singleton of the expected type, use that value.
 		l := reflect.New(reflect.SliceOf(v.Type()))
 		if err := d.parseList(l.Elem()); err != nil {
 			return err
@@ -481,7 +483,6 @@ func (d *Decoder) parseList(v reflect.Value) error {
 		v.Set(l.Elem().Index(0))
 		return nil
 	case reflect.Array, reflect.Slice:
-		// We can work with this. Normal case, fallthrough.
 	}
 
 	i := 0
@@ -538,13 +539,10 @@ func (d *Decoder) readOneValue() bool {
 
 	switch b {
 	case 'd', 'l':
-		// Bounded as parseDict and parseList are: a field with its own UnmarshalBencode is read here.
 		d.enter()
 		defer d.leave()
-		// read until there is nothing to read
 		for d.readOneValue() {
 		}
-		// consume 'e' as well
 		b = d.readByte()
 		d.buf.WriteByte(b)
 	case 'i':
@@ -596,12 +594,8 @@ func (d *Decoder) parseUnmarshaler(v reflect.Value) bool {
 	return true
 }
 
-// Returns true if there was a value and it's now stored in 'v'. Otherwise, there was an end symbol
-// ("e") and no value was stored.
 func (d *Decoder) parseValue(v reflect.Value) (bool, error) {
-	// we support one level of indirection at the moment
 	if v.Kind() == reflect.Pointer {
-		// A nil pointer gets a new element of the type it points to.
 		if v.IsNil() {
 			v.Set(reflect.New(v.Type().Elem()))
 		}
@@ -612,9 +606,11 @@ func (d *Decoder) parseValue(v reflect.Value) (bool, error) {
 		return true, nil
 	}
 
-	// common case: interface{}
 	if v.Kind() == reflect.Interface && v.NumMethod() == 0 {
-		iface, _ := d.parseValueInterface()
+		iface, ok := d.parseValueInterface()
+		if !ok {
+			return false, nil
+		}
 		v.Set(reflect.ValueOf(iface))
 		return true, nil
 	}
@@ -636,9 +632,7 @@ func (d *Decoder) parseValue(v reflect.Value) (bool, error) {
 		return true, d.parseInt(v)
 	default:
 		if b >= '0' && b <= '9' {
-			// It's a string.
 			d.buf.Reset()
-			// Write the first digit of the length to the buffer.
 			d.buf.WriteByte(b)
 			return true, d.parseString(v)
 		}
@@ -648,7 +642,6 @@ func (d *Decoder) parseValue(v reflect.Value) (bool, error) {
 	panic("unreachable")
 }
 
-// An unknown bencode type character was encountered.
 func (d *Decoder) raiseUnknownValueType(b byte, offset int64) {
 	panic(&SyntaxError{
 		Offset: offset,
@@ -674,7 +667,6 @@ func (d *Decoder) parseValueInterface() (any, bool) {
 		return d.parseIntInterface(), true
 	default:
 		if b >= '0' && b <= '9' {
-			// A string: the length's first digit goes in the buffer.
 			d.buf.WriteByte(b)
 			return d.parseStringInterface(), true
 		}
@@ -684,7 +676,6 @@ func (d *Decoder) parseValueInterface() (any, bool) {
 	}
 }
 
-// Called after 'i', for an arbitrary integer size.
 func (d *Decoder) parseIntInterface() (ret any) {
 	start := d.Offset - 1
 
@@ -693,6 +684,12 @@ func (d *Decoder) parseIntInterface() (ret any) {
 	}
 	n, err := strconv.ParseInt(d.buf.String(), 10, 64)
 	if ne, ok := err.(*strconv.NumError); ok && ne.Err == strconv.ErrRange {
+		if d.buf.Len() > maxBigIntDigits {
+			panic(&SyntaxError{
+				Offset: start,
+				What:   fmt.Errorf("integer of %d digits", d.buf.Len()),
+			})
+		}
 		i := new(big.Int)
 		_, ok := i.SetString(d.buf.String(), 10)
 		if !ok {
@@ -729,9 +726,6 @@ func (d *Decoder) parseStringInterface() string {
 	}
 	b := d.readBytes(int(length))
 	d.Offset += int64(len(b))
-	if err != nil {
-		panic(&SyntaxError{Offset: d.Offset, What: err})
-	}
 	return bytesAsString(b)
 }
 

@@ -15,7 +15,6 @@ import (
 	"yoru/internal/store"
 )
 
-// A failed title fetch must leave discovery due, or the new ids wait a day.
 func TestDiscoveryStaysDueWhenTitlesFail(t *testing.T) {
 	var aniUp atomic.Bool
 	ani := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +52,6 @@ func TestDiscoveryStaysDueWhenTitlesFail(t *testing.T) {
 	ing := NewIngester(st, f, al, discard())
 	ctx := context.Background()
 
-	// The seed fails too; discovery must still run.
 	rep, err := ing.Run(ctx, false)
 	if err == nil {
 		t.Fatal("want an error from the failed seed and fetch")

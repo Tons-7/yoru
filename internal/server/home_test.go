@@ -13,7 +13,6 @@ import (
 	"yoru/internal/store"
 )
 
-// fakeShows answers the by-ids query with those asked for of these shows, each with a status.
 func fakeShows(w http.ResponseWriter, body []byte, shows map[int]string) {
 	var asked struct {
 		Variables struct {
@@ -47,8 +46,6 @@ func seedList(t *testing.T, h *harness, entries map[int][2]any) {
 	}
 }
 
-// "For you" sums the picks after the best-liked shows, the favourite's in full: one after both comes first;
-// none on the list or adult, and AniList asked once a day.
 func TestForYouWeighsTheFavouritesRecommendations(t *testing.T) {
 	asked := 0
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +79,6 @@ func TestForYouWeighsTheFavouritesRecommendations(t *testing.T) {
 		t.Errorf("AniList asked for recommendations %d times, want once a day", asked)
 	}
 
-	// Asked for in Settings, the adult one comes too, first by its rating.
 	if code, _ := h.call(t, "POST", "/api/prefs", `{"key":"home.adult_picks","value":"true"}`); code != http.StatusOK {
 		t.Fatalf("allowing adult titles: %d", code)
 	}
@@ -96,7 +92,6 @@ func TestForYouWeighsTheFavouritesRecommendations(t *testing.T) {
 	}
 }
 
-// One best-liked show AniList no longer has fails the whole aliased ask: the rest still give "For you".
 func TestForYouLeavesOutAShowAniListLost(t *testing.T) {
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -119,7 +114,6 @@ func TestForYouLeavesOutAShowAniListLost(t *testing.T) {
 	}
 }
 
-// A sequel AniList now says isn't out yet stays off "Sequels you missed", whatever was saved.
 func TestSequelsMissedAreOutNow(t *testing.T) {
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

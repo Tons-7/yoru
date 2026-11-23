@@ -7,23 +7,17 @@ import (
 	"yoru/internal/bt/metainfo"
 )
 
-// Vars so tests need not wait.
 var (
-	// How long a download wanting data may have no peer before the ones it had are tried again.
-	regroupAfter = 20 * time.Second
-	// Each try that brings nobody waits twice as long, up to this.
-	regroupMax = 10 * time.Minute
-	// Per torrent, so a busy swarm cannot grow the list without end.
+	regroupAfter    = 20 * time.Second
+	regroupMax      = 10 * time.Minute
 	rememberedPeers = 200
 )
 
-// remembered is a peer a torrent was connected to, and when it was last seen.
 type remembered struct {
 	info bt.PeerInfo
 	seen time.Time
 }
 
-// connected is the torrent's peers now; KnownSwarm also lists ones only heard of.
 func connected(t *bt.Torrent) []bt.PeerInfo {
 	conns := t.PeerConns()
 	out := make([]bt.PeerInfo, 0, len(conns))
@@ -35,7 +29,6 @@ func connected(t *bt.Torrent) []bt.PeerInfo {
 	return out
 }
 
-// remember notes the torrent's peers; when full, the one seen longest ago makes way. Caller holds e.mu.
 func (e *Engine) remember(hash metainfo.Hash, peers []bt.PeerInfo, now time.Time) {
 	if len(peers) == 0 {
 		return
@@ -62,12 +55,10 @@ func (e *Engine) remember(hash metainfo.Hash, peers []bt.PeerInfo, now time.Time
 			}
 			delete(known, oldest)
 		}
-		// As an address to try, not as trusted.
 		known[key] = remembered{info: bt.PeerInfo{Addr: p.Addr, Source: p.Source}, seen: now}
 	}
 }
 
-// tryAgain: due for another try? Each wait is twice the last, from regroupAfter. Caller holds e.mu.
 func (en *entry) tryAgain(now time.Time) bool {
 	if en.aloneSince.IsZero() {
 		en.aloneSince, en.regroupWait = now, regroupAfter
@@ -81,7 +72,6 @@ func (en *entry) tryAgain(now time.Time) bool {
 	return true
 }
 
-// regroup retries a starved torrent's remembered peers (bt forgets them), doubling the wait each time.
 func (e *Engine) regroup(en *entry, now time.Time) {
 	t := en.t
 	if t.Info() == nil {
@@ -107,14 +97,12 @@ func (e *Engine) regroup(en *entry, now time.Time) {
 			again = append(again, r.info)
 		}
 	}
-	// Rebound since the janitor looked: the torrent is a closed client's.
 	cl, current := e.cl, e.byID[en.id] == en
 	e.mu.Unlock()
 
 	if !due || !current || cl == nil {
 		return
 	}
-	// The first try is news; the rest are the same line again.
 	level := e.log.Info
 	if tries > 0 {
 		level = e.log.Debug
@@ -123,7 +111,6 @@ func (e *Engine) regroup(en *entry, now time.Time) {
 	askAround(t, cl, again)
 }
 
-// askAround dials the peers again and asks the DHT afresh, where that is on.
 func askAround(t *bt.Torrent, cl *bt.Client, peers []bt.PeerInfo) {
 	t.AddPeers(peers)
 	for _, dht := range cl.DhtServers() {

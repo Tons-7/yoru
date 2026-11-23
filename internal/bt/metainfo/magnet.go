@@ -13,18 +13,16 @@ import (
 	"yoru/internal/bt/types/infohash"
 )
 
-// Magnet link components.
 type Magnet struct {
-	InfoHash    Hash       // Expected in this implementation
-	Trackers    []string   // "tr" values
-	DisplayName string     // "dn" value, if not empty
-	Params      url.Values // All other values, such as "x.pe", "as", "xs" etc.
+	InfoHash    Hash
+	Trackers    []string
+	DisplayName string
+	Params      url.Values
 }
 
 const btihPrefix = "urn:btih:"
 
 func (m Magnet) String() string {
-	// Deep-copy m.Params
 	vs := make(url.Values, len(m.Params)+len(m.Trackers)+2)
 	for k, v := range m.Params {
 		vs[k] = append([]string(nil), v...)
@@ -37,7 +35,6 @@ func (m Magnet) String() string {
 		vs.Add("dn", m.DisplayName)
 	}
 
-	// "urn:btih:" unescaped for Transmission and Deluge, and first for Deluge; InfoHash is BitTorrent's.
 	u := url.URL{
 		Scheme:   "magnet",
 		RawQuery: "xt=" + btihPrefix + m.InfoHash.HexString(),
@@ -48,10 +45,8 @@ func (m Magnet) String() string {
 	return u.String()
 }
 
-// Deprecated: Use ParseMagnetUri.
 var ParseMagnetURI = ParseMagnetUri
 
-// ParseMagnetUri parses Magnet-formatted URIs into a Magnet instance
 func ParseMagnetUri(uri string) (m Magnet, err error) {
 	u, err := url.Parse(uri)
 	if err != nil {
@@ -107,13 +102,16 @@ func parseEncodedV1Infohash(encoded string) (ih infohash.T, err error) {
 		err = fmt.Errorf("unhandled xt parameter encoding (encoded length %d)", len(encoded))
 		return
 	}
+	if len(encoded) == 32 {
+		encoded = strings.ToUpper(encoded)
+	}
 	n, err := decode(ih[:], []byte(encoded))
 	if err != nil {
 		err = fmt.Errorf("error decoding xt: %w", err)
 		return
 	}
 	if n != 20 {
-		panic(n)
+		err = fmt.Errorf("xt decodes to %d bytes, want 20", n)
 	}
 	return
 }

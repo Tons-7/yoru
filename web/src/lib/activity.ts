@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { sortDownloads, type DownloadSections } from './downloads'
 import { savedKey, savedShare, useSaved, type Job, type SaveStatus } from './offline'
 import { useDownloadQueue, useDownloads } from './queries'
+import { useHiddenKeys } from './undo'
 
 export interface Activity {
   count: number
@@ -45,7 +46,8 @@ export function joinActivity(a: Activity, b: Activity): Activity {
 export function usePcActivity(): Activity {
   const downloads = useDownloads()
   const queue = useDownloadQueue()
-  return pcActivity(sortDownloads(downloads.data?.items ?? [], queue.data?.items ?? []))
+  const hidden = useHiddenKeys()
+  return pcActivity(sortDownloads(downloads.data?.items ?? [], queue.data?.items ?? [], hidden))
 }
 
 export function useDeviceActivity(): Activity {

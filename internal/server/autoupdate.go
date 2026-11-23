@@ -14,6 +14,7 @@ var (
 
 func (s *Server) busyWith(ctx context.Context) []string {
 	s.togetherMu.Lock()
+	s.expireRooms()
 	rooms := len(s.rooms)
 	s.togetherMu.Unlock()
 	var out []string
@@ -54,7 +55,8 @@ func (s *Server) AutoUpdate(ctx context.Context) {
 		if !st.Available || st.Latest == nil || (st.Stage != update.StageIdle && st.Stage != update.StageFailed) {
 			continue
 		}
-		if st.Latest.Version == tried && time.Since(triedAt) < autoUpdateRetry || !s.autoUpdates(ctx) {
+		if st.Latest.Version == tried && time.Since(triedAt) < autoUpdateRetry || !s.autoUpdates(ctx) ||
+			st.Latest.Version == s.updater.FailedVersion() {
 			continue
 		}
 		tried, triedAt = st.Latest.Version, time.Now()

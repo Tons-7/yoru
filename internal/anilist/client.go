@@ -47,6 +47,9 @@ type Client struct {
 
 	refusedToken string
 	refusedAt    time.Time
+
+	missingMu sync.Mutex
+	missing   map[int]time.Time
 }
 
 const refusedFor = 10 * time.Minute
@@ -160,10 +163,13 @@ func (c *Client) Query(ctx context.Context, query string, vars map[string]any, o
 	public := token != "" && !isMutation(query) && ctx.Value(anonymousKey{}) == nil && ctx.Value(tokenKey{}) == nil
 	triedAnonymous := false
 	if public && c.loginRefused(token) {
-		if c.queryAnonymous(ctx, query, vars, out) == nil {
+		err := c.queryAnonymous(ctx, query, vars, out)
+		if err == nil {
 			return nil
 		}
-
+		if _, refused := errors.AsType[Errors](err); !refused {
+			return err
+		}
 		triedAnonymous = true
 	}
 	err := c.query(ctx, query, vars, out)
@@ -186,13 +192,13 @@ func (c *Client) query(ctx context.Context, query string, vars map[string]any, o
 		return c.execute(ctx, query, body, out)
 	}
 
-	key := cacheKey(query, body, c.bearerFor(ctx))
+	key := cacheKey(body, c.bearerFor(ctx))
 	if data, ok := c.cache.get(key); ok {
 		servedFrom(ctx).noteLive()
 		return decodeInto(data, out)
 	}
 
-	saved := archiveKey(body, c.bearerFor(ctx) != "")
+	saved := archiveKey(body, c.bearerFor(ctx))
 
 	if c.isDown() && c.fromArchive(ctx, saved, out) {
 		return nil
@@ -201,10 +207,10 @@ func (c *Client) query(ctx context.Context, query string, vars map[string]any, o
 		return nil
 	}
 
-	wait, mine := c.cache.enter(key)
+	f, mine := c.cache.enter(key)
 	if !mine {
 		select {
-		case <-wait:
+		case <-f.wait:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -215,11 +221,14 @@ func (c *Client) query(ctx context.Context, query string, vars map[string]any, o
 		if c.isDown() && c.fromArchive(ctx, saved, out) {
 			return nil
 		}
-
+		if err := c.cache.failure(f); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 		return c.fetch(ctx, query, body, key, saved, out)
 	}
-	defer c.cache.done(key, wait)
-	return c.fetch(ctx, query, body, key, saved, out)
+	err = c.fetch(ctx, query, body, key, saved, out)
+	c.cache.done(key, f, err)
+	return err
 }
 
 const refreshWait = 2 * time.Minute
@@ -245,19 +254,21 @@ func (c *Client) savedFirst(ctx context.Context, query string, body []byte, key,
 		return true
 	}
 	served.noteRefreshing()
-	wait, mine := c.cache.enter(key)
+	f, mine := c.cache.enter(key)
 	if !mine {
 		return true
 	}
 	behind, cancel := context.WithTimeout(Background(context.WithoutCancel(ctx)), refreshWait)
 	go func() {
 		defer cancel()
-		defer c.cache.done(key, wait)
+		defer c.cache.done(key, f, nil)
 		var fresh json.RawMessage
 		if err := c.execute(behind, query, body, &fresh); err != nil {
-			if unreachable(behind, err) {
+			switch _, refused := errors.AsType[Errors](err); {
+			case behind.Err() != nil || errors.Is(err, ErrBusy):
+			case unreachable(behind, err):
 				c.markDown()
-			} else {
+			case refused:
 				c.cache.noteFailed(key)
 			}
 			c.log.Debug("refresh a saved anilist answer", "err", err)
@@ -355,7 +366,10 @@ func (c *Client) run(ctx context.Context, body []byte, out any, repeatable bool)
 			return err
 		}
 		if err := c.limiter.Wait(ctx); err != nil {
-			return err
+			if ctx.Err() != nil {
+				return err
+			}
+			return fmt.Errorf("%w: %v", ErrBusy, err)
 		}
 		if err := c.awaitPause(ctx); err != nil {
 			return err
@@ -389,7 +403,7 @@ func (c *Client) run(ctx context.Context, body []byte, out any, repeatable bool)
 
 		if remaining(res) == 0 {
 			c.log.Debug("anilist quota exhausted, pausing subsequent requests")
-			c.pauseFor(time.Minute)
+			c.pauseFor(retryAfter(res))
 		}
 
 		var parsed response

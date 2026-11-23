@@ -11,7 +11,6 @@ const (
 	DeviceDenied   = "denied"
 )
 
-// Device is a phone, TV or browser that asked the host for access.
 type Device struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -41,7 +40,6 @@ func (s *Store) Devices(ctx context.Context) ([]Device, error) {
 	return out, rows.Err()
 }
 
-// RequestAccess records a device as waiting, new or asking again.
 func (s *Store) RequestAccess(ctx context.Context, id, name, addr string) error {
 	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO access_device (id, name, addr, status, requested_at) VALUES (?, ?, ?, 'pending', ?)
@@ -51,8 +49,6 @@ func (s *Store) RequestAccess(ctx context.Context, id, name, addr string) error 
 	return err
 }
 
-// PendingFrom: a device at this address with this name already waits; a cookieless browser asks again on
-// every reload, and each ask must not take another of the few waiting places.
 func (s *Store) PendingFrom(ctx context.Context, addr, name string) bool {
 	var one int
 	return s.r.QueryRowContext(ctx,

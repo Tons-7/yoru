@@ -50,7 +50,7 @@ type studioList struct {
 
 const (
 	studioTTL  = 6 * time.Hour
-	studioKeep = 24
+	studioKeep = 8
 )
 
 func (c *studioLists) get(ctx context.Context, id int, fetch func() (string, []anilist.Media, error)) (studioList, error) {
@@ -123,9 +123,10 @@ func (s *Server) browseStudio(w http.ResponseWriter, r *http.Request, studio int
 		}
 		go s.fillStudio(studio)
 
-		s.studioWorks.servedFirst(studio, b.Sort, len(result.Media))
+		shown := narrowMedia(result.Media, b)
+		s.studioWorks.servedFirst(studio, b.Sort, len(shown))
 		send(w, http.StatusOK, map[string]any{
-			"items": s.decorate(r, result.Media), "page": 1, "hasMore": result.HasNextPage, "total": result.Total - result.Dropped,
+			"items": s.decorate(r, shown), "page": 1, "hasMore": result.HasNextPage, "total": result.Total - result.Dropped,
 			"studio": map[string]any{"id": studio, "name": name},
 		})
 		return
@@ -145,10 +146,13 @@ func (s *Server) browseStudio(w http.ResponseWriter, r *http.Request, studio int
 	if page > 1 && !narrows(b) {
 		from -= s.studioWorks.shortfall(studio, b.Sort, perPage)
 	}
+	if page == 1 {
+		s.studioWorks.servedFirst(studio, b.Sort, perPage)
+	}
 	from = min(max(from, 0), total)
 	to := min(from+perPage, total)
 	send(w, http.StatusOK, map[string]any{
-		"items": s.decorate(r, works[from:to]), "page": page, "hasMore": to < total, "total": total,
+		"items": s.decorateOnly(r, works[from:to]), "page": page, "hasMore": to < total, "total": total,
 		"studio": map[string]any{"id": studio, "name": list.name},
 	})
 }

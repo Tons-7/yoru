@@ -433,7 +433,8 @@ func (s *Store) SaveSeaDex(ctx context.Context, releases []metadata.SeaDexReleas
 		                    notes, comparison, incomplete, files)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(anime_id, info_hash, release_group) DO UPDATE SET
-		    is_best=excluded.is_best, dual_audio=excluded.dual_audio, tags=excluded.tags`)
+		    is_best=max(seadex.is_best, excluded.is_best), dual_audio=max(seadex.dual_audio, excluded.dual_audio),
+		    tags=excluded.tags`)
 	if err != nil {
 		return 0, err
 	}

@@ -12,7 +12,6 @@ import (
 	"yoru/internal/jimaku"
 )
 
-// A key is kept only once Jimaku takes it, and no answer of Yoru's gives it back.
 func TestJimakuKeyIsKeptSecret(t *testing.T) {
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "good-key" {

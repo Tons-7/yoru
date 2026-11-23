@@ -41,7 +41,6 @@ func TestScoreChangeAloneIsPendingForMAL(t *testing.T) {
 	}
 }
 
-// A MAL-only title (negative id) gets its anime row from the corpus, mal_id included.
 func TestMALOnlyAnimeGetRowsFromTheCorpus(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -95,7 +94,6 @@ func TestMALOnlyAnimeGetRowsFromTheCorpus(t *testing.T) {
 	}
 }
 
-// A show the corpus never saw gets a placeholder row, so nothing keyed on anime(id) fails.
 func TestEnsureAnimePlaceholderForUnknownIDs(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

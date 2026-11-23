@@ -47,7 +47,6 @@ Dialogue: 0,0:00:01.00,0:00:05.00,Default,styled line one
 Dialogue: 0,0:00:06.00,0:00:10.00,Default,styled line two
 `
 
-// A Matroska file with a styled subtitle track and an embedded font, which is what anime actually ships as.
 func testMKV(t *testing.T, ffmpeg string, seconds int) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -56,7 +55,6 @@ func testMKV(t *testing.T, ffmpeg string, seconds int) string {
 	if err := os.WriteFile(subPath, []byte(testASS), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// -shortest counts subtitles too, so the track is padded or the clip ends at its last line.
 	if seconds > 10 {
 		pad := fmt.Sprintf("Dialogue: 0,0:00:%02d.00,0:00:%02d.00,Default,tail\n", seconds-2, seconds-1)
 		if err := os.WriteFile(subPath, []byte(testASS+pad), 0o644); err != nil {
@@ -64,7 +62,6 @@ func testMKV(t *testing.T, ffmpeg string, seconds int) string {
 		}
 	}
 
-	// Any real font file will do; the point is that an attachment exists.
 	fontSrc := filepath.Join(os.Getenv("WINDIR"), "Fonts", "arial.ttf")
 	if _, err := os.Stat(fontSrc); err != nil {
 		fontSrc = ""
@@ -93,7 +90,6 @@ func testMKV(t *testing.T, ffmpeg string, seconds int) string {
 	return out
 }
 
-// Encoder failures are otherwise invisible: the only symptom is segments that never appear.
 type testWriter struct{ t *testing.T }
 
 func (w testWriter) Write(p []byte) (int, error) {
@@ -136,7 +132,6 @@ func TestProbeReadsEveryStream(t *testing.T) {
 	}
 }
 
-// H.264 with AAC needs no re-encoding: only the container is unusable, and rewriting that is nearly free.
 func TestPlanCopiesPlayableStreams(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := testMKV(t, ffmpeg, 6)
@@ -156,7 +151,6 @@ func TestPlanCopiesPlayableStreams(t *testing.T) {
 }
 
 func TestPlanReEncodesUnplayableStreams(t *testing.T) {
-	// No GPU decodes 10-bit H.264, and HEVC needs a platform extension that can't be assumed.
 	tests := []struct {
 		name  string
 		video Stream
@@ -178,7 +172,6 @@ func TestPlanReEncodesUnplayableStreams(t *testing.T) {
 		})
 	}
 
-	// Browsers cannot decode these at all.
 	for _, codec := range []string{"dts", "truehd", "eac3"} {
 		info := &MediaInfo{Video: &Stream{Codec: "h264"}, Audio: []Stream{{Codec: codec}}}
 		if PlanFor(info, "").AudioCopy {
@@ -203,7 +196,6 @@ func TestSegmentsAreProducedAndSeekable(t *testing.T) {
 	}
 	defer m.Close("test")
 
-	// The playlist covers the whole duration up front, so the seek bar is real at once.
 	playlist := session.Playlist()
 	if !strings.Contains(playlist, "#EXT-X-ENDLIST") {
 		t.Error("playlist is not marked complete")
@@ -222,7 +214,6 @@ func TestSegmentsAreProducedAndSeekable(t *testing.T) {
 		t.Fatal("segment or init file missing")
 	}
 
-	// Jumping ahead: the encoder restarts at an offset instead of grinding through.
 	start := time.Now()
 	last := session.Segments - 1
 	if err := session.WaitSegment(ctx, last, 90*time.Second); err != nil {
@@ -253,14 +244,12 @@ func TestSubtitleAndFontExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Styling survives, which WebVTT would discard.
 	for _, want := range []string{"[V4+ Styles]", "styled line one"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("extracted subtitle missing %q", want)
 		}
 	}
 
-	// Extracting twice must not re-run ffmpeg or corrupt the file.
 	if _, err := subs.Extract(ctx, clip, dir, info.Subtitles[0].Index, "ass", true); err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +265,6 @@ func TestSubtitleAndFontExtraction(t *testing.T) {
 	}
 }
 
-// An attachment named for a path outside the fonts folder still lands inside it.
 func TestExtractFontsKeepsHostileNamesInside(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	root := t.TempDir()
@@ -285,8 +273,7 @@ func TestExtractFontsKeepsHostileNamesInside(t *testing.T) {
 		t.Fatal(err)
 	}
 	font := filepath.Join(root, "font.ttf")
-	// A TrueType header and little else: extraction keeps only what looks whole.
-	if err := os.WriteFile(font, []byte("\x00\x01\x00\x00not really a font"), 0o644); err != nil {
+	if err := os.WriteFile(font, sfnt("\x00\x01\x00\x00", []byte("glyph data that is not all zeros, long enough to count as one table")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -323,7 +310,6 @@ func TestExtractFontsKeepsHostileNamesInside(t *testing.T) {
 	}
 }
 
-// A source with no attachments is normal and must not be reported as failure.
 func TestExtractFontsWithNoAttachments(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	dir := t.TempDir()
@@ -348,7 +334,6 @@ func TestRenderable(t *testing.T) {
 			t.Errorf("%s should be renderable", codec)
 		}
 	}
-	// Bitmap subtitles would have to be burned in, which is deliberately not done.
 	for _, codec := range []string{"hdmv_pgs_subtitle", "dvd_subtitle"} {
 		if Renderable(codec) {
 			t.Errorf("%s is a bitmap format and cannot be rendered as text", codec)
@@ -356,8 +341,6 @@ func TestRenderable(t *testing.T) {
 	}
 }
 
-// A 10-bit source is re-encoded precisely because the browser cannot decode
-// it. Preserving the source depth makes the output equally unplayable.
 func TestH264OutputIsAlwaysEightBit(t *testing.T) {
 	base := &Session{Info: &MediaInfo{Video: &Stream{Codec: "hevc", BitDepth: 10}}}
 
@@ -370,7 +353,6 @@ func TestH264OutputIsAlwaysEightBit(t *testing.T) {
 	}
 }
 
-// Hardware encoders ignore -force_key_frames, so the GOP interval sets segment boundaries.
 func TestKeyframeFlagsMatchEncoderKind(t *testing.T) {
 	base := &Session{Info: &MediaInfo{Video: &Stream{Codec: "hevc", BitDepth: 10}}}
 
@@ -393,7 +375,6 @@ func TestKeyframeFlagsMatchEncoderKind(t *testing.T) {
 	}
 }
 
-// A copy seek lands on the preceding keyframe, so the offset is biased forward to reach the intended one.
 func TestRemuxSeekIsBiased(t *testing.T) {
 	s := &Session{
 		Source: "http://x/1",
@@ -408,7 +389,6 @@ func TestRemuxSeekIsBiased(t *testing.T) {
 	if !strings.Contains(args, "-start_number 10") {
 		t.Errorf("segment numbering must continue from the seek point: %s", args)
 	}
-	// Without these the segments do not line up with the playlist already given to the player.
 	for _, want := range []string{"-copyts", "-hls_segment_type fmp4", "frag_discont"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("missing %q: %s", want, args)

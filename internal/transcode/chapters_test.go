@@ -9,13 +9,11 @@ import (
 )
 
 func TestChapterKind(t *testing.T) {
-	// The vocabulary release groups actually use.
 	for title, want := range map[string]string{
 		"Intro": "op", "Opening": "op", "OP": "op", "op": "op",
 		"Opening Theme": "op", "OP - Kick Back": "op",
 		"Credits": "ed", "Ending": "ed", "ED": "ed", "Outro": "ed",
 		"Ending Theme": "ed", "End Credits": "ed",
-		// Release groups number them.
 		"OP1": "op", "OP 1": "op", "OP-01": "op", "ED1": "ed", "ED 2": "ed", "ED-01": "ed",
 		"Scene 1": "", "Part B": "", "": "", "Stop": "", "Prologue": "",
 		"Preview": "preview", "Next Episode": "preview", "Next Episode Preview": "preview", "予告": "preview",
@@ -27,7 +25,6 @@ func TestChapterKind(t *testing.T) {
 	}
 }
 
-// The shape a real release ships: named chapters around the episode body.
 func TestProbeReadsChapters(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	dir := t.TempDir()
@@ -93,7 +90,6 @@ title=Credits
 	if ed.Start < 69.9 || ed.Start > 70.1 {
 		t.Errorf("ending starts at %.2f, want 70", ed.Start)
 	}
-	// A body chapter is not something to offer skipping.
 	for _, c := range info.Chapters {
 		if c.Title == "Scene 1" && c.Kind != "" {
 			t.Errorf("body chapter classified as %q", c.Kind)
@@ -101,12 +97,10 @@ title=Credits
 	}
 }
 
-// A quarter-hour "Intro" is a mislabel; skipping it would skip the episode.
 func TestImplausibleThemeSpanIsNotSkippable(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	dir := t.TempDir()
 
-	// Too long to be a theme, and too short to be one.
 	meta := filepath.Join(dir, "chapters.ini")
 	if err := os.WriteFile(meta, []byte(`;FFMETADATA1
 [CHAPTER]
@@ -142,7 +136,6 @@ title=Credits
 	}
 }
 
-// Against a real release: set REALFILE to an episode on disk.
 func TestRealReleaseChapters(t *testing.T) {
 	path := os.Getenv("REALFILE")
 	if path == "" {
@@ -171,7 +164,6 @@ func TestRealReleaseChapters(t *testing.T) {
 	}
 }
 
-// A file with no chapters is the normal case, not a failure.
 func TestProbeWithoutChapters(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	info, err := NewProber(ffprobe).Probe(context.Background(), testMKV(t, ffmpeg, 6))

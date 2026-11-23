@@ -1,17 +1,22 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useEffect, useEffectEvent, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useModalFocus } from '../lib/hooks'
 
-// The trailer over the page it came from, not a new tab: Escape or the X brings the page straight back.
 export function TrailerOverlay({ videoId, onClose }: { videoId: string; onClose: () => void }) {
-  const close = useCallback(() => onClose(), [onClose])
+  const close = useEffectEvent(() => onClose())
   const dialog = useRef<HTMLDivElement>(null)
   useModalFocus(dialog)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close()
     document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [close])
+    const Watcher = (window as { CloseWatcher?: new () => { onclose: (() => void) | null; destroy: () => void } }).CloseWatcher
+    const back = Watcher ? new Watcher() : null
+    if (back) back.onclose = () => close()
+    return () => {
+      back?.destroy()
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [])
 
   return createPortal(
     <div
@@ -20,17 +25,15 @@ export function TrailerOverlay({ videoId, onClose }: { videoId: string; onClose:
       aria-modal="true"
       aria-label="Trailer"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
-      onClick={close}
+      onClick={onClose}
     >
-      {/* In the corner, not above the video (off-screen on a landscape phone), and always reachable. */}
       <button
-        onClick={close}
+        onClick={onClose}
         aria-label="Close trailer"
-        className="fixed top-3 right-3 z-10 grid size-10 place-items-center rounded-full bg-base-900/90 text-lg text-base-100 ring-1 ring-white/15 hover:bg-base-800 hover:text-white"
+        className="fixed top-3 right-3 z-10 grid size-11 place-items-center rounded-full bg-base-900/90 text-lg text-base-100 ring-1 ring-white/15 hover:bg-base-800 hover:text-white"
       >
         ✕
       </button>
-      {/* Width capped by the height too, so the whole 16:9 frame fits. */}
       <div
         className="relative w-full max-w-4xl"
         style={{ maxWidth: 'min(56rem, calc((100dvh - 2rem) * 16 / 9))' }}

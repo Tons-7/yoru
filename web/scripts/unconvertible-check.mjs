@@ -1,4 +1,3 @@
-// A release that can't be converted: the player says so and offers another, rather than buffering forever.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -20,7 +19,6 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 
-// What the server answers once its session is broken: 422, with ffmpeg's words.
 let asked = 0
 await page.route('**/api/stream/*/*.mp4', (route) => {
   asked++
@@ -31,7 +29,6 @@ await page.route('**/api/stream/*/*.mp4', (route) => {
 })
 
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
-// At the first answer: hls.js alone would retry it for a minute.
 const says = page.getByText(/couldn't convert this release/)
 check(await says.waitFor({ timeout: 5000 }).then(() => true, () => false), 'the player says the release could not be converted')
 

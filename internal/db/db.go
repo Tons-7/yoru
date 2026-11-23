@@ -5,6 +5,8 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -20,19 +22,18 @@ const pragmas = "_pragma=journal_mode(WAL)" +
 	"&_pragma=synchronous(NORMAL)" +
 	"&_pragma=foreign_keys(1)" +
 	"&_pragma=temp_store(MEMORY)" +
-	"&_pragma=cache_size(-32000)"
+	"&_pragma=cache_size(-32000)" +
+	"&_pragma=journal_size_limit(67108864)"
 
-// DB holds separate handles for reads and writes. SQLite permits one writer but
-// WAL lets readers run alongside it, so one shared connection would stall the UI.
 type DB struct {
 	W *sql.DB
 	R *sql.DB
 
-	dsn string
+	dsn  string
+	path string
 }
 
 func Open(path string) (*DB, error) {
-	// Not a file: URI, which ends at '#' and decodes '%' in folder names; pragmas after '?' still apply.
 	dsn := path + "?" + pragmas
 
 	write, err := sql.Open("sqlite", dsn)
@@ -53,8 +54,6 @@ func Open(path string) (*DB, error) {
 	}
 	readers := max(4, runtime.NumCPU())
 	read.SetMaxOpenConns(readers)
-	// Idle defaults to two, so a burst reopens connections and re-runs every pragma on each one. Each keeps
-	// its own ~31 MiB page cache, so after a quiet spell they go, and their caches with them.
 	read.SetMaxIdleConns(readers)
 	read.SetConnMaxIdleTime(5 * time.Minute)
 	if err := read.Ping(); err != nil {
@@ -63,45 +62,101 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("open %s for reading: %w", path, err)
 	}
 
-	return &DB{W: write, R: read, dsn: dsn}, nil
+	return &DB{W: write, R: read, dsn: dsn, path: path}, nil
 }
 
 func (d *DB) Close() error {
+	d.W.Exec("PRAGMA optimize")
 	return errors.Join(d.R.Close(), d.W.Close())
 }
 
-// Migrate runs with foreign keys off, or a SQLite-style table rebuild cascade-deletes; checked after.
 func (d *DB) Migrate() error {
 	if err := prepareGoose(); err != nil {
 		return err
 	}
-	migrator, err := sql.Open("sqlite", d.dsn+"&_pragma=foreign_keys(0)")
+	migrator, err := d.migrator()
 	if err != nil {
 		return err
 	}
 	defer migrator.Close()
-	migrator.SetMaxOpenConns(1)
-	if err := goose.Up(migrator, "migrations"); err != nil {
+
+	from, err := goose.GetDBVersion(migrator)
+	if err != nil {
 		return err
 	}
-	// Four columns per row: the table, its rowid, the parent it points at, and which foreign key.
+	all, err := goose.CollectMigrations("migrations", 0, goose.MaxVersion)
+	if err != nil {
+		return err
+	}
+	last, err := all.Last()
+	if err != nil {
+		return err
+	}
+	if from >= last.Version {
+		d.dropSnapshots("")
+		return nil
+	}
+
+	snapshot := ""
+	if from > 0 && d.path != "" {
+		snapshot = fmt.Sprintf("%s.pre-%d.bak", d.path, from)
+		d.dropSnapshots(snapshot)
+		os.Remove(snapshot)
+		if _, err := migrator.Exec(`VACUUM INTO ?`, snapshot); err != nil {
+			return fmt.Errorf("copy the database before updating it: %w", err)
+		}
+	}
+	failed := func(err error) error {
+		if snapshot != "" {
+			return fmt.Errorf("%w (the database before this update is at %s)", err, snapshot)
+		}
+		return err
+	}
+	if err := goose.Up(migrator, "migrations"); err != nil {
+		return failed(err)
+	}
 	var table, parent string
 	var rowid sql.NullInt64
 	var fkid int
 	if err := migrator.QueryRow("PRAGMA foreign_key_check").Scan(&table, &rowid, &parent, &fkid); err == nil {
-		return fmt.Errorf("migration left a dangling foreign key in %s (row %d) to %s", table, rowid.Int64, parent)
+		return failed(fmt.Errorf("migration left a dangling foreign key in %s (row %d) to %s", table, rowid.Int64, parent))
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		return err
+		return failed(err)
 	}
 	return nil
 }
 
-// MigrateTo stops at a version, so a test can seed old-release data, then run the rewriting migration.
+func (d *DB) migrator() (*sql.DB, error) {
+	m, err := sql.Open("sqlite", d.dsn+"&_pragma=foreign_keys(0)")
+	if err != nil {
+		return nil, err
+	}
+	m.SetMaxOpenConns(1)
+	return m, nil
+}
+
+func (d *DB) dropSnapshots(keep string) {
+	if d.path == "" {
+		return
+	}
+	old, _ := filepath.Glob(d.path + ".pre-*.bak")
+	for _, f := range old {
+		if f != keep {
+			os.Remove(f)
+		}
+	}
+}
+
 func (d *DB) MigrateTo(version int64) error {
 	if err := prepareGoose(); err != nil {
 		return err
 	}
-	return goose.UpTo(d.W, "migrations", version)
+	migrator, err := d.migrator()
+	if err != nil {
+		return err
+	}
+	defer migrator.Close()
+	return goose.UpTo(migrator, "migrations", version)
 }
 
 func prepareGoose() error {

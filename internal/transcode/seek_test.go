@@ -8,18 +8,17 @@ import (
 	"time"
 )
 
-// The seek decision, exhaustively: a far segment with only a stale file relaunches, not waits.
 func TestShouldRestart(t *testing.T) {
-	const from, to = 38, 45 // a pass started at 38, finished up to 45 (working on 46)
+	const from, to = 38, 45
 	cases := []struct {
 		name string
 		n    int
 		want bool
 	}{
-		{"not running", 40, true}, // active=false overrides below
+		{"not running", 40, true},
 		{"the segment being worked on", 46, false},
 		{"a few ahead, buffer drift", 49, false},
-		{"just past the grace window", 51, true}, // to+1+restartAfterSegments = 50
+		{"just past the grace window", 51, true},
 		{"far forward jump", 200, true},
 		{"backward seek before the pass", 10, true},
 		{"the pass start itself", 38, false},
@@ -33,7 +32,6 @@ func TestShouldRestart(t *testing.T) {
 		}
 	}
 
-	// Right after launch (to = from-1), up to restartAfterSegments ahead is buffering; one more is a jump.
 	for n := 0; n <= restartAfterSegments; n++ {
 		if shouldRestart(n, 0, -1, true) {
 			t.Errorf("fresh pass restarted for a near segment %d", n)
@@ -44,7 +42,6 @@ func TestShouldRestart(t *testing.T) {
 	}
 }
 
-// Real ffmpeg: a seek to the end and back both deliver, the backward one by relaunching.
 func TestSeekingForwardAndBackDelivers(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := testMKV(t, ffmpeg, 60)
@@ -70,20 +67,17 @@ func TestSeekingForwardAndBackDelivers(t *testing.T) {
 		t.Fatalf("seek to the final segment: %v", err)
 	}
 
-	// Back to the start, behind the pass near the end: it must relaunch, not wait.
 	start := time.Now()
 	if err := session.WaitSegment(ctx, 1, 90*time.Second); err != nil {
 		t.Fatalf("seek back to segment 1: %v", err)
 	}
 	t.Logf("backward seek delivered in %s", time.Since(start).Round(time.Millisecond))
 
-	// A mid-file forward jump after the backward seek.
 	if err := session.WaitSegment(ctx, last/2, 90*time.Second); err != nil {
 		t.Fatalf("mid seek: %v", err)
 	}
 }
 
-// advanceHead follows the encoder, so the restart decision doesn't trust a lingering file.
 func TestAdvanceHeadTracksProducedSegments(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := testMKV(t, ffmpeg, 30)
@@ -100,7 +94,6 @@ func TestAdvanceHeadTracksProducedSegments(t *testing.T) {
 	}
 	defer m.Close("advance")
 
-	// Every segment in order, no stall, and no forward request taken for a backward seek.
 	last := -1
 	for n := 0; n < session.Segments; n++ {
 		if err := session.WaitSegment(ctx, n, 60*time.Second); err != nil {
@@ -117,8 +110,6 @@ func TestAdvanceHeadTracksProducedSegments(t *testing.T) {
 }
 
 func TestPlaylistSegmentMapsToFixedTime(t *testing.T) {
-	// Segment N must always cover time N*SegmentSeconds, independent of where the
-	// encoder started, or the player and server disagree on a seek target.
 	s := &Session{Info: &MediaInfo{Duration: 120}, Segments: segmentCount(120)}
 	playlist := s.Playlist()
 	if !strings.Contains(playlist, "#EXT-X-PLAYLIST-TYPE:VOD") {

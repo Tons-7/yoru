@@ -12,13 +12,11 @@ import (
 	"time"
 
 	_ "github.com/anacrolix/envpprof"
-	"github.com/anacrolix/missinggo/v2/iter"
 	qt "github.com/go-quicktest/qt"
 	"github.com/stretchr/testify/require"
 	"yoru/internal/bt/dht/krpc"
 )
 
-// net.IPs are stored big-endian, as they are read off the wire.
 func TestNetIPv4Bytes(t *testing.T) {
 	ip := net.IP([]byte{127, 0, 0, 1})
 	if ip.String() != "127.0.0.1" {
@@ -42,7 +40,6 @@ func TestMarshalAnnounceResponse(t *testing.T) {
 	require.EqualValues(t, 12, binary.Size(AnnounceResponseHeader{}))
 }
 
-// Failure to write an entire packet to UDP is expected to given an error.
 func TestLongWriteUDP(t *testing.T) {
 	t.Parallel()
 	l, err := net.ListenUDP("udp4", nil)
@@ -104,31 +101,25 @@ func TestConnClientLogDispatchUnknownTransactionId(t *testing.T) {
 func TestConnectionIdMismatch(t *testing.T) {
 	t.Skip("Server host returns consistent connection ID in limited tests and so isn't effective.")
 	cl, err := NewConnClient(NewConnClientOpts{
-		// Answers `Connection ID missmatch.\x00` every couple of minutes under heavy use.
-		Host: "tracker.torrent.eu.org:451",
-		//Host:    "tracker.opentrackr.org:1337",
+		Host:    "tracker.torrent.eu.org:451",
 		Network: "udp",
 	})
 	qt.Assert(t, qt.IsNil(err))
 	defer cl.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	// Force every request to use a different connection ID. It's racey, but we want to get a
-	// different ID issued before a request can be sent with an old ID.
 	cl.Client.shouldReconnectOverride = func() bool { return true }
 	started := time.Now()
 	var wg sync.WaitGroup
-	for range iter.N(2) {
+	for range 2 {
 		ar := AnnounceRequest{
 			NumWant: -1,
 			Event:   2,
 		}
 		rand.Read(ar.InfoHash[:])
 		rand.Read(ar.PeerId[:])
-		//spew.Dump(ar)
 		wg.Go(func() {
 			_, _, err := cl.Announce(ctx, ar, Options{})
-			// I'm looking for `error response: "Connection ID missmatch.\x00"`.
 			t.Logf("announce error after %v: %v", time.Since(started), err)
 		})
 	}

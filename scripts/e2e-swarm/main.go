@@ -27,6 +27,8 @@ type seeded struct {
 	Size     int64  `json:"size"`
 }
 
+var swarmStarted = time.Now().UTC()
+
 func main() {
 	src := flag.String("src", "", "episode file to seed copies of")
 	dir := flag.String("dir", "", "where the copies live")
@@ -87,8 +89,12 @@ func run(src, dir, title string, count, listen int, peer, httpAddr string) error
 		torrents = append(torrents, t)
 		listing = append(listing, seeded{Episode: i, InfoHash: mi.HashInfoBytes().HexString(), Title: name, Size: size})
 	}
+	verified := time.Now().Add(5 * time.Minute)
 	for _, t := range torrents {
 		for t.BytesMissing() > 0 {
+			if time.Now().After(verified) {
+				return fmt.Errorf("%s: %d bytes never verified", t.Name(), t.BytesMissing())
+			}
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
@@ -169,7 +175,7 @@ func (x *indexer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				`<nyaa:infoHash>%s</nyaa:infoHash><nyaa:seeders>50</nyaa:seeders><nyaa:leechers>0</nyaa:leechers>`+
 				`<nyaa:downloads>120</nyaa:downloads><nyaa:category>Anime - English-translated</nyaa:category>`+
 				`<nyaa:size>%s</nyaa:size><nyaa:trusted>No</nyaa:trusted><nyaa:remake>No</nyaa:remake></item>`,
-				html.EscapeString(s.Title), html.EscapeString(magnet(s)), i+1, time.Now().UTC().Format(time.RFC1123),
+				html.EscapeString(s.Title), html.EscapeString(magnet(s)), i+1, swarmStarted.Format(time.RFC1123),
 				s.InfoHash, size(s.Size))
 		}
 		b.WriteString(`</channel></rss>`)

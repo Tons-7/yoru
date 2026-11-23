@@ -13,7 +13,6 @@ import (
 	"yoru/internal/config"
 )
 
-// A studio of five anime and a manga, two pages: the first has the TV series, the film and the manga.
 const studioPage1 = `
   {"id":1,"title":{"romaji":"Show A","english":"Show A English"},"synonyms":["Alpha"],"format":"TV","status":"FINISHED",
    "genres":["Action"],"season":"FALL","seasonYear":2022,"startDate":{"year":2022,"month":10,"day":12},"averageScore":86,
@@ -34,7 +33,6 @@ const studioPage2 = `
   {"id":6,"title":{"romaji":"Zeta OVA"},"format":"OVA","status":"FINISHED","genres":["Action"],"averageScore":60,
    "popularity":100,"favourites":10,"trending":1,"episodes":2,"countryOfOrigin":"JP","type":"ANIME"}`
 
-// studioHarness serves the studio above, two pages, and records every studio query's variables.
 func studioHarness(t *testing.T) (*harness, func() []map[string]any) {
 	t.Helper()
 	return studioHarnessOf(t, func(page int) (string, bool) {
@@ -84,7 +82,6 @@ func browseIDs(t *testing.T, h *harness, target string) ([]int, map[string]any) 
 	return ids, body
 }
 
-// A studio's works come from the studio; the filters narrow the whole list, most popular first.
 func TestBrowseByStudio(t *testing.T) {
 	h, _ := studioHarness(t)
 
@@ -104,10 +101,8 @@ func TestBrowseByStudio(t *testing.T) {
 	}
 }
 
-// Every browse filter narrows a studio's list the way the catalogue reads it, and they stack.
 func TestStudioFiltersNarrowTogether(t *testing.T) {
 	h, _ := studioHarness(t)
-	// The whole list first, so even the unfiltered page below is answered from it.
 	browseIDs(t, h, "/api/browse?studio=569&genres=Action")
 	for _, tt := range []struct{ query, want string }{
 		{"", "[4 1 2 6 5]"},
@@ -117,13 +112,13 @@ func TestStudioFiltersNarrowTogether(t *testing.T) {
 		{"&statuses=FINISHED", "[1 2 6 5]"},
 		{"&formats=TV,MOVIE", "[4 1 2]"},
 		{"&year=2022", "[1 5]"},
-		{"&year=2023", "[2]"}, // no season on the film: its start year counts
+		{"&year=2023", "[2]"},
 		{"&season=FALL", "[1]"},
 		{"&year=2022&season=SPRING", "[5]"},
 		{"&q=show", "[4 1]"},
-		{"&q=ALPHA", "[1]"}, // a synonym, case aside
+		{"&q=ALPHA", "[1]"},
 		{"&q=" + "%E3%82%A4%E3%83%BC", "[5]"},
-		{"&q=a+english", "[1]"}, // every word
+		{"&q=a+english", "[1]"},
 		{"&q=nothing+like+this", "[]"},
 		{"&minScore=85", "[1 2]"},
 		{"&minEpisodes=12", "[1 5]"},
@@ -139,7 +134,6 @@ func TestStudioFiltersNarrowTogether(t *testing.T) {
 	}
 }
 
-// Every sort the browse offers orders the list as the catalogue would; unknown values go last.
 func TestStudioSortsTheWholeList(t *testing.T) {
 	h, _ := studioHarness(t)
 	for _, tt := range []struct{ sort, want string }{
@@ -153,14 +147,12 @@ func TestStudioSortsTheWholeList(t *testing.T) {
 		{"title", "[2 5 1 4 6]"},
 		{"no-such-sort", "[4 1 2 6 5]"},
 	} {
-		// A filter keeping everything, so the answer is the kept list, not the catalogue's first page.
 		if ids, _ := browseIDs(t, h, "/api/browse?studio=569&excludeGenres=Mecha&sort="+tt.sort); fmt.Sprint(ids) != tt.want {
 			t.Errorf("sort %s: items %v, want %v", tt.sort, ids, tt.want)
 		}
 	}
 }
 
-// The count is exact and the pages come from the list: a studio of 65 works, 30 to a page.
 func TestStudioTotalIsExactAndPaged(t *testing.T) {
 	h, _ := studioHarnessOf(t, func(page int) (string, bool) {
 		var nodes []string
@@ -183,7 +175,6 @@ func TestStudioTotalIsExactAndPaged(t *testing.T) {
 	}
 }
 
-// The list is fetched once (every page) and kept; later filters, sorts and pages ask nothing more.
 func TestStudioListIsFetchedOnceAndKept(t *testing.T) {
 	h, asked := studioHarness(t)
 	browseIDs(t, h, "/api/browse?studio=569&genres=Action")
@@ -194,7 +185,6 @@ func TestStudioListIsFetchedOnceAndKept(t *testing.T) {
 	}
 }
 
-// The first unfiltered page comes from the catalogue at once, in the sort asked; the list loads behind it.
 func TestStudioFirstPageIsAnsweredBeforeTheListIsWhole(t *testing.T) {
 	h, asked := studioHarness(t)
 	ids, body := browseIDs(t, h, "/api/browse?studio=569&sort=score")

@@ -6,10 +6,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
-// Searched by AniList id with the key, an episode's files listed without archives, fetched from Jimaku only.
 func TestFilesAndFetch(t *testing.T) {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -51,5 +51,25 @@ func TestFilesAndFetch(t *testing.T) {
 	}
 	if err := c.Check(context.Background(), "wrong"); !errors.Is(err, ErrKey) {
 		t.Errorf("a wrong key: %v, want ErrKey", err)
+	}
+}
+
+func TestFetchStaysOnJimaku(t *testing.T) {
+	leaked := false
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked = r.Header.Get("Authorization") != ""
+	}))
+	defer other.Close()
+	home := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer home.Close()
+	c := &Client{http: home.Client(), base: home.URL}
+
+	for _, u := range []string{other.URL + "/x.ass", strings.Replace(home.URL, "http://", "https://", 1) + "/x.ass", "::"} {
+		if _, err := c.Fetch(context.Background(), "k3y", u); err == nil {
+			t.Errorf("fetched %s", u)
+		}
+	}
+	if leaked {
+		t.Fatal("the Jimaku key was sent to another server")
 	}
 }

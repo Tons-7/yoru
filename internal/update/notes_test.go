@@ -12,7 +12,6 @@ import (
 	"yoru/internal/store"
 )
 
-// releaseList serves /releases/latest (newest, no assets needed) and the list, drafts and pre-releases too.
 func releaseList(t *testing.T, tags ...string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -24,7 +23,6 @@ func releaseList(t *testing.T, tags ...string) *httptest.Server {
 			{"tag_name": "v9.9.9", "body": "a draft", "draft": true},
 			{"tag_name": "v9.9.8", "body": "a beta", "prerelease": true},
 		}
-		// Out of order on purpose: the list is sorted by version, not trusted.
 		for _, tag := range slices.Backward(tags) {
 			list = append(list, map[string]any{"tag_name": "v" + tag, "body": "notes " + tag})
 		}
@@ -43,7 +41,6 @@ func versions(ns []Notes) []string {
 	return out
 }
 
-// Several versions behind, every release in between is offered with its notes, not just the newest.
 func TestCheckListsEveryPendingRelease(t *testing.T) {
 	setVersion(t, "2026.10.13")
 	gh := releaseList(t, "2026.10.16", "2026.10.15", "2026.10.13.1", "2026.10.13", "2026.10.12")
@@ -64,7 +61,6 @@ func TestCheckListsEveryPendingRelease(t *testing.T) {
 	}
 }
 
-// A list GitHub won't give still leaves the latest release's own notes.
 func TestCheckFallsBackToTheLatestNotes(t *testing.T) {
 	setVersion(t, "2026.10.13")
 	gh := fakeGitHub(t, "2026.10.16", []byte("new"), true)
@@ -79,14 +75,15 @@ func TestCheckFallsBackToTheLatestNotes(t *testing.T) {
 	}
 }
 
-// The first start after an update says so once, and what's new covers every version since the old one.
 func TestStartedAfterAnUpdate(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
 	gh := releaseList(t, "2026.10.16", "2026.10.15", "2026.10.13")
 
 	setVersion(t, "2026.10.13")
-	newUpdater(t, st, gh, "yoru.exe").Started(ctx)
+	first := newUpdater(t, st, gh, "yoru.exe")
+	first.Started(ctx)
+	first.Serving(ctx)
 	if items, _ := st.Notifications(ctx, false, 10); len(items) != 0 {
 		t.Fatalf("a first install announced an update: %+v", items)
 	}
@@ -95,6 +92,7 @@ func TestStartedAfterAnUpdate(t *testing.T) {
 	for range 2 {
 		u := newUpdater(t, st, gh, "yoru.exe")
 		u.Started(ctx)
+		u.Serving(ctx)
 		got, err := u.Check(ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -112,7 +110,6 @@ func TestStartedAfterAnUpdate(t *testing.T) {
 	}
 }
 
-// Versions before this one recorded nothing: the announcement of this very version marks an update.
 func TestStartedAfterAnUpdateFromAnOlderUpdater(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()
@@ -122,6 +119,7 @@ func TestStartedAfterAnUpdateFromAnOlderUpdater(t *testing.T) {
 	}
 	u := newUpdater(t, st, releaseList(t, "2026.10.16", "2026.10.15"), "yoru.exe")
 	u.Started(ctx)
+	u.Serving(ctx)
 	got, err := u.Check(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +132,6 @@ func TestStartedAfterAnUpdateFromAnOlderUpdater(t *testing.T) {
 	}
 }
 
-// Rolling back to an older binary is not an update to announce.
 func TestStartedAfterARollbackSaysNothing(t *testing.T) {
 	st := testStore(t)
 	ctx := context.Background()

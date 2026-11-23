@@ -108,8 +108,12 @@ type Updater struct {
 	restart func()
 	launch  func(exe string) error
 
-	mu     sync.Mutex
-	status Status
+	mu            sync.Mutex
+	announce      bool
+	status        Status
+	checkedStaged string
+
+	notifying sync.Mutex
 }
 
 func New(st *store.Store, exe, staging string, log *slog.Logger) *Updater {
@@ -188,11 +192,18 @@ func (u *Updater) Check(ctx context.Context) (Status, error) {
 	if st := u.Status(); st.Stage == StageIdle || st.Stage == StageFailed {
 		staged = u.verifiedStaged()
 	}
+	failed := u.FailedVersion()
 	u.set(func(s *Status) {
 		s.CheckedAt = time.Now()
 		s.CheckErr = ""
 		if err != nil {
 			s.CheckErr = err.Error()
+			if staged != "" && Newer(staged, Version) && (s.Stage == StageIdle || s.Stage == StageFailed) {
+				s.Stage, s.Staged, s.Error, s.Available = StageReady, staged, "", true
+				if s.Latest == nil {
+					s.Latest = &Release{Version: staged}
+				}
+			}
 			return
 		}
 		s.Latest = &rel
@@ -205,6 +216,9 @@ func (u *Updater) Check(ctx context.Context) (Status, error) {
 		}
 		s.Pending = pending(all, Version)
 		s.WhatsNew = whatsNew(all, Version, s.UpdatedFrom)
+		if failed != "" && failed == rel.Version && s.Stage == StageIdle && s.Error == "" {
+			s.Error = fmt.Sprintf("Yoru %s didn't start, so this version is back.", failed)
+		}
 	})
 	if err != nil {
 		return u.Status(), err
@@ -266,8 +280,8 @@ func (e *rateLimited) Error() string {
 	if e.reset.IsZero() {
 		return "GitHub is limiting update checks from this network for now; Yoru tries again later"
 	}
-	return fmt.Sprintf("GitHub is limiting update checks from this network until %s; Yoru tries again later",
-		e.reset.Local().Format("15:04"))
+	minutes := max(1, int(time.Until(e.reset).Round(time.Minute).Minutes()))
+	return fmt.Sprintf("GitHub is limiting update checks from this network for about %d min; Yoru tries again later", minutes)
 }
 
 func limitOf(res *http.Response) error {
@@ -524,7 +538,17 @@ func (u *Updater) Started(ctx context.Context) {
 		u.log.Warn("remember the previous version", "err", err)
 	}
 	u.set(func(s *Status) { s.UpdatedFrom = from })
-	if !updated {
+	u.mu.Lock()
+	u.announce = updated
+	u.mu.Unlock()
+}
+
+func (u *Updater) Serving(ctx context.Context) {
+	u.mu.Lock()
+	announce := u.announce
+	u.announce = false
+	u.mu.Unlock()
+	if !announce || u.store == nil {
 		return
 	}
 	if _, err := u.store.AddNotification(ctx, store.Notification{
@@ -565,6 +589,8 @@ func (u *Updater) notify(ctx context.Context, rel Release) {
 	if u.store == nil {
 		return
 	}
+	u.notifying.Lock()
+	defer u.notifying.Unlock()
 	if seen, _ := u.store.Setting(ctx, "update.notified"); seen == rel.Version {
 		return
 	}
@@ -687,11 +713,24 @@ func (u *Updater) verifiedStaged() string {
 		u.forgetIfIdle()
 		return ""
 	}
+	stamp := ""
+	if info, err := os.Stat(filepath.Join(u.staging, mark.Archive)); err == nil {
+		stamp = fmt.Sprintf("%s %d %d", mark.Version, info.Size(), info.ModTime().UnixNano())
+	}
+	u.mu.Lock()
+	same := stamp != "" && stamp == u.checkedStaged
+	u.mu.Unlock()
+	if same {
+		return mark.Version
+	}
 	if _, err := u.stagedArchive(mark.Version); err != nil {
 		u.log.Warn("downloaded update dropped", "version", mark.Version, "err", err)
 		u.forgetIfIdle()
 		return ""
 	}
+	u.mu.Lock()
+	u.checkedStaged = stamp
+	u.mu.Unlock()
 	return mark.Version
 }
 
@@ -730,6 +769,10 @@ func (u *Updater) forgetStaged() {
 	for _, path := range []string{u.markPath(), u.sumsPath(), u.sigPath()} {
 		os.Remove(path)
 	}
+	leftovers, _ := filepath.Glob(filepath.Join(u.staging, config.Name+"-*.zip"))
+	for _, path := range leftovers {
+		os.Remove(path)
+	}
 }
 
 func (u *Updater) stage(ctx context.Context, rel Release) error {
@@ -749,11 +792,6 @@ func (u *Updater) stage(ctx context.Context, rel Release) error {
 		}
 	}()
 
-	if err := u.download(ctx, rel.URL, archive); err != nil {
-		return fmt.Errorf("download: %w", err)
-	}
-
-	u.set(func(s *Status) { s.Stage = StageVerifying })
 	raw, err := u.fetchSmall(ctx, rel.Sums)
 	if err != nil {
 		return fmt.Errorf("checksums: %w", err)
@@ -762,6 +800,15 @@ func (u *Updater) stage(ctx context.Context, rel Release) error {
 	if err != nil {
 		return fmt.Errorf("signature: %w", err)
 	}
+	if _, err := signedSum(raw, sig, name); err != nil {
+		return err
+	}
+
+	if err := u.download(ctx, rel.URL, archive); err != nil {
+		return fmt.Errorf("download: %w", err)
+	}
+
+	u.set(func(s *Status) { s.Stage = StageVerifying })
 	if err := verifyArchive(raw, sig, archive); err != nil {
 		return err
 	}
@@ -819,6 +866,25 @@ func Rollback(exe string) error {
 		return err
 	}
 	return nil
+}
+
+func failedMark(exe string) string { return exe + ".failed-version" }
+
+func RememberFailed(exe string) {
+	os.WriteFile(failedMark(exe), []byte(Version), 0o644)
+}
+
+func (u *Updater) FailedVersion() string {
+	raw, err := os.ReadFile(failedMark(u.exe))
+	if err != nil {
+		return ""
+	}
+	failed := strings.TrimSpace(string(raw))
+	if failed == "" || !Newer(failed, Version) {
+		os.Remove(failedMark(u.exe))
+		return ""
+	}
+	return failed
 }
 
 func Handover(args []string) bool {
@@ -883,7 +949,7 @@ func (u *Updater) download(ctx context.Context, url, dest string) error {
 			u.set(func(s *Status) { s.Bytes = done })
 		}
 		if rerr == io.EOF {
-			return nil
+			return f.Close()
 		}
 		if rerr != nil {
 			return stallOr(rerr)
@@ -895,13 +961,11 @@ var stallAfter = time.Minute
 
 var errStalled = errors.New("the download stopped: no data for a minute")
 
-func verifyArchive(raw, sig []byte, archive string) error {
+func signedSum(raw, sig []byte, name string) (string, error) {
 	if !ed25519.Verify(signingKey, raw, sig) {
-		return errors.New(sumsFile + " is not signed by Yoru's release key; refusing the update")
+		return "", errors.New(sumsFile + " is not signed by Yoru's release key; refusing the update")
 	}
-
 	want := ""
-	name := filepath.Base(archive)
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == name {
@@ -909,7 +973,15 @@ func verifyArchive(raw, sig []byte, archive string) error {
 		}
 	}
 	if want == "" {
-		return fmt.Errorf("%s has no entry for %s", sumsFile, name)
+		return "", fmt.Errorf("%s has no entry for %s", sumsFile, name)
+	}
+	return want, nil
+}
+
+func verifyArchive(raw, sig []byte, archive string) error {
+	want, err := signedSum(raw, sig, filepath.Base(archive))
+	if err != nil {
+		return err
 	}
 
 	f, err := os.Open(archive)
@@ -949,9 +1021,8 @@ func extractExe(archive, dest string) error {
 		if err != nil {
 			return err
 		}
-		defer out.Close()
 		_, err = io.Copy(out, src)
-		return err
+		return errors.Join(err, out.Close())
 	}
 	return fmt.Errorf("%s not in the archive", want)
 }
@@ -989,7 +1060,8 @@ func relaunchCmd(exe string) *exec.Cmd {
 }
 
 func relaunchArgs(pid int, current []string) []string {
-	return append([]string{"--wait-for", strconv.Itoa(pid)}, carried(current)...)
+	args := slices.DeleteFunc(carried(current), func(a string) bool { return a == "--tray" })
+	return append([]string{"--wait-for", strconv.Itoa(pid)}, args...)
 }
 
 func carried(current []string) []string {

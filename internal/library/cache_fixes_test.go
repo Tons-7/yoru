@@ -10,8 +10,6 @@ import (
 	"yoru/internal/store"
 )
 
-// A finished show played again is a rewatch: only what was watched this time around goes, never the
-// episodes ahead that the list's count covers.
 func TestAutoDeleteSparesARewatchOfACompletedShow(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -27,7 +25,6 @@ func TestAutoDeleteSparesARewatchOfACompletedShow(t *testing.T) {
 	for ep := 1; ep <= 3; ep++ {
 		episode(t, st, "ep"+string(rune('0'+ep)), ep, 7, ep)
 	}
-	// Episode 1 finished in the player this time; 2 and 3 are waiting their turn.
 	for range 7 {
 		if _, err := st.SavePlayback(ctx, store.PlaybackState{AnimeID: 7, EpKey: "1", Position: 1390, Duration: 1400, Played: 120}); err != nil {
 			t.Fatal(err)
@@ -47,7 +44,6 @@ func TestAutoDeleteSparesARewatchOfACompletedShow(t *testing.T) {
 	}
 }
 
-// A pack is as recent as its newest file: one with an episode played today goes after an older single file.
 func TestEvictionOrderAgesAPackByItsNewestFile(t *testing.T) {
 	old := entry("pack", 4<<30, 10, false, false)
 	fresh := entry("pack", 4<<30, 100, false, false)
@@ -58,7 +54,6 @@ func TestEvictionOrderAgesAPackByItsNewestFile(t *testing.T) {
 	}
 }
 
-// Clear reports every file of a pack, not its first.
 func TestClearReportsEveryFileOfAPack(t *testing.T) {
 	c, st := newCache(t)
 	cache(t, st, "batch", 1, 3<<30, false)
@@ -69,7 +64,6 @@ func TestClearReportsEveryFileOfAPack(t *testing.T) {
 	}
 }
 
-// A paused download was never tried, so it does not age toward stalled and evictable.
 func TestPausedDownloadNeverCountsAsStalled(t *testing.T) {
 	c, st, engine := restartFixture(t, 0)
 	ctx := context.Background()
@@ -102,8 +96,6 @@ func TestPausedDownloadNeverCountsAsStalled(t *testing.T) {
 	}
 }
 
-// A kept download the engine stopped listing is still on disk: removing it deletes the file, so the
-// bytes the reply counts as freed are freed.
 func TestRemovingADownloadTheEngineLostDeletesItsFile(t *testing.T) {
 	c, st, _ := restartFixture(t, 0)
 	ctx := context.Background()

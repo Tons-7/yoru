@@ -21,6 +21,7 @@ export function useHlsSource(
   onGone?: () => void,
   onUndecodable?: () => boolean,
   airplay?: string,
+  onReopen?: () => void,
 ) {
   const [failure, setFailure] = useState<{
     video: HTMLVideoElement
@@ -36,6 +37,7 @@ export function useHlsSource(
   const gone = useEffectEvent(() => onGone?.())
   const undecodable = useEffectEvent(() => !!onUndecodable?.())
   const readAirplay = useEffectEvent(() => airplay)
+  const reopen = useEffectEvent(() => onReopen?.())
   const alternative = useRef<HTMLSourceElement | null>(null)
   useEffect(() => {
     if (alternative.current && airplay) alternative.current.src = airplay
@@ -96,10 +98,30 @@ export function useHlsSource(
         maxBufferLength: 20,
         maxMaxBufferLength: 60,
         lowLatencyMode: false,
-        manifestLoadingMaxRetry: 8,
-        manifestLoadingRetryDelay: 800,
-        levelLoadingMaxRetry: 8,
-        fragLoadingMaxRetry: 10,
+        manifestLoadPolicy: {
+          default: {
+            maxTimeToFirstByteMs: Infinity,
+            maxLoadTimeMs: 20_000,
+            timeoutRetry: { maxNumRetry: 8, retryDelayMs: 800, maxRetryDelayMs: 0 },
+            errorRetry: { maxNumRetry: 8, retryDelayMs: 800, maxRetryDelayMs: 8000 },
+          },
+        },
+        playlistLoadPolicy: {
+          default: {
+            maxTimeToFirstByteMs: 10_000,
+            maxLoadTimeMs: 20_000,
+            timeoutRetry: { maxNumRetry: 8, retryDelayMs: 0, maxRetryDelayMs: 0 },
+            errorRetry: { maxNumRetry: 8, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+          },
+        },
+        fragLoadPolicy: {
+          default: {
+            maxTimeToFirstByteMs: 10_000,
+            maxLoadTimeMs: 120_000,
+            timeoutRetry: { maxNumRetry: 10, retryDelayMs: 0, maxRetryDelayMs: 0 },
+            errorRetry: { maxNumRetry: 10, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+          },
+        },
       })
 
       instance.on(HlsCtor.Events.BUFFER_EOS, () => {
@@ -109,6 +131,11 @@ export function useHlsSource(
         streamEnded.current = false
       })
       instance.on(HlsCtor.Events.ERROR, (_event, data) => {
+        if (data.response?.code === 409) {
+          instance.stopLoad()
+          reopen()
+          return
+        }
         if (data.response?.code === 422) {
           instance.stopLoad()
           setError("Yoru couldn't convert this release to play here. Try another release, or mpv.", true)
@@ -124,6 +151,13 @@ export function useHlsSource(
             if (data.response?.code === 404) {
               instance.stopLoad()
               gone()
+            } else if (
+              data.details === HlsCtor.ErrorDetails.MANIFEST_LOAD_ERROR ||
+              data.details === HlsCtor.ErrorDetails.MANIFEST_LOAD_TIMEOUT ||
+              data.details === HlsCtor.ErrorDetails.MANIFEST_PARSING_ERROR
+            ) {
+              instance.stopLoad()
+              setError("The episode's stream could not be loaded.")
             } else {
               instance.startLoad()
             }
@@ -902,6 +936,7 @@ export function useAutoSkip(
     if (!video || ranges.length === 0) return
 
     const onTime = () => {
+      if (video.readyState === HTMLMediaElement.HAVE_NOTHING) return
       const t = video.currentTime
       for (const range of ranges) {
         if (!range?.kind || !wanted(skipKind(range.kind), enabled)) continue
@@ -1183,15 +1218,22 @@ export function useFreshFrames(video: HTMLVideoElement | null, enabled: boolean)
 
     let handle = 0
     let cancelled = false
+    let shown = false
 
     const onFrame = () => {
       if (cancelled) return
-      setFresh(true)
+      if (!shown) {
+        shown = true
+        setFresh(true)
+      }
       handle = request(onFrame)
     }
     handle = request(onFrame)
 
-    const stale = () => setFresh(false)
+    const stale = () => {
+      shown = false
+      setFresh(false)
+    }
     video.addEventListener('seeking', stale)
     video.addEventListener('emptied', stale)
 

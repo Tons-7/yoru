@@ -24,25 +24,22 @@ import (
 	"yoru/internal/torrent"
 )
 
-// fakeEngine is enough engine for attach: add, report state, stream, delete.
 type fakeEngine struct {
 	mu       sync.Mutex
-	dead     map[string]bool          // by info hash
-	slow     map[string]time.Duration // delay before the first byte, by info hash
-	ids      map[int]string           // torrent id -> info hash
-	finished map[string]bool          // by info hash
-	folder   string                   // every torrent's output folder
+	dead     map[string]bool
+	slow     map[string]time.Duration
+	ids      map[int]string
+	finished map[string]bool
+	folder   string
 	added    []string
 	deleted  []string
 	next     int
 
-	// trickle: peers and bytes, the head only after this long; stuck: peers that never send a byte.
 	trickle map[string]time.Duration
 	stuck   map[string]bool
 	addedAt map[string]time.Time
 	paused  map[int]bool
-	// onAdd runs as a torrent is added, before the add answers.
-	onAdd func(hash string)
+	onAdd   func(hash string)
 }
 
 func newFakeEngine(dead ...string) *fakeEngine {
@@ -72,7 +69,6 @@ func (f *fakeEngine) handler() http.Handler {
 	mux.HandleFunc("POST /torrents", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		hash := hashOf(string(body))
-		// Named after the release, as a real torrent is, so the file can be told apart by episode.
 		name := "Frieren - 01.mkv"
 		if m := magnetName.FindStringSubmatch(string(body)); m != nil {
 			if dn, err := url.QueryUnescape(m[1]); err == nil && dn != "" {
@@ -151,7 +147,6 @@ func (f *fakeEngine) handler() http.Handler {
 		})
 	})
 
-	// A dead swarm drops the connection instead of serving bytes, which tells Prewarm it's no good.
 	mux.HandleFunc("GET /torrents/{id}/stream/{file}", func(w http.ResponseWriter, r *http.Request) {
 		var id int
 		fmt.Sscanf(r.PathValue("id"), "%d", &id)
@@ -293,7 +288,6 @@ const (
 	otherHash = "3333333333333333333333333333333333333333"
 )
 
-// A release that never delivers must be removed, or it holds disk space and an engine slot for nothing.
 func TestAttachRemovesReleasesThatNeverDeliver(t *testing.T) {
 	engine := newFakeEngine(deadHash)
 	p := newPlayback(t, engine, []indexer.Torrent{
@@ -319,8 +313,6 @@ func TestAttachRemovesReleasesThatNeverDeliver(t *testing.T) {
 	}
 }
 
-// The cache sweep adopts whatever the engine holds, a release still being tried included. That bare
-// record is not a download anyone asked for, so the release is still removed when it does not deliver.
 func TestAttachRemovesAReleaseAdoptedWhileItWasTried(t *testing.T) {
 	engine := newFakeEngine(deadHash)
 	p := newPlayback(t, engine, []indexer.Torrent{
@@ -329,7 +321,6 @@ func TestAttachRemovesAReleaseAdoptedWhileItWasTried(t *testing.T) {
 	})
 	ctx := context.Background()
 
-	// The sweep, landing between the add and the verdict: as the add happens, not polled for after.
 	swept := false
 	engine.onAdd = func(hash string) {
 		if hash != deadHash {
@@ -358,7 +349,6 @@ func TestAttachRemovesAReleaseAdoptedWhileItWasTried(t *testing.T) {
 	}
 }
 
-// A release on record for an episode is someone's download, and stays whatever this attempt thought.
 func TestDiscardKeepsADownloadOnRecordForAnEpisode(t *testing.T) {
 	engine := newFakeEngine()
 	p := newPlayback(t, engine, nil)
@@ -376,7 +366,6 @@ func TestDiscardKeepsADownloadOnRecordForAnEpisode(t *testing.T) {
 	}
 }
 
-// Only what this attempt started may be deleted; a hash already held is a finished download.
 func TestAttachKeepsReleasesTheEngineAlreadyHeld(t *testing.T) {
 	engine := newFakeEngine(deadHash)
 	engine.ids[99] = deadHash
@@ -419,14 +408,11 @@ func TestAttachKeepsReleasesTheEngineAlreadyHeld(t *testing.T) {
 	}
 }
 
-// A release Yoru chose is dropped the moment it shows no peers, for the next one. A release picked by
-// hand has no next one: it is waited on, and plays when its swarm wakes up.
 func TestPickedReleaseIsWaitedForWhereAnAutomaticOneIsDropped(t *testing.T) {
 	old := peerProbeDeadline
 	peerProbeDeadline = 200 * time.Millisecond
 	t.Cleanup(func() { peerProbeDeadline = old })
 
-	// No peers counted, and the first byte only after the quick look has ended.
 	results := []indexer.Torrent{release(goodHash, "[Slow] Sousou no Frieren - 01 [1080p].mkv", 3)}
 	ctx := context.Background()
 
@@ -450,15 +436,12 @@ func TestPickedReleaseIsWaitedForWhereAnAutomaticOneIsDropped(t *testing.T) {
 	}
 }
 
-// The best release wins whenever it can deliver, even if a lower-ranked one
-// answers first; racing for speed must never trade quality for a head start.
 func TestAttachPrefersBetterReleaseEvenWhenSlower(t *testing.T) {
 	old := raceStagger
 	raceStagger = 10 * time.Millisecond
 	t.Cleanup(func() { raceStagger = old })
 
 	engine := newFakeEngine()
-	// The better release, ranked first, delivers only after the worse one has.
 	engine.slow[goodHash] = 400 * time.Millisecond
 
 	p := newPlayback(t, engine, []indexer.Torrent{
@@ -479,7 +462,6 @@ func TestAttachPrefersBetterReleaseEvenWhenSlower(t *testing.T) {
 		t.Fatalf("took the faster-but-worse release %s, want the better %s", rel.Torrent.InfoHash, goodHash)
 	}
 
-	// The worse release, warmed in parallel, is dropped once the better one wins.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && !engine.wasDeleted(otherHash) {
 		time.Sleep(20 * time.Millisecond)
@@ -492,7 +474,6 @@ func TestAttachPrefersBetterReleaseEvenWhenSlower(t *testing.T) {
 	}
 }
 
-// Resolving a release on a series-page open adds nothing to the engine, so browsing never fills Downloads.
 func TestPrepareResolvesWithoutTouchingTheEngine(t *testing.T) {
 	engine := newFakeEngine()
 	srv := httptest.NewServer(engine.handler())
@@ -536,7 +517,6 @@ func TestPrepareResolvesWithoutTouchingTheEngine(t *testing.T) {
 	}
 }
 
-// Play uses the prepared release: the finder here has nothing, so a fresh search would fail.
 func TestAttachUsesThePreparedRelease(t *testing.T) {
 	engine := newFakeEngine()
 	p := newPlayback(t, engine, nil)
@@ -559,5 +539,28 @@ func TestAttachUsesThePreparedRelease(t *testing.T) {
 	}
 	if _, ok := pref.TakePrepared(1, 1); ok {
 		t.Error("the prepared release was not consumed by attach")
+	}
+}
+
+func TestPlayReaddsAKeptDownloadTheEngineLost(t *testing.T) {
+	engine := newFakeEngine()
+	p := newPlayback(t, engine, nil)
+	ctx := context.Background()
+	if err := p.store.RecordTorrent(ctx, store.TorrentRecord{InfoHash: goodHash, Name: "[Live] Sousou no Frieren - 01 [1080p].mkv",
+		AnimeID: 1, EpKey: "1", FilePath: "Frieren - 01.mkv", TotalSize: 1 << 30}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.SetCacheBytes(ctx, goodHash, 0, 1<<30, true); err != nil {
+		t.Fatal(err)
+	}
+	session, ok, err := p.reattach(ctx, PlayRequest{AnimeID: 1, Episode: 1, Season: 1, Prefs: score.DefaultPreferences()})
+	if err != nil || !ok || session == nil {
+		t.Fatalf("reattach = %v, %v, %v; want the kept download played", session, ok, err)
+	}
+	if !wasAdded(engine, goodHash) {
+		t.Fatal("the kept download the engine lost was not added back")
+	}
+	if session.InfoHash != goodHash {
+		t.Errorf("playing %s, want the kept release", session.InfoHash)
 	}
 }

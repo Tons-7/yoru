@@ -8,18 +8,16 @@ import (
 	"github.com/anacrolix/missinggo/v2/panicif"
 )
 
-// A timer reset from its callback or outside, knowing when it's due; one callback runs at a time and
-// returns the next delay.
 type Timer struct {
-	mu      sync.RWMutex
-	when    time.Time
-	f       Func
-	t       *time.Timer
-	inited  bool
-	stopped bool
+	mu           sync.RWMutex
+	when         time.Time
+	f            Func
+	t            *time.Timer
+	inited       bool
+	stopped      bool
+	missedUpdate bool
 }
 
-// Stop ends the timer for good; later updates and a callback already due do nothing.
 func (me *Timer) Stop() {
 	me.mu.Lock()
 	defer me.mu.Unlock()
@@ -38,8 +36,6 @@ func (me *Timer) Init(first TimeValue, f Func) {
 	if first.IsZero() {
 		d = math.MaxInt64
 	}
-	// Should we Stop the timer if there's no initial delay set? We can't update the timer
-	// externally unless we know if the timer is scheduled.
 	me.t = time.AfterFunc(d, me.innerCallback)
 }
 
@@ -49,15 +45,12 @@ func (me *Timer) update(when time.Time) {
 	if me.stopped {
 		return
 	}
-	// Avoid hammering the scheduler with changes. I think this will work, and is probably cheaper
-	// than avoiding our object's lock.
 	if when.Equal(me.when) {
 		return
 	}
 	if !me.t.Stop() {
-		// Timer callback might be active.
 		if !me.when.IsZero() {
-			// Timer callback is running.
+			me.missedUpdate = true
 			return
 		}
 	}
@@ -83,16 +76,18 @@ func (me *Timer) innerCallback() {
 	}
 	panicif.True(me.when.IsZero())
 	panicif.True(time.Now().Before(me.when))
-	// Nobody else sets it while this runs (when is non-zero and the timer has fired).
 	when := me.f()
 	me.mu.Lock()
 	if !me.stopped {
+		if me.missedUpdate {
+			me.missedUpdate = false
+			when = time.Now()
+		}
 		me.reset(when)
 	}
 	me.mu.Unlock()
 }
 
-// Resets if the timer func hasn't fired.
 func (me *Timer) Update(when time.Time) {
 	me.update(when)
 }

@@ -2,5 +2,13 @@
 
 package engine
 
-// Unix deletes a file still open; its reader keeps the data until it closes.
+import (
+	"errors"
+	"syscall"
+)
+
 func inUse(error) bool { return false }
+
+func badName(err error) bool {
+	return errors.Is(err, syscall.ENAMETOOLONG) || errors.Is(err, syscall.EILSEQ)
+}

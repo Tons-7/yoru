@@ -4,11 +4,14 @@ import { readKey, writeKey } from '../lib/storage'
 import { api } from '../lib/api'
 import {
   claimCanvas,
+  ownsCanvas,
   prepareSmooth,
   presentSmooth,
   recording,
+  setCanvasRedraw,
   smoothDevice,
   SmoothMissing,
+  touchDevice,
   type SmoothFiles,
   type SmoothRate,
   type SmoothState,
@@ -40,8 +43,6 @@ export function autoTier(): AutoTier | null {
 export const setAutoTier = (tier: AutoTier | null) => writeKey(AUTO_KEY, tier)
 
 export const lowerTier = (tier: UpscaleTier): AutoTier => (tier === 'full' ? 'balanced' : tier === 'balanced' ? 'light' : 'off')
-
-const touchDevice = () => typeof matchMedia === 'function' && matchMedia('(hover: none) and (pointer: coarse)').matches
 
 export function upscaleHere(choice: DeviceUpscale, shared: boolean, settled: AutoTier | null) {
   const fallback: UpscaleTier = touchDevice() ? 'light' : 'full'
@@ -229,7 +230,7 @@ function presentOn(
   if (!context) throw new Error('no WebGPU canvas context')
   const format = navigator.gpu.getPreferredCanvasFormat()
   context.configure({ device, format, alphaMode: 'premultiplied' })
-  claimCanvas(canvas)
+  const token = claimCanvas(canvas)
 
   const { videoWidth: width, videoHeight: height } = video
   const input = device.createTexture({
@@ -261,7 +262,7 @@ function presentOn(
 
   let stopped = false
   let handle = 0
-  const frame = () => {
+  const render = () => {
     if (stopped) return
     if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
       device.queue.copyExternalImageToTexture({ source: video }, { texture: input }, [width, height])
@@ -283,8 +284,13 @@ function presentOn(
     pass.draw(6)
     pass.end()
     device.queue.submit([encoder.finish()])
+  }
+  const frame = () => {
+    if (stopped) return
+    render()
     handle = video.requestVideoFrameCallback(frame)
   }
+  setCanvasRedraw(canvas, render)
   handle = video.requestVideoFrameCallback(frame)
 
   return {
@@ -292,6 +298,7 @@ function presentOn(
     stop: () => {
       stopped = true
       video.cancelVideoFrameCallback(handle)
+      if (ownsCanvas(canvas, token)) context.unconfigure()
       device.destroy()
     },
   }
@@ -347,6 +354,16 @@ export function useAnime4K({
     document.addEventListener('fullscreenchange', restart)
     return () => document.removeEventListener('fullscreenchange', restart)
   }, [])
+  const revived = useRef(0)
+  useEffect(() => {
+    revived.current = 0
+  }, [source])
+  const reviveAfterLoss = () => {
+    if (revived.current >= 1) return false
+    revived.current++
+    setGeneration((n) => n + 1)
+    return true
+  }
 
   const run = [video, canvas, enabled, mode, tier, generation, source, smoothing, held, retry]
   type Ended = 'on' | 'failed'
@@ -357,6 +374,7 @@ export function useAnime4K({
     if ((!enabled && !smoothing) || !webgpuAvailable() || !video || !canvas) return
 
     let cancelled = false
+    const gone = new AbortController()
     let stop: (() => void) | undefined
     const run = [video, canvas, enabled, mode, tier, generation, source, smoothing, held, retry]
     const settle = (upscale: Ended, smooth: SmoothEnded) => setOutcome({ run, upscale, smooth })
@@ -365,7 +383,8 @@ export function useAnime4K({
     const start = async () => {
       if (!video.videoWidth) {
         await new Promise<void>((resolve) => {
-          video.addEventListener('loadedmetadata', () => resolve(), { once: true })
+          video.addEventListener('loadedmetadata', () => resolve(), { once: true, signal: gone.signal })
+          gone.signal.addEventListener('abort', () => resolve(), { once: true })
         })
       }
       if (cancelled) return
@@ -388,8 +407,10 @@ export function useAnime4K({
         const picked = pickMode(mode)
         build = (gpu, inputTexture, shared) => {
           if (!shared) {
-            void gpu.lost.then(() => {
-              if (!cancelled) settle('failed', 'failed')
+            void gpu.lost.then((info) => {
+              if (cancelled) return
+              if (info.reason !== 'destroyed' && reviveAfterLoss()) return
+              settle('failed', 'failed')
             })
           }
           const pipelines = chain(lib, gpu, inputTexture, native, target, picked, tier)
@@ -412,7 +433,10 @@ export function useAnime4K({
               if (build && upscaleSteps()) slow()
               else smoothSlow()
             },
-            onLost: () => !cancelled && settle('failed', 'failed'),
+            onLost: () => {
+              if (cancelled || reviveAfterLoss()) return
+              settle('failed', 'failed')
+            },
           })
           if (cancelled) {
             shown.stop()
@@ -452,6 +476,7 @@ export function useAnime4K({
 
     return () => {
       cancelled = true
+      gone.abort()
       stop?.()
       stop = undefined
       live.current = null
@@ -471,7 +496,7 @@ export function useAnime4K({
           .then((s) => {
             if (stopped) return
             if (s.ready) setFilesLanded((n) => n + 1)
-            else check(s.canInstall ? 4000 : 30_000)
+            else check(s.progress && s.progress.stage !== 'done' && s.progress.stage !== 'failed' ? 3000 : s.canInstall ? 10_000 : 30_000)
           })
           .catch(() => !stopped && check(30_000))
       }, wait)

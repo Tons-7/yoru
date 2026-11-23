@@ -17,7 +17,6 @@ import (
 	"yoru/internal/transcode"
 )
 
-// A drawn-in copy's id or a device's plan names its episode, so resume, holds and suspends treat it as that.
 func TestBurnedSessionIDsNameTheirEpisode(t *testing.T) {
 	for id, want := range map[string][2]int{
 		"127230-3": {127230, 3}, "127230-3-burn2-0": {127230, 3}, "127230-3-burn2--15": {127230, 3}, "-55-7-burn0-5": {-55, 7},
@@ -29,10 +28,8 @@ func TestBurnedSessionIDsNameTheirEpisode(t *testing.T) {
 	}
 }
 
-// What a TV fetches through its link, from a real session: the playlist, init, a segment and WebVTT subtitles.
 func TestCastPlaysASessionThroughItsLink(t *testing.T) {
 	h, source := streamHarness(t)
-	// Before the link is signed: the grant key includes the token.
 	h.server.token = "s3cret"
 	code, opened := h.call(t, "POST", "/api/stream/open?id=1&episode=1&source="+source, "")
 	if code != http.StatusOK {
@@ -43,7 +40,6 @@ func TestCastPlaysASessionThroughItsLink(t *testing.T) {
 		t.Fatalf("cast link: %d %v", code, link)
 	}
 	playlist, _ := url.Parse(link["url"].(string))
-	// Asked from this PC's own window: the TV gets an address it can reach, as loopback is the TV itself.
 	if loopbackHost(playlist.Host) && len(lanAddrs()) > 0 {
 		t.Errorf("the TV was sent %s", playlist)
 	}
@@ -67,13 +63,11 @@ func TestCastPlaysASessionThroughItsLink(t *testing.T) {
 		}
 	}
 	vtt, _ := url.Parse(subs[0].(map[string]any)["url"].(string))
-	// The fixture's cut-down event format gives ffmpeg no text to carry; a release's standard one does.
 	if code, body := tv(vtt.Path); code != http.StatusOK || !strings.HasPrefix(string(body), "WEBVTT") || !strings.Contains(string(body), "00:01.000 --> 00:05.000") {
 		t.Errorf("subtitles: %d %q", code, body)
 	}
 }
 
-// A full-frame white box from 1 s to 5 s: drawn in, a frame at 2 s is almost all white.
 const boxASS = `[Script Info]
 ScriptType: v4.00+
 PlayResX: 320
@@ -88,7 +82,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:01.00,0:00:05.00,Default,,0,0,0,,{\pos(0,0)\p1}m 0 0 l 320 0 320 240 0 240{\p0}
 `
 
-// Drawn in: the TV gets a session of its own whose picture carries the subtitles, and no text track beside.
 func TestCastWithSubtitlesDrawnIn(t *testing.T) {
 	h, source := streamHarnessWith(t, boxASS)
 	code, opened := h.call(t, "POST", "/api/stream/open?id=1&episode=1&source="+source, "")
@@ -102,7 +95,6 @@ func TestCastWithSubtitlesDrawnIn(t *testing.T) {
 	}
 	playlist, _ := url.Parse(link["url"].(string))
 	root := strings.TrimSuffix(playlist.Path, "playlist.m3u8")
-	// Its encoder stopped before the temp folder goes, which Windows won't delete with files open.
 	t.Cleanup(func() { h.server.streams.Close(fmt.Sprintf("%s-burn%v-0", opened["id"], index)) })
 
 	var video []byte
@@ -132,7 +124,6 @@ func TestCastWithSubtitlesDrawnIn(t *testing.T) {
 	}
 }
 
-// A TV's link reaches Yoru with no token, opens one session's files only, and answers the receiver's CORS asks.
 func TestCastLinks(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -152,7 +143,6 @@ func TestCastLinks(t *testing.T) {
 	if rec := tv("OPTIONS", "/c/"+cast+"/playlist.m3u8"); rec.Code != http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "*" {
 		t.Errorf("preflight: %d, CORS %q", rec.Code, rec.Header().Get("Access-Control-Allow-Origin"))
 	}
-	// Past the grant, the session is looked up: none here, so 404, but never the token's 401.
 	if rec := tv("GET", "/c/"+cast+"/playlist.m3u8"); rec.Code != http.StatusNotFound || rec.Header().Get("Access-Control-Allow-Origin") != "*" {
 		t.Errorf("a cast link: %d, want it past the guard to the session lookup", rec.Code)
 	}

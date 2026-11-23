@@ -4,7 +4,6 @@ import (
 	"github.com/RoaringBitmap/roaring/v2"
 )
 
-// TODO: Update to roaring v2 or higher
 type Bitmap[T BitConstraint] struct {
 	roaring.Bitmap
 }
@@ -43,9 +42,6 @@ func (me *Bitmap[T]) Remove(x T) {
 	me.Bitmap.Remove(uint32(x))
 }
 
-// Returns an uninitialized iterator for the type of the receiver.
 func (Bitmap[T]) IteratorType() Iterator[T] {
 	return Iterator[T]{}
 }
-
-// TODO: Override Bitmap.Iterator.

@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 
@@ -11,22 +14,24 @@ import (
 	"yoru/internal/torrent"
 )
 
-// layout is where each torrent's files live: under its name, or with its hash appended when another
-// torrent holds that name, so two same-named releases never write to or delete each other's files.
 type layout struct {
-	base string
-	mu   sync.Mutex
-	tops map[metainfo.Hash]string
-	own  map[metainfo.Hash]bool // restored with no saved name: under its own, as when it was added
+	base  string
+	mu    sync.Mutex
+	tops  map[metainfo.Hash]string
+	own   map[metainfo.Hash]bool
+	packs map[metainfo.Hash]map[string][]string
 }
 
 func newLayout(base string) *layout {
-	return &layout{base: base, tops: map[metainfo.Hash]string{}, own: map[metainfo.Hash]bool{}}
+	return &layout{base: base, tops: map[metainfo.Hash]string{}, own: map[metainfo.Hash]bool{},
+		packs: map[metainfo.Hash]map[string][]string{}}
 }
 
-// top is the name a torrent's file or folder goes under, decided on first sight and kept after.
 func (l *layout) top(name string, hash metainfo.Hash) string {
 	name = safeName(name)
+	if !safeComponent(name) {
+		name = hash.HexString()
+	}
 	if l == nil {
 		return name
 	}
@@ -35,14 +40,17 @@ func (l *layout) top(name string, hash metainfo.Hash) string {
 	if top, ok := l.tops[hash]; ok {
 		return top
 	}
-	// Placed before these rules, its files are there: tagged now, it would download again.
 	if l.own[hash] {
 		delete(l.own, hash)
 		l.tops[hash] = name
 		return name
 	}
-	// Case-blind: Windows and macOS put "Show" and "show" in one folder.
-	// One of Yoru's own folders would be swept with it.
+	if tagged := suffixed(name, hash); l.base != "" {
+		if _, err := os.Stat(filepath.Join(l.base, tagged)); err == nil {
+			l.tops[hash] = tagged
+			return tagged
+		}
+	}
 	taken := torrent.OwnFolder(name)
 	for other, top := range l.tops {
 		if !taken && strings.EqualFold(top, name) && other != hash {
@@ -56,11 +64,8 @@ func (l *layout) top(name string, hash metainfo.Hash) string {
 	return name
 }
 
-// suffixed tags a name with the hash; the cache's cleanup derives the same, so the rule lives in torrent.
 func suffixed(name string, hash metainfo.Hash) string { return torrent.Tagged(name, hash.HexString()) }
 
-// claim records a name restored from the session, so a restart keeps every torrent where it was; with none
-// saved, the torrent's own name.
 func (l *layout) claim(hash metainfo.Hash, top string) {
 	if l == nil {
 		return
@@ -76,7 +81,6 @@ func (l *layout) claim(hash metainfo.Hash, top string) {
 	l.mu.Unlock()
 }
 
-// claimed is the name a torrent holds, known before its info arrives when restored from the session.
 func (l *layout) claimed(hash metainfo.Hash) (string, bool) {
 	if l == nil {
 		return "", false
@@ -94,10 +98,10 @@ func (l *layout) forget(hash metainfo.Hash) {
 	l.mu.Lock()
 	delete(l.tops, hash)
 	delete(l.own, hash)
+	delete(l.packs, hash)
 	l.mu.Unlock()
 }
 
-// folder is where a torrent's files go: the cache for one file, a folder named after the torrent for several.
 func (l *layout) folder(t *bt.Torrent) string {
 	info := t.Info()
 	if info == nil || !info.IsDir() {
@@ -106,19 +110,49 @@ func (l *layout) folder(t *bt.Torrent) string {
 	return filepath.Join(l.base, l.top(info.BestName(), t.InfoHash()))
 }
 
+func inTorrent(base, top string, isDir bool, path string) bool {
+	if !safeComponent(top) {
+		return false
+	}
+	base = filepath.Clean(base)
+	path = filepath.Clean(path)
+	own := filepath.Join(base, top)
+	if !isDir {
+		return path == own
+	}
+	return path != own && torrent.Within(own, path)
+}
+
+func safeComponent(name string) bool {
+	return name != "" && name != "." && name != ".." &&
+		!strings.ContainsRune(name, '/') && !strings.ContainsRune(name, filepath.Separator)
+}
+
+func (l *layout) owns(t *bt.Torrent, path string) bool {
+	info := t.Info()
+	if info == nil {
+		return false
+	}
+	return inTorrent(l.base, l.top(info.BestName(), t.InfoHash()), info.IsDir(), path)
+}
+
 func (l *layout) filePath(t *bt.Torrent, f *bt.File) string {
 	info := t.Info()
 	if !info.IsDir() {
 		return filepath.Join(l.base, l.top(info.BestName(), t.InfoHash()))
 	}
-	fi := f.FileInfo()
-	return filepath.Join(append([]string{l.folder(t)}, safePath(fi.BestPath())...)...)
+	return filepath.Join(append([]string{l.folder(t)}, l.parts(info, t.InfoHash(), f.FileInfo())...)...)
 }
 
-// shared reports a path another held torrent also maps to, which a delete must leave alone.
 func (l *layout) shared(path string, hash metainfo.Hash, others []*bt.Torrent) bool {
 	for _, o := range others {
-		if o.InfoHash() == hash || o.Info() == nil {
+		if o.InfoHash() == hash {
+			continue
+		}
+		if o.Info() == nil {
+			if top, ok := l.claimed(o.InfoHash()); ok && safeComponent(top) && under(path, filepath.Join(l.base, top)) {
+				return true
+			}
 			continue
 		}
 		for _, f := range o.Files() {
@@ -130,16 +164,85 @@ func (l *layout) shared(path string, hash metainfo.Hash, others []*bt.Torrent) b
 	return false
 }
 
-// samePath: one file on disk. Case-blind where the filesystem is (Windows, macOS); on Linux two names
-// differing in case are two files, and treating them as one left a deleted torrent's file behind.
 func samePath(a, b string) bool {
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(windowsName(a), windowsName(b))
+	}
+	if runtime.GOOS == "darwin" {
 		return strings.EqualFold(a, b)
 	}
 	return a == b
 }
 
-// safePath is a torrent's path inside its folder, each part made safe to create.
+func windowsName(p string) string {
+	parts := strings.Split(filepath.Clean(p), string(filepath.Separator))
+	for i, part := range parts {
+		if part != "." && part != ".." {
+			parts[i] = strings.TrimRight(part, ". ")
+		}
+	}
+	return strings.Join(parts, string(filepath.Separator))
+}
+
+func under(path, dir string) bool {
+	path, dir = filepath.Clean(path), filepath.Clean(dir)
+	if samePath(path, dir) {
+		return true
+	}
+	return len(path) > len(dir) && path[len(dir)] == filepath.Separator && samePath(path[:len(dir)], dir)
+}
+
+func (l *layout) parts(info *metainfo.Info, hash metainfo.Hash, fi metainfo.FileInfo) []string {
+	if l == nil {
+		return packParts(info)[pathKey(fi.BestPath())]
+	}
+	l.mu.Lock()
+	m, ok := l.packs[hash]
+	if !ok {
+		m = packParts(info)
+		l.packs[hash] = m
+	}
+	l.mu.Unlock()
+	return m[pathKey(fi.BestPath())]
+}
+
+func pathKey(parts []string) string { return strings.Join(parts, "\x00") }
+
+func packParts(info *metainfo.Info) map[string][]string {
+	out := map[string][]string{}
+	taken := map[string]bool{}
+	for fi := range info.UpvertedFilesIter() {
+		key := pathKey(fi.BestPath())
+		if _, ok := out[key]; ok {
+			continue
+		}
+		base := safePath(fi.BestPath())
+		parts := base
+		for n := 2; taken[foldPath(parts)]; n++ {
+			parts = numbered(base, n)
+		}
+		taken[foldPath(parts)] = true
+		out[key] = parts
+	}
+	return out
+}
+
+func foldPath(parts []string) string {
+	p := strings.Join(parts, "/")
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		return strings.ToLower(p)
+	}
+	return p
+}
+
+func numbered(parts []string, n int) []string {
+	out := slices.Clone(parts)
+	last := out[len(out)-1]
+	ext := filepath.Ext(last)
+	out[len(out)-1] = fmt.Sprintf("%s (%d)%s", strings.TrimSuffix(last, ext), n, ext)
+	return out
+}
+
 func safePath(parts []string) []string {
 	out := make([]string, len(parts))
 	for i, p := range parts {

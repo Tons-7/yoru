@@ -5,10 +5,6 @@ import (
 	"database/sql"
 )
 
-// Home's own picks: sequels missed, and what "For you" grows from.
-
-// SequelsMissed follow shows finished on the list and aren't known yet (see Known). Newest first; aired only,
-// as far as known here.
 func (s *Store) SequelsMissed(ctx context.Context, limit int) ([]int, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT r.related_id
@@ -28,7 +24,6 @@ func (s *Store) SequelsMissed(ctx context.Context, limit int) ([]int, error) {
 	return s.ids(rows, err)
 }
 
-// TopScored are the best-liked watched shows by the viewer's score, scored or not; latest first among equals.
 func (s *Store) TopScored(ctx context.Context, limit int) ([]int, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT anime_id FROM list_entry
@@ -38,7 +33,6 @@ func (s *Store) TopScored(ctx context.Context, limit int) ([]int, error) {
 	return s.ids(rows, err)
 }
 
-// Known are the shows the viewer knows of: on the list in any status, favourited, or hidden.
 func (s *Store) Known(ctx context.Context) (map[int]bool, error) {
 	ids, err := s.ids(s.r.QueryContext(ctx, `
 		SELECT anime_id FROM list_entry
@@ -50,7 +44,6 @@ func (s *Store) Known(ctx context.Context) (map[int]bool, error) {
 	return listed, err
 }
 
-// ids reads a one-column query of ids.
 func (s *Store) ids(rows *sql.Rows, err error) ([]int, error) {
 	if err != nil {
 		return nil, err
@@ -65,4 +58,39 @@ func (s *Store) ids(rows *sql.Rows, err error) ([]int, error) {
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+func (s *Store) HiddenIDs(ctx context.Context) (map[int]bool, error) {
+	ids, err := s.ids(s.r.QueryContext(ctx, `SELECT anime_id FROM user_anime WHERE hidden = 1`))
+	out := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, err
+}
+
+type HiddenShow struct {
+	AnimeID int    `json:"animeId"`
+	Title   string `json:"title"`
+	Cover   string `json:"cover,omitempty"`
+}
+
+func (s *Store) HiddenShows(ctx context.Context) ([]HiddenShow, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT u.anime_id, coalesce(nullif(a.title_english, ''), a.title_romaji, ''), coalesce(a.cover_url, '')
+		FROM user_anime u LEFT JOIN anime a ON a.id = u.anime_id
+		WHERE u.hidden = 1 ORDER BY u.updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HiddenShow{}
+	for rows.Next() {
+		var h HiddenShow
+		if err := rows.Scan(&h.AnimeID, &h.Title, &h.Cover); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }

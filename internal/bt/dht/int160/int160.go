@@ -84,11 +84,6 @@ func (me *T) IsZero() bool {
 	return true
 }
 
-func FromBytes(b []byte) (ret T) {
-	ret.SetBytes(b)
-	return
-}
-
 func FromByteArray(b [20]byte) (ret T) {
 	ret.SetBytes(b[:])
 	return

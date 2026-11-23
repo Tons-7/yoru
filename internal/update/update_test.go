@@ -38,6 +38,7 @@ func TestRelaunchForwardsTheWindowChoice(t *testing.T) {
 		{nil, []string{"--wait-for", "42"}},
 		{[]string{"--no-window", "--other"}, []string{"--wait-for", "42", "--no-window", "--other"}},
 		{[]string{"--wait-for", "7", "--no-window"}, []string{"--wait-for", "42", "--no-window"}},
+		{[]string{"--tray"}, []string{"--wait-for", "42"}},
 	} {
 		got := relaunchArgs(42, tc.current)
 		if fmt.Sprint(got) != fmt.Sprint(tc.want) {
@@ -111,6 +112,8 @@ func fakeRelease(t *testing.T, version string, exeBody []byte, sums, trusted, li
 type tamper struct {
 	listedAs string
 	served   []byte
+	silent   bool
+	drip     time.Duration
 }
 
 func fakeTamperedRelease(t *testing.T, version string, exeBody []byte, sums, trusted, limited bool, tm tamper) *httptest.Server {
@@ -159,7 +162,22 @@ func fakeTamperedRelease(t *testing.T, version string, exeBody []byte, sums, tru
 		json.NewEncoder(w).Encode(map[string]any{"tag_name": "v" + version, "body": "notes", "assets": assets})
 	})
 	mux.HandleFunc("/dl/"+AssetName(version), func(w http.ResponseWriter, r *http.Request) {
-		w.Write(served)
+		switch {
+		case tm.silent:
+			w.Write(served[:min(1024, len(served))])
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		case tm.drip > 0:
+			for i := range served {
+				w.Write(served[i : i+1])
+				w.(http.Flusher).Flush()
+				if i < 6 {
+					time.Sleep(tm.drip)
+				}
+			}
+		default:
+			w.Write(served)
+		}
 	})
 	mux.HandleFunc("/dl/"+sumsFile, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, lines)
@@ -352,10 +370,10 @@ func TestRateLimitedCheckSaysUntilWhen(t *testing.T) {
 	u := newUpdater(t, testStore(t), gh, "yoru.exe")
 	u.web = gh.URL + "/elsewhere"
 	_, err := u.Check(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "limiting update checks from this network until 19:42") {
-		t.Fatalf("err = %v, want it to say GitHub limits checks until 19:42", err)
+	if err == nil || !strings.Contains(err.Error(), "limiting update checks from this network for about ") {
+		t.Fatalf("err = %v, want it to say how long GitHub limits checks", err)
 	}
-	if st := u.Status(); !strings.Contains(st.CheckErr, "until 19:42") {
+	if st := u.Status(); !strings.Contains(st.CheckErr, "for about ") {
 		t.Errorf("checkError = %q", st.CheckErr)
 	}
 
@@ -712,5 +730,61 @@ func TestATamperedDownloadIsNotOfferedForRestart(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(exe); string(got) != "old binary" {
 		t.Errorf("executable = %q, want it untouched", got)
+	}
+}
+
+func TestPrepareGivesUpOnASilentDownload(t *testing.T) {
+	was := stallAfter
+	stallAfter = 100 * time.Millisecond
+	t.Cleanup(func() { stallAfter = was })
+	setVersion(t, "2026.08.24")
+	st := testStore(t)
+	body := bytes.Repeat([]byte("x"), 8192)
+	gh := fakeTamperedRelease(t, "2026.08.27", body, true, true, false, tamper{silent: true})
+	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
+	os.WriteFile(exe, []byte("old binary"), 0o755)
+	u := newUpdater(t, st, gh, exe)
+	if _, err := u.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	for end := time.Now().Add(10 * time.Second); u.Status().Stage != StageFailed; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatalf("still %+v", u.Status())
+		}
+	}
+	if s := u.Status(); !strings.Contains(s.Error, "no data") {
+		t.Errorf("error %q, want it to say no data came", s.Error)
+	}
+	if _, err := os.Stat(filepath.Join(u.staging, AssetName("2026.08.27"))); !os.IsNotExist(err) {
+		t.Error("the half download stayed in the staging folder")
+	}
+	if got, _ := os.ReadFile(exe); string(got) != "old binary" {
+		t.Error("the program changed")
+	}
+}
+
+func TestPrepareKeepsASlowButMovingDownload(t *testing.T) {
+	was := stallAfter
+	stallAfter = 100 * time.Millisecond
+	t.Cleanup(func() { stallAfter = was })
+	setVersion(t, "2026.08.24")
+	st := testStore(t)
+	gh := fakeTamperedRelease(t, "2026.08.27", []byte("new binary"), true, true, false, tamper{drip: 50 * time.Millisecond})
+	exe := filepath.Join(t.TempDir(), config.ExeName("yoru"))
+	os.WriteFile(exe, []byte("old binary"), 0o755)
+	u := newUpdater(t, st, gh, exe)
+	if _, err := u.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	for end := time.Now().Add(10 * time.Second); u.Status().Stage != StageReady; time.Sleep(20 * time.Millisecond) {
+		if s := u.Status(); s.Stage == StageFailed || time.Now().After(end) {
+			t.Fatalf("a download that kept moving failed: %+v", s)
+		}
 	}
 }

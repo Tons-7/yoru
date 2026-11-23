@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, type DiscoverItem, type LibraryItem, type ScheduleItem } from '../lib/api'
@@ -11,15 +11,17 @@ import {
   useDiscover,
   useHome,
   useHomePicks,
+  useNotInterested,
   useNow,
   useUpNext,
   useUpNextEdit,
 } from '../lib/queries'
 import { toast } from '../lib/toast'
+import { outDay } from '../lib/libraryText'
 import { AiringToday } from '../components/AiringToday'
 import { EditHomeSheet } from '../components/EditHome'
 import { Hero } from '../components/Hero'
-import { useHomeLayout, type HomeRowId } from '../components/homeLayout'
+import { RailFold, useHomeLayout, type HomeRowId } from '../components/homeLayout'
 import { MoreMenu } from '../components/MoreMenu'
 import { PosterCard } from '../components/PosterCard'
 import { Rail, RailFailed, RailItem, RailSkeleton } from '../components/Rail'
@@ -27,7 +29,7 @@ import { ReleasedCard } from '../components/ReleasedCard'
 import { ResumeCard } from '../components/ResumeCard'
 import { TopTen } from '../components/TopTen'
 import { soonestFirst } from '../components/upcoming'
-import { Button, ConfirmInline, LinkButton } from '../components/ui'
+import { Button, LinkButton } from '../components/ui'
 import { UpNextRail, UpNextSheet } from '../components/UpNext'
 
 export function Home() {
@@ -101,9 +103,9 @@ export function Home() {
       case 'trending':
         return <TopTen {...fold} />
       case 'foryou':
-        return <ShowsRail title="For you" result={forYou} items={picked.foryou ?? []} quiet {...fold} />
+        return <ShowsRail title="For you" result={forYou} items={picked.foryou ?? []} quiet dismissable {...fold} />
       case 'sequels':
-        return <ShowsRail title="Sequels you missed" result={sequels} items={picked.sequels ?? []} quiet {...fold} />
+        return <ShowsRail title="Sequels you missed" result={sequels} items={picked.sequels ?? []} quiet dismissable {...fold} />
       case 'season':
         return (
           <ShowsRail
@@ -141,7 +143,14 @@ export function Home() {
   return (
     <div className="space-y-8">
       <Hero items={trending.data?.items} loading={trending.isPending} />
-      {layout.order.map((id) => layout.shown(id) && <Fragment key={id}>{row(id)}</Fragment>)}
+      {layout.order.map(
+        (id) =>
+          layout.shown(id) && (
+            <RailFold key={id} value={() => layout.setFold(id, true)}>
+              {row(id)}
+            </RailFold>
+          ),
+      )}
       <div className="flex justify-center pt-2">
         <Button size="lg" className="w-full sm:w-auto" onClick={() => setEditingHome(true)}>
           <SlidersGlyph />
@@ -170,6 +179,7 @@ function ShowsRail({
   action,
   folded,
   onUnfold,
+  dismissable = false,
 }: Fold & {
   title: string
   to?: string
@@ -179,7 +189,9 @@ function ShowsRail({
   alert?: boolean
   meta?: ReactNode
   action?: ReactNode
+  dismissable?: boolean
 }) {
+  const notInterested = useNotInterested()
   if (result.isError && !result.data) return <RailFailed title={title} to={to} retry={() => void result.refetch()} />
   if (result.isPending) {
     if (quiet) return null
@@ -190,7 +202,11 @@ function ShowsRail({
     <Rail title={title} to={to} meta={meta} action={action}>
       {items.map((anime) => (
         <RailItem key={anime.id}>
-          <PosterCard anime={toCard(anime)} alert={alert} />
+          <PosterCard
+            anime={toCard(anime)}
+            alert={alert}
+            onNotInterested={dismissable ? () => notInterested(anime.id, toCard(anime).title) : undefined}
+          />
         </RailItem>
       ))}
     </Rail>
@@ -221,15 +237,19 @@ function ReleasedRail({
 }
 
 function ContinueCard({ item }: { item: LibraryItem }) {
+  const now = useNow() / 1000
   const resume = item.resume
   const episode = resume?.episode ?? item.progress + 1
   const qc = useQueryClient()
   const navigate = useNavigate()
   const { add } = useUpNextEdit()
-  const [confirming, setConfirming] = useState(false)
   const dismiss = useMutation({
-    mutationFn: () => api.post('/api/continue/dismiss', { animeId: item.id, episode }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['continue'] }),
+    mutationFn: (undo: boolean) => api.post('/api/continue/dismiss', { animeId: item.id, episode, undo }),
+    onSuccess: (_res, undo) => {
+      void qc.invalidateQueries({ queryKey: ['continue'] })
+      if (undo) return
+      toast(`${item.title} won't show in Continue`, 'info', { label: 'Undo', run: () => dismiss.mutate(true) })
+    },
   })
   const watched = useMutation({
     mutationFn: () => api.post('/api/watched', { animeId: item.id, episode, watched: true }),
@@ -248,6 +268,11 @@ function ContinueCard({ item }: { item: LibraryItem }) {
       position={resume?.position}
       duration={resume?.duration}
       fallback="Next episode"
+      extra={
+        !resume && item.nextEpisode != null && episode >= item.nextEpisode && item.nextAiringAt
+          ? `out ${outDay(item.nextAiringAt, now)}`
+          : undefined
+      }
       menu={
         <MoreMenu
           label={`More for ${item.title}`}
@@ -255,25 +280,11 @@ function ContinueCard({ item }: { item: LibraryItem }) {
           className="size-11 rounded-full"
           items={[
             { label: 'Go to show', run: () => navigate(`/anime/${item.id}`) },
-            { label: 'Add to Up next', run: () => add.mutate({ animeId: item.id, episode }), disabled: add.isPending },
+            { label: `Queue episode ${episode}`, run: () => add.mutate({ animeId: item.id, episode }), disabled: add.isPending },
             { label: 'Mark as watched', run: () => watched.mutate(), disabled: watched.isPending },
-            { label: 'Remove from Up next', run: () => setConfirming(true), danger: true },
+            { label: 'Hide from Continue', note: 'Progress stays', run: () => dismiss.mutate(false), danger: true },
           ]}
         />
-      }
-      footer={
-        confirming && (
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <ConfirmInline
-              label="Remove"
-              note="Progress stays."
-              onConfirm={() => dismiss.mutate()}
-              onCancel={() => setConfirming(false)}
-              pending={dismiss.isPending}
-              size="sm"
-            />
-          </div>
-        )
       }
     />
   )

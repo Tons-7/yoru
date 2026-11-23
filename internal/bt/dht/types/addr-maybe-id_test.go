@@ -5,7 +5,6 @@ import (
 	"net"
 	"testing"
 
-	"github.com/bradfitz/iter"
 	qt "github.com/frankban/quicktest"
 
 	"yoru/internal/bt/dht/krpc"
@@ -26,7 +25,7 @@ func TestNoIdFarther(tb *testing.T) {
 	b.Id = a.Id
 	c.Assert(a.CloserThan(b, target), qt.IsFalse)
 	id := a.Id.UnwrapPtr()
-	for i := range iter.N(160) {
+	for i := range 160 {
 		if target.GetBit(i) != id.GetBit(i) {
 			id.SetBit(i, target.GetBit(i))
 			break
@@ -48,7 +47,7 @@ func TestCloserThanId(tb *testing.T) {
 	b.Id.SetSomeZeroValue()
 	b.Id = a.Id
 	c.Assert(a.CloserThan(b, target), qt.IsFalse)
-	for i := range iter.N(160) {
+	for i := range 160 {
 		if target.GetBit(i) != a.Id.UnwrapPtr().GetBit(i) {
 			a.Id.UnwrapPtr().SetBit(i, target.GetBit(i))
 			break
@@ -63,7 +62,7 @@ func TestCloserThanId(tb *testing.T) {
 func BenchmarkDeterministicAddr(tb *testing.B) {
 	ip := net.ParseIP("1.2.3.4")
 	target := krpc.RandomNodeID().Int160()
-	for range iter.N(tb.N) {
+	for range tb.N {
 		a := AddrMaybeId{
 			Addr: krpc.NodeAddr{
 				IP:   ip,

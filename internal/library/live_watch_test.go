@@ -11,8 +11,6 @@ import (
 	"yoru/internal/anilist"
 )
 
-// At progress 6 of TYBW: The Calamity, aired episode 7 is announced and episode 8 is not.
-// Opt-in: YORU_LIVE=1 YORU_NYAA=… go test ./internal/library -run LiveWatcher -v
 func TestLiveWatcherAnnouncesTheEpisodeThatAired(t *testing.T) {
 	if os.Getenv("YORU_LIVE") == "" {
 		t.Skip("set YORU_LIVE=1 to search the live indexers")
@@ -59,7 +57,6 @@ func TestLiveWatcherAnnouncesTheEpisodeThatAired(t *testing.T) {
 		t.Errorf("announced another cour's release: %s", n.Body)
 	}
 
-	// Polling again announces nothing new.
 	if rep, err := w.Poll(ctx); err != nil || rep.Notified != 0 {
 		t.Errorf("second poll notified %d (err %v), want 0", rep.Notified, err)
 	}

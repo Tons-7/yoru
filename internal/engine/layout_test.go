@@ -13,7 +13,6 @@ import (
 	"yoru/internal/bt/metainfo"
 )
 
-// A single-file release lands straight in the cache, as rqbit put it.
 func TestSingleFileTorrentLayout(t *testing.T) {
 	seedDir := t.TempDir()
 	body := make([]byte, 333_333)
@@ -53,7 +52,6 @@ func TestSingleFileTorrentLayout(t *testing.T) {
 		t.Fatalf("file on disk: %v", err)
 	}
 
-	// Prewarm reads the tail and the head; both must arrive.
 	if err := f.client.Prewarm(c, added.ID, 0, 64<<10); err != nil {
 		t.Fatalf("prewarm: %v", err)
 	}
@@ -62,7 +60,6 @@ func TestSingleFileTorrentLayout(t *testing.T) {
 	}
 }
 
-// A file deleted behind the engine's back is no longer reported complete.
 func TestDeletedFileIsNoLongerComplete(t *testing.T) {
 	f := newFixture(t)
 	c := ctx(t)
@@ -107,8 +104,6 @@ func TestForgetKeepsFiles(t *testing.T) {
 	}
 }
 
-// A file deleted behind the engine's back (orphan cleanup after a forget) must
-// not leave "complete" records for when the torrent is added again.
 func TestReaddAfterDeletedFileForgetsItsPieces(t *testing.T) {
 	f := newFixture(t)
 	c := ctx(t)
@@ -126,7 +121,6 @@ func TestReaddAfterDeletedFileForgetsItsPieces(t *testing.T) {
 
 	f.client.Forget(c, added.ID)
 	os.Remove(filepath.Join(f.cache, "Show Pack", "Show - 02.mkv"))
-	// An inspection downloads nothing, so no piece is refetched; add runs the same cleanup on it.
 	if _, err := f.client.Inspect(c, f.magnet); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +133,6 @@ func TestReaddAfterDeletedFileForgetsItsPieces(t *testing.T) {
 	}
 }
 
-// Startup pauses part-downloaded torrents and leaves finished ones alone.
 func TestPauseUnfinished(t *testing.T) {
 	f := newFixture(t)
 	c := ctx(t)

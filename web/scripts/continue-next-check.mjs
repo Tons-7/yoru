@@ -32,10 +32,8 @@ for (let i = 0; i < 60; i++) {
   } catch {}
   await sleep(1000)
 }
-// The show has to exist locally before a list status can hang off it.
 await fetch(`${BASE}/api/anime/${ANIME}`)
 
-// Watching episode 1 through to the end and stopping there: no resume point.
 await post('/api/status', { animeId: ANIME, status: 'CURRENT' })
 await post('/api/watched', { animeId: ANIME, episode: 1 })
 
@@ -61,11 +59,9 @@ check(await until(() => card.isVisible()), 'its card links straight to episode 2
 const named = (await card.getAttribute('aria-label').catch(() => '')) ?? ''
 check(/\bepisode 2\b/i.test(named), 'and says which episode', named)
 
-// Finishing the show takes it off the row; there is no next episode.
 await post('/api/watched', { animeId: ANIME, episode: 12 })
 check(!(await pick()), 'a finished show drops off the row')
 
-// Partway through again as a rewatch, which resets progress, so the watch is redone.
 await post('/api/watched', { animeId: ANIME, episode: 2, watched: false })
 await post('/api/status', { animeId: ANIME, status: 'REPEATING' })
 await post('/api/watched', { animeId: ANIME, episode: 1 })
@@ -81,9 +77,11 @@ await page.reload({ waitUntil: 'domcontentloaded' })
 check(await until(() => rail.locator(`a[href="/watch/${ANIME}/2"]`).first().isVisible()),
   'the rewatch card is on the home page')
 
-// Removing it is per-episode and has to stick.
 await post('/api/continue/dismiss', { animeId: ANIME, episode: 2 })
 check(!(await pick()), 'dismissing the card removes it')
+await page.reload({ waitUntil: 'domcontentloaded' })
+await sleep(1500)
+check(!(await rail.locator(`a[href="/watch/${ANIME}/2"]`).first().isVisible().catch(() => false)), 'and it stays gone after a reload')
 
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 await browser.close()

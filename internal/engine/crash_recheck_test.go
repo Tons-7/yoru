@@ -6,7 +6,6 @@ import (
 	"yoru/internal/bt/metainfo"
 )
 
-// After an unclean stop each torrent is rechecked once; a rebind's restore must not hash it again.
 func TestCrashRecheckOncePerTorrent(t *testing.T) {
 	e := &Engine{unclean: true}
 	a, b := metainfo.Hash{1}, metainfo.Hash{2}

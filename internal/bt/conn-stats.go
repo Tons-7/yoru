@@ -6,10 +6,7 @@ import (
 	pp "yoru/internal/bt/peer_protocol"
 )
 
-// Connection metrics, summed per Torrent: chunks carry data, Data is content alone, Useful we needed,
-// Intended we expected. 64-bit aligned on 32-bit platforms, for Count's atomics.
 type ConnStats struct {
-	// Total bytes on the wire. Includes handshakes and encryption.
 	BytesWritten     Count
 	BytesWrittenData Count
 
@@ -26,11 +23,8 @@ type ConnStats struct {
 
 	MetadataChunksRead Count
 
-	// Number of pieces data was written to, that subsequently passed verification.
 	PiecesDirtiedGood Count
-	// Number of pieces data was written to, that subsequently failed verification. Note that a
-	// connection may not have been the sole dirtier of a piece.
-	PiecesDirtiedBad Count
+	PiecesDirtiedBad  Count
 }
 
 func (me *ConnStats) Copy() (ret ConnStats) {
@@ -38,7 +32,6 @@ func (me *ConnStats) Copy() (ret ConnStats) {
 }
 
 func (cs *ConnStats) wroteMsg(msg *pp.Message) {
-	// TODO: Track messages and not just chunks.
 	switch msg.Type {
 	case pp.Piece:
 		cs.ChunksWritten.Add(1)
@@ -53,13 +46,11 @@ func (cs *ConnStats) receivedChunk(size int64) {
 
 func (cs *ConnStats) incrementPiecesDirtiedGood() bool {
 	cs.PiecesDirtiedGood.Add(1)
-	// This method is used as an iterator and should never return early.
 	return true
 }
 
 func (cs *ConnStats) incrementPiecesDirtiedBad() bool {
 	cs.PiecesDirtiedBad.Add(1)
-	// This method is used as an iterator and should never return early.
 	return true
 }
 

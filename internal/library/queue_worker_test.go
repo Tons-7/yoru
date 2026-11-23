@@ -351,3 +351,34 @@ func TestCancelStopsTheEpisodeInFlight(t *testing.T) {
 		t.Fatalf("cancelling the show: removed=%d stopped=%v err=%v, want the waiting one and the one in flight", n, stopped, err)
 	}
 }
+
+func TestAnEnginePausedDownloadGoesBackInLine(t *testing.T) {
+	d, st, engine := workerQueueWith(t, release(otherHash, "[Other] Show - 02 [1080p].mkv", 50))
+	engine.trickle[otherHash] = time.Hour
+	engine.onAdd = func(hash string) {
+		engine.mu.Lock()
+		for id, h := range engine.ids {
+			if h == hash {
+				engine.paused[id] = true
+			}
+		}
+		engine.mu.Unlock()
+	}
+	ctx := context.Background()
+	if _, err := st.Enqueue(ctx, 1, 1, []int{2}); err != nil {
+		t.Fatal(err)
+	}
+	runUntil(t, d, func() bool {
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		return len(engine.added) >= 1
+	})
+	time.Sleep(1500 * time.Millisecond)
+	items := queued(t, st)
+	if len(items) != 1 {
+		t.Fatalf("queue = %+v, want episode 2 still in line", items)
+	}
+	if items[0].State == "failed" {
+		t.Fatalf("an engine-paused download failed: %+v", items[0])
+	}
+}

@@ -22,9 +22,9 @@ type LocalFile struct {
 	Group      string  `json:"releaseGroup,omitempty"`
 	Confidence float64 `json:"confidence"`
 	Missing    bool    `json:"missing,omitempty"`
+	ShowTitle  string  `json:"showTitle,omitempty"`
 }
 
-// SaveLocalFiles records a scan's files by path, stamped with the scan so SweepLocal retires the rest.
 func (s *Store) SaveLocalFiles(ctx context.Context, stamp int64, files []LocalFile) (int, error) {
 	if len(files) == 0 {
 		return 0, nil
@@ -71,7 +71,6 @@ func (s *Store) SaveLocalFiles(ctx context.Context, stamp int64, files []LocalFi
 	return len(files), tx.Commit()
 }
 
-// NextScanStamp is strictly newer than every scan's; the Windows clock is too coarse to promise that.
 func (s *Store) NextScanStamp(ctx context.Context) (int64, error) {
 	var last sql.NullInt64
 	if err := s.r.QueryRowContext(ctx,
@@ -86,15 +85,12 @@ func (s *Store) NextScanStamp(ctx context.Context) (int64, error) {
 	return stamp, nil
 }
 
-// likePrefix escapes a path so LIKE treats it literally, and ends it at a
-// separator so a root never matches a sibling that merely starts the same way.
 func likePrefix(root string) string {
 	root = strings.TrimRight(root, `\/`) + string(filepath.Separator)
 	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return r.Replace(root)
 }
 
-// SweepLocal marks what this scan missed, only under roots that walked cleanly (not an unplugged drive).
 func (s *Store) SweepLocal(ctx context.Context, stamp int64, roots []string) (int, error) {
 	if len(roots) == 0 {
 		return 0, nil
@@ -120,7 +116,6 @@ func (s *Store) SweepLocal(ctx context.Context, stamp int64, roots []string) (in
 	return int(n), nil
 }
 
-// SweepOutside marks rows under none of the configured roots missing: a folder taken out of the library.
 func (s *Store) SweepOutside(ctx context.Context, roots []string) (int, error) {
 	var query strings.Builder
 	query.WriteString(`UPDATE local_file SET missing = 1 WHERE missing = 0`)
@@ -137,13 +132,11 @@ func (s *Store) SweepOutside(ctx context.Context, roots []string) (int, error) {
 	return int(n), nil
 }
 
-// MarkLocalMissing flags one file found gone when it was about to be used.
 func (s *Store) MarkLocalMissing(ctx context.Context, id int) error {
 	_, err := s.w.ExecContext(ctx, `UPDATE local_file SET missing = 1 WHERE id = ?`, id)
 	return err
 }
 
-// ForgetMissing drops rows of files really gone; a sweep only flags them (unplugged drives).
 func (s *Store) ForgetMissing(ctx context.Context) (int, error) {
 	res, err := s.w.ExecContext(ctx, `DELETE FROM local_file WHERE missing = 1`)
 	if err != nil {
@@ -153,7 +146,6 @@ func (s *Store) ForgetMissing(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
-// LocalEpisode finds a playable file for one episode: a hand assignment first, then the sharper encode.
 func (s *Store) LocalEpisode(ctx context.Context, animeID, episode int) (LocalFile, error) {
 	var f LocalFile
 	var season, ep sql.NullInt64
@@ -207,24 +199,29 @@ func (s *Store) LocalFile(ctx context.Context, id int) (LocalFile, error) {
 	return f, nil
 }
 
-// LocalFiles lists what was scanned; animeID 0 lists all, for reviewing unmatched files.
 func (s *Store) LocalFiles(ctx context.Context, animeID int, unmatchedOnly bool, p Paging) (Page[LocalFile], error) {
-	where := `WHERE missing = 0 AND (?1 = 0 OR anime_id = ?1)`
+	return s.LocalFilesView(ctx, animeID, unmatchedOnly, false, p)
+}
+
+func (s *Store) LocalFilesView(ctx context.Context, animeID int, unmatchedOnly, missingOnly bool, p Paging) (Page[LocalFile], error) {
+	where := `WHERE f.missing = ` + map[bool]string{false: "0", true: "1"}[missingOnly] + ` AND (?1 = 0 OR f.anime_id = ?1)`
 	if unmatchedOnly {
-		where += ` AND anime_id IS NULL`
+		where += ` AND f.anime_id IS NULL`
 	}
 
 	var total int
 	if err := s.r.QueryRowContext(ctx,
-		`SELECT count(*) FROM local_file `+where, animeID).Scan(&total); err != nil {
+		`SELECT count(*) FROM local_file f `+where, animeID).Scan(&total); err != nil {
 		return Page[LocalFile]{}, err
 	}
 
+	mode := s.TitleMode(ctx, 0)
 	rows, err := s.r.QueryContext(ctx, `
-		SELECT id, path, size, modified, anime_id, episode, season,
-		       parsed_title, resolution, release_group, confidence
-		FROM local_file `+where+`
-		ORDER BY coalesce(parsed_title, path), episode
+		SELECT f.id, f.path, f.size, f.modified, f.anime_id, f.episode, f.season,
+		       f.parsed_title, f.resolution, f.release_group, f.confidence, f.missing,
+		       coalesce(a.title_romaji, ''), a.title_english
+		FROM local_file f LEFT JOIN anime a ON a.id = f.anime_id `+where+`
+		ORDER BY coalesce(f.parsed_title, f.path), f.episode
 		LIMIT ?2 OFFSET ?3`, animeID, p.PerPage+1, p.Offset())
 	if err != nil {
 		return Page[LocalFile]{}, err
@@ -236,13 +233,20 @@ func (s *Store) LocalFiles(ctx context.Context, animeID int, unmatchedOnly bool,
 		var f LocalFile
 		var aid, season, ep sql.NullInt64
 		var title, res, group sql.NullString
+		var missing int
+		var romaji string
+		var english *string
 
 		if err := rows.Scan(&f.ID, &f.Path, &f.Size, &f.Modified, &aid, &ep, &season,
-			&title, &res, &group, &f.Confidence); err != nil {
+			&title, &res, &group, &f.Confidence, &missing, &romaji, &english); err != nil {
 			return Page[LocalFile]{}, err
 		}
 		f.AnimeID, f.Episode, f.Season = int(aid.Int64), int(ep.Int64), int(season.Int64)
 		f.Title, f.Resolution, f.Group = title.String, res.String, group.String
+		f.Missing = missing == 1
+		if romaji != "" {
+			f.ShowTitle = PickTitle(mode, romaji, english)
+		}
 		items = append(items, f)
 	}
 	if err := rows.Err(); err != nil {
@@ -251,7 +255,6 @@ func (s *Store) LocalFiles(ctx context.Context, animeID int, unmatchedOnly bool,
 	return NewPage(items, p, total), nil
 }
 
-// AssignLocalFile corrects a wrong or missing match by hand.
 func (s *Store) AssignLocalFile(ctx context.Context, id, animeID, episode int) error {
 	_, err := s.w.ExecContext(ctx, `
 		UPDATE local_file SET anime_id = ?, episode = ?, confidence = 1

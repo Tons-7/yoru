@@ -17,7 +17,6 @@ func animeWithCount(t *testing.T, s *Store, id, episodes int) {
 	}
 }
 
-// A show no metadata source knows still lists its counted episodes.
 func TestEpisodesFallBackToTheCount(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -70,7 +69,6 @@ func TestNoEpisodesWhenTheCountIsUnknown(t *testing.T) {
 	}
 }
 
-// An airing show with no count yet lists what aired and the next, dated; still so once releases give rows.
 func TestAnAiringShowWithoutACountListsWhatAired(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

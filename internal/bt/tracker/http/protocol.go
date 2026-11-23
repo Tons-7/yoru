@@ -9,14 +9,13 @@ import (
 )
 
 type HttpResponse struct {
-	FailureReason string `bencode:"failure reason"`
-	Interval      int32  `bencode:"interval"`
-	TrackerId     string `bencode:"tracker id"`
-	Complete      int32  `bencode:"complete"`
-	Incomplete    int32  `bencode:"incomplete"`
-	Peers         Peers  `bencode:"peers"`
-	// BEP 7
-	Peers6 krpc.CompactIPv6NodeAddrs `bencode:"peers6"`
+	FailureReason string                    `bencode:"failure reason"`
+	Interval      int32                     `bencode:"interval"`
+	TrackerId     string                    `bencode:"tracker id"`
+	Complete      int32                     `bencode:"complete"`
+	Incomplete    int32                     `bencode:"incomplete"`
+	Peers         Peers                     `bencode:"peers"`
+	Peers6        krpc.CompactIPv6NodeAddrs `bencode:"peers6"`
 }
 
 type Peers struct {
@@ -44,46 +43,48 @@ var (
 	_ bencode.Marshaler   = Peers{}
 )
 
+type dictPeer Peer
+
+func (p *dictPeer) UnmarshalBencode(b []byte) error {
+	var d map[string]any
+	if err := bencode.Unmarshal(b, &d); err != nil {
+		return fmt.Errorf("peer entry is not a dict: %w", err)
+	}
+	return (*Peer)(p).FromDictInterface(d)
+}
+
 func (me *Peers) UnmarshalBencode(b []byte) (err error) {
-	var _v any
-	err = bencode.Unmarshal(b, &_v)
+	if len(b) > 0 && b[0] == 'l' {
+		vars.Add("http responses with list peers", 1)
+		var list []dictPeer
+		if err = bencode.Unmarshal(b, &list); err != nil {
+			return
+		}
+		me.Compact = false
+		for _, p := range list {
+			if p.IP != nil {
+				me.List = append(me.List, Peer(p))
+			}
+		}
+		return
+	}
+	var v string
+	if err = bencode.Unmarshal(b, &v); err != nil {
+		vars.Add("http responses with unhandled peers type", 1)
+		return fmt.Errorf("unsupported peers value: %w", err)
+	}
+	vars.Add("http responses with string peers", 1)
+	var cnas krpc.CompactIPv4NodeAddrs
+	err = cnas.UnmarshalBinary([]byte(v))
 	if err != nil {
 		return
 	}
-	switch v := _v.(type) {
-	case string:
-		vars.Add("http responses with string peers", 1)
-		var cnas krpc.CompactIPv4NodeAddrs
-		err = cnas.UnmarshalBinary([]byte(v))
-		if err != nil {
-			return
-		}
-		me.Compact = true
-		for _, cp := range cnas {
-			me.List = append(me.List, Peer{
-				IP:   cp.IP[:],
-				Port: cp.Port,
-			})
-		}
-		return
-	case []any:
-		vars.Add("http responses with list peers", 1)
-		me.Compact = false
-		for _, i := range v {
-			d, ok := i.(map[string]any)
-			if !ok {
-				return fmt.Errorf("peer entry is %T, not a dict", i)
-			}
-			var p Peer
-			if err = p.FromDictInterface(d); err != nil {
-				return
-			}
-			me.List = append(me.List, p)
-		}
-		return
-	default:
-		vars.Add("http responses with unhandled peers type", 1)
-		err = fmt.Errorf("unsupported type: %T", _v)
-		return
+	me.Compact = true
+	for _, cp := range cnas {
+		me.List = append(me.List, Peer{
+			IP:   cp.IP[:],
+			Port: cp.Port,
+		})
 	}
+	return
 }

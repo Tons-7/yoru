@@ -65,7 +65,7 @@ await today.waitFor({ timeout: 60_000 }).catch(() => {})
 const todayCard = today.locator('a[href^="/anime/"]').first()
 await todayCard.waitFor({ timeout: 30_000 }).catch(() => {})
 if ((await todayCard.count()) === 0) {
-  console.log('skip Airing today hover: nothing airs today')
+  console.log('SKIP Airing today hover: nothing airs today')
 } else {
   await todayCard.scrollIntoViewIfNeeded()
   await page.mouse.move(0, 0)

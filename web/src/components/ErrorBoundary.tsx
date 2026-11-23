@@ -1,13 +1,10 @@
 import { Component, type ReactNode } from 'react'
-import { cx } from '../lib/format'
 import { buttonClass } from '../lib/ui'
 
-// After a self-update the old page asks for chunks that no longer exist.
 const STALE_CHUNK = /dynamically imported module|Importing a module script failed|error loading dynamically/i
 
-// resetKey clears a caught error when it changes: the watch page keeps one key across episodes.
 export class ErrorBoundary extends Component<
-  { children: ReactNode; resetKey?: string },
+  { children: ReactNode; resetKey?: string; back?: { href: string; label: string } },
   { error: Error | null; key?: string }
 > {
   state: { error: Error | null; key?: string } = { error: null, key: this.props.resetKey }
@@ -16,7 +13,6 @@ export class ErrorBoundary extends Component<
     return { error }
   }
 
-  // Before the render, not after it as componentDidUpdate did: the error clears without a second pass.
   static getDerivedStateFromProps(props: { resetKey?: string }, state: { key?: string }) {
     return props.resetKey !== state.key ? { error: null, key: props.resetKey } : null
   }
@@ -32,16 +28,22 @@ export class ErrorBoundary extends Component<
             {updated ? 'Yoru was updated' : 'This page hit a problem'}
           </p>
           <p className="mt-1.5 text-sm text-base-400">
-            {updated
-              ? 'Reload to pick up the new version.'
-              : `Reloading usually fixes it. (${error.message.slice(0, 160)})`}
+            {updated ? 'Reload to pick up the new version.' : 'Reloading usually fixes it.'}
           </p>
-          <button
-            onClick={() => window.location.reload()}
-            className={cx(buttonClass('primary'), 'mt-4')}
-          >
-            Reload
-          </button>
+          {!updated && (
+            <details className="mt-2 text-xs text-base-500">
+              <summary className="cursor-pointer">Details</summary>
+              <p className="mt-1 break-words">{error.message.slice(0, 300)}</p>
+            </details>
+          )}
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            <button onClick={() => window.location.reload()} className={buttonClass('primary')}>
+              Reload
+            </button>
+            <a href={this.props.back?.href ?? '/'} className={buttonClass('secondary')}>
+              {this.props.back?.label ?? 'Go home'}
+            </a>
+          </div>
         </div>
       </div>
     )

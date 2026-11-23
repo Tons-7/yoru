@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,9 +18,7 @@ type playBody struct {
 	InfoHash string `json:"infoHash"`
 	External bool   `json:"external"`
 	AllowRaw bool   `json:"allowRaw"`
-	// Audio overrides the saved sub/dub preference for this play only: it is a
-	// "watch this one dubbed" decision, not a change of mind about everything.
-	Audio string `json:"audio,omitempty"`
+	Audio    string `json:"audio,omitempty"`
 }
 
 func (s *Server) play(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +38,6 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "animeId is required"})
 		return
 	}
-	// Season 0 lets the finder read it from the title; forcing 1 rejected every "3rd Season" release.
 	prefs := s.preferences(r.Context(), body.AnimeID)
 	chosen := false
 	switch body.Audio {
@@ -52,13 +50,17 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 		Episode:     body.Episode,
 		Season:      body.Season,
 		InfoHash:    body.InfoHash,
-		External:    body.External,
+		External:    body.External && fromHost(r),
 		AllowRaw:    body.AllowRaw,
 		AudioChosen: chosen,
 		Prefs:       prefs,
 	})
 	if err != nil {
-		s.log.Error("play", "anime", body.AnimeID, "episode", body.Episode, "err", err)
+		if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+			s.log.Debug("play left", "anime", body.AnimeID, "episode", body.Episode)
+		} else {
+			s.log.Error("play", "anime", body.AnimeID, "episode", body.Episode, "err", err)
+		}
 
 		out := map[string]any{"error": err.Error()}
 		var missing *library.NoRelease
@@ -66,7 +68,6 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 			out["rawAvailable"] = true
 			out["rawTitle"] = missing.RawTitle
 		}
-		// Not out yet, or raw only: the page offers to say when it's out, or download it then.
 		if missing != nil && (missing.Unaired || missing.RawOnly) {
 			out["notOut"] = true
 		}
@@ -76,7 +77,6 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, session)
 }
 
-// playStage is what a starting episode is waiting on; an empty step when it is not starting.
 func (s *Server) playStage(w http.ResponseWriter, r *http.Request) {
 	animeID, _ := strconv.Atoi(r.URL.Query().Get("id"))
 	episode, _ := strconv.Atoi(r.URL.Query().Get("episode"))
@@ -111,8 +111,29 @@ func (s *Server) stopPlayback(w http.ResponseWriter, r *http.Request) {
 		Episode int `json:"episode"`
 	}
 	json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body)
+	if s.playback != nil {
+		if animeID, episode, _ := s.playback.External(); animeID > 0 {
+			body.AnimeID, body.Episode = animeID, episode
+		}
+	}
 	if body.AnimeID > 0 && s.playback != nil {
 		s.playback.Suspend(r.Context(), body.AnimeID, body.Episode)
 	}
 	send(w, http.StatusOK, map[string]any{"stopped": true})
+}
+
+func (s *Server) externalPlayer(w http.ResponseWriter, r *http.Request) {
+	if s.playback == nil {
+		send(w, http.StatusOK, map[string]any{})
+		return
+	}
+	animeID, episode, failed := s.playback.External()
+	out := map[string]any{"animeId": animeID, "episode": episode}
+	if animeID > 0 {
+		out["title"] = s.store.ShownTitle(r.Context(), animeID)
+	}
+	if failed != "" {
+		out["failed"] = failed
+	}
+	send(w, http.StatusOK, out)
 }

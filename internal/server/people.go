@@ -11,20 +11,15 @@ import (
 	"yoru/internal/metadata"
 )
 
-// People pages: a voice actor or staff member with every part and credit, and a character with the shows
-// they're in and who voiced them. MyAnimeList's, as the cast is; each show as Yoru knows it.
-
 type peopleShow struct {
-	MalID int    `json:"malId"`
-	ID    int    `json:"id,omitempty"`
-	Title string `json:"title"`
-	Image string `json:"image,omitempty"`
-	Year  int    `json:"year,omitempty"`
-	// Status is the list's, so the page can put the viewer's own shows first.
+	MalID  int    `json:"malId"`
+	ID     int    `json:"id,omitempty"`
+	Title  string `json:"title"`
+	Image  string `json:"image,omitempty"`
+	Year   int    `json:"year,omitempty"`
 	Status string `json:"status,omitempty"`
 }
 
-// played is one character a voice actor played, with every show they played them in.
 type played struct {
 	Character metadata.Person `json:"character"`
 	Role      string          `json:"role,omitempty"`
@@ -36,7 +31,6 @@ type worked struct {
 	Positions []string   `json:"positions"`
 }
 
-// showsAsKnown turns MyAnimeList's shows into Yoru's: AniList ids, the viewer's titles, years, list status.
 func (s *Server) showsAsKnown(ctx context.Context, shown []metadata.Shown) (map[int]peopleShow, error) {
 	ids := make([]int, 0, len(shown))
 	for _, sh := range shown {
@@ -55,7 +49,6 @@ func (s *Server) showsAsKnown(ctx context.Context, shown []metadata.Shown) (map[
 	return out, nil
 }
 
-// byListThenNewest puts the viewer's shows first, then the newest.
 func byListThenNewest(a, b peopleShow) int {
 	listed := func(s peopleShow) int {
 		if s.Status != "" {
@@ -68,8 +61,12 @@ func byListThenNewest(a, b peopleShow) int {
 
 func (s *Server) person(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil || id <= 0 || s.enricher == nil {
+	if err != nil || id <= 0 {
 		send(w, http.StatusBadRequest, map[string]any{"error": "bad person id"})
+		return
+	}
+	if s.enricher == nil {
+		send(w, http.StatusServiceUnavailable, map[string]any{"error": "People pages aren't available right now."})
 		return
 	}
 	p, err := s.enricher.Person(r.Context(), id)
@@ -94,7 +91,6 @@ func (s *Server) person(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One card a character, however many seasons: Lelouch in five entries is one part.
 	var characters []*played
 	byID := map[int]*played{}
 	for _, role := range p.Roles {
@@ -112,7 +108,6 @@ func (s *Server) person(w http.ResponseWriter, r *http.Request) {
 	for _, c := range characters {
 		slices.SortFunc(c.Shows, byListThenNewest)
 	}
-	// The viewer's shows first; then the lead parts, a voice's recognisable ones, before a single scene's.
 	main := func(c *played) int {
 		if c.Role == "Main" {
 			return 1
@@ -129,7 +124,6 @@ func (s *Server) person(w http.ResponseWriter, r *http.Request) {
 		return cmp.Or(cmp.Compare(listed(b), listed(a)), cmp.Compare(main(b), main(a)), byListThenNewest(a.Shows[0], b.Shows[0]))
 	})
 
-	// One row a show, its positions together.
 	var work []*worked
 	byShow := map[int]*worked{}
 	for _, wk := range p.Work {
@@ -153,8 +147,12 @@ func (s *Server) person(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) character(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil || id <= 0 || s.enricher == nil {
+	if err != nil || id <= 0 {
 		send(w, http.StatusBadRequest, map[string]any{"error": "bad character id"})
+		return
+	}
+	if s.enricher == nil {
+		send(w, http.StatusServiceUnavailable, map[string]any{"error": "People pages aren't available right now."})
 		return
 	}
 	c, err := s.enricher.Character(r.Context(), id)
@@ -190,7 +188,6 @@ func (s *Server) character(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// orEmpty sends a list as one, not null, when there's nothing in it.
 func orEmpty[T any](list []T) []T {
 	if list == nil {
 		return []T{}

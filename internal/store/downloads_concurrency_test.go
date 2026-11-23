@@ -11,8 +11,6 @@ import (
 	"yoru/internal/db"
 )
 
-// A second query while the rows cursor is open holds two connections from the
-// read pool, so enough callers at once deadlock every one of them.
 func TestDownloadStatusUnderConcurrency(t *testing.T) {
 	conn, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -30,7 +28,6 @@ func TestDownloadStatusUnderConcurrency(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Comfortably more callers than the pool has connections.
 	callers := max(4, runtime.NumCPU()) * 4
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

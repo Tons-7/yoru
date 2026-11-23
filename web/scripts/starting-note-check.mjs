@@ -1,4 +1,3 @@
-// While an episode starts the player says what it waits on; once playing, the seek bar shows what is loaded.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -20,7 +19,6 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 
-// The play request is held open, as a slow release holds it, while the stage moves on.
 let stage = { step: 'search' }
 let release
 const held = new Promise((r) => (release = r))
@@ -47,7 +45,6 @@ stage = { step: 'start' }
 check(await says(/^Reading the start of the episode/), 'then that it is reading the start of the episode')
 await page.screenshot({ path: `${SHOTS}/starting-note.png` })
 
-// Let it start: the notes go, and the bar shows what is loaded ahead of the playhead.
 stage = {}
 release()
 const video = page.locator('video').first()
@@ -67,7 +64,6 @@ const bar = await page.evaluate(() => {
 })
 const ahead = bar.parts.find((p) => p.to > bar.played)
 check(bar.parts.length > 0, 'the seek bar draws the loaded part', JSON.stringify(bar))
-// A library file is whole on disk, so the loaded part is the whole bar; the browser's buffer lies inside it.
 check(!!ahead && ahead.to > 0.99 && bar.buffered <= ahead.to, 'it spans the whole file, with the browser buffer inside', JSON.stringify(bar))
 await page.locator('video').first().hover()
 await page.screenshot({ path: `${SHOTS}/loaded-bar.png` })

@@ -1,5 +1,3 @@
-// People pages: a cast card's character and voice lead to their pages; a voice actor's roles come one card a
-// character, the viewer's shows first; a character's page lists who voiced them and the shows they're in.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -50,7 +48,6 @@ try {
   await page.route('**/api/person/86', (route) => route.fulfill({ json: person }))
   await page.route('**/api/character/417', (route) => route.fulfill({ json: character }))
 
-  // The cast card: two ways in, each named as said, not as MyAnimeList files it.
   await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
   const lelouch = page.getByRole('link', { name: 'Lelouch Lamperouge', exact: true })
   check(await until(() => lelouch.isVisible(), 30_000), 'the cast card names the character, given name first')
@@ -59,7 +56,6 @@ try {
   await voice.click()
   check(await until(async () => new URL(page.url()).pathname === '/person/86'), 'the voice opens their page', page.url())
 
-  // A voice actor's page.
   check(await until(() => page.getByRole('heading', { name: 'Jun Fukuyama', level: 1 }).isVisible()), 'their page leads with their name')
   check(await page.getByText('福山 潤').isVisible(), 'and their name in Japanese')
   const mine = page.locator('section', { has: page.getByRole('heading', { name: /^In your shows/ }) })
@@ -75,7 +71,6 @@ try {
   await more.click()
   check(await until(() => page.getByRole('button', { name: 'Show less' }).isVisible()), 'a long bio folds, Show more unfolds it')
 
-  // A character's page, from their card.
   await mine.getByRole('link', { name: 'Lelouch Lamperouge', exact: true }).click()
   check(await until(async () => new URL(page.url()).pathname === '/character/417'), 'the character opens their page', page.url())
   check(await until(() => page.getByRole('heading', { name: 'Lelouch Lamperouge', level: 1 }).isVisible()), 'named as said')
@@ -85,7 +80,6 @@ try {
   check((await appears.getByRole('link', { name: 'Code Geass', exact: true }).getAttribute('href')) === `/anime/${ANIME}`,
     'and the shows they\'re in, the viewer\'s first')
 
-  // A phone: no page wider than the screen.
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(`${BASE}/person/86`, { waitUntil: 'domcontentloaded' })
   await until(() => page.getByRole('heading', { name: 'Jun Fukuyama', level: 1 }).isVisible())

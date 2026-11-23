@@ -6,7 +6,6 @@ func frierenIndex(t *testing.T) *Index {
 	t.Helper()
 	ix := NewIndex()
 
-	// The real franchise, which is exactly where AniList's own search picks the wrong entry.
 	ix.Add(Media{
 		ID: 154587, Format: "TV", Episodes: 28, Year: 2023, Season: 1,
 		Titles: []string{
@@ -69,7 +68,6 @@ func TestMatchScenneNamesResolveCorrectly(t *testing.T) {
 	}
 }
 
-// The full official English title must not land on a sibling franchise entry.
 func TestFullEnglishTitleDoesNotDriftToSpinOff(t *testing.T) {
 	ix := frierenIndex(t)
 
@@ -88,7 +86,6 @@ func TestFullEnglishTitleDoesNotDriftToSpinOff(t *testing.T) {
 	}
 }
 
-// A bare franchise name can't be resolved, so it reports ambiguous rather than guessing.
 func TestAmbiguousQueryIsFlagged(t *testing.T) {
 	ix := frierenIndex(t)
 
@@ -102,7 +99,6 @@ func TestAmbiguousQueryIsFlagged(t *testing.T) {
 	}
 }
 
-// A full, unambiguous title should clear the auto band so playback can start without interrupting the user.
 func TestConfidentMatchIsAutomatic(t *testing.T) {
 	ix := frierenIndex(t)
 
@@ -135,7 +131,6 @@ func TestSeasonSeparatesFranchiseEntries(t *testing.T) {
 func TestYearBreaksTiesButCannotRescueAWeakTitle(t *testing.T) {
 	ix := frierenIndex(t)
 
-	// A correct year must not make an unrelated title match.
 	if got, ok := ix.Match(Query{Title: "Completely Different Show", Year: 2023}); ok {
 		t.Fatalf("matched %d on year alone", got.MediaID)
 	}
@@ -165,8 +160,6 @@ func TestNoMatchForUnknownTitles(t *testing.T) {
 	}
 }
 
-// Every season of a franchise carries the same English title as a synonym, so
-// the title alone cannot separate them. What the user is watching can.
 func TestBoostSettlesFranchiseTies(t *testing.T) {
 	ix := NewIndex()
 	for _, id := range []int{16498, 20958, 99147, 104578} {
@@ -179,7 +172,6 @@ func TestBoostSettlesFranchiseTies(t *testing.T) {
 		t.Fatalf("four identical titles should be ambiguous, got %q", tied.Decision)
 	}
 
-	// The user is midway through one of them.
 	got, ok := ix.Match(Query{
 		Title: "Attack on Titan",
 		Boost: map[int]float64{99147: BoostWatching, 16498: BoostCompleted},
@@ -195,7 +187,6 @@ func TestBoostSettlesFranchiseTies(t *testing.T) {
 	}
 }
 
-// A boost must settle a tie, never overturn a genuinely better title match.
 func TestBoostCannotOverrideABetterTitle(t *testing.T) {
 	ix := NewIndex()
 	ix.Add(Media{ID: 1, Titles: []string{"Sousou no Frieren"}})
@@ -210,7 +201,6 @@ func TestBoostCannotOverrideABetterTitle(t *testing.T) {
 	}
 }
 
-// An episode beyond a season's length rules that season out.
 func TestEpisodeOutOfRangeIsPenalised(t *testing.T) {
 	ix := NewIndex()
 	ix.Add(Media{ID: 1, Episodes: 12, Titles: []string{"Show"}})
@@ -267,8 +257,6 @@ func TestDice(t *testing.T) {
 	}
 }
 
-// Unrelated strings still share common bigrams, so the absolute value matters
-// less than staying clear of the thresholds that produce a match.
 func TestDiceKeepsUnrelatedTitlesBelowThreshold(t *testing.T) {
 	pairs := [][2]string{
 		{"frieren", "completely different"},
@@ -293,5 +281,24 @@ func TestDiceIsSymmetric(t *testing.T) {
 		if a, b := dice(p[0], p[1]), dice(p[1], p[0]); a != b {
 			t.Errorf("dice(%q,%q)=%.4f but reversed=%.4f", p[0], p[1], a, b)
 		}
+	}
+}
+
+func TestNoiseOnlyTitlesStillMatchExactly(t *testing.T) {
+	ix := NewIndex()
+	ix.Add(Media{ID: 1, Titles: []string{"No. 6"}})
+	ix.Add(Media{ID: 2, Titles: []string{"K"}})
+	ix.Add(Media{ID: 3, Titles: []string{"K-On!"}})
+	for _, c := range []struct {
+		title string
+		want  int
+	}{{"No. 6", 1}, {"K", 2}} {
+		got, ok := ix.Match(Query{Title: c.title})
+		if !ok || got.MediaID != c.want {
+			t.Errorf("%q matched %+v (%v), want %d", c.title, got, ok, c.want)
+		}
+	}
+	if got, ok := ix.Match(Query{Title: "No"}); ok && got.MediaID == 1 {
+		t.Error("a bare noise word matched a title it is only part of")
 	}
 }

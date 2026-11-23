@@ -15,7 +15,6 @@ import (
 	"yoru/internal/transcode"
 )
 
-// markSkip keeps the viewer's own opening or ending for an episode, which beats every other source.
 func (s *Server) markSkip(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID  int     `json:"animeId"`
@@ -37,7 +36,6 @@ func (s *Server) markSkip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mark := player.SkipRange{Kind: body.Kind, Start: body.Start, End: body.End, Source: "marked"}
-	// "chapters" or "sound": what the mark was lined up with, which the player tells the viewer.
 	snapped := s.snapMark(r.Context(), body.AnimeID, body.Episode, &mark)
 	if err := s.store.SaveOwnSkip(r.Context(), body.AnimeID, body.Episode, mark); err != nil {
 		s.fail(w, "mark skip", err)
@@ -47,9 +45,7 @@ func (s *Server) markSkip(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"ok": true, "start": mark.Start, "end": mark.End, "snapped": snapped})
 }
 
-// snapMark lines a mark up, reading the file or the stream playing it (what was just watched is fetched).
 func (s *Server) snapMark(ctx context.Context, animeID, episode int, mark *player.SkipRange) string {
-	// Short: a slow swarm can hold the bytes past the playhead, and the mark is saved as given after.
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	path, ok := s.episodeOnDisk(ctx, animeID, episode)
@@ -66,7 +62,6 @@ func (s *Server) snapMark(ctx context.Context, animeID, episode int, mark *playe
 			}
 		}
 	}
-	// No stream open: the file's chapters from the file, as the sound search reads them.
 	if !live && ok {
 		if info, err := transcode.NewProber(s.cfg.Tool("ffprobe")).Probe(ctx, path); err == nil {
 			chapters = info.Chapters
@@ -75,7 +70,6 @@ func (s *Server) snapMark(ctx context.Context, animeID, episode int, mark *playe
 	return s.snapEdges(ctx, path, chapters, mark)
 }
 
-// snapEdges moves a range's ends to a near chapter start, else the song's sound edge, and says which ("" none).
 func (s *Server) snapEdges(ctx context.Context, path string, chapters []transcode.Chapter, r *player.SkipRange) string {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -115,7 +109,6 @@ func (s *Server) snapEdges(ctx context.Context, path string, chapters []transcod
 	return max(moved[0], moved[1])
 }
 
-// nearChapter is the chapter start nearest at within reach; the first, at 0, starts no part.
 func nearChapter(chapters []transcode.Chapter, at float64) (float64, bool) {
 	best, found := at, false
 	for _, c := range chapters {
@@ -131,7 +124,6 @@ func skipSpan(start, end float64) bool {
 	return start >= 0 && span >= 5 && span <= 300
 }
 
-// afterMark keeps the marked song's sound as the show's print, for later episodes, and gives it to AniSkip.
 func (s *Server) afterMark(animeID, episode int, mark player.SkipRange, duration float64) {
 	ctx, cancel := detached(2 * time.Minute)
 	defer cancel()
@@ -139,6 +131,9 @@ func (s *Server) afterMark(animeID, episode int, mark player.SkipRange, duration
 		if err := s.enricher.ShareSkip(ctx, animeID, episode, mark, duration); err != nil {
 			s.log.Debug("share marked skip", "anime", animeID, "err", err)
 		}
+	}
+	if !skipfind.Usable(mark.End - mark.Start) {
+		return
 	}
 	path, ok := s.episodeOnDisk(ctx, animeID, episode)
 	if !ok || !s.canFind() {
@@ -153,7 +148,6 @@ func (s *Server) afterMark(animeID, episode int, mark player.SkipRange, duration
 	}
 }
 
-// forgetSkipMarks drops the viewer's marks on an episode, so its other sources show again.
 func (s *Server) forgetSkipMarks(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int `json:"animeId"`
@@ -169,7 +163,6 @@ func (s *Server) forgetSkipMarks(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// voteSkip passes the player's verdict on an AniSkip time on: kept through the skip, or undone as wrong.
 func (s *Server) voteSkip(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ID string `json:"id"`
@@ -190,7 +183,6 @@ func (s *Server) voteSkip(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// skipFinder says whether this ffmpeg can find openings itself; a build without chromaprint can't.
 func (s *Server) skipFinder(w http.ResponseWriter, _ *http.Request) {
 	send(w, http.StatusOK, map[string]any{"available": s.canFind()})
 }
@@ -202,17 +194,24 @@ var finderCheck struct {
 	at   time.Time
 }
 
-// canFind asks the ffmpeg in use once; a "no" is asked again later, as Setup can install another.
 func (s *Server) canFind() bool {
 	tool := s.cfg.Tool("ffmpeg")
 	finderCheck.Lock()
-	defer finderCheck.Unlock()
-	if finderCheck.tool != tool || !finderCheck.ok && time.Since(finderCheck.at) > 10*time.Minute {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		out, err := proc.Hide(exec.CommandContext(ctx, tool, "-hide_banner", "-muxers")).Output()
-		cancel()
-		finderCheck.tool, finderCheck.at = tool, time.Now()
-		finderCheck.ok = err == nil && strings.Contains(string(out), "chromaprint")
+	stale := finderCheck.tool != tool || !finderCheck.ok && time.Since(finderCheck.at) > 10*time.Minute
+	known := finderCheck.ok
+	if stale {
+		finderCheck.at = time.Now()
 	}
-	return finderCheck.ok
+	finderCheck.Unlock()
+	if !stale {
+		return known
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := proc.Hide(exec.CommandContext(ctx, tool, "-hide_banner", "-muxers")).Output()
+	ok := err == nil && strings.Contains(string(out), "chromaprint")
+	finderCheck.Lock()
+	finderCheck.tool, finderCheck.at, finderCheck.ok = tool, time.Now(), ok
+	finderCheck.Unlock()
+	return ok
 }

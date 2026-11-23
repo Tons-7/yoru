@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"yoru/internal/player"
@@ -22,13 +23,12 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 	return true
 }
 
-// Must match the episode catalogue's key, which is the bare number.
 func epKey(episode int) string { return fmt.Sprint(episode) }
 
-// playerNotes are what the browser player may log: an episode's end is decided in the page, so only it can say.
-var playerNotes = map[string]bool{"ended": true, "end-stuck": true, "countdown-cleared": true, "next": true}
+var undoGrace = 15 * time.Second
 
-// playerNote logs one end-of-episode event from the page, a few short fields at most.
+var playerNotes = map[string]bool{"ended": true, "end-stuck": true, "countdown-cleared": true, "next": true, "previous": true}
+
 func (s *Server) playerNote(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int            `json:"animeId"`
@@ -44,13 +44,12 @@ func (s *Server) playerNote(w http.ResponseWriter, r *http.Request) {
 	keys := slices.Sorted(maps.Keys(body.Detail))
 	for _, k := range keys[:min(len(keys), 12)] {
 		v := fmt.Sprint(body.Detail[k])
-		args = append(args, k[:min(len(k), 24)], v[:min(len(v), 80)])
+		args = append(args, strings.ToValidUTF8(k[:min(len(k), 24)], ""), strings.ToValidUTF8(v[:min(len(v), 80)], ""))
 	}
 	s.log.Info("player", args...)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// progress takes the browser player's reports, which resuming and the trackers depend on.
 func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID  int     `json:"animeId"`
@@ -58,9 +57,8 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 		Position float64 `json:"position"`
 		Duration float64 `json:"duration"`
 		Played   float64 `json:"played"`
-		// Paused, and final (the episode ended or the player closed), are for the Discord card.
-		Paused bool `json:"paused"`
-		Final  bool `json:"final"`
+		Paused   bool    `json:"paused"`
+		Final    bool    `json:"final"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -71,11 +69,9 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	// A page knows the TV's exact time; its report beats the TV's own estimate (noteTV) for a while.
 	s.tvMu.Lock()
 	key := sessionID(body.AnimeID, body.Episode)
 	if _, seen := s.pageReported[key]; !seen {
-		// Only the last pageWins count: cleared out on each new episode.
 		maps.DeleteFunc(s.pageReported, func(_ string, at time.Time) bool { return time.Since(at) >= pageWins })
 	}
 	s.pageReported[key] = time.Now()
@@ -97,19 +93,17 @@ func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"saved": true, "watched": watched})
 }
 
-// savePosition saves a page's report or the TV's estimate alike: the store decides what counts as watched
-// (as for mpv), so no client can claim it, and a newly watched episode goes to the trackers.
 func (s *Server) savePosition(ctx context.Context, animeID, episode int, position, duration, played float64) (bool, error) {
 	return s.saveState(ctx, episode, store.PlaybackState{AnimeID: animeID, Position: position, Duration: duration, Played: played})
 }
 
 func (s *Server) saveState(ctx context.Context, episode int, p store.PlaybackState) (bool, error) {
 	p.EpKey, p.Ending = epKey(episode), s.endingFor(ctx, p.AnimeID, episode)
-	watched, err := s.store.SavePlayback(ctx, p)
+	watched, newly, err := s.store.SavePlaybackFinished(ctx, p)
 	if err != nil {
 		return false, err
 	}
-	if watched && s.syncer != nil {
+	if newly && s.syncer != nil {
 		if err := s.syncer.Watched(ctx, p.AnimeID, episode); err != nil {
 			s.log.Warn("sync watched", "anime", p.AnimeID, "err", err)
 		}
@@ -117,7 +111,6 @@ func (s *Server) saveState(ctx context.Context, episode int, p store.PlaybackSta
 	return watched, nil
 }
 
-// prepare resolves an episode's release before play is asked, so the search is done by then.
 func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int `json:"animeId"`
@@ -135,7 +128,6 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusOK, map[string]any{"preparing": false})
 		return
 	}
-	// Already on screen, or starting: playback is resolving this very episode.
 	if _, starting := s.playback.Stage(body.AnimeID, body.Episode); starting {
 		send(w, http.StatusOK, map[string]any{"preparing": false})
 		return
@@ -147,13 +139,10 @@ func (s *Server) prepare(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Season 0 lets the finder fill from the show's own title; forcing 1 here
-	// searched a second season's episodes as if they were season one.
 	s.prefetch.PrepareTarget(body.AnimeID, body.Episode, body.Season, s.preferences(r.Context(), body.AnimeID))
 	send(w, http.StatusAccepted, map[string]any{"preparing": true})
 }
 
-// skips serves the browser player's skip times by the order of trust below, and looks for what none knows.
 func (s *Server) skips(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	animeID, _ := strconv.Atoi(q.Get("anime"))
@@ -172,11 +161,8 @@ func (s *Server) skips(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Each part from the most trusted source that knows it: the viewer's marks, the file's own chapters (they
-	// fit this exact release), AniSkip, then what Yoru found in the sound.
 	chapters := s.chapterSkips(animeID, episode, player.SkipNames(prefs.String("playback.skip_chapters")))
 	ranges := player.Merge(player.From(own, "marked"), chapters)
-	// Sharing asks AniSkip either way: what it lacks is what the chapters can give it.
 	sharing := prefs.Bool("skips.share")
 	if sharing || !player.HasPart(ranges, "op") || !player.HasPart(ranges, "ed") {
 		if s.enricher != nil {
@@ -213,7 +199,6 @@ func (s *Server) skips(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// endingFor is where the ending starts by the skip times' order of trust, as for mpv; 0 unless that rule is on.
 func (s *Server) endingFor(ctx context.Context, animeID, episode int) float64 {
 	prefs, err := s.store.Prefs(ctx, animeID)
 	if err != nil || prefs.String("sync.progress_at") != store.EndingThreshold {
@@ -233,7 +218,6 @@ func (s *Server) shareSkip(animeID, episode int, r player.SkipRange, length floa
 	}
 }
 
-// chapterSkips reads the open file's skippable chapters, names too; not stored, as each release has its own.
 func (s *Server) chapterSkips(animeID, episode int, names []string) []player.SkipRange {
 	if s.streams == nil {
 		return nil
@@ -252,13 +236,12 @@ func (s *Server) chapterSkips(animeID, episode int, names []string) []player.Ski
 	return out
 }
 
-// setWatched marks an episode watched or not by hand. Unwatching rewinds
-// progress rather than deleting it, which is what the trackers understand.
 func (s *Server) setWatched(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AnimeID int   `json:"animeId"`
-		Episode int   `json:"episode"`
-		Watched *bool `json:"watched"`
+		AnimeID  int   `json:"animeId"`
+		Episode  int   `json:"episode"`
+		Watched  *bool `json:"watched"`
+		Undoable bool  `json:"undoable"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -271,7 +254,6 @@ func (s *Server) setWatched(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	watched := body.Watched == nil || *body.Watched
 
-	// Saved here and pushed after the response, so a tracker that's down fails nothing.
 	var err error
 	if watched {
 		_, err = s.store.MarkWatched(ctx, body.AnimeID, body.Episode)
@@ -284,14 +266,24 @@ func (s *Server) setWatched(w http.ResponseWriter, r *http.Request) {
 	}
 	s.pushSoon(body.AnimeID)
 	if watched && s.cache != nil {
-		if _, err := s.cache.AutoDelete(ctx, body.AnimeID); err != nil {
-			s.log.Warn("auto-delete watched", "anime", body.AnimeID, "err", err)
+		autoDelete := func(ctx context.Context) {
+			if _, err := s.cache.AutoDelete(ctx, body.AnimeID); err != nil {
+				s.log.Warn("auto-delete watched", "anime", body.AnimeID, "err", err)
+			}
+		}
+		if body.Undoable {
+			time.AfterFunc(undoGrace, func() {
+				ctx, cancel := detached(time.Minute)
+				defer cancel()
+				autoDelete(ctx)
+			})
+		} else {
+			autoDelete(ctx)
 		}
 	}
 	send(w, http.StatusOK, map[string]any{"animeId": body.AnimeID, "episode": body.Episode, "watched": watched})
 }
 
-// pushSoon sends one anime to the trackers behind the response.
 func (s *Server) pushSoon(animeID int) {
 	if s.syncer == nil {
 		return
@@ -305,7 +297,6 @@ func (s *Server) pushSoon(animeID int) {
 	}()
 }
 
-// setScore rates a show 0-100; 0 clears it. Both trackers score per show.
 func (s *Server) setScore(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int `json:"animeId"`
@@ -330,7 +321,6 @@ func (s *Server) setScore(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"animeId": body.AnimeID, "score": body.Score})
 }
 
-// setStatus backs the list tags: watching, completed, on hold, dropped, planning, rewatching.
 func (s *Server) setStatus(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int    `json:"animeId"`
@@ -351,7 +341,6 @@ func (s *Server) setStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Zero means unrated, so "leave it alone" has its own value.
 	score := -1
 	if body.Score != nil {
 		score = *body.Score
@@ -367,8 +356,6 @@ func (s *Server) setStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only a show being watched now subscribes to release notifications; following
-	// on any status announced every episode of merely-planned shows.
 	if err := s.store.SetFollow(ctx, body.AnimeID,
 		body.Status == store.StatusCurrent || body.Status == store.StatusRepeating); err != nil {
 		s.log.Warn("follow on status change", "anime", body.AnimeID, "err", err)
@@ -378,7 +365,6 @@ func (s *Server) setStatus(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"animeId": body.AnimeID, "status": body.Status})
 }
 
-// removeStatus takes a show off the list, trackers first: one failing leaves the show listed everywhere.
 func (s *Server) removeStatus(w http.ResponseWriter, r *http.Request) {
 	animeID, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil || animeID == 0 {
@@ -398,11 +384,11 @@ func (s *Server) removeStatus(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"animeId": animeID, "removed": true})
 }
 
-// dismissResume removes an episode from continue-watching without pretending it was finished.
 func (s *Server) dismissResume(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		AnimeID int `json:"animeId"`
-		Episode int `json:"episode"`
+		AnimeID int  `json:"animeId"`
+		Episode int  `json:"episode"`
+		Undo    bool `json:"undo"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -412,6 +398,14 @@ func (s *Server) dismissResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if body.Undo {
+		if err := s.store.UndismissResume(r.Context(), body.AnimeID, epKey(body.Episode)); err != nil {
+			s.fail(w, "bring back resume", err)
+			return
+		}
+		send(w, http.StatusOK, map[string]any{"dismissed": false})
+		return
+	}
 	if err := s.store.DismissResume(r.Context(), body.AnimeID, epKey(body.Episode)); err != nil {
 		s.fail(w, "dismiss resume", err)
 		return

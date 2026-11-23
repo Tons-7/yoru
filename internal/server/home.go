@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/http"
 	"slices"
 	"time"
@@ -83,17 +84,27 @@ func (s *Server) forYouIDs(ctx context.Context, seeds []int, adult bool) ([]int,
 	if err != nil {
 		return nil, err
 	}
+	hidden, err := s.store.HiddenIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
 	place := make(map[int]int, len(seeds))
 	for i, id := range seeds {
 		place[id] = i
+	}
+	cooled := map[int]int{}
+	for _, rec := range recs {
+		if hidden[rec.ID] {
+			cooled[rec.From]++
+		}
 	}
 	weight := map[int]float64{}
 	for _, rec := range recs {
 		if known[rec.ID] || rec.Rating <= 0 || rec.Adult && !adult {
 			continue
 		}
-
-		weight[rec.ID] += float64(rec.Rating) * (1 - float64(place[rec.From])/float64(2*len(seeds)))
+		w := float64(rec.Rating) * (1 - float64(place[rec.From])/float64(2*len(seeds)))
+		weight[rec.ID] += w * math.Pow(0.75, float64(cooled[rec.From]))
 	}
 	ids := slices.Collect(maps.Keys(weight))
 	slices.SortFunc(ids, func(a, b int) int { return cmp.Or(cmp.Compare(weight[b], weight[a]), a-b) })
@@ -122,4 +133,13 @@ func (s *Server) homeSequels(w http.ResponseWriter, r *http.Request) {
 		return m.Status == nil || (*m.Status != "FINISHED" && *m.Status != "RELEASING")
 	})
 	send(w, http.StatusOK, map[string]any{"items": s.decorate(r, media)})
+}
+
+func (s *Server) hiddenShows(w http.ResponseWriter, r *http.Request) {
+	shows, err := s.store.HiddenShows(r.Context())
+	if err != nil {
+		s.fail(w, "hidden shows", err)
+		return
+	}
+	send(w, http.StatusOK, map[string]any{"items": shows})
 }

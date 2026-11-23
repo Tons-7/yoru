@@ -9,21 +9,14 @@ import (
 	infohash_v2 "yoru/internal/bt/types/infohash-v2"
 )
 
-// TorrentSpec is a torrent to add, or additions to one held, made from a magnet or metainfo. TODO: split
-// into options for a new Torrent and methods changing one.
 type TorrentSpec struct {
 	AddTorrentOpts
-	// The tiered tracker URIs.
-	Trackers [][]string
-	// The name to use if the Name field from the Info isn't available.
+	Trackers    [][]string
 	DisplayName string
-	// WebSeed URLs; Torrent.AddWebSeeds takes them with options.
-	Webseeds  []string
-	DhtNodes  []string
-	PeerAddrs []string
-	// The combination of the "xs" and "as" fields in magnet links, for now.
-	Sources []string
-	// BEP 52 "piece layers" from metainfo
+	Webseeds    []string
+	DhtNodes    []string
+	PeerAddrs   []string
+	Sources     []string
 	PieceLayers map[string]string
 }
 
@@ -37,16 +30,13 @@ func TorrentSpecFromMagnetUri(uri string) (spec *TorrentSpec, err error) {
 		DisplayName: m.DisplayName,
 		Webseeds:    m.Params["ws"],
 		Sources:     append(m.Params["xs"], m.Params["as"]...),
-		PeerAddrs:   m.Params["x.pe"], // BEP 9
-		// TODO: What's the parameter for DHT nodes?
+		PeerAddrs:   m.Params["x.pe"],
 	}
 	spec.InfoHash = m.InfoHash.UnwrapOrZeroValue()
 	spec.InfoHashV2 = m.V2InfoHash
 	return
 }
 
-// The error will be from unmarshalling the info bytes. The TorrentSpec is still filled out as much
-// as possible in this case.
 func TorrentSpecFromMetaInfoErr(mi *metainfo.MetaInfo) (*TorrentSpec, error) {
 	info, err := mi.UnmarshalInfo()
 	if err != nil {
@@ -81,7 +71,6 @@ func TorrentSpecFromMetaInfoErr(mi *metainfo.MetaInfo) (*TorrentSpec, error) {
 	}, err
 }
 
-// Panics if there was anything missing from the metainfo.
 func TorrentSpecFromMetaInfo(mi *metainfo.MetaInfo) *TorrentSpec {
 	ts, err := TorrentSpecFromMetaInfoErr(mi)
 	if err != nil {

@@ -58,15 +58,14 @@ func TestMarshalMetainfoNodes(t *testing.T) {
 
 func TestUnmarshalBadMetainfoNodes(t *testing.T) {
 	var mi MetaInfo
-	// Should barf on the integer in the nodes list.
-	err := bencode.Unmarshal([]byte("d5:nodesl1:ai42eee"), &mi)
-	require.Error(t, err)
+	require.NoError(t, bencode.Unmarshal([]byte("d5:nodesl1:ai42el4:hostee8:url-listd1:ai1eee"), &mi))
+	require.Equal(t, Node("a"), mi.Nodes[0])
+	require.Empty(t, mi.UrlList)
 }
 
 func TestMetainfoEmptyInfoBytes(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, (&MetaInfo{
-		// Include a non-empty field that comes after "info".
 		UrlList: []string{"hello"},
 	}).Write(&buf))
 	var mi MetaInfo

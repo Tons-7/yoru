@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 import { cx } from '../lib/format'
 import type { DeviceUpscale } from '../player/anime4k'
 import { ANIME4K_MODES } from '../lib/anime4k'
-import { Segmented } from './ui'
+import { CloseButton, Segmented, SwitchTrack } from './ui'
 import { useDismiss, useModalFocus } from '../lib/hooks'
 
 const DEVICE_CHOICES: ReadonlyArray<{ value: DeviceUpscale; label: string }> = [
@@ -52,23 +52,17 @@ export function Anime4KDialog({
         ref={panel}
         role="dialog"
         aria-modal="true"
-        aria-label="Anime4K"
+        aria-label="Sharper picture (Anime4K)"
         className="animate-fade-in relative max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl border border-base-800 bg-base-900 p-4 shadow-2xl scrollbar-thin"
       >
         <div className="mb-3 flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-base font-semibold text-white">Anime4K</h2>
+            <h2 className="text-base font-semibold text-white">Sharper picture (Anime4K)</h2>
             <p className="mt-0.5 text-xs text-base-500">
               Upscaling for this episode only. Your saved default is not changed.
             </p>
           </div>
-          <button
-            onClick={close}
-            aria-label="Close"
-            className="tap relative grid size-9 shrink-0 place-items-center rounded-md text-base-400 hover:bg-base-800 hover:text-base-100"
-          >
-            ✕
-          </button>
+          <CloseButton onClick={close} />
         </div>
 
         <button
@@ -84,19 +78,7 @@ export function Anime4KDialog({
           )}
         >
           <span className="font-medium">{enabled ? 'On' : 'Off'}</span>
-          <span
-            className={cx(
-              'relative h-5 w-9 rounded-full transition-colors',
-              enabled ? 'bg-accent-500' : 'bg-base-700',
-            )}
-          >
-            <span
-              className={cx(
-                'absolute top-0.5 size-4 rounded-full bg-white transition-all',
-                enabled ? 'left-[1.125rem]' : 'left-0.5',
-              )}
-            />
-          </span>
+          <SwitchTrack on={enabled} />
         </button>
 
         <div
@@ -135,13 +117,10 @@ export function Anime4KDialog({
             <p className="text-sm text-base-200">On this device</p>
             <p className="text-xs text-base-500">{DEVICE_HINTS[device]}</p>
           </div>
-          <Segmented size="sm" value={device} onChange={onDevice} options={DEVICE_CHOICES} />
+          <Segmented size="sm" label="On this device" value={device} onChange={onDevice} options={DEVICE_CHOICES} />
         </div>
 
-        <p className="mt-3 text-xs text-base-600">
-          Size in mpv, under Settings › Sound and picture, is for mpv; in the browser, Light, Balanced and
-          Full above take its place.
-        </p>
+        <p className="mt-3 text-xs text-base-500">In the browser, Light, Balanced and Full set the size.</p>
       </div>
     </div>
   )

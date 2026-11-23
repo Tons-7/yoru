@@ -14,14 +14,11 @@ import (
 
 const Size = sha256.Size
 
-// 32-byte SHA2-256 hash. See BEP 52.
 type T [Size]byte
 
 var _ fmt.Formatter = (*T)(nil)
 
 func (t *T) Format(f fmt.State, c rune) {
-	// TODO: I can't figure out a nice way to just override the 'x' rune, since it's meaningless
-	// with the "default" 'v', or .String() already returning the hex.
 	f.Write([]byte(t.HexString()))
 }
 
@@ -56,7 +53,6 @@ func (t *T) FromHexString(s string) (err error) {
 	return
 }
 
-// Truncates the hash to 20 bytes for use in auxiliary interfaces, like DHT and trackers.
 func (t *T) ToShort() (short *infohash.T) {
 	return (*infohash.T)(unsafe.Pointer(t))
 }

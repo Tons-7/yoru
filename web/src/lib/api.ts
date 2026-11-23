@@ -2,10 +2,13 @@ import { markRefreshing } from './freshness'
 
 export const TOKEN_KEY = 'yoru.token'
 
+let tokenFromLink = ''
+
 function readToken(): string {
   const params = new URLSearchParams(window.location.search)
   const fromUrl = params.get('token')
   if (fromUrl) {
+    tokenFromLink = fromUrl
     try {
       localStorage.setItem(TOKEN_KEY, fromUrl)
     } catch {}
@@ -15,13 +18,19 @@ function readToken(): string {
     return fromUrl
   }
   try {
-    return localStorage.getItem(TOKEN_KEY) ?? ''
+    return localStorage.getItem(TOKEN_KEY) ?? tokenFromLink
   } catch {
-    return ''
+    return tokenFromLink
   }
 }
 
 export const UNPAIRED_EVENT = 'yoru:unpaired'
+
+export class OfflineError extends TypeError {
+  constructor() {
+    super("Can't reach Yoru. Check the connection and try again.")
+  }
+}
 
 export class ApiError extends Error {
   readonly status: number
@@ -51,18 +60,30 @@ export const catalogueSource = {
     return () => savedListeners.delete(listener)
   },
   savedAt: () => savedAt,
+  clear() {
+    if (savedAt === null) return
+    savedAt = null
+    savedListeners.forEach((l) => l())
+  },
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
 
-  const res = await fetchAuthed(path, { ...init, headers })
+  let res: Response
+  try {
+    res = await fetchAuthed(path, { ...init, headers })
+  } catch (e) {
+    if (e instanceof TypeError) throw new OfflineError()
+    throw e
+  }
   noteSource(res)
 
   if (!res.ok) {
     let body: unknown
-    let message = `${res.status} ${res.statusText}`
+    let message =
+      res.status >= 500 ? `Yoru couldn't answer just now (${res.status}). Try again.` : `${res.status} ${res.statusText}`.trim()
     try {
       body = await res.json()
       const err = (body as { error?: string })?.error
@@ -178,6 +199,7 @@ export interface UpNextItem {
   position?: number
   duration?: number
   spoiler?: boolean
+  downloaded?: boolean
 }
 
 export interface LibraryItem {

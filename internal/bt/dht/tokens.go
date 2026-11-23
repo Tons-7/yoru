@@ -4,17 +4,11 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"time"
-
-	"github.com/bradfitz/iter"
 )
 
-// Manages creation and validation of tokens issued to querying nodes.
 type tokenServer struct {
-	// Something only we know that peers can't guess, so they can't deduce valid tokens.
-	secret []byte
-	// How long between token changes.
-	interval time.Duration
-	// How many intervals a token's may lag the current one and still be valid.
+	secret           []byte
+	interval         time.Duration
 	maxIntervalDelta int
 	timeNow          func() time.Time
 }
@@ -40,7 +34,7 @@ func (me tokenServer) createToken(addr Addr, t time.Time) string {
 
 func (me *tokenServer) ValidToken(token string, addr Addr) bool {
 	t := me.getTimeNow()
-	for range iter.N(me.maxIntervalDelta + 1) {
+	for range me.maxIntervalDelta + 1 {
 		if me.createToken(addr, t) == token {
 			return true
 		}

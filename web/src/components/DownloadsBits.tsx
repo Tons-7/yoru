@@ -157,9 +157,9 @@ export function SelectBar({
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete' || count === 0 || confirming) return
+      if (e.key !== 'Delete' || count === 0 || confirming || e.defaultPrevented || e.repeat) return
       const t = e.target as HTMLElement | null
-      if (t?.closest('input, textarea, select, [contenteditable="true"]')) return
+      if (t?.closest('input, textarea, select, [contenteditable="true"], [role=dialog], [role=menu], [role=listbox], [data-portal-menu]')) return
       e.preventDefault()
       onRemove()
     }

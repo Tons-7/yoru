@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// flaky is a listener whose first Accept fails the way a busy socket table does; the next ones work.
 type flaky struct {
 	net.Listener
 	failed bool
@@ -21,7 +20,6 @@ func (f *flaky) Accept() (net.Conn, error) {
 	return f.Listener.Accept()
 }
 
-// One accept error must not end every later Accept: Serve asks again, and the loop has to be there.
 func TestDualListenerKeepsAcceptingAfterAnError(t *testing.T) {
 	inner, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

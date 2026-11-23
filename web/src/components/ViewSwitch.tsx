@@ -13,7 +13,7 @@ export function ViewSwitch<T extends string>({
   onChange: (value: T) => void
   className?: string
 }) {
-  return <Segmented options={options} value={value} onChange={onChange} full className={cx('min-w-0', className)} />
+  return <Segmented label="View" options={options} value={value} onChange={onChange} full className={cx('min-w-0', className)} />
 }
 
 export function SwitchHeader({

@@ -13,7 +13,6 @@ import (
 	"yoru/internal/store"
 )
 
-// listing is the enrichment's step on its own, with a crawl of its own.
 func (e *Enricher) listing(ctx context.Context, animeID, malID int) {
 	e.listingFrom(ctx, animeID, func() (metadata.Listing, error) { return e.meta.Listing(ctx, malID) })
 }
@@ -23,7 +22,6 @@ const listingJSON = `{"data":[
   {"mal_id":2,"title":"Episode 2","aired":null}
 ],"pagination":{"last_visible_page":1,"has_next_page":false}}`
 
-// listed: a store with one OVA of that many parts, and an enricher whose MyAnimeList answers two episodes.
 func listed(t *testing.T, status string, parts int) (*Enricher, *store.Store, *atomic.Int32) {
 	t.Helper()
 	st := openStore(t)
@@ -45,7 +43,6 @@ func listed(t *testing.T, status string, parts int) (*Enricher, *store.Store, *a
 	return NewEnricher(st, meta, slog.New(slog.DiscardHandler)), st, &asked
 }
 
-// A finished show the episode source has nothing for gets its episodes named from MyAnimeList.
 func TestListingNamesAFinishedShowNothingDescribes(t *testing.T) {
 	e, st, asked := listed(t, "FINISHED", 2)
 	ctx := context.Background()
@@ -62,19 +59,16 @@ func TestListingNamesAFinishedShowNothingDescribes(t *testing.T) {
 	if first.AirDate == nil || first.Runtime == nil || *first.Runtime != 23 {
 		t.Errorf("episode 1 air date %v, runtime %v", first.AirDate, first.Runtime)
 	}
-	// "Episode 2" is MyAnimeList's placeholder, not a title.
 	if eps[1].TitleEN != nil {
 		t.Errorf("episode 2 title = %q", *eps[1].TitleEN)
 	}
 
-	// Asked once a month, not on every page load.
 	e.listing(ctx, 1, 77)
 	if asked.Load() != 1 {
 		t.Errorf("asked %d times", asked.Load())
 	}
 }
 
-// MyAnimeList's list lags an airing show, and a named row ends the padding to the episode count.
 func TestListingLeavesAnAiringShowAlone(t *testing.T) {
 	e, st, asked := listed(t, "RELEASING", 3)
 	e.listing(context.Background(), 1, 77)
@@ -87,7 +81,6 @@ func TestListingLeavesAnAiringShowAlone(t *testing.T) {
 	}
 }
 
-// A list naming two of three parts would hide the third, so it is not used.
 func TestListingShorterThanTheShowIsNotUsed(t *testing.T) {
 	e, st, _ := listed(t, "FINISHED", 3)
 	ctx := context.Background()
@@ -99,7 +92,6 @@ func TestListingShorterThanTheShowIsNotUsed(t *testing.T) {
 	}
 }
 
-// A show the episode source did describe is not asked about.
 func TestListingLeavesADescribedShowAlone(t *testing.T) {
 	e, st, asked := listed(t, "FINISHED", 3)
 	ctx := context.Background()
@@ -113,7 +105,6 @@ func TestListingLeavesADescribedShowAlone(t *testing.T) {
 	}
 }
 
-// Only gaps are filled: what was recorded stays, and so do rows the list does not have.
 func TestFillEpisodesKeepsWhatIsRecorded(t *testing.T) {
 	_, st, _ := listed(t, "FINISHED", 3)
 	ctx := context.Background()

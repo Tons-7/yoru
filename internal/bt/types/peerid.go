@@ -5,7 +5,6 @@ import (
 	"fmt"
 )
 
-// Peer client ID.
 type PeerID [20]byte
 
 func (me PeerID) String() string {

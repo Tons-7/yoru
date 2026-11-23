@@ -1,4 +1,3 @@
-// Save an episode, open Yoru with the PC out of reach, play it with subtitles, and sync what was watched.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -19,7 +18,6 @@ const check = (ok, label, detail = '') => {
 check(await prepareLocalEpisode({ base: BASE, lib: process.env.YORU_LIB, anime: ANIME }), 'test episode ready')
 const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] })
 const context = await browser.newContext({ viewport: { width: 1400, height: 1000 } })
-// This browser is on Yoru's own machine; the page is told it's another device, which can save.
 await context.route('**/api/access', async (route) => {
   const res = await route.fetch()
   await route.fulfill({ response: res, json: { ...(await res.json()), host: false } })
@@ -55,7 +53,7 @@ try {
 
   await page.goto(`${BASE}/saved`, { waitUntil: 'domcontentloaded' })
   check(await until(() => page.getByRole('link', { name: 'Play' }).isVisible()), 'it lists in Downloads, on the This device side')
-  check(await page.getByRole('tab', { name: /^This (device|phone)/, selected: true }).isVisible(), 'with This device chosen')
+  check(await page.getByRole('radio', { name: /^This (device|phone)/, checked: true }).isVisible(), 'with This device chosen')
   const before = await position()
 
   const cut = (route) => route.abort('internetdisconnected')
@@ -64,10 +62,10 @@ try {
   await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' }).catch(() => {})
   check(await until(() => page.getByText("Can't reach the PC. Saved episodes still play.").isVisible(), 20_000),
     'with the PC out of reach, Yoru opens on what is saved', page.url())
-  await page.getByRole('tab', { name: 'On the PC' }).click()
+  await page.getByRole('radio', { name: 'On the PC', exact: true }).click()
   check(await until(() => page.getByText("The PC is off or out of reach. Its list comes back when it's on.").isVisible()),
     'the PC side says why its list is missing')
-  await page.getByRole('tab', { name: /^This (device|phone)/ }).click()
+  await page.getByRole('radio', { name: /^This (device|phone)/ }).click()
   await page.getByRole('link', { name: 'Play' }).click()
   await page.locator('video').first().waitFor({ timeout: 20_000 })
   await page.evaluate(() => {
@@ -130,7 +128,7 @@ try {
   await pc.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
   const pcMore = pc.getByRole('button', { name: 'More for Yoru Test Show episode 1' })
   await pcMore.waitFor({ timeout: 15_000 })
-  check((await pc.getByRole('tab', { name: /This (device|phone)/ }).count()) === 0, 'the PC running Yoru has no This device side')
+  check((await pc.getByRole('radio', { name: /This (device|phone)/ }).count()) === 0, 'the PC running Yoru has no This device side')
   await pcMore.click()
   check((await pc.getByRole('menuitem', { name: /this device/ }).count()) === 0, 'and no Save to this device')
   check(errors.length === 0, 'no page errors', errors.join(' | '))

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"yoru/internal/metadata"
@@ -26,7 +27,6 @@ func TestUnwatchRewindsProgressAndClearsLaterTicks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for n := 1; n <= 5; n++ {
-		// One report may claim at most two minutes played; the flag needs half the episode.
 		for range 8 {
 			if _, err := s.SavePlayback(ctx, PlaybackState{AnimeID: 1, EpKey: epKey(n), Position: 1400, Duration: 1440, Played: 120}); err != nil {
 				t.Fatal(err)
@@ -85,7 +85,7 @@ func TestUnwatchPastProgressChangesNothing(t *testing.T) {
 	ctx := context.Background()
 	s.ImportList(ctx, []Anime{{ID: 1, Romaji: "Show"}}, nil, ImportMerge)
 	s.MarkWatched(ctx, 1, 2)
-	s.ClearDirty(ctx, 1, 0, 0)
+	s.ClearDirtyAt(ctx, 1, 0, 0, math.MaxInt64)
 
 	if err := s.Unwatch(ctx, 1, 7); err != nil {
 		t.Fatal(err)
@@ -115,7 +115,6 @@ func TestSetScoreCreatesAPlannedEntryAndPushes(t *testing.T) {
 		t.Fatalf("dirty = %+v", dirty)
 	}
 
-	// An existing entry keeps its status.
 	s.SetListStatus(ctx, 1, "CURRENT", -1)
 	if err := s.SetScore(ctx, 1, 0); err != nil {
 		t.Fatal(err)
@@ -137,7 +136,6 @@ func TestLocalEntryIDsNeverCollideWithRealOnes(t *testing.T) {
 	s.ImportList(ctx, []Anime{{ID: 1, Romaji: "A"}, {ID: 2, Romaji: "B"}, {ID: 3, Romaji: "C"}},
 		[]Entry{{ID: 500, AnimeID: 1, Progress: 1}}, ImportMerge)
 
-	// max(id)-1 would have handed anime 2 the id 499, a real AniList id.
 	s.MarkWatched(ctx, 2, 1)
 	s.SetScore(ctx, 3, 50)
 
@@ -155,7 +153,6 @@ func TestDirtyEntriesSkipMALOnlyAnime(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	s.MarkWatched(ctx, 1, 3)
-	// A row with a negative anime id, however it got there, is not AniList's.
 	if _, err := s.w.ExecContext(ctx, `INSERT INTO anime (id, title_romaji, synced_at) VALUES (-52991, 'MAL only', 0)`); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +186,6 @@ func TestApplyRemoteCreatesAndUpdatesButNeverOverwritesLocalEdits(t *testing.T) 
 		t.Fatal("a remote change must be flagged for the other tracker")
 	}
 
-	// Edited locally after the caller read the row: the remote must not roll it back.
 	read := entryOf(t, s, 1).Changed
 	if _, err := s.MarkWatched(ctx, 1, 5); err != nil {
 		t.Fatal(err)
@@ -202,7 +198,6 @@ func TestApplyRemoteCreatesAndUpdatesButNeverOverwritesLocalEdits(t *testing.T) 
 		t.Fatalf("progress = %d after refused apply", e.Progress)
 	}
 
-	// Still dirty for AniList, but read just now: the site's change lands.
 	changed, err = s.ApplyRemote(ctx, RemoteEntry{AnimeID: 1, Status: "COMPLETED", Progress: 12, Score: 70, Repeat: 0,
 		Since: entryOf(t, s, 1).Changed})
 	if err != nil || !changed {
@@ -213,7 +208,6 @@ func TestApplyRemoteCreatesAndUpdatesButNeverOverwritesLocalEdits(t *testing.T) 
 		t.Fatalf("entry = %+v; repeat must not go backwards", e)
 	}
 
-	// Unknown vocabulary keeps the status rather than storing garbage.
 	if _, err := s.ApplyRemote(ctx, RemoteEntry{AnimeID: 1, Status: "weird", Progress: 12, Score: 70, Since: entryOf(t, s, 1).Changed}); err != nil {
 		t.Fatal(err)
 	}
@@ -251,8 +245,6 @@ func epKey(n int) string {
 	return string(rune('0' + n))
 }
 
-// A tick set by hand raises the list's progress, not the player's flag, so the
-// episode list has to read both — or marking by hand never shows.
 func TestEpisodeListTicksFollowProgressAndUnwatch(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -279,7 +271,6 @@ func TestEpisodeListTicksFollowProgressAndUnwatch(t *testing.T) {
 		}
 	}
 
-	// The same rule for a show with no episode data, only a count.
 	s.ImportList(ctx, []Anime{{ID: 2, Romaji: "Bare", Episodes: &ep}}, nil, ImportMerge)
 	s.MarkWatched(ctx, 2, 2)
 	planned, _ := s.Episodes(ctx, 2)

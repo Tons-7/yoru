@@ -7,7 +7,6 @@ import (
 	"yoru/internal/bt/tracker"
 )
 
-// Helper-type used to bulk-manage PeerInfos.
 type peerInfos []PeerInfo
 
 func (me *peerInfos) AppendFromPex(nas []krpc.NodeAddr, fs []peer_protocol.PexPeerFlags) {

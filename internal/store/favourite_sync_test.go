@@ -28,7 +28,6 @@ func favouriteRow(t *testing.T, st *Store, id int) (favourite, synced, dirty int
 	return
 }
 
-// The push reads the row, sends it, then marks it. A click in between must not be stamped as sent.
 func TestFavouriteChangedDuringPushStaysDirty(t *testing.T) {
 	st := favouriteStore(t)
 	ctx := context.Background()
@@ -36,7 +35,6 @@ func TestFavouriteChangedDuringPushStaysDirty(t *testing.T) {
 	if err := st.SetBookmark(ctx, 100, Bookmark{Favourite: true}); err != nil {
 		t.Fatal(err)
 	}
-	// Snapshot taken, toggle sent; before it is marked, the user undoes it.
 	if err := st.SetBookmark(ctx, 100, Bookmark{Favourite: false}); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +47,6 @@ func TestFavouriteChangedDuringPushStaysDirty(t *testing.T) {
 		t.Fatalf("row = favourite %d synced %d dirty %d, want the undo kept and still queued", fav, synced, dirty)
 	}
 
-	// The merge that follows sees the site holding it, and must not put it back.
 	if _, err := st.ApplyRemoteFavourites(ctx, []int{100}); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +68,6 @@ func TestMarkSyncedClearsARowThatDidNotMove(t *testing.T) {
 	}
 }
 
-// A sync that changes nothing leaves the rows, or the favourites page (by updated_at) shuffles.
 func TestMergeLeavesSettledRowsAlone(t *testing.T) {
 	st := favouriteStore(t)
 	ctx := context.Background()

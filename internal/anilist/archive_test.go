@@ -100,7 +100,7 @@ func TestRejectionIsNotReplacedBySavedAnswer(t *testing.T) {
 	archive := newMemArchive()
 	c.SetArchive(archive)
 	body := []byte(`{"query":"query { n }","variables":null}`)
-	archive.saved[archiveKey(body, false)] = []byte(`{"n":7}`)
+	archive.saved[archiveKey(body, "")] = []byte(`{"n":7}`)
 
 	page, _ := WithServed(context.Background())
 	var out struct{ N int }
@@ -203,8 +203,10 @@ func TestASavedAnswerIsShownAtOnceAndRefreshedBehind(t *testing.T) {
 	}
 	<-archive.wrote
 	asked := calls.Load()
-	if got, fresh, err := ask(); err != nil || got != 2 || fresh.Refreshing() || UsedSaved(context.Background()) {
-		t.Fatalf("after the refresh: %d %v, refreshing %v", got, err, fresh.Refreshing())
+	later, fresh := WithServed(context.Background())
+	var after struct{ N int }
+	if err := c.Query(later, "query { n }", nil, &after); err != nil || after.N != 2 || fresh.Refreshing() || UsedSaved(later) {
+		t.Fatalf("after the refresh: %d %v, refreshing %v, used saved %v", after.N, err, fresh.Refreshing(), UsedSaved(later))
 	}
 	if calls.Load() != asked {
 		t.Error("the refreshed answer cost another request")
@@ -277,7 +279,7 @@ func TestWhoIsSignedInIsNeverTakenFromASavedAnswer(t *testing.T) {
 	}
 
 	archive.mu.Lock()
-	archive.saved[archiveKey(mustBody(t, viewerQuery), true)] = []byte(`{"Viewer":{"id":1,"name":"first"}}`)
+	archive.saved[archiveKey(mustBody(t, viewerQuery), "two")] = []byte(`{"Viewer":{"id":1,"name":"first"}}`)
 	archive.mu.Unlock()
 	c.cache = newResponseCache()
 	c.SetToken("two")
@@ -292,6 +294,16 @@ func TestWhoIsSignedInIsNeverTakenFromASavedAnswer(t *testing.T) {
 	page, _ = WithServed(context.Background())
 	if v, err := c.Viewer(page); err == nil {
 		t.Fatalf("with AniList down, signing in answered %+v from a saved copy", v)
+	}
+}
+
+func TestSavedAnswersBelongToOneAccount(t *testing.T) {
+	body := []byte(`{"query":"q"}`)
+	if archiveKey(body, "one") == archiveKey(body, "two") {
+		t.Error("two accounts share a saved answer")
+	}
+	if archiveKey(body, "one") == archiveKey(body, "") {
+		t.Error("an account shares the signed-out saved answer")
 	}
 }
 

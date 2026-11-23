@@ -7,7 +7,6 @@ import (
 	"yoru/internal/metadata"
 )
 
-// An episode a library folder holds needs no download, so "Download all" must not count it.
 func TestEpisodesMarkWhatTheLibraryHolds(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -21,7 +20,6 @@ func TestEpisodesMarkWhatTheLibraryHolds(t *testing.T) {
 	if _, err := s.SaveLocalFiles(ctx, 1, []LocalFile{
 		{Path: `D:\Anime\Show - 02.mkv`, Size: 1, AnimeID: 1, Episode: 2, Confidence: 0.9},
 		{Path: `D:\Anime\Show - 03.mkv`, Size: 1, AnimeID: 1, Episode: 3, Confidence: 0.9},
-		// Show 2 has no episode metadata: its planned rows are flagged too.
 		{Path: `D:\Anime\Other - 01.mkv`, Size: 1, AnimeID: 2, Episode: 1, Confidence: 0.9},
 	}); err != nil {
 		t.Fatal(err)

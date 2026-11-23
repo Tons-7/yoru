@@ -81,7 +81,9 @@ func (w *Window) Open(ctx context.Context, url string) {
 		w.log("app window", "attempt", attempt+1, "maximized", maximized, "handoff", w.handoff, "outcome", how)
 		if l != nil {
 			w.mu.Lock()
-			w.run = l
+			if l.cmd != nil || w.run == nil || w.run.cmd == nil {
+				w.run = l
+			}
 			w.mu.Unlock()
 			if l.cmd != nil {
 				go w.watch(l)
@@ -187,7 +189,8 @@ func appWindow(ctx context.Context, url, profile string, maximized, handoff bool
 		}
 		return nil, how
 	case <-ctx.Done():
-		return &launched{cmd: cmd, exited: exited}, browser + " starting as Yoru stops"
+		cmd.Process.Kill()
+		return &launched{}, browser + " closed: Yoru is stopping"
 	case <-time.After(3 * time.Second):
 		return &launched{cmd: cmd, exited: exited}, browser + " up"
 	}

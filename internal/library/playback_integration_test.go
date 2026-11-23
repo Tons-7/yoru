@@ -16,7 +16,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// End to end: torrent stream over HTTP into mpv, position back over IPC. Big Buck Bunny, CC BY 3.0.
 const testMagnet = "magnet:?xt=urn:btih:dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c&dn=Big+Buck+Bunny"
 
 func magnetWithTrackers() string {
@@ -101,7 +100,6 @@ func TestStreamIntoPlayer(t *testing.T) {
 	err = p.Play(ctx, player.Options{
 		URL:   streamURL,
 		Title: "yoru stream test",
-		// Audio only keeps the run headless; the video path is identical.
 		Extra: []string{"--no-video", "--cache=yes"},
 	})
 	if err != nil {
@@ -136,14 +134,10 @@ func TestStreamIntoPlayer(t *testing.T) {
 		t.Errorf("duration = %.0f, expected the full clip length", duration)
 	}
 
-	// Seeking well beyond the downloaded region is the real test: the engine has
-	// to repoint its priority window and block until those pieces arrive.
 	if err := p.Seek(duration / 2); err != nil {
 		t.Fatalf("seek: %v", err)
 	}
 
-	// mpv reports the seek target before data arrives, so one event past the
-	// target only proves the command was accepted; resumption means it keeps advancing.
 	seekStart := time.Now()
 	target := duration/2 - 5
 	seekDeadline := time.After(120 * time.Second)

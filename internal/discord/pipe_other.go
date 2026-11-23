@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 )
 
-// openPipe dials the Discord app's socket n, wherever this system's Discord (plain, Flatpak or Snap) keeps it.
 func openPipe(n int) (io.ReadWriteCloser, error) {
 	name := fmt.Sprintf("discord-ipc-%d", n)
 	var dirs []string

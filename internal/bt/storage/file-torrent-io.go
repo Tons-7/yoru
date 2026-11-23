@@ -10,18 +10,14 @@ import (
 	"yoru/internal/bt/segments"
 )
 
-// Exposes file-based storage of a torrent, as one big ReadWriterAt.
 type fileTorrentImplIO struct {
 	fts *fileTorrentImpl
 }
 
-// Returns EOF on short or missing file.
 func (fst fileTorrentImplIO) readFileAt(file file, b []byte, off int64) (n int, err error) {
 	fst.fts.logger().Debug("readFileAt", "file.safeOsPath", file.safeOsPath)
 	f, err := fst.fts.openSharedFile(file)
 	if errors.Is(err, fs.ErrNotExist) {
-		// File missing is treated the same as a short file. Should we propagate this through the
-		// interface now that fs.ErrNotExist is a thing?
 		err = io.EOF
 		return
 	}
@@ -29,7 +25,6 @@ func (fst fileTorrentImplIO) readFileAt(file file, b []byte, off int64) (n int, 
 		return
 	}
 	defer f.Close()
-	// Limit the read to within the expected bounds of this file.
 	if int64(len(b)) > file.length()-off {
 		b = b[:file.length()-off]
 	}
@@ -46,7 +41,6 @@ func (fst fileTorrentImplIO) readFileAt(file file, b []byte, off int64) (n int, 
 	return
 }
 
-// Only returns EOF at the end of the torrent. Premature EOF is ErrUnexpectedEOF.
 func (fst fileTorrentImplIO) ReadAt(b []byte, off int64) (n int, err error) {
 	for i, e := range fst.fts.segmentLocater.LocateIter(
 		segments.Extent{Start: off, Length: int64(len(b))},
@@ -56,7 +50,6 @@ func (fst fileTorrentImplIO) ReadAt(b []byte, off int64) (n int, err error) {
 		b = b[n1:]
 		if segments.Int(n1) == e.Length {
 			switch err1 {
-			// ReaderAt.ReadAt contract.
 			case nil, io.EOF:
 			default:
 				err = err1
@@ -69,7 +62,6 @@ func (fst fileTorrentImplIO) ReadAt(b []byte, off int64) (n int, err error) {
 		}
 	}
 	if len(b) != 0 {
-		// We're at the end of the torrent.
 		err = io.EOF
 	}
 	return

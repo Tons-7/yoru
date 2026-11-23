@@ -1,5 +1,3 @@
-// Choosing releases: Settings' wait, avoids and preview; SeaDex notes; held episodes and better copies.
-// Sites aren't reachable here, so what they would answer is fed to the page.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -34,7 +32,6 @@ page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 const row = (label) => page.locator('[data-row]', { has: page.getByText(label, { exact: true }) })
 const GB = 1 << 30
 
-// The picker's list, as a site search would rank it, with SeaDex's word on two of them.
 const notes = 'Mehul is CsS+Restyled and retimed GUDish.\nThe JPN BD is heavily lowpassed; CsS cleans up a lot of the ringing to make it bearable.'
 const sources = [
   { Torrent: { title: '[Mehul] Show - 05 (BD 1080p)', infoHash: 'a'.repeat(40), size: GB, seeders: 40, seedersKnown: true, leechers: 1 },
@@ -53,7 +50,6 @@ await page.route('**/api/download/release', (route) => {
   return route.fulfill({ status: 202, json: { queued: true } })
 })
 
-// Settings: the wait, avoided groups and words, and the low-quality switch are saved.
 await page.goto(`${BASE}/settings?tab=Downloads`, { waitUntil: 'domcontentloaded' })
 const wait = row('Wait for a better release').getByRole('combobox', { name: 'Wait for a better release' })
 check(await until(() => wait.isVisible()), 'Downloads offers a wait for a better release')
@@ -81,7 +77,6 @@ check(await until(async () => (await prefs()).effective['release.avoid_lq'] === 
 await lq.click()
 await until(async () => (await prefs()).effective['release.avoid_lq'] === 'false')
 
-// The preview lists per show what would happen and why; Open picker opens that episode's releases.
 await page.route('**/api/releases/preview', (route) => route.fulfill({ json: { items: [
   { animeId: ANIME, title: 'Frieren', episode: 6, state: 'download', release: '[SubsPlease] Frieren - 06 (1080p)', size: 1.4 * GB },
   { animeId: 2, title: 'Waiting Show', episode: 3, state: 'wait', release: '[Other] Waiting Show - 03 (1080p)', size: GB, reason: 'waits up to 3 hours for SubsPlease at 1080p' },
@@ -95,7 +90,7 @@ check(await page.getByText('Left for you to choose: larger than the automatic si
 check(await page.getByText('Up to date: nothing new has aired').isVisible(), 'and which shows are up to date')
 await page.screenshot({ path: `${SHOTS}/releases-preview.png` })
 
-await page.getByRole('button', { name: 'Open picker' }).first().click()
+await page.getByRole('button', { name: 'Choose release' }).first().click()
 const dialog = page.getByRole('dialog', { name: 'Choose a release' })
 check(await until(() => dialog.isVisible()), 'Open picker opens the episode\'s releases')
 const best = dialog.locator('li', { hasText: '[Mehul] Show - 05' })
@@ -111,7 +106,6 @@ await page.screenshot({ path: `${SHOTS}/releases-picker.png` })
 await dialog.getByText('[Drag] Show - 05 (BD 1080p)').click()
 check(await until(() => posted.length === 1 && posted[0].infoHash === 'b'.repeat(40) && posted[0].episode === 6), 'picking one queues it', JSON.stringify(posted[0]))
 
-// Downloads: an episode held for a better release, and a better copy over kept ones.
 const calls = []
 await page.route('**/api/releases/waiting', (route) => route.fulfill({ json: { items: [
   { animeId: 2, episode: 3, title: 'Waiting Show', until: Math.floor(Date.now() / 1000) + 7200, wants: 'SubsPlease at 1080p' },
@@ -144,7 +138,6 @@ check(await until(() => calls.includes('replace')), 'Replace asks first, then qu
 await page.getByRole('button', { name: "Don't offer again" }).first().click()
 check(await until(() => calls.includes('dismiss')), "Don't offer again turns the offer down")
 
-// The show page: with auto-download on, a wait of the show's own, over Settings'; and the better copy too.
 await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
 const auto = page.getByRole('switch', { name: 'Auto-download new episodes' })
 if (await until(() => auto.isVisible(), 30_000)) {

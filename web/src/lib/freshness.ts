@@ -1,6 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query'
 
-const DELAYS = [1500, 3000, 6000, 12_000, 20_000]
+const DELAYS = [1500, 3000, 6000, 12_000, 20_000, 30_000, 45_000]
 
 const BEHIND = '__behind'
 
@@ -36,15 +36,19 @@ export function watchRefreshes(client: QueryClient) {
     if (event.type === 'removed') return settle(query.queryHash)
     if (event.type !== 'updated') return
     if (event.action.type === 'error') return settle(query.queryHash)
-    if (event.action.type !== 'success') return
+    if (event.action.type !== 'success' || event.action.manual) return
     if (!isBehind(query.state.data)) return settle(query.queryHash)
     const was = waiting.get(query.queryHash)
     if (was) clearTimeout(was.timer)
     const tries = (was?.tries ?? 0) + 1
-    if (tries > DELAYS.length) return settle(query.queryHash)
+    const giveUp = () => {
+      void client.invalidateQueries({ queryKey: query.queryKey, exact: true, refetchType: 'none' })
+      settle(query.queryHash)
+    }
+    if (tries > DELAYS.length) return giveUp()
     const timer = setTimeout(() => {
       const observer = query.observers[0]
-      if (!observer) return settle(query.queryHash)
+      if (!observer) return giveUp()
       void observer.refetch().catch(() => settle(query.queryHash))
     }, DELAYS[tries - 1])
     waiting.set(query.queryHash, { tries, timer })

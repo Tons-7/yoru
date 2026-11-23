@@ -27,7 +27,6 @@ func pairMapRight[K, V any](me Pair[K, V]) V {
 	return me.Right
 }
 
-// A full index that doesn't require mapping records.
 func NewFullIndex[R comparable](from tableInterface[R], cmpFunc CompareFunc[R], minRecord R) (index Index[R]) {
 	return NewFullMappedIndex(
 		from,
@@ -37,7 +36,6 @@ func NewFullIndex[R comparable](from tableInterface[R], cmpFunc CompareFunc[R], 
 	)
 }
 
-// An index on a mapped form of the upstream data. What about cross-table and partial indexes?
 func NewFullMappedIndex[F, T comparable](
 	from tableInterface[F],
 	cmpFunc CompareFunc[T],

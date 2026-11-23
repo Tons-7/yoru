@@ -2,7 +2,6 @@ package bt
 
 import (
 	"errors"
-	"net"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/anacrolix/missinggo/v2"
@@ -16,7 +15,6 @@ import (
 )
 
 type (
-	// TODO: Make this private. Use types.Request in the (one?) place it's exposed here.
 	Request       = types.Request
 	ChunkSpec     = types.ChunkSpec
 	PiecePriority = types.PiecePriority
@@ -46,13 +44,11 @@ func newRequestFromMessage(msg *pp.Message) Request {
 	}
 }
 
-// The size in bytes of a metadata extension piece.
 func metadataPieceSize(totalSize, piece int) int {
 	ret := min(totalSize-piece*(1<<14), 1<<14)
 	return ret
 }
 
-// Return the request that would include the given offset into the torrent data.
 func torrentOffsetRequest(
 	torrentLength, pieceSize, chunkSize, offset int64,
 ) (
@@ -85,16 +81,17 @@ func torrentRequestOffset(torrentLength, pieceSize int64, r Request) (off int64)
 }
 
 func validateInfo(info *metainfo.Info) error {
-	if len(info.Pieces)%20 != 0 {
-		return errors.New("pieces has invalid length")
+	if err := info.Validate(); err != nil {
+		return err
+	}
+	if info.PieceLength < 0 || info.PieceLength > 1<<31 {
+		return errors.New("impossible piece length")
 	}
 	if info.PieceLength == 0 {
 		if info.TotalLength() != 0 {
 			return errors.New("zero piece length")
 		}
 	} else if !info.HasV2() {
-		// TotalLength returns different values for V1 and V2 depending on whether v1 pad files are
-		// counted. Split the interface into several methods?
 		if int((info.TotalLength()+info.PieceLength-1)/info.PieceLength) != info.NumPieces() {
 			return errors.New("piece count and file lengths are at odds")
 		}
@@ -115,22 +112,12 @@ func comparePeerTrust(l, r *Peer) int {
 	return l.trust().Cmp(r.trust())
 }
 
-func connIsIpv6(nc interface {
-	LocalAddr() net.Addr
-},
-) bool {
-	ra := nc.LocalAddr()
-	rip := addrIpOrNil(ra)
-	return rip.To4() == nil && rip.To16() != nil
-}
-
 var unlimited = rate.NewLimiter(rate.Inf, 0)
 
 type (
 	pieceIndex = int
-	// Deprecated: Use infohash.T directly to avoid unnecessary imports.
-	InfoHash = infohash.T
-	IpPort   = missinggo.IpPort
+	InfoHash   = infohash.T
+	IpPort     = missinggo.IpPort
 )
 
 func boolSliceToBitmap(slice []bool) (rb roaring.Bitmap) {

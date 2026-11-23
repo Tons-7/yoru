@@ -10,17 +10,14 @@ import (
 	"yoru/internal/torrent"
 )
 
-// netAdapter is a network adapter torrents can keep to.
 type netAdapter struct {
 	Name      string   `json:"name"`
 	Addresses []string `json:"addresses"`
-	// VPN: named like a VPN app's adapter, so those come first.
-	VPN bool `json:"vpn"`
+	VPN       bool     `json:"vpn"`
 }
 
 var vpnName = regexp.MustCompile(`(?i)vpn|wireguard|\bwg\d|\btun|\btap|nordlynx|proton|mullvad|windscribe|surfshark|cyberghost|ipvanish|expressvpn`)
 
-// adapters lists the ones up with an address, VPN-looking first.
 func adapters() []netAdapter {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -54,7 +51,6 @@ func adapters() []netAdapter {
 	return out
 }
 
-// network is the adapters torrents can keep to and how they go out now; host only, as it names this machine's.
 func (s *Server) network(w http.ResponseWriter, r *http.Request) {
 	var status torrent.Network
 	if s.engine != nil {

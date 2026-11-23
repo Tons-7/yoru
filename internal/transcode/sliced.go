@@ -13,16 +13,10 @@ import (
 	"time"
 )
 
-// A copied picture cuts only at keyframes, counted from each pass's start, so even segments drift apart;
-// knowing the source's keyframes, segments start on them, every pass's per-keyframe files gathered alike.
-
-// How far a fragment may start from its planned keyframe: the index and fragments agree to the millisecond.
 const startSlack = 0.002
 
-// The shortest a last segment may be: a keyframe closer to the end than this starts nothing.
 const minTail = 1.0
 
-// planSegments starts a segment at 0, then at the first keyframe at least SegmentSeconds past the last start.
 func planSegments(keys []float64, duration float64) []float64 {
 	starts := []float64{0}
 	for _, k := range keys {
@@ -33,9 +27,7 @@ func planSegments(keys []float64, duration float64) []float64 {
 	return starts
 }
 
-// indexKeyframes plans segments from the source's keyframes, or nil to keep evenly spaced ones.
 func (m *Manager) indexKeyframes(ctx context.Context, id, source string, info *MediaInfo, plan Plan) []float64 {
-	// Only from disk: through the engine, the index at a file's end would be fetched ahead of its start.
 	if !plan.VideoCopy || !isMatroska(info.Container) || remote(source) {
 		return nil
 	}
@@ -52,10 +44,8 @@ func (m *Manager) indexKeyframes(ctx context.Context, id, source string, info *M
 	return planSegments(keys, info.Duration)
 }
 
-// No encoder leaves keyframes this far apart: a gap like it is an index cut off where a download's pieces stop.
 const maxKeyframeGap = 30.0
 
-// coversEpisode: the index runs from the start to near the end without a gap, or it was read before it arrived.
 func coversEpisode(keys []float64, duration float64) error {
 	prev := 0.0
 	for _, k := range keys {
@@ -70,10 +60,8 @@ func coversEpisode(keys []float64, duration float64) error {
 	return nil
 }
 
-// sliced: segments start on the source's keyframes (see above), not every SegmentSeconds.
 func (s *Session) sliced() bool { return s.starts != nil }
 
-// segmentStart is where segment n begins in the source's time.
 func (s *Session) segmentStart(n int) float64 {
 	if !s.sliced() {
 		return float64(n) * SegmentSeconds
@@ -84,10 +72,8 @@ func (s *Session) segmentStart(n int) float64 {
 	return s.starts[max(n, 0)]
 }
 
-// SegmentStart is where segment n begins in the episode, as the TV's asks are read for its place.
 func (s *Session) SegmentStart(n int) float64 { return s.segmentStart(n) }
 
-// SegmentAt is the segment time t falls in, as the player would ask for it.
 func (s *Session) SegmentAt(t float64) int {
 	if !s.sliced() {
 		return min(int(t/SegmentSeconds), max(s.Segments-1, 0))
@@ -99,30 +85,29 @@ func (s *Session) SegmentAt(t float64) int {
 	return min(max(n, 0), s.Segments-1)
 }
 
-// partPath is a sliced pass's file j, one keyframe to the next.
 func (s *Session) partPath(r *run, j int) string {
 	return filepath.Join(s.dir, fmt.Sprintf("p%d_%d.mp4", r.id, j))
 }
 
-// gather turns a sliced pass's per-keyframe files into segments as each completes.
 func (s *Session) gather(r *run) {
 	defer close(r.gathered)
 	var tracks map[uint32]fmp4Track
 	n, j := r.from, 0
 	var parts []string
+	whole := false
+	var stuckSince time.Time
 	for {
 		exited := closedChan(r.exited)
 		cur := s.partPath(r, j)
-		// ffmpeg opens a file only once the one before is whole; the last is whole when the pass has ended.
-		if !fileReady(s.partPath(r, j+1)) && !(exited && fileReady(cur)) {
+		if !fileReady(s.partPath(r, j+1)) && !(exited && fileReady(cur)) && !segmentComplete(cur) {
 			if exited {
+				whole = true
 				break
 			}
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
 		if tracks == nil {
-			// Any pass's init: the copied picture's track is the same in all of them, so it times parts alike.
 			init, err := os.ReadFile(s.InitPath())
 			if err == nil {
 				tracks, err = initTracks(init)
@@ -137,20 +122,23 @@ func (s *Session) gather(r *run) {
 		}
 		at, ok, err := partStart(tracks, cur)
 		if err != nil {
-			// Gone (taken from under it): its span is lost, the rest still gathers. Anything else (a scanner
-			// holding it a moment) is tried again while the pass runs, or its later parts would pile up.
 			if errors.Is(err, fs.ErrNotExist) {
 				j++
 				continue
 			}
 			if exited {
-				break
+				if stuckSince.IsZero() {
+					stuckSince = time.Now()
+				}
+				if time.Since(stuckSince) > 3*time.Second {
+					break
+				}
 			}
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
+		stuckSince = time.Time{}
 		j++
-		// The seek landed on the keyframe before the one asked for: that lead-in belongs to no segment here.
 		if ok && at < s.segmentStart(r.from)-startSlack {
 			os.Remove(cur)
 			continue
@@ -171,22 +159,19 @@ func (s *Session) gather(r *run) {
 		}
 		parts = append(parts, cur)
 	}
-	// A pass that read to the end leaves the last segment; one killed or cut short leaves only a part of one.
-	if r.clean.Load() && len(parts) > 0 {
+	if whole && r.clean.Load() && len(parts) > 0 {
 		if n != s.Segments-1 {
 			s.log.Warn("keyframe index planned past the picture", "session", s.ID, "ended", n, "segments", s.Segments)
 		}
 		s.publish(r, n, parts)
 		parts = nil
 	}
-	// Published parts belong to their segment now; only what never became one goes.
 	removeFiles(parts)
 	for ; fileReady(s.partPath(r, j)); j++ {
 		os.Remove(s.partPath(r, j))
 	}
 }
 
-// partStart is a part's picture start, from its head: the moof is at the front, and a part can be 15 MB.
 func partStart(tracks map[uint32]fmp4Track, path string) (float64, bool, error) {
 	f, err := openShared(path)
 	if err != nil {
@@ -201,7 +186,6 @@ func partStart(tracks map[uint32]fmp4Track, path string) (float64, bool, error) 
 	if at, ok := pictureStart(tracks, head[:n]); ok || n < len(head) {
 		return at, ok, nil
 	}
-	// A moof bigger than the head: the whole part, as before.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, false, err
@@ -210,17 +194,14 @@ func partStart(tracks map[uint32]fmp4Track, path string) (float64, bool, error) 
 	return at, ok, nil
 }
 
-// sliceSegment is a finished sliced segment: the pass that made it and its parts, in order, served as they are.
 type sliceSegment struct {
 	by    *run
 	parts []string
 	at    time.Time
 }
 
-// publish makes segment n its parts, replacing any earlier pass's; nothing is copied.
 func (s *Session) publish(r *run, n int, parts []string) {
 	s.mu.Lock()
-	// Checked under the lock the wipes take, so a stopped pass's segment lands before one or not at all.
 	if r.discarded.Load() {
 		s.mu.Unlock()
 		removeFiles(parts)
@@ -232,11 +213,9 @@ func (s *Session) publish(r *run, n int, parts []string) {
 	old := s.segs[n]
 	s.segs[n] = sliceSegment{by: r, parts: parts, at: time.Now()}
 	s.mu.Unlock()
-	// After the swap: a reader that opened the old parts reads on, the files going once it lets go.
 	removeFiles(old.parts)
 }
 
-// segmentDone: segment n can be served whole, whichever pass made it.
 func (s *Session) segmentDone(n int) bool {
 	if !s.sliced() {
 		return segmentReady(s.SegmentPath(n))
@@ -247,7 +226,6 @@ func (s *Session) segmentDone(n int) bool {
 	return ok
 }
 
-// madeByLocked: pass r made segment n. The caller holds s.mu.
 func (s *Session) madeByLocked(r *run, n int) bool {
 	if !s.sliced() {
 		return r.wrote(s.SegmentPath(n))
@@ -256,7 +234,6 @@ func (s *Session) madeByLocked(r *run, n int) bool {
 	return ok && seg.by == r
 }
 
-// dropSegments forgets every segment and removes its files, for a plan whose output no longer matches.
 func (s *Session) dropSegments() {
 	if !s.sliced() {
 		for n := range s.Segments {
@@ -273,7 +250,6 @@ func (s *Session) dropSegments() {
 	}
 }
 
-// OpenSegment opens segment n as it is sent: its file, or a sliced segment's parts end to end.
 func (s *Session) OpenSegment(n int) (*SegmentReader, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -284,7 +260,6 @@ func (s *Session) OpenSegment(n int) (*SegmentReader, error) {
 	if !ok {
 		return nil, os.ErrNotExist
 	}
-	// Opened under the lock: a replacement takes it before removing these, so all of them are still there.
 	return openParts(seg.parts, seg.at)
 }
 
@@ -294,7 +269,6 @@ func removeFiles(paths []string) {
 	}
 }
 
-// targetDuration is the playlist's EXT-X-TARGETDURATION: the longest segment, rounded up.
 func (s *Session) targetDuration() int {
 	if !s.sliced() {
 		return int(SegmentSeconds) + 1

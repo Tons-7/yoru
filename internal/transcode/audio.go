@@ -9,7 +9,6 @@ var (
 	japaneseTag = regexp.MustCompile(`(?i)^(ja|jp|jpn|japanese)$|\bjapanese\b`)
 )
 
-// ChooseAudio picks by language tag, then title, then the file's default; an index into info.Audio (0:a:N).
 func ChooseAudio(info *MediaInfo, want string) int {
 	if info == nil || len(info.Audio) < 2 {
 		return 0
@@ -47,21 +46,19 @@ func (s *Session) AudioTrack() int {
 	return s.audioTrack
 }
 
-// ApplyAudioPreference: pick a track on first open or a changed preference, not on a same-choice reopen.
 func (s *Session) ApplyAudioPreference(want string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.audioPref == want && s.audioPref != "" {
-		return false
-	}
 	if want == "" {
 		want = "either"
+	}
+	if s.audioPref == want {
+		return false
 	}
 	s.audioPref = want
 	return true
 }
 
-// SetAudioTrack switches the encoded track, stopping the pass and dropping segments with the old one.
 func (s *Session) SetAudioTrack(n int) bool {
 	s.startMu.Lock()
 	defer s.startMu.Unlock()
@@ -78,7 +75,6 @@ func (s *Session) SetAudioTrack(n int) bool {
 	s.mu.Unlock()
 
 	s.stop()
-	// Every segment and the init file carry the old track, so all of them go.
 	s.wipeOutput()
 	s.log.Info("audio track switched", "session", s.ID, "track", n)
 	return true

@@ -6,13 +6,12 @@ import (
 
 	g "github.com/anacrolix/generics"
 	"yoru/internal/bt/internal/amortize"
+	"yoru/internal/bt/internal/check"
 )
 
-// Iterates from gte while where holds, which it does only in one run from there.
 func IterClusteredWhere[R any](t relation[R], gte R, where func(r R) bool) Iter[R] {
 	return func(yield func(R) bool) {
 		first := true
-		// TODO: This function is allocating..
 		checkFirst := func(r g.Option[R]) {
 			if !first {
 				return
@@ -26,7 +25,6 @@ func IterClusteredWhere[R any](t relation[R], gte R, where func(r R) bool) Iter[
 			}
 			checkFirst(g.Some(r))
 			if !yield(r) {
-				// Mustn't do first check after yielding, as the table could have changed.
 				return
 			}
 		}
@@ -35,7 +33,7 @@ func IterClusteredWhere[R any](t relation[R], gte R, where func(r R) bool) Iter[
 }
 
 func checkWhereGotFirst[R any](me relation[R], first g.Option[R], where func(r R) bool) {
-	if !amortize.Try() {
+	if !check.Enabled || !amortize.Try() {
 		return
 	}
 	var slowRet g.Option[R]
@@ -63,12 +61,4 @@ func IterRange[R any](me relation[R], gte, lt R) iter.Seq[R] {
 			}
 		}
 	}
-}
-
-func FirstInRange[R any](me relation[R], gte, lt R) (ret g.Option[R]) {
-	ret = me.GetGte(gte)
-	if ret.Ok && me.GetCmp()(ret.Value, lt) >= 0 {
-		ret.SetNone()
-	}
-	return
 }

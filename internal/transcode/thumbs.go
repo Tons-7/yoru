@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
@@ -15,17 +16,13 @@ import (
 	"yoru/internal/proc"
 )
 
-// Scrub frames are laid out as one sprite sheet the player offsets into. One
-// image avoids a round trip per hover and a hundred small files to clean up.
 type Thumbnails struct {
 	ffmpeg string
 	log    *slog.Logger
 
-	mu      sync.Mutex
-	running map[string]struct{}
-	// failed: when a sheet last failed, so the player polling every 15 s does not restart ffmpeg each time.
-	failed map[string]time.Time
-	// Downloading files' sheets so far, by directory (see thumbs_partial.go).
+	mu       sync.Mutex
+	running  map[string]struct{}
+	failed   map[string]time.Time
 	partials map[string]*partial
 }
 
@@ -39,42 +36,33 @@ func NewThumbnails(ffmpeg string, log *slog.Logger) *Thumbnails {
 	}
 }
 
-// Sheet describes where each frame sits, so the client can turn a hovered time into a background offset.
 type Sheet struct {
-	Ready bool `json:"ready"`
-	// Seconds between frames.
+	Ready    bool    `json:"ready"`
 	Interval float64 `json:"interval"`
 	Columns  int     `json:"columns"`
 	Rows     int     `json:"rows"`
 	Count    int     `json:"count"`
 	Width    int     `json:"width"`
 	Height   int     `json:"height"`
-	// A downloading file's sheet so far: Have marks each tile there with a 1, Version counts them.
-	Partial bool   `json:"partial,omitempty"`
-	Have    string `json:"have,omitempty"`
-	Version int    `json:"version,omitempty"`
+	Partial  bool    `json:"partial,omitempty"`
+	Have     string  `json:"have,omitempty"`
+	Version  int     `json:"version,omitempty"`
 }
 
 const (
-	// Wide enough to make out a scene, small enough for the episode to fit in one image.
-	thumbWidth = 160
-	// About this many frames whatever the length, so episodes and films both scrub well.
-	thumbTarget = 144
-	// The longest a pass may take: a whole sheet walks the episode.
+	thumbWidth    = 160
+	thumbTarget   = 144
 	thumbDeadline = 5 * time.Minute
-	// A failed sheet is tried again this much later, not on the next poll.
-	thumbRetry = time.Hour
+	thumbRetry    = time.Hour
 )
 
 func sheetPath(dir string) string { return filepath.Join(dir, "thumbs.jpg") }
 
-// sheetArgs decodes keyframes only: 160 px tiles need no more, and a film's every frame overran the deadline.
 func sheetArgs(source, filter, part string) []string {
 	return []string{"-hide_banner", "-loglevel", "error", "-y", "-skip_frame", "nokey", "-i", source,
 		"-vf", filter, "-frames:v", "1", "-q:v", "6", part}
 }
 
-// tail keeps the end of ffmpeg's output, where it says what went wrong.
 func tail(out string) string {
 	const keep = 300
 	out = strings.TrimSpace(out)
@@ -84,15 +72,12 @@ func tail(out string) string {
 	return out[len(out)-keep:]
 }
 
-// PlanSheet works out the grid for this length, for a handler describing a sheet it didn't build.
 func PlanSheet(duration float64) Sheet {
 	if duration <= 0 {
 		return Sheet{}
 	}
 
 	interval := math.Max(2, math.Round(duration/thumbTarget))
-	// A second short of the end: the container often outlasts the picture by a
-	// subtitle or audio tail, and a frame sampled there came out black.
 	count := max(1, int(math.Ceil((duration-1)/interval)))
 	columns := int(math.Ceil(math.Sqrt(float64(count))))
 	rows := int(math.Ceil(float64(count) / float64(columns)))
@@ -106,8 +91,6 @@ func PlanSheet(duration float64) Sheet {
 	}
 }
 
-// Read reports an existing sheet. Nothing is generated here: the player asks on
-// every open and a missing sheet is the normal answer for a fresh episode.
 func (t *Thumbnails) Read(dir string, duration float64, aspect float64) (Sheet, bool) {
 	plan := PlanSheet(duration)
 	if plan.Count == 0 {
@@ -125,7 +108,6 @@ func (t *Thumbnails) Read(dir string, duration float64, aspect float64) (Sheet, 
 	return plan, true
 }
 
-// SheetFile is the sheet to serve: the whole one, else a downloading file's so far, "" with neither.
 func SheetFile(dir string) string {
 	for _, path := range []string{sheetPath(dir), partialSheet(dir)} {
 		if _, err := os.Stat(path); err == nil {
@@ -135,7 +117,6 @@ func SheetFile(dir string) string {
 	return ""
 }
 
-// tileHeight keeps the video's shape, rounded even as the encoder refuses odd dimensions.
 func tileHeight(aspect float64) int {
 	if aspect <= 0 {
 		aspect = 16.0 / 9.0
@@ -147,7 +128,6 @@ func tileHeight(aspect float64) int {
 	return h
 }
 
-// Generate builds the sheet once, in the background, from the file on disk (not through the engine).
 func (t *Thumbnails) Generate(source, dir string, duration, aspect float64) {
 	plan := PlanSheet(duration)
 	if t == nil || plan.Count == 0 || source == "" {
@@ -175,20 +155,17 @@ func (t *Thumbnails) Generate(source, dir string, duration, aspect float64) {
 		ctx, cancel := context.WithTimeout(context.Background(), thumbDeadline)
 		defer cancel()
 
-		// Written aside and renamed, so a half-finished sheet is never served.
-		// The extension stays .jpg because ffmpeg picks its muxer from it.
 		part := filepath.Join(dir, "thumbs.part.jpg")
-		// tpad holds the last keyframe to the end: decoding keyframes only left the tiles after it black.
 		filter := fmt.Sprintf("tpad=stop_mode=clone:stop_duration=%g,fps=1/%g,scale=%d:%d,tile=%dx%d",
 			duration, plan.Interval, thumbWidth, tileHeight(aspect), plan.Columns, plan.Rows)
 
 		started := time.Now()
-		// ffmpeg complains about a downloading file's holes yet makes a sheet; only real failure is reported.
-		out, err := proc.Hide(exec.CommandContext(ctx, t.ffmpeg, sheetArgs(source, filter, part)...)).CombinedOutput()
+		out, err := proc.Background(exec.CommandContext(ctx, t.ffmpeg, sheetArgs(source, filter, part)...)).CombinedOutput()
 		if err != nil {
 			t.log.Warn("scrub previews", "err", err, "detail", tail(string(out)))
 			os.Remove(part)
 			t.mu.Lock()
+			maps.DeleteFunc(t.failed, func(_ string, at time.Time) bool { return time.Since(at) >= thumbRetry })
 			t.failed[dir] = time.Now()
 			t.mu.Unlock()
 			return

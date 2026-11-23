@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"yoru/internal/match"
@@ -21,7 +22,6 @@ func scanned(t *testing.T, s *Scanner) ScanReport {
 	return rep
 }
 
-// A folder inside a root that cannot be read keeps its rows: sweeping them would drop hand assignments.
 func TestUnreadableSubfolderKeepsItsRows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("uses icacls to deny access")
@@ -56,7 +56,6 @@ func TestUnreadableSubfolderKeepsItsRows(t *testing.T) {
 	}
 }
 
-// A root that is a junction or symlink is walked where it points.
 func TestJunctionRootIsWalked(t *testing.T) {
 	s, st := newScanner(t)
 	real := t.TempDir()
@@ -74,13 +73,33 @@ func TestJunctionRootIsWalked(t *testing.T) {
 	if rep := scanned(t, s); rep.Video != 1 || rep.Matched != 1 {
 		t.Fatalf("report = %+v, want the file behind the link", rep)
 	}
-	// Seen again: still there, not missing.
 	if rep := scanned(t, s); rep.Missing != 0 {
 		t.Fatalf("second scan marked %d missing", rep.Missing)
 	}
 }
 
-// Downloads in Yoru's own cache folder are not library files, however the roots are drawn.
+func TestLinkedFolderInsideARootStaysFound(t *testing.T) {
+	s, st := newScanner(t)
+	root, real := t.TempDir(), t.TempDir()
+	link := filepath.Join(root, "NAS")
+	if runtime.GOOS == "windows" {
+		if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, real).CombinedOutput(); err != nil {
+			t.Skipf("mklink: %v %s", err, out)
+		}
+	} else if err := os.Symlink(real, link); err != nil {
+		t.Skip(err)
+	}
+	setRoots(t, st, root)
+	write(t, filepath.Join(real, "[SubsPlease] Sousou no Frieren - 10 (1080p).mkv"), minEpisodeBytes+1)
+
+	if rep := scanned(t, s); rep.Matched != 1 || rep.Missing != 0 {
+		t.Fatalf("report = %+v, want the linked file found and kept", rep)
+	}
+	if f, _ := st.LocalEpisode(context.Background(), 154587, 10); f.ID == 0 {
+		t.Fatal("the file behind the link was marked missing")
+	}
+}
+
 func TestScanSkipsYorusCacheFolder(t *testing.T) {
 	s, st := newScanner(t)
 	root := t.TempDir()
@@ -95,7 +114,6 @@ func TestScanSkipsYorusCacheFolder(t *testing.T) {
 	}
 }
 
-// A folder taken out of the library takes its files with it.
 func TestRemovedRootRetiresItsFiles(t *testing.T) {
 	s, st := newScanner(t)
 	a, b := t.TempDir(), t.TempDir()
@@ -116,7 +134,6 @@ func TestRemovedRootRetiresItsFiles(t *testing.T) {
 	}
 }
 
-// A file that matches two seasons alike is left for a hand assignment; the folder's season breaks the tie.
 func TestAmbiguousMatchIsNotRecordedAsFact(t *testing.T) {
 	ix := match.NewIndex()
 	ix.Add(match.Media{ID: 1, Titles: []string{"Frieren"}, Season: 1})
@@ -134,7 +151,6 @@ func TestAmbiguousMatchIsNotRecordedAsFact(t *testing.T) {
 	}
 }
 
-// Among copies of one episode the sharper encode plays, after any hand assignment.
 func TestLocalEpisodePrefersTheSharperCopy(t *testing.T) {
 	_, st := newScanner(t)
 	ctx := context.Background()
@@ -155,5 +171,34 @@ func TestLocalEpisodePrefersTheSharperCopy(t *testing.T) {
 	}
 	if f, _ := st.LocalEpisode(ctx, 1, 5); f.Resolution != "720p" {
 		t.Fatalf("picked %+v, want the hand-assigned copy", f)
+	}
+}
+
+func TestAnUnpluggedRootKeepsItsFiles(t *testing.T) {
+	s, st := newScanner(t)
+	root := filepath.Join(t.TempDir(), "drive")
+	setRoots(t, st, root)
+	write(t, filepath.Join(root, "Show X", "[SubsPlease] Sousou no Frieren - 10 (1080p).mkv"), minEpisodeBytes+1)
+	scanned(t, s)
+	if f, _ := st.LocalEpisode(context.Background(), 154587, 10); f.ID == 0 {
+		t.Fatal("not recorded")
+	}
+
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	rep := scanned(t, s)
+	if rep.Missing != 0 {
+		t.Fatalf("an unplugged root marked %d files missing", rep.Missing)
+	}
+	named := false
+	for _, e := range rep.Errors {
+		named = named || strings.Contains(e, root)
+	}
+	if !named {
+		t.Errorf("errors %v do not name the unplugged root", rep.Errors)
+	}
+	if f, _ := st.LocalEpisode(context.Background(), 154587, 10); f.ID == 0 {
+		t.Fatal("the episode on the unplugged drive was dropped")
 	}
 }

@@ -54,8 +54,11 @@ func (s *Server) malCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no code returned", http.StatusBadRequest)
 		return
 	}
-	s.store.SetSettings(ctx, map[string]string{"mal.state": "", "mal.verifier.token": ""})
+	if err := s.store.SetSettings(ctx, map[string]string{"mal.state": "", "mal.verifier.token": ""}); err != nil {
+		s.log.Warn("clear mal login state", "err", err)
+	}
 
+	prev := s.mal.Token()
 	token, err := s.mal.Exchange(ctx, code, verifier, s.cfg.MALRedirectURI())
 	if err != nil {
 		s.log.Error("mal token exchange", "err", err)
@@ -66,6 +69,12 @@ func (s *Server) malCallback(w http.ResponseWriter, r *http.Request) {
 	viewer, err := s.mal.Viewer(ctx)
 	if err != nil {
 		s.log.Error("mal viewer", "err", err)
+		s.mal.SetToken(prev)
+		s.store.SetSettings(ctx, map[string]string{
+			"mal.token":         prev.Access,
+			"mal.refresh.token": prev.Refresh,
+			"mal.expires_at":    strconv.FormatInt(prev.Expires.Unix(), 10),
+		})
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}

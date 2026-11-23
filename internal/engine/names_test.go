@@ -11,8 +11,6 @@ import (
 	"yoru/internal/bt/metainfo"
 )
 
-// Two torrents named alike get their own folders, the first keeping the plain name; a torrent asks once
-// and is answered the same after, and the name is free again once it is forgotten.
 func TestLayoutKeepsSameNamedTorrentsApart(t *testing.T) {
 	l := newLayout("cache")
 	a, b := metainfo.Hash{1}, metainfo.Hash{2}
@@ -30,7 +28,6 @@ func TestLayoutKeepsSameNamedTorrentsApart(t *testing.T) {
 		t.Fatalf("after forget = %q", got)
 	}
 
-	// Storage follows the layout.
 	info := &metainfo.Info{Name: "Show Pack", PieceLength: 4, Files: []metainfo.FileInfo{{Length: 4, Path: []string{"ep.mkv"}}}}
 	fs := files{base: "cache", names: l}
 	if _, err := fs.OpenTorrent(context.Background(), info, b); err != nil {
@@ -45,7 +42,6 @@ func TestLayoutKeepsSameNamedTorrentsApart(t *testing.T) {
 	}
 }
 
-// The peers remembered are the ones seen last; a full list drops the one seen longest ago.
 func TestRememberKeepsTheLatestPeers(t *testing.T) {
 	old := rememberedPeers
 	rememberedPeers = 2
@@ -74,8 +70,6 @@ func TestRememberKeepsTheLatestPeers(t *testing.T) {
 	}
 }
 
-// A starved download tries its peers after 20 s, then waits twice as long each time, up to ten minutes;
-// a peer coming back starts the clock over.
 func TestRegroupBacksOff(t *testing.T) {
 	en := &entry{}
 	start := time.Now()

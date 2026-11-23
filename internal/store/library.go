@@ -1,9 +1,11 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -151,7 +153,11 @@ ON CONFLICT(id) DO UPDATE SET
     source=excluded.source, start_date=excluded.start_date, end_date=excluded.end_date,
     trailer_id=excluded.trailer_id, trailer_site=excluded.trailer_site,
     next_episode=excluded.next_episode, next_airing_at=excluded.next_airing_at,
-    media=excluded.media, synced_at=excluded.synced_at
+    media=excluded.media,
+    synced_at=CASE
+        WHEN excluded.next_airing_at IS NOT NULL AND excluded.next_airing_at <= excluded.synced_at
+         AND anime.synced_at < excluded.next_airing_at THEN anime.synced_at
+        ELSE excluded.synced_at END
 WHERE ` + animeChanged()
 
 const entryUpdateSet = `
@@ -159,7 +165,8 @@ const entryUpdateSet = `
     repeat_count=excluded.repeat_count, notes=excluded.notes,
     private=excluded.private, hidden=excluded.hidden,
     started_at=excluded.started_at, completed_at=excluded.completed_at,
-    remote_updated_at=excluded.remote_updated_at, dirty=0`
+    remote_updated_at=excluded.remote_updated_at,
+    local_updated_at=max(list_entry.local_updated_at, excluded.local_updated_at), dirty=0`
 
 func buildUpsertEntry(guard bool) string {
 	where := ""
@@ -246,7 +253,7 @@ func (s *Store) ImportList(ctx context.Context, anime []Anime, entries []Entry, 
 		_, err := tx.ExecContext(ctx, statement,
 			e.ID, e.AnimeID, e.Status, e.Progress, e.Score, e.Repeat, e.Notes,
 			boolInt(e.Private), boolInt(e.Hidden),
-			nullable(e.StartedAt), nullable(e.CompletedAt), e.UpdatedAt, now)
+			nullable(e.StartedAt), nullable(e.CompletedAt), e.UpdatedAt, cmp.Or(int64(e.UpdatedAt), now))
 		if err != nil {
 			return ImportResult{}, err
 		}
@@ -304,7 +311,7 @@ func dropMissingEntries(ctx context.Context, tx *sql.Tx, keep []Entry) (int, err
 const latestPlayback = `
 LEFT JOIN (
     SELECT anime_id, ep_key, position_s, duration_s, watched, last_played_at,
-           ROW_NUMBER() OVER (PARTITION BY anime_id ORDER BY last_played_at DESC) AS rn
+           ROW_NUMBER() OVER (PARTITION BY anime_id ORDER BY last_played_at DESC, watched, CAST(ep_key AS INTEGER) DESC, ep_key DESC) AS rn
     FROM playback
     WHERE last_played_at > 0
 ) p ON p.anime_id = a.id AND p.rn = 1
@@ -322,7 +329,7 @@ var librarySortSQL = map[string]string{
 	"updated":  "e.local_updated_at DESC, a.title_romaji",
 	"title":    "{title}, a.title_romaji",
 	"score":    "e.score DESC, e.local_updated_at DESC",
-	"airing":   "a.next_airing_at IS NULL, a.next_airing_at, a.title_romaji",
+	"airing":   "a.next_airing_at IS NULL, a.next_airing_at < unixepoch(), a.next_airing_at, a.title_romaji",
 	"progress": "e.progress DESC, e.local_updated_at DESC",
 	"watched":  "coalesce(p.last_played_at, 0) DESC, e.remote_updated_at DESC, e.local_updated_at DESC, a.title_romaji",
 	"new": `(a.status = 'RELEASING' AND coalesce(a.next_episode, 1) - 1 > coalesce(e.progress, 0)) DESC,
@@ -336,7 +343,17 @@ var librarySortSQL = map[string]string{
 const libraryWhere = `
 WHERE (?1 = '' OR e.status = ?1)
   AND (?2 = '' OR a.title_romaji LIKE ?2 ESCAPE '\' OR a.title_english LIKE ?2 ESCAPE '\'
-       OR a.synonyms LIKE ?2 ESCAPE '\')`
+       OR a.synonyms LIKE ?2 ESCAPE '\')
+  AND (?5 = '' OR a.format = ?5 OR (?5 = 'TV' AND a.format = 'TV_SHORT'))
+  AND (?6 = 0 OR a.status = 'RELEASING')
+  AND (?7 = 0
+       OR EXISTS (SELECT 1 FROM torrent_file tf
+                  JOIN cache_entry c ON c.info_hash = tf.info_hash AND c.file_index = tf.file_index
+                  WHERE tf.anime_id = a.id AND c.complete = 1)
+       OR EXISTS (SELECT 1 FROM local_file lf WHERE lf.anime_id = a.id AND lf.missing = 0))
+  AND (?8 = 0 OR a.season_year = ?8)
+  AND (?9 = '' OR a.season = ?9)
+  AND (?10 = '' OR EXISTS (SELECT 1 FROM json_each(a.genres) g WHERE g.value = ?10))`
 
 const favouritesFrom = `
 FROM user_anime u
@@ -380,17 +397,18 @@ ORDER BY ` + order + `
 LIMIT ?3 OFFSET ?4`
 }
 
-const inProgress = `dismissed = 0 AND position_s >= 15
+var inProgress = `dismissed = 0 AND position_s >= 15
       AND NOT (coalesce(duration_s, 0) > 0 AND position_s >= duration_s * coalesce(
-          (SELECT CAST(value AS REAL) FROM anime_pref
-           WHERE anime_id = playback.anime_id AND key = 'sync.progress_at'
-             AND CAST(value AS REAL) > 0 AND CAST(value AS REAL) <= 1), ?1))
+          (SELECT CASE WHEN CAST(value AS REAL) > 0 AND CAST(value AS REAL) <= 1 THEN CAST(value AS REAL)
+                       ELSE ` + strconv.FormatFloat(defaultThreshold(), 'f', -1, 64) + ` END
+           FROM anime_pref
+           WHERE anime_id = playback.anime_id AND key = 'sync.progress_at'), ?1))
       AND NOT (coalesce(done_s, 0) > 0 AND position_s >= done_s)
       AND NOT (coalesce(duration_s, 0) <= 0 AND watched = 1)`
 
-const latestFirst = `ORDER BY last_played_at DESC, watched, ep_key DESC`
+const latestFirst = `ORDER BY last_played_at DESC, watched, CAST(ep_key AS INTEGER) DESC, ep_key DESC`
 
-const continuePicks = `
+var continuePicks = `
 WITH resume AS (
     SELECT anime_id, ep_key, position_s, duration_s, watched, last_played_at, rn
     FROM (SELECT playback.*, ROW_NUMBER() OVER (PARTITION BY anime_id ` + latestFirst + `) AS rn
@@ -409,7 +427,8 @@ upnext AS (
       AND (e.progress > 0 OR e.status = 'REPEATING')
       AND (a.episode_count IS NULL OR e.progress < a.episode_count)
       AND (a.next_episode IS NULL OR a.next_airing_at IS NULL
-           OR e.progress + 1 < a.next_episode OR a.next_airing_at <= unixepoch())
+           OR e.progress + 1 < a.next_episode
+           OR (e.progress + 1 = a.next_episode AND a.next_airing_at <= unixepoch()))
       AND e.anime_id NOT IN (SELECT anime_id FROM resume WHERE rn = 1)
       AND NOT EXISTS (
           SELECT 1 FROM playback d
@@ -424,7 +443,7 @@ picks AS (
     SELECT anime_id, ep_key, position_s, duration_s, watched, last_played_at FROM upnext
 )`
 
-const continueQuery = continuePicks + `
+var continueQuery = continuePicks + `
 SELECT ` + libraryColumns + `
 FROM picks p
 JOIN anime a ON a.id = p.anime_id
@@ -433,13 +452,23 @@ LEFT JOIN episode ep ON ep.anime_id = a.id AND ep.ep_key = p.ep_key
 ORDER BY p.last_played_at DESC
 LIMIT ?2 OFFSET ?3`
 
-const continueCountQuery = continuePicks + `SELECT count(*) FROM picks`
+var continueCountQuery = continuePicks + `SELECT count(*) FROM picks`
 
 type LibraryFilter struct {
-	Status    string
-	Query     string
-	Sort      string
-	Favourite bool
+	Status     string
+	Query      string
+	Sort       string
+	Favourite  bool
+	Format     string
+	Airing     bool
+	Downloaded bool
+	Year       int
+	Season     string
+	Genre      string
+}
+
+func (f LibraryFilter) extras() []any {
+	return []any{f.Format, boolInt(f.Airing), boolInt(f.Downloaded), f.Year, f.Season, f.Genre}
 }
 
 func (s *Store) Library(ctx context.Context, f LibraryFilter, p Paging) (Page[LibraryItem], error) {
@@ -447,13 +476,15 @@ func (s *Store) Library(ctx context.Context, f LibraryFilter, p Paging) (Page[Li
 	if q := strings.TrimSpace(f.Query); q != "" {
 		like = "%" + escapeLike(q) + "%"
 	}
-	items, err := s.libraryRows(ctx, libraryQuery(f.Sort, f.Favourite, s.TitleMode(ctx, 0)), f.Status, like, p.PerPage+1, p.Offset())
+	items, err := s.libraryRows(ctx, libraryQuery(f.Sort, f.Favourite, s.TitleMode(ctx, 0)),
+		append([]any{f.Status, like, p.PerPage + 1, p.Offset()}, f.extras()...)...)
 	if err != nil {
 		return Page[LibraryItem]{}, err
 	}
 
 	total, err := s.countRows(ctx,
-		`SELECT count(*)`+libraryFrom(f.Favourite)+libraryFilterWhere(f.Favourite), f.Status, like)
+		`SELECT count(*)`+libraryFrom(f.Favourite)+libraryFilterWhere(f.Favourite),
+		append([]any{f.Status, like, 0, 0}, f.extras()...)...)
 	if err != nil {
 		return Page[LibraryItem]{}, err
 	}

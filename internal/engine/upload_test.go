@@ -16,7 +16,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// rawPeer is a bare wire connection to addr for mi, past the handshake; next reads one message.
 func rawPeer(t *testing.T, addr string, mi metainfo.MetaInfo) (conn net.Conn, next func() (pp.Message, error)) {
 	t.Helper()
 	conn, next, err := dialPeer(addr, mi)
@@ -49,7 +48,6 @@ func dialPeer(addr string, mi metainfo.MetaInfo) (conn net.Conn, next func() (pp
 	}, nil
 }
 
-// A streaming peer asks in reading order, so chunks go out in the order asked, as libtorrent sends them.
 func TestUploadsGoOutInRequestOrder(t *testing.T) {
 	const pieceLen, chunk = 256 << 10, 16 << 10
 	mi, seeds := bigFile(t, 4<<20, pieceLen, 1<<20)
@@ -60,7 +58,6 @@ func TestUploadsGoOutInRequestOrder(t *testing.T) {
 	if !unchokes(next) {
 		t.Fatal("the seeder never unchoked")
 	}
-	// Scattered over the file, the way a reader that seeks asks; one write, so all are queued at once.
 	asked := []int{37, 2, 90, 15, 64, 3, 128, 41, 7, 200, 99, 1}
 	var out []byte
 	for _, c := range asked {
@@ -85,7 +82,6 @@ func TestUploadsGoOutInRequestOrder(t *testing.T) {
 	}
 }
 
-// unchokes reads until an unchoke, or until the connection's deadline or close says there won't be one.
 func unchokes(next func() (pp.Message, error)) bool {
 	for {
 		m, err := next()
@@ -98,11 +94,9 @@ func unchokes(next func() (pp.Message, error)) bool {
 	}
 }
 
-// Uploads follow Settings: peers are served while the episode downloads, nobody under "never" or once done.
 func TestUploadChoices(t *testing.T) {
 	mi, seeds := bigFile(t, 24<<20, 256<<10, 2<<20)
 	e, id := seedEngine(t, mi, seeds, nil, func(*bt.ClientConfig) {})
-	// A peer turned away at the handshake wasn't served either.
 	served := func() bool {
 		conn, next, err := dialPeer(fmt.Sprintf("127.0.0.1:%d", e.cl.LocalPort()), mi)
 		if err != nil {

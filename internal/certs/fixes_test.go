@@ -22,11 +22,9 @@ import (
 	"github.com/caddyserver/certmagic"
 )
 
-// A second save replaces the running DuckDNS manager and stops it; none is left pushing the address for good.
 func TestSecondDuckDNSSetupStopsTheFirst(t *testing.T) {
 	var calls []url.Values
 	duckServer(t, "OK", &calls)
-	// No certificate: a real order went to Let's Encrypt, and its lock file outlived the test's folder.
 	was := manageCert
 	manageCert = func(context.Context, *certmagic.Config, string) error { return nil }
 	t.Cleanup(func() { manageCert = was })
@@ -52,7 +50,6 @@ func TestSecondDuckDNSSetupStopsTheFirst(t *testing.T) {
 	}
 }
 
-// A router with DNS rebind protection drops the name's home address: said so, and cleared when it answers.
 func TestARouterThatWontAnswerTheNameIsNoticed(t *testing.T) {
 	var calls []url.Values
 	duckServer(t, "OK", &calls)
@@ -88,7 +85,6 @@ func TestARouterThatWontAnswerTheNameIsNoticed(t *testing.T) {
 		t.Errorf("the router answers now, yet %+v", st)
 	}
 
-	// A slow resolver is no verdict; a router dropping the answer reads as the name not existing.
 	answer, failure = nil, &net.DNSError{Err: "i/o timeout", Name: "myyoru.duckdns.org", IsTimeout: true}
 	if st := s.CheckHome(context.Background()); st.AtHome == nil || !*st.AtHome || s.HomeBlocked() {
 		t.Errorf("a timeout counted as the router blocking the name: %+v", st)
@@ -99,7 +95,6 @@ func TestARouterThatWontAnswerTheNameIsNoticed(t *testing.T) {
 	}
 }
 
-// An owner certificate for this machine's own address pairs over https too.
 func TestOwnCertificateForTheLANAddressNamesIt(t *testing.T) {
 	ip := ownPrivateIP()
 	if ip == nil {

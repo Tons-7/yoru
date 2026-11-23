@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// libass loads a .srt without error and draws nothing, so everything becomes ASS.
 func TestEveryTextFormatIsWrittenAsASS(t *testing.T) {
 	for _, codec := range []string{
 		"ass", "ssa", "subrip", "srt", "webvtt", "mov_text",
@@ -22,7 +21,6 @@ func TestEveryTextFormatIsWrittenAsASS(t *testing.T) {
 	}
 }
 
-// Only ASS is copied as it is; everything else is converted for the renderer.
 func TestOnlyASSIsCopiedVerbatim(t *testing.T) {
 	for _, codec := range []string{"ass", "ssa"} {
 		if !isASS(codec) {
@@ -36,7 +34,6 @@ func TestOnlyASSIsCopiedVerbatim(t *testing.T) {
 	}
 }
 
-// Picture subtitles can't become text, so they're reported unavailable, not offered blank.
 func TestBitmapFormatsAreNotRenderable(t *testing.T) {
 	for _, codec := range []string{
 		"hdmv_pgs_subtitle", "pgssub", "dvd_subtitle", "dvdsub", "dvb_subtitle", "xsub",
@@ -47,7 +44,6 @@ func TestBitmapFormatsAreNotRenderable(t *testing.T) {
 	}
 }
 
-// A closed session's entries go, and only that session's.
 func TestForgetDropsOnlyThatSession(t *testing.T) {
 	s := NewSubtitles("ffmpeg")
 	root := t.TempDir()
@@ -67,7 +63,6 @@ func TestForgetDropsOnlyThatSession(t *testing.T) {
 	}
 }
 
-// A remembered extraction must not hand back a path deleted with its session's directory.
 func TestExtractRedoesWorkWhenTheFileIsGone(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	clip := testMKV(t, ffmpeg, 6)
@@ -83,7 +78,6 @@ func TestExtractRedoesWorkWhenTheFileIsGone(t *testing.T) {
 		t.Fatalf("nothing was written: %v", err)
 	}
 
-	// What closing the session does.
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}

@@ -23,6 +23,7 @@ import {
   refreshDownloads,
   refreshListState,
   useAccess,
+  useHiddenShows,
   useAccessDevices,
   useDecideDevice,
   usePrefs,
@@ -264,7 +265,7 @@ const SearchResults = memo(function SearchResults({
   onClear: () => void
 }) {
   return (
-    <SearchQuery.Provider value={query}>
+    <SearchQuery value={query}>
       <div className="animate-fade-in space-y-6 [&:not(:has([data-shown])):not(:has([data-loading]))>[data-empty]]:block">
         {CATEGORIES.map((t) => (
           <div key={t.id} className="space-y-3 [&:not(:has([data-shown]))]:hidden">
@@ -275,9 +276,9 @@ const SearchResults = memo(function SearchResults({
               <Tile tab={t.id} small />
               {t.label} ›
             </button>
-            <SectionMatched.Provider value={matches(query, t.label)}>
+            <SectionMatched value={matches(query, t.label)}>
               <TabBody tab={t.id} />
-            </SectionMatched.Provider>
+            </SectionMatched>
           </div>
         ))}
         <div data-empty className="surface hidden p-6 text-center">
@@ -287,7 +288,7 @@ const SearchResults = memo(function SearchResults({
           </button>
         </div>
       </div>
-    </SearchQuery.Provider>
+    </SearchQuery>
   )
 })
 
@@ -308,7 +309,7 @@ function CategoryList({ news, unseen }: { news: number; unseen: boolean }) {
   return (
     <nav aria-label="Settings sections" className="flex flex-col gap-3">
       {news > 0 && (
-        <ul className="overflow-hidden rounded-card bg-base-900">
+        <ul className="overflow-hidden surface">
           <li>
             <Link to="?tab=New" className={cx(row, 'text-[15px] font-medium text-accent-300')}>
               <NewMark news={news} unseen={unseen} />
@@ -320,7 +321,7 @@ function CategoryList({ news, unseen }: { news: number; unseen: boolean }) {
       {GROUPS.map((g) => (
         <Fragment key={g.title}>
           <h2 className="px-1 pt-1 text-[13px] font-semibold text-base-400">{g.title}</h2>
-          <ul className="divide-y divide-white/5 overflow-hidden rounded-card bg-base-900">
+          <ul className="divide-y divide-white/5 overflow-hidden surface">
             {g.tabs.map((id) => (
               <li key={id}>
                 <Link to={`?tab=${id}`} className={row}>
@@ -365,10 +366,9 @@ function SideTabs({
     >
       {search}
       {news > 0 && (
-        <div role="tablist" aria-label="New" aria-orientation="vertical" className="mt-2">
+        <div className="mt-2">
           <button
-            role="tab"
-            aria-selected={tab === 'New'}
+            aria-current={tab === 'New' ? 'page' : undefined}
             onClick={() => onChange('New')}
             className={cx(base, 'font-semibold text-accent-300', tab === 'New' ? 'bg-base-800' : 'hover:bg-base-900')}
           >
@@ -381,9 +381,9 @@ function SideTabs({
           <p id={`${ids}-${i}`} className="px-2.5 pt-4 pb-1 text-[13px] font-semibold text-base-400">
             {g.title}
           </p>
-          <div role="tablist" aria-labelledby={`${ids}-${i}`} aria-orientation="vertical" className="flex flex-col gap-0.5">
+          <div role="group" aria-labelledby={`${ids}-${i}`} className="flex flex-col gap-0.5">
             {g.tabs.map((id) => (
-              <button key={id} role="tab" aria-selected={id === tab} onClick={() => onChange(id)} className={item(id === tab)}>
+              <button key={id} aria-current={id === tab ? 'page' : undefined} onClick={() => onChange(id)} className={item(id === tab)}>
                 <Tile tab={id} small />
                 {CATEGORY[id].label}
               </button>
@@ -416,7 +416,7 @@ function NewSettings() {
           </Button>
         </div>
       </Section>
-      <OnlyRows.Provider value={rows}>
+      <OnlyRows value={rows}>
         {CATEGORIES.map((t) => (
           <div key={t.id} className="space-y-3 [&:not(:has([data-shown]))]:hidden">
             <p className="flex items-center gap-2.5 text-[15px] font-semibold text-base-100 sm:text-sm">
@@ -426,7 +426,7 @@ function NewSettings() {
             <TabBody tab={t.id} />
           </div>
         ))}
-      </OnlyRows.Provider>
+      </OnlyRows>
     </div>
   )
 }
@@ -504,12 +504,18 @@ function Section({ title, hint, keywords, children }: { title: string; hint?: st
   return (
     <section data-shown={query && all ? '' : undefined} className={cx('space-y-2', !all && '[&:not(:has([data-shown]))]:hidden')}>
       <h2 className="px-1 text-[13px] font-semibold text-base-400">{title}</h2>
-      <div className={cx('divide-y divide-white/5 rounded-card bg-base-900 px-4', !all && '[&>:not([data-row])]:hidden')}>
-        <SectionMatched.Provider value={all}>{children}</SectionMatched.Provider>
+      <div className={cx('divide-y divide-white/5 surface px-4', !all && '[&>:not([data-row])]:hidden')}>
+        <SectionMatched value={all}>{children}</SectionMatched>
       </div>
       {hint && <p className="px-1 text-[13px] leading-snug text-base-500 sm:text-xs sm:leading-relaxed">{hint}</p>}
     </section>
   )
+}
+
+function useShownBySearch(...words: string[]) {
+  const query = useContext(SearchQuery)
+  const sectionMatched = useContext(SectionMatched)
+  return !query || sectionMatched || matches(query, ...words)
 }
 
 const RowLabel = ControlLabel
@@ -564,7 +570,7 @@ function Row({
         {hint && <p className="mt-0.5 text-[13px] leading-snug text-base-400 sm:text-xs sm:leading-relaxed">{hint}</p>}
       </div>
       <div data-control className={cx('flex', compact ? 'max-w-[50%] shrink-0' : 'max-w-full', !stacked && 'justify-end')}>
-        <RowLabel.Provider value={label}>{children}</RowLabel.Provider>
+        <RowLabel value={label}>{children}</RowLabel>
       </div>
       {below && <div className="basis-full">{below}</div>}
     </div>
@@ -594,7 +600,8 @@ function useFlag() {
     failed: prefs.isError && !prefs.data ? <ErrorState error={prefs.error} retry={() => void prefs.refetch()} /> : null,
     get: (key: string) => values[key] === 'true',
     value: (key: string) => values[key] ?? '',
-    set: (key: string, value: string) => setPref.mutate({ key, value }),
+    set: (key: string, value: string, done?: () => void) =>
+      setPref.mutate({ key, value }, done ? { onSettled: done } : undefined),
   }
 }
 
@@ -670,13 +677,17 @@ function SignInRow() {
         : 'Yoru starts when you open it.'
   return (
     <Row label={`Start Yoru when I sign in, ${where}`} hint={hint} keywords="startup sign in login boot autostart tray">
-      <Switch on={on} onChange={(v) => set.mutate(v)} />
+      <Switch on={on} onChange={(v) => set.mutate(v)} disabled={set.isPending || startup.isPending} />
     </Row>
   )
 }
 
 function CloseWindowRow({ f }: { f: ReturnType<typeof useFlag> }) {
-  if (!navigator.userAgent.includes('Windows')) return null
+  const startup = useQuery({
+    queryKey: ['app-startup'],
+    queryFn: () => api.get<{ on: boolean; tray: boolean }>('/api/app/startup'),
+  })
+  if (startup.data?.tray !== true) return null
   const tray = f.value('window.on_close') === 'tray'
   return (
     <Row
@@ -728,8 +739,12 @@ function VLCNote() {
   const setup = useSetup()
   if (f.value('playback.player') !== 'vlc' || !setup.data || setup.data.vlc) return null
   return (
-    <p className="py-3 text-xs text-recap">
-      VLC was not found. Install it from videolan.org, or if it is installed somewhere unusual set{' '}
+    <p className="py-3 text-xs text-red-300">
+      VLC was not found. Install it from{' '}
+      <a href="https://www.videolan.org/vlc/" target="_blank" rel="noreferrer" className="underline hover:text-white">
+        videolan.org
+      </a>
+      , or if it is installed somewhere unusual set{' '}
       <code>vlc_path</code> in {setup.data.configPath} to its folder, then restart Yoru.
     </p>
   )
@@ -916,8 +931,45 @@ function LanguageTab() {
         >
           <Switch on={f.get('home.adult_picks')} onChange={(v) => f.set('home.adult_picks', String(v))} />
         </Row>
+        <NotInterestedRow />
       </Section>
     </div>
+  )
+}
+
+function NotInterestedRow() {
+  const qc = useQueryClient()
+  const hidden = useHiddenShows()
+  const show = useMutation({
+    meta: { inline: true },
+    mutationFn: (animeId: number) => api.post('/api/bookmarks', { animeId, hidden: false }),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ['hidden'] })
+      void qc.invalidateQueries({ queryKey: ['home'] })
+    },
+  })
+  const items = hidden.data?.items ?? []
+  return (
+    <Row
+      label="Not interested"
+      hint={items.length > 0 ? 'Shows you hid from For you and Sequels.' : 'Shows you hide from For you and Sequels are listed here.'}
+      keywords="not interested hidden recommendations for you sequels dismissed"
+    >
+      {items.length > 0 && (
+        <ul className="w-full space-y-1 sm:w-auto sm:min-w-72">
+          {items.map((h) => (
+            <li key={h.animeId} className="flex items-center justify-between gap-3 text-sm">
+              <Link to={`/anime/${h.animeId}`} className="min-w-0 truncate text-base-100 hover:text-white">
+                {h.title || `Show ${h.animeId}`}
+              </Link>
+              <Button size="sm" onClick={() => show.mutate(h.animeId)} disabled={show.isPending && show.variables === h.animeId}>
+                Show again
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Row>
   )
 }
 
@@ -1174,8 +1226,10 @@ function SubtitleLanguages({ f }: { f: ReturnType<typeof useFlag> }) {
 
 function JimakuKey() {
   const qc = useQueryClient()
+  const host = useAccess().data?.host !== false
   const state = useQuery({ queryKey: ['jimaku'], queryFn: () => api.get<{ set: boolean }>('/api/jimaku') })
   const [key, setKey] = useState('')
+  const [removing, setRemoving] = useState(false)
   const save = useMutation({
     meta: { inline: true },
     mutationFn: (value: string) => api.post<{ set: boolean }>('/api/jimaku/key', { key: value }),
@@ -1185,6 +1239,17 @@ function JimakuKey() {
     },
   })
   const set = state.data?.set
+  if (!host) {
+    return (
+      <Row
+        label="Jimaku (Japanese subtitles)"
+        hint={set ? "Set on the PC. Jimaku's files show in the player's subtitles menu." : 'Add a Jimaku key on the PC.'}
+        keywords="japanese subtitles jimaku learning immersion api key"
+      >
+        <></>
+      </Row>
+    )
+  }
   return (
     <Row
       label="Jimaku (Japanese subtitles)"
@@ -1198,9 +1263,17 @@ function JimakuKey() {
       keywords="japanese subtitles jimaku learning immersion api key"
     >
       <div className="flex flex-wrap justify-end gap-2">
-        {set ? (
-          <Button size="sm" onClick={() => save.mutate('')} disabled={save.isPending}>
-            {save.isPending ? 'Removing…' : 'Remove key'}
+        {set && removing ? (
+          <ConfirmInline
+            label="Remove key"
+            onConfirm={() => save.mutate('', { onSettled: () => setRemoving(false) })}
+            onCancel={() => setRemoving(false)}
+            pending={save.isPending}
+            size="sm"
+          />
+        ) : set ? (
+          <Button size="sm" onClick={() => setRemoving(true)}>
+            Remove key
           </Button>
         ) : (
           <>
@@ -1294,7 +1367,14 @@ function StorageTab() {
           <ValueMenu
             value={f.value('cache.budget_bytes')}
             onChange={(v) => f.set('cache.budget_bytes', v)}
-            options={[5, 10, 20, 40, 80].map((gb) => ({ value: String(gb * 1024 ** 3), label: `${gb} GB` }))}
+            options={[5, 10, 20, 40, 80]
+              .map((gb) => ({ value: String(gb * 1024 ** 3), label: `${gb} GB` }))
+              .concat(
+                f.value('cache.budget_bytes') && ![5, 10, 20, 40, 80].some((gb) => String(gb * 1024 ** 3) === f.value('cache.budget_bytes'))
+                  ? [{ value: f.value('cache.budget_bytes'), label: bytes(Number(f.value('cache.budget_bytes'))) }]
+                  : [],
+              )
+              .toSorted((a, b) => Number(a.value) - Number(b.value))}
           />
         </Row>
         <Row
@@ -1352,13 +1432,16 @@ function StorageTab() {
           hint={
             clear.isError
               ? (clear.error as Error).message
-              : cleared
-                ? cleared.removed > 0
-                  ? `Cleared ${cleared.removed} download${cleared.removed === 1 ? '' : 's'} · freed ${bytes(cleared.freedBytes)}`
-                  : "Nothing to clear: what's cached is playing, still downloading, or kept."
-                : cache.data
-                  ? `${bytes(Number(cache.data.bytes ?? 0))} cached · ${bytes(Number(cache.data.keptBytes ?? 0))} downloaded`
-                  : 'Loading…'
+              : cleared && cleared.removed === 0
+                ? "Nothing to clear: what's cached is playing, still downloading, or kept."
+                : [
+                    cleared && `Cleared ${cleared.removed} download${cleared.removed === 1 ? '' : 's'}, freed ${bytes(cleared.freedBytes)}`,
+                    cache.data
+                      ? `${bytes(Number(cache.data.bytes ?? 0))} cached · ${bytes(Number(cache.data.keptBytes ?? 0))} downloaded`
+                      : 'Loading…',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
           }
         >
           {confirmClear ? (
@@ -1423,7 +1506,7 @@ function StorageTab() {
           </ul>
         )}
         {(preview.error ?? orphans.error) && (
-          <p className="py-3 text-xs text-recap">{((preview.error ?? orphans.error) as Error).message}</p>
+          <p className="py-3 text-xs text-red-300">{((preview.error ?? orphans.error) as Error).message}</p>
         )}
       </Section>
 
@@ -1462,8 +1545,8 @@ function DownloadsTab() {
           <ValueMenu
             value={f.get('cache.prefetch_next') ? (f.value('cache.prefetch_count') === '2' ? '2' : '1') : '0'}
             onChange={(v) => {
-              f.set('cache.prefetch_next', String(v !== '0'))
               if (v !== '0') f.set('cache.prefetch_count', v)
+              f.set('cache.prefetch_next', String(v !== '0'))
             }}
             options={[
               { value: '0', label: 'Off' },
@@ -1663,10 +1746,11 @@ function PeersFirewallRow() {
   const qc = useQueryClient()
   const access = useAccess()
   const host = !!access.data?.host
+  const shown = useShownBySearch('firewall peers torrent port windows')
   const fw = useQuery({
     queryKey: ['torrent-firewall'],
     queryFn: () => api.get<PeersFirewall>('/api/torrent/firewall'),
-    enabled: host,
+    enabled: host && shown,
   })
   const allow = useMutation({
     meta: { inline: true },
@@ -1746,10 +1830,11 @@ interface TorrentNetwork {
 function TorrentNetworkRow({ f }: { f: ReturnType<typeof useFlag> }) {
   const access = useAccess()
   const host = !!access.data?.host
+  const shown = useShownBySearch('network adapter vpn torrents')
   const net = useQuery({
     queryKey: ['network'],
     queryFn: () => api.get<TorrentNetwork>('/api/network'),
-    enabled: host,
+    enabled: host && shown,
     refetchInterval: 5000,
   })
   if (!host || !net.data) return null
@@ -1822,8 +1907,12 @@ function AutoDownloadPreview() {
     meta: { inline: true },
     mutationFn: (p: { animeId: number; episode: number; infoHash: string; title: string }) =>
       api.post('/api/download/release', p),
-    onSuccess: () => refreshDownloads(qc),
+    onSuccess: (_, p) => {
+      setQueued((prev) => new Set(prev).add(p.animeId))
+      return refreshDownloads(qc)
+    },
   })
+  const [queued, setQueued] = useState<ReadonlySet<number>>(new Set())
   const [picking, setPicking] = useState<{ animeId: number; episode: number } | null>(null)
   const rows = useHeldData(preview)?.items
 
@@ -1848,7 +1937,7 @@ function AutoDownloadPreview() {
         (rows.length === 0 ? (
           <p className="pb-3 text-sm text-base-400">No show you follow has auto-download on.</p>
         ) : (
-          <ul className="divide-y divide-white/[0.06] pb-2">
+          <ul className="divide-y divide-white/6 pb-2">
             {rows.map((row) => (
               <li key={row.animeId} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
                 <div className="min-w-0 flex-1 basis-64">
@@ -1858,14 +1947,17 @@ function AutoDownloadPreview() {
                   </p>
                   <p className="text-xs text-base-400">{previewWords(row)}</p>
                 </div>
-                {row.episode && row.state !== 'have' && row.state !== 'current' && (
-                  <button
-                    onClick={() => setPicking({ animeId: row.animeId, episode: row.episode! })}
-                    className={cx(buttonClass(), 'pointer-coarse:min-h-11')}
-                  >
-                    Open picker
-                  </button>
-                )}
+                {row.episode && row.state !== 'have' && row.state !== 'current' &&
+                  (queued.has(row.animeId) ? (
+                    <span className="text-xs font-medium text-emerald-300">Queued</span>
+                  ) : (
+                    <button
+                      onClick={() => setPicking({ animeId: row.animeId, episode: row.episode! })}
+                      className={cx(buttonClass(), 'pointer-coarse:min-h-11')}
+                    >
+                      Choose release
+                    </button>
+                  ))}
               </li>
             ))}
           </ul>
@@ -2038,7 +2130,8 @@ function ListPref({
   const saved = stored.join(', ')
   const [text, setText] = useState(saved)
   const [shown, setShown] = useState(saved)
-  if (shown !== saved) {
+  const [focused, setFocused] = useState(false)
+  if (shown !== saved && !focused) {
     setShown(saved)
     setText(saved)
   }
@@ -2054,7 +2147,11 @@ function ListPref({
       <TextInput
         value={text}
         onChange={(e) => setText(e.target.value)}
-        onBlur={save}
+        onFocus={() => setFocused(true)}
+        onBlur={() => {
+          setFocused(false)
+          save()
+        }}
         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
         placeholder={placeholder}
         aria-label={label}
@@ -2123,7 +2220,7 @@ function PictureSection({ host }: { host: boolean }) {
           )}
         </div>
       </Row>
-      {failed && <p className="py-3 text-xs text-recap">{(failed as Error).message}</p>}
+      {failed && <p className="py-3 text-xs text-red-300">{(failed as Error).message}</p>}
     </Section>
   )
 }
@@ -2137,7 +2234,7 @@ function AccountsTab() {
   return (
     <div className="space-y-4">
       <PictureSection host={host} />
-      {trackers.isPending ? (
+      {trackers.isPending || access.isPending ? (
         <Skeleton className="h-64 w-full" />
       ) : trackers.isError && !trackers.data ? (
         <ErrorState error={trackers.error} retry={() => void trackers.refetch()} />
@@ -2230,7 +2327,7 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
       }
       keywords="tracker sync list account login mal"
     >
-      <Row label={status}>
+      <Row label={status} hint={host ? undefined : 'Connected and changed on the computer Yoru runs on.'}>
         <div className="flex flex-wrap justify-end gap-2">
           {tracker.configured && host && (
             <a
@@ -2300,7 +2397,7 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
         </p>
       )}
       {importFavs.isError && (
-        <p className="py-3 text-xs text-recap">{(importFavs.error as Error).message}</p>
+        <p className="py-3 text-xs text-red-300">{(importFavs.error as Error).message}</p>
       )}
 
       {confirmingOut && (
@@ -2368,7 +2465,11 @@ function TrackerCard({ tracker, host }: { tracker: Tracker; host: boolean }) {
             >
               {save.isPending ? 'Saving…' : 'Save'}
             </button>
-            {save.isError && <span className="text-xs text-red-400">Could not save</span>}
+            {save.isError && (
+              <span className="text-xs text-red-300">
+                {save.error instanceof Error && save.error.message ? save.error.message : 'Could not save'}
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -2449,23 +2550,20 @@ function ImportRow() {
     <div className="my-3 space-y-2 rounded-lg border border-base-850 bg-base-950/40 p-3">
       <p className="text-xs text-base-400">Bring your AniList list into Yoru.</p>
 
-      <div className="flex gap-1 rounded-md bg-base-900 p-1">
-        {(['merge', 'replace'] as const).map((option) => (
-          <button
-            key={option}
-            onClick={() => {
-              setMode(option)
-              setConfirming(false)
-            }}
-            className={cx(
-              'flex-1 rounded px-2 py-1 text-xs font-medium capitalize transition-colors',
-              mode === option ? 'bg-base-750 text-white' : 'text-base-400 hover:text-base-200',
-            )}
-          >
-            {option}
-          </button>
-        ))}
-      </div>
+      <Segmented
+        label="Import mode"
+        size="sm"
+        full
+        value={mode}
+        onChange={(option) => {
+          setMode(option)
+          setConfirming(false)
+        }}
+        options={[
+          { value: 'merge', label: 'Merge' },
+          { value: 'replace', label: 'Replace' },
+        ]}
+      />
 
       <p className="text-xs text-base-500">
         {mode === 'merge'
@@ -2515,6 +2613,7 @@ function LibraryTab() {
 
 function BackupSection() {
   const qc = useQueryClient()
+  const host = useAccess().data?.host === true
   const [message, setMessage] = useState('')
 
   const exportURL = (format: string) => withToken(`/api/library/export?format=${format}`)
@@ -2543,7 +2642,7 @@ function BackupSection() {
   return (
     <Section
       title="Backup"
-      hint="Everything watched, rated and favourited, in one file. Importing merges: progress never moves backwards."
+      hint="Your list, ratings and favourites in one file. Importing merges: progress never moves backwards."
       keywords="export import myanimelist xml json"
     >
       <Row label="Export" hint="JSON to import again, text to read">
@@ -2585,9 +2684,75 @@ function BackupSection() {
       </Row>
 
       {message && (
-        <p className={cx('py-3 text-xs', load.isError ? 'text-recap' : 'text-base-400')}>{message}</p>
+        <p className={cx('py-3 text-xs', load.isError ? 'text-red-300' : 'text-base-400')}>{message}</p>
       )}
+      {host && <FullBackupRows />}
     </Section>
+  )
+}
+
+function FullBackupRows() {
+  const [picked, setPicked] = useState<File | null>(null)
+  const [restarting, setRestarting] = useState(false)
+  const restore = useMutation({
+    meta: { inline: true },
+    mutationFn: (file: File) => api.upload<{ restart: boolean }>('/api/backup/full', file),
+    onSuccess: async (res) => {
+      setPicked(null)
+      if (!res.restart) return
+      setRestarting(true)
+      await new Promise((r) => setTimeout(r, 2500))
+      for (let i = 0; i < 120; i++) {
+        if (await fetch('/api/access', { cache: 'no-store' }).then((r) => r.ok, () => false)) break
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+      window.location.reload()
+    },
+  })
+  return (
+    <>
+      <Row label="Full backup" hint="Everything: history, settings, devices, downloads and sign-ins. Keep it private.">
+        <a href={withToken('/api/backup/full')} download className={buttonClass()}>
+          Download
+        </a>
+      </Row>
+      <Row label="Restore a full backup" hint="Replaces everything here, then Yoru restarts. The current data is kept beside it.">
+        {picked ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <ConfirmInline
+              label={restore.isPending ? 'Restoring…' : 'Replace everything'}
+              pending={restore.isPending}
+              onConfirm={() => restore.mutate(picked)}
+              onCancel={() => setPicked(null)}
+            />
+          </div>
+        ) : (
+          <label className={cx(buttonClass(), 'cursor-pointer')}>
+            Choose backup
+            <input
+              type="file"
+              accept=".db,application/vnd.sqlite3,application/octet-stream"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                e.target.value = ''
+                if (file) {
+                  restore.reset()
+                  setPicked(file)
+                }
+              }}
+            />
+          </label>
+        )}
+      </Row>
+      {restarting ? (
+        <p role="status" className="py-3 text-xs text-base-300">
+          Restored. Restarting Yoru…
+        </p>
+      ) : (
+        restore.isError && <p className="py-3 text-xs text-red-300">{(restore.error as Error).message}</p>
+      )}
+    </>
   )
 }
 
@@ -2623,20 +2788,24 @@ function AlertsRow() {
     }
   }
 
-  if (!state.data) return null
+  if (!state.data) return <div aria-hidden className="min-h-16" />
   const pushed = state.data === 'on'
   const on = wanted && state.data !== 'denied' && state.data !== 'install'
   return (
     <Row label="Alerts on this device" hint={ALERT_HINT[state.data]} keywords="desktop push phone notifications closed">
       <div className="flex flex-wrap items-center justify-end gap-2">
         {on && pushed && (
-          <Button size="sm" onClick={() => test.mutate()} disabled={test.isPending}>
+          <Button
+            size="sm"
+            onClick={() => test.mutate(undefined, { onSuccess: () => window.setTimeout(() => test.reset(), 3000) })}
+            disabled={test.isPending}
+          >
             {test.isPending ? 'Sending…' : test.isSuccess ? 'Sent' : 'Send a test'}
           </Button>
         )}
-        <Switch label="Alerts on this device" on={on} onChange={(v) => void toggle(v)} />
+        <Switch label="Alerts on this device" on={on} onChange={(v) => void toggle(v)} disabled={busy} />
         {(error || test.isError) && (
-          <p className="basis-full text-right text-xs text-recap">{error || (test.error as Error).message}</p>
+          <p className="basis-full text-right text-xs text-red-300">{error || (test.error as Error).message}</p>
         )}
         {busy && <span className="sr-only">Working…</span>}
       </div>
@@ -2651,7 +2820,7 @@ function NotificationsTab() {
 
   return (
     <Section title="Release notifications" hint="Checks for new episodes of anime you follow." keywords="alerts new episodes">
-      <Row label="Enabled">
+      <Row label="New episode alerts" keywords="enabled">
         <Switch on={f.get('notify.enabled')} onChange={(v) => f.set('notify.enabled', String(v))} />
       </Row>
       <AlertsRow />
@@ -2711,7 +2880,7 @@ function DevicesAccess() {
         {access.isPending ? (
           <Skeleton className="my-3 h-40 w-full" />
         ) : access.isError ? (
-          <p className="py-3 text-sm text-recap">{(access.error as Error).message}</p>
+          <p className="py-3 text-sm text-red-300">{(access.error as Error).message}</p>
         ) : !access.data?.reachable ? (
           <p className="py-3 text-sm text-base-400">
             {proxy ? 'Only this machine, and the proxy on it, can reach Yoru.' : 'Only this machine can reach Yoru right now.'}
@@ -3002,6 +3171,7 @@ function DeviceApproval() {
   const qc = useQueryClient()
   const devices = useAccessDevices(true)
   const decide = useDecideDevice()
+  const [removing, setRemoving] = useState<string | null>(null)
   const setMode = useMutation({
     meta: { inline: true },
     mutationFn: (mode: ApprovalMode) => api.post('/api/access/approval', { mode }),
@@ -3017,8 +3187,18 @@ function DeviceApproval() {
 
   return (
     <>
-      <Row label="Ask before letting a device in" hint={setMode.isError ? (setMode.error as Error).message : hint}>
-        <Segmented options={APPROVAL_MODES} value={mode} onChange={(m) => setMode.mutate(m)} size="sm" />
+      <Row label="Ask before letting a device in" hint={hint}>
+        <div className="flex flex-col items-end gap-1">
+          <Segmented options={APPROVAL_MODES} value={mode} onChange={(m) => setMode.mutate(m)} size="sm" />
+          {setMode.isError && (
+            <p className="flex items-center gap-2 text-xs text-red-300">
+              {(setMode.error as Error).message}
+              <Button size="sm" onClick={() => setMode.mutate(setMode.variables!)}>
+                Retry
+              </Button>
+            </p>
+          )}
+        </div>
       </Row>
       {(devices.data?.devices ?? []).map((d) => (
         <Row
@@ -3049,13 +3229,18 @@ function DeviceApproval() {
                 Decline
               </button>
             )}
-            <button
-              onClick={() => decide.mutate({ id: d.id, status: 'removed' })}
-              disabled={decide.isPending}
-              className={buttonClass()}
-            >
-              Remove
-            </button>
+            {removing === d.id ? (
+              <ConfirmInline
+                label="Remove"
+                onConfirm={() => decide.mutate({ id: d.id, status: 'removed' }, { onSettled: () => setRemoving(null) })}
+                onCancel={() => setRemoving(null)}
+                pending={decide.isPending}
+              />
+            ) : (
+              <button onClick={() => setRemoving(d.id)} disabled={decide.isPending} className={buttonClass()}>
+                Remove
+              </button>
+            )}
           </div>
         </Row>
       ))}
@@ -3141,10 +3326,12 @@ interface FirewallState {
 function FirewallPanel() {
   const qc = useQueryClient()
   const [alsoPublic, setAlsoPublic] = useState(false)
+  const shown = useShownBySearch('firewall network devices phone windows')
   const fw = useQuery({
     queryKey: ['firewall'],
-    queryFn: () => api.get<FirewallState>('/api/access/firewall'),
+    queryFn: ({ signal }) => api.get<FirewallState>('/api/access/firewall', signal),
     refetchOnWindowFocus: true,
+    enabled: shown,
   })
   const allow = useMutation({
     meta: { inline: true },
@@ -3153,6 +3340,7 @@ function FirewallPanel() {
   })
   const openSettings = useMutation({ mutationFn: () => api.post('/api/access/network-settings') })
 
+  if (!shown) return null
   if (fw.isPending) return <Skeleton className="my-3 h-16 w-full" />
   if (fw.isError || !fw.data) return null
   const { status, reachable, blocked } = fw.data
@@ -3216,21 +3404,24 @@ function FirewallPanel() {
             {allow.isPending ? 'Waiting for Windows…' : 'Allow through Windows Firewall'}
           </button>
           <button
-            onClick={() => fw.refetch()}
-            className="rounded-md px-2 py-1.5 text-xs text-base-400 hover:text-white"
+            onClick={() => void fw.refetch()}
+            disabled={fw.isFetching}
+            className={buttonClass('ghost', 'sm')}
           >
-            Check again
+            {fw.isFetching ? 'Checking…' : 'Check again'}
           </button>
         </div>
       )}
       {!reachable && publicNets.length > 0 && (
-        <label className="flex items-center gap-2 text-xs text-base-400">
-          <input type="checkbox" checked={alsoPublic} onChange={(e) => setAlsoPublic(e.target.checked)} />
-          Also allow on Public networks (cafés, hotels: anyone on them could try to connect; the link's
-          token still keeps them out)
-        </label>
+        <div className="flex min-h-11 items-center justify-between gap-3">
+          <span className="min-w-0">
+            <span className="block text-xs text-base-200">Also allow on Public networks</span>
+            <span className="block text-xs text-base-500">Cafés and hotels. The link's token still keeps strangers out.</span>
+          </span>
+          <Switch on={alsoPublic} onChange={setAlsoPublic} aria-label="Also allow on Public networks" />
+        </div>
       )}
-      {allow.isError && <p className="text-xs text-recap">{(allow.error as Error).message}</p>}
+      {allow.isError && <p className="text-xs text-red-300">{(allow.error as Error).message}</p>}
       <p className="text-xs text-base-500">
         Windows will ask for permission. The rule only admits devices on the same local network. Still
         can't connect? Guest networks and routers with "client isolation" keep devices apart.
@@ -3254,7 +3445,7 @@ function AboutTab() {
   if (!s) {
     return (
       <Section title="Yoru">
-        <p className="py-3 text-sm text-recap">{(status.error as Error | null)?.message ?? 'Could not read the version.'}</p>
+        <p className="py-3 text-sm text-red-300">{(status.error as Error | null)?.message ?? 'Could not read the version.'}</p>
       </Section>
     )
   }
@@ -3311,7 +3502,7 @@ function AboutTab() {
 
   return (
     <div className="space-y-4">
-      <Section title={`Yoru ${s.current}`} hint="Updates replace only yoru.exe. Downloads, settings and history stay.">
+      <Section title={`Yoru ${s.current}`} hint="Updates replace only the app. Downloads, settings and history stay.">
         <Row label={line} hint={s.checkedAt ? `Checked ${relativeTime(Date.parse(s.checkedAt) / 1000)}` : undefined}>
           <div className="flex flex-wrap justify-end gap-2">
             <button
@@ -3350,15 +3541,14 @@ function AboutTab() {
             on={f.get('update.auto')}
             disabled={!host}
             onChange={(v) => {
-              f.set('update.auto', String(v))
-              void qc.invalidateQueries({ queryKey: ['update'] })
+              f.set('update.auto', String(v), () => void qc.invalidateQueries({ queryKey: ['update'] }))
             }}
           />
         </Row>
         {host && <SetupGuideRow />}
         {s.stage === 'downloading' && s.total > 0 && <ProgressBar value={percent} className="my-3" />}
         {(download.isError || restart.isError) && (
-          <p className="py-3 text-xs text-recap">{((download.error ?? restart.error) as Error).message}</p>
+          <p className="py-3 text-xs text-red-300">{((download.error ?? restart.error) as Error).message}</p>
         )}
         {ask && <UpdateRestartDialog busy={ask} version={s.staged || s.latest?.version || ''} onClose={close} />}
         {s.available && pendingNotes.length > 0 && (
@@ -3464,8 +3654,8 @@ function LogSection() {
           </button>
         </div>
       </Row>
-      {copied === 'failed' && <p className="py-3 text-xs text-recap">Couldn't copy the log; Save log keeps it as a file.</p>}
-      {folder.isError && <p className="py-3 text-xs text-recap">{(folder.error as Error).message}</p>}
+      {copied === 'failed' && <p className="py-3 text-xs text-red-300">Couldn't copy the log; Save log keeps it as a file.</p>}
+      {folder.isError && <p className="py-3 text-xs text-red-300">{(folder.error as Error).message}</p>}
     </Section>
   )
 }
@@ -3539,9 +3729,6 @@ function ComponentsSection() {
         )
       })}
       {setup.data.encoder && <ConvertingRow encoder={setup.data.encoder} toneMapper={setup.data.toneMapper ?? ''} />}
-      {install.isError && (
-        <p className="py-3 text-xs text-recap">{(install.error as Error).message}</p>
-      )}
     </Section>
   )
 }
@@ -3565,11 +3752,37 @@ function ConvertingRow({ encoder, toneMapper }: { encoder: string; toneMapper: s
   )
 }
 
+const JOB_NAMES: Record<string, string> = {
+  'cache-sweep': 'Cache clean-up',
+  'anilist-sync': 'AniList sync',
+  'mal-sync': 'MyAnimeList sync',
+  'release-watch': 'New episode check',
+  'filler-data': 'Filler lists',
+  seadex: 'SeaDex picks',
+  'group-tiers': 'Release group ratings',
+  'update-check': 'Update check',
+  corpus: 'Anime title list',
+  'library-scan': 'Local folder scan',
+  'airing-refresh': 'Airing times',
+}
+
+function everyLabel(every: string): string {
+  const part = (unit: string) => Number(new RegExp(`([\\d.]+)${unit}`).exec(every)?.[1] ?? 0)
+  const seconds = part('h') * 3600 + part('m(?!s)') * 60 + part('(?<!m)s')
+  if (!seconds) return `every ${every}`
+  if (seconds % 86400 === 0) return seconds === 86400 ? 'daily' : `every ${seconds / 86400} days`
+  if (seconds % 3600 === 0) return seconds === 3600 ? 'hourly' : `every ${seconds / 3600} hours`
+  if (seconds >= 60) return `every ${Math.round(seconds / 60)} min`
+  return `every ${seconds} s`
+}
+
 function JobsSection() {
+  const shown = useShownBySearch('Background jobs', 'Syncing, release checks and data mirrors.', 'tasks schedule sync')
   const jobs = useQuery({
     queryKey: ['jobs'],
     queryFn: () => api.get<{ jobs: Array<Record<string, unknown>> }>('/api/jobs'),
     refetchInterval: 10_000,
+    enabled: shown,
   })
   const qc = useQueryClient()
   const run = useMutation({
@@ -3582,7 +3795,7 @@ function JobsSection() {
 
   return (
     <Section title="Background jobs" hint="Syncing, release checks and data mirrors." keywords="tasks schedule sync">
-      {jobs.isPending ? (
+      {!shown ? null : jobs.isPending ? (
         <Skeleton className="my-3 h-40 w-full" />
       ) : (
         jobs.data?.jobs?.map((job) => {
@@ -3598,9 +3811,10 @@ function JobsSection() {
           return (
             <Row
               key={name}
-              label={name}
+              label={JOB_NAMES[name] ?? name}
+              keywords={name}
               hint={[
-                `every ${String(job.every)} · ${String(job.runs)} runs${Number(job.failures) > 0 ? ` · ${String(job.failures)} failed` : ''}`,
+                `${everyLabel(String(job.every))} · ${String(job.runs)} runs${Number(job.failures) > 0 ? ` · ${String(job.failures)} failed` : ''}`,
                 note,
               ]
                 .filter(Boolean)

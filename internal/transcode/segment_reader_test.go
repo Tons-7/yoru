@@ -13,7 +13,6 @@ import (
 	"time"
 )
 
-// writeParts writes files of the given sizes with distinct bytes, returning their paths and their bytes joined.
 func writeParts(t *testing.T, dir, prefix string, sizes ...int) ([]string, []byte) {
 	t.Helper()
 	var paths []string
@@ -33,7 +32,6 @@ func writeParts(t *testing.T, dir, prefix string, sizes ...int) ([]string, []byt
 	return paths, whole
 }
 
-// Parts read as one file: whole, from any offset, and by ranges over HTTP, a part of no bytes included.
 func TestSegmentReaderReadsPartsAsOne(t *testing.T) {
 	paths, whole := writeParts(t, t.TempDir(), "p", 70_001, 0, 128_000, 3)
 	r, err := openParts(paths, time.Time{})
@@ -101,7 +99,6 @@ func TestSegmentReaderReadsPartsAsOne(t *testing.T) {
 	}
 }
 
-// A reader holding a segment's parts reads them to the end though they are removed, as a replacement does.
 func TestSegmentReaderOutlivesRemovedParts(t *testing.T) {
 	paths, whole := writeParts(t, t.TempDir(), "p", 50_000, 60_000)
 	r, err := openParts(paths, time.Time{})
@@ -124,7 +121,6 @@ func TestSegmentReaderOutlivesRemovedParts(t *testing.T) {
 	}
 }
 
-// Replacing a segment leaves an open reader on the old parts, gives the next one the new; dropping clears it.
 func TestPublishReplacesWithoutDisturbingAReader(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{dir: dir, starts: []float64{0, 6}, Segments: 2, Info: &MediaInfo{Duration: 12}}
@@ -181,8 +177,6 @@ func TestPublishReplacesWithoutDisturbingAReader(t *testing.T) {
 
 func segmentBytesOf(t *testing.T, s *Session, n int) []byte { return segmentBytes(t, s, n) }
 
-// A player whose connection drops mid-segment gets it whole on asking again, and the cut send holds no file
-// open (on Windows a leaked handle would keep the session's folder from going).
 func TestSegmentServingSurvivesACutConnection(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "session")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -235,7 +229,6 @@ func TestSegmentServingSurvivesACutConnection(t *testing.T) {
 	}
 }
 
-// While a segment is replaced over and over, every read gets one whole version, never a mix or an error.
 func TestSegmentReadsAreWholeUnderReplacement(t *testing.T) {
 	dir := t.TempDir()
 	s := &Session{dir: dir, starts: []float64{0}, Segments: 1, Info: &MediaInfo{Duration: 6}}

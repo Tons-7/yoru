@@ -127,14 +127,14 @@ for (const { only: viewOnly, ...view } of views) {
       console.log(`ok   ${menu}`)
       await page.keyboard.press('Escape')
     }
-    const week = page.getByRole('tab', { name: 'Week', exact: true })
+    const week = page.getByRole('radio', { name: 'Week', exact: true })
     if (p.name === 'schedule' && (await week.isVisible().catch(() => false))) {
       await week.click()
       await sleep(1500)
       const weekly = join(OUT, `${PREFIX}-schedule-week-${view.name}.png`)
       await page.screenshot({ path: weekly })
       console.log(`ok   ${weekly}`)
-      await page.getByRole('tab', { name: 'Day', exact: true }).click()
+      await page.getByRole('radio', { name: 'Day', exact: true }).click()
     }
     const asList = page.getByRole('group', { name: 'Show as' }).getByRole('button', { name: 'List' })
     if (p.name === 'library' && (await asList.isVisible().catch(() => false))) {

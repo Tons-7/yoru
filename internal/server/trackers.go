@@ -10,21 +10,18 @@ import (
 )
 
 type trackerStatus struct {
-	Provider   string `json:"provider"`
-	Name       string `json:"name"`
-	ClientID   string `json:"clientId"`
-	HasSecret  bool   `json:"hasSecret"`
-	Configured bool   `json:"configured"`
-	Connected  bool   `json:"connected"`
-	// The token is stored but the tracker refused it: expired or revoked.
-	Reconnect bool   `json:"reconnect"`
-	User      string `json:"user,omitempty"`
-	Redirect  string `json:"redirect"`
-	Register  string `json:"register"`
-	// False for MyAnimeList: its public clients authenticate with PKCE alone.
-	SecretRequired bool `json:"secretRequired"`
-	// TokenURL asks for a token to paste back, on Yoru's own client: AniList only, once that client exists.
-	TokenURL string `json:"tokenUrl,omitempty"`
+	Provider       string `json:"provider"`
+	Name           string `json:"name"`
+	ClientID       string `json:"clientId"`
+	HasSecret      bool   `json:"hasSecret"`
+	Configured     bool   `json:"configured"`
+	Connected      bool   `json:"connected"`
+	Reconnect      bool   `json:"reconnect"`
+	User           string `json:"user,omitempty"`
+	Redirect       string `json:"redirect"`
+	Register       string `json:"register"`
+	SecretRequired bool   `json:"secretRequired"`
+	TokenURL       string `json:"tokenUrl,omitempty"`
 }
 
 func (s *Server) trackers(w http.ResponseWriter, r *http.Request) {
@@ -75,9 +72,8 @@ func (s *Server) trackers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) setTracker(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Provider string `json:"provider"`
-		ClientID string `json:"clientId"`
-		// Omitted keeps the stored secret; empty string clears it.
+		Provider     string  `json:"provider"`
+		ClientID     string  `json:"clientId"`
 		ClientSecret *string `json:"clientSecret"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {

@@ -1,4 +1,3 @@
-// Subtitles beyond the file's: the look, a file from this device, Jimaku's (site stood in for), PGS pictures.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -34,9 +33,7 @@ const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 const video = page.locator('video').first()
 
-// Pixels of the picture as shown, counted in the page: a paused frame differs only by what is drawn over it.
 const count = async (test) => {
-  // Reaching a row of a tall menu scrolls the page, taking the picture under the sticky header.
   await page.evaluate(() => window.scrollTo(0, 0))
   const box = await video.boundingBox()
   const png = await page.screenshot({ clip: box })
@@ -59,7 +56,6 @@ const count = async (test) => {
     { b64: png.toString('base64'), test },
   )
 }
-// Near white: both renderers keep video range, where white is 235.
 const WHITE = 'r > 225 && g > 225 && b > 225'
 const YELLOW = 'r > 220 && g > 220 && b < 60'
 const open = async (episode, at) => {
@@ -87,8 +83,6 @@ const closeMenu = async () => {
   await menu.waitFor({ state: 'hidden', timeout: 3000 })
 }
 
-// ---------------------------------------------------------------- a file from this device, and the look
-// Paused, the bar's shade covers the bottom: drawn lines are measured mid-picture (\an5), white on colour bars.
 const TEXT = WHITE
 const middle = (text) =>
   `[Script Info]\nScriptType: v4.00+\nPlayResX: 1280\nPlayResY: 720\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,60,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:03:00.00,Default,,0,0,0,,${text}\n`
@@ -112,7 +106,6 @@ await page.locator('input[type=file][accept*=".srt"]').setInputFiles({
   mimeType: 'text/plain',
   buffer: Buffer.from('1\n00:00:00,000 --> 00:03:00,000\n<i>A line</i> from this device, long enough to see\n'),
 })
-// A file with no line Yoru can read is refused, so the .srt taken is one converted.
 check(await until(() => trackGroup.getByRole('radio', { name: 'mine.srt', checked: true }).isVisible()), 'a loaded .srt becomes the track')
 await openMenu()
 await page.locator('input[type=file][accept*=".srt"]').setInputFiles({
@@ -121,7 +114,6 @@ await page.locator('input[type=file][accept*=".srt"]').setInputFiles({
   buffer: Buffer.from(middle('MY OWN FILE MY OWN FILE')),
 })
 await closeMenu()
-// The outline hides some of the pattern's own yellow bar, so the look is judged against the line as made.
 check(await until(async () => Math.abs((await count(YELLOW)) - offYellow) > 500), 'a loaded .ass is drawn')
 await sleep(1500)
 const yellow = await count(YELLOW)
@@ -134,7 +126,6 @@ await closeMenu()
 check(await until(async () => (await count(TEXT)) > off + 1000 && (await count(YELLOW)) < yellow - 600),
   'yellow as set, white again as made', `${off} → ${await count(TEXT)} white; ${yellow} → ${await count(YELLOW)} yellow pixels`)
 
-// ---------------------------------------------------------------- Jimaku, its site stood in for
 const jimakuASS = middle('JIMAKU LINE JIMAKU LINE')
 await page.route('**/api/jimaku', (r) => r.fulfill({ json: { set: true } }))
 await page.route('**/api/stream/*/jimaku', (r) => {
@@ -154,7 +145,6 @@ await closeMenu()
 check(await until(async () => (await count(TEXT)) > none + 1000), 'and is drawn', `${none} → ${await count(TEXT)}`)
 await page.unroute('**/api/jimaku')
 
-// ---------------------------------------------------------------- PGS pictures
 if (pictures) {
   await open(4, 30)
   await openMenu()

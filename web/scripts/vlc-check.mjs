@@ -1,4 +1,3 @@
-// VLC via its HTTP interface: progress saves, Stop keeps the resume point, the end marks watched, auto-next.
 import { execSync } from 'node:child_process'
 import { chromium } from 'playwright'
 
@@ -52,7 +51,6 @@ for (let i = 0; i < 30 && files.length < 2; i++) {
 }
 check(files.length === 2, 'two local test episodes listed')
 if (files.length < 2) process.exit(1)
-// Files 01 and 03 become episodes 1 and 2 so auto-next has somewhere to go.
 for (const f of files) {
   await post('/api/local/assign', { id: f.id, animeId: ANIME, episode: f.path.includes('01') ? 1 : 2 })
 }
@@ -64,14 +62,11 @@ if (process.env.YORU_VLC_EXPECT) {
 }
 check(!vlcRunning(), 'no VLC running before the test')
 await post('/api/prefs', { key: 'playback.player', value: 'vlc' })
-// With the sound settings on: VLC is launched with its own filters for them, and must still play.
 for (const [key, value] of [['playback.voice', 'medium'], ['playback.night', 'true'], ['playback.boost', 'medium']]) {
   await post('/api/prefs', { key, value })
 }
 await post('/api/prefs', { key: 'playback.autonext', value: 'true' })
-// VLC skips only what Settings ask for, as the browser player does.
 await post('/api/prefs', { key: 'playback.autoskip_op', value: 'true' })
-// Episode 1 keeps its song by default; the skip itself is what's checked here.
 await post('/api/prefs', { key: 'playback.skip_keep_bookends', value: 'false' })
 
 const browser = await chromium.launch()
@@ -79,20 +74,18 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 160)))
 
-// Play, then Stop: past the opening chapter's 40 s, the saved position proves tracking and auto-skip.
 await post('/api/progress', { animeId: ANIME, episode: 1, position: 0, duration: 180, played: 0 })
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await until(() => page.getByText('Playing in VLC').isVisible().catch(() => false), 30000), 'the page says it is playing in VLC')
 check(await until(vlcRunning, 15000), 'a VLC process is running')
 await sleep(14000)
-await page.getByRole('button', { name: /stop/i }).click()
+await page.getByRole('button', { name: 'Stop', exact: true }).click()
 check(await until(() => !vlcRunning(), 15000), 'Stop ends VLC')
 await sleep(1500)
 const saved = await resume(1)
 check(saved >= 40 && saved <= 60, 'the position VLC reached, past the skipped opening, was saved', String(saved))
 check(!(await episode(1))?.watched, 'a stopped episode is not watched')
 
-// Resume near the end (half already played, so it counts): watched, and auto-next opens episode 2.
 await post('/api/progress', { animeId: ANIME, episode: 1, position: 150, duration: 180, played: 100 })
 check(!(await episode(1))?.watched, 'episode 1 is not watched before the ending plays')
 const play = (await post('/api/play', { animeId: ANIME, episode: 1, external: true })).body ?? {}
@@ -107,7 +100,6 @@ check((two?.position ?? 0) > 3, 'episode 2 is being tracked', String(two?.positi
 await post('/api/stop', { animeId: ANIME, episode: 2 })
 check(await until(() => !vlcRunning(), 15000), 'API stop ends VLC')
 
-// Back to the browser player.
 await post('/api/prefs', { key: 'playback.player', value: 'browser' })
 await page.goto(`${BASE}/watch/${ANIME}/2`, { waitUntil: 'domcontentloaded' })
 check(await until(() => page.locator('video').evaluate((v) => v.readyState >= 1).catch(() => false), 60000), 'browser playback works again')

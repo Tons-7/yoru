@@ -7,34 +7,28 @@ import (
 	"time"
 )
 
-// Watching is what's on screen, for the card.
 type Watching struct {
-	Title string
-	// Episode is the line under the title: "Episode 5 of 28".
-	Episode string
-	// Cover is the show's image (https), Link its AniList page; either may be empty.
+	Title              string
+	Episode            string
 	Cover, Link        string
 	Position, Duration float64
 	Paused             bool
 }
 
-// Discord allows 5 activity updates in 20 s; one per sendGap stays inside that whatever the player does.
+var idleClear = 45 * time.Second
+
 const (
-	sendGap   = 4 * time.Second
-	retryGap  = 30 * time.Second
-	idleClear = 45 * time.Second
-	// A start time that moved less than this (a report's own jitter) isn't worth an update.
-	drift = 10 * time.Second
+	sendGap     = 4 * time.Second
+	retryGap    = 30 * time.Second
+	pausedClear = 20 * time.Minute
+	resendAfter = time.Minute
+	drift       = 10 * time.Second
 )
 
-// Presence keeps the Discord card in step with what plays, sending only changes; it clears once reports stop.
-// One goroutine talks to Discord, so a stuck or missing app never holds a caller up.
 type Presence struct {
-	log *slog.Logger
-	// dial and now are swapped by tests.
-	dial func() (activitySetter, error)
-	now  func() time.Time
-	// kick wakes the sender; barrier lets a test wait for it.
+	log     *slog.Logger
+	dial    func() (activitySetter, error)
+	now     func() time.Time
 	kick    chan struct{}
 	barrier chan chan struct{}
 
@@ -47,7 +41,6 @@ type Presence struct {
 	pending *time.Timer
 	idle    *time.Timer
 
-	// conn is the sender's alone.
 	conn activitySetter
 }
 
@@ -56,7 +49,6 @@ type activitySetter interface {
 	Close() error
 }
 
-// card is what Discord shows; start is when the episode would have begun, for its elapsed and left counters.
 type card struct {
 	w     Watching
 	start time.Time
@@ -74,7 +66,6 @@ func New(log *slog.Logger) *Presence {
 	return p
 }
 
-// SetEnabled turns the card on or off from Settings; off lets go of Discord, which takes the card down.
 func (p *Presence) SetEnabled(on bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -86,7 +77,6 @@ func (p *Presence) SetEnabled(on bool) {
 	p.wake()
 }
 
-// Show puts w on the card, or keeps it there; reports that change nothing visible send nothing.
 func (p *Presence) Show(w Watching) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -94,15 +84,13 @@ func (p *Presence) Show(w Watching) {
 		return
 	}
 	c := &card{w: w, start: p.now().Add(-time.Duration(w.Position * float64(time.Second)))}
-	p.resetIdle()
+	p.resetIdle(w.Paused)
 	if !p.same(c) {
 		p.want = c
 	}
-	// Even unchanged: a card Discord never got (it wasn't running) goes once it is.
 	p.wake()
 }
 
-// Clear takes the card down: the episode ended, or the player closed.
 func (p *Presence) Clear() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -142,7 +130,6 @@ func (p *Presence) run() {
 	}
 }
 
-// step sends the wanted card if it isn't up, as the rate limit allows; turned off, it lets go of Discord.
 func (p *Presence) step() {
 	p.mu.Lock()
 	if !p.on {
@@ -153,11 +140,11 @@ func (p *Presence) step() {
 		}
 		return
 	}
-	if p.want == p.shown {
+	now := p.now()
+	if p.want == p.shown && (p.want == nil || now.Sub(p.sent) < resendAfter) {
 		p.mu.Unlock()
 		return
 	}
-	now := p.now()
 	if wait := p.sent.Add(sendGap).Sub(now); wait > 0 {
 		if p.pending == nil {
 			p.pending = time.AfterFunc(wait, func() {
@@ -193,42 +180,40 @@ func (p *Presence) step() {
 		activity = want.activity()
 	}
 	if err := p.conn.setActivity(activity); err != nil {
-		// Discord quit or restarted: try again with a later report.
 		p.log.Debug("discord presence", "err", err)
 		p.conn.Close()
 		p.conn = nil
+		p.mu.Lock()
+		p.shown = nil
+		p.mu.Unlock()
 		return
 	}
 	p.mu.Lock()
-	// Turned off meanwhile: the card goes with the connection, at the next step.
 	if p.on {
 		p.sent, p.shown = now, want
 	}
 	p.mu.Unlock()
 }
 
-// same reports a card already showing (or about to) what c would.
 func (p *Presence) same(c *card) bool {
 	o := p.want
-	if o == nil {
-		o = p.shown
-	}
 	if o == nil || o.w.Title != c.w.Title || o.w.Episode != c.w.Episode || o.w.Paused != c.w.Paused {
 		return false
 	}
-	// A paused card has no counter to keep right.
 	return c.w.Paused || math.Abs(o.start.Sub(c.start).Seconds()) < drift.Seconds()
 }
 
-// resetIdle clears the card once reports stop, as when a tab closes without saying so.
-func (p *Presence) resetIdle() {
+func (p *Presence) resetIdle(paused bool) {
 	if p.idle != nil {
 		p.idle.Stop()
 	}
-	p.idle = time.AfterFunc(idleClear, p.Clear)
+	after := idleClear
+	if paused {
+		after = pausedClear
+	}
+	p.idle = time.AfterFunc(after, p.Clear)
 }
 
-// activity is the card as Discord takes it: "Watching <title>", the episode, elapsed and left, the cover.
 func (c *card) activity() map[string]any {
 	w := c.w
 	state := w.Episode
@@ -236,8 +221,7 @@ func (c *card) activity() map[string]any {
 		state = "Paused · " + w.Episode
 	}
 	a := map[string]any{
-		"type": 3, // Watching
-		// The member list says the show, not the app.
+		"type":                3,
 		"status_display_type": 2,
 		"details":             fit(w.Title),
 		"state":               fit(state),
@@ -261,14 +245,13 @@ func (c *card) activity() map[string]any {
 	return a
 }
 
-// fit keeps a line within what Discord takes: 2 to 128 characters.
 func fit(s string) string {
 	r := []rune(s)
 	if len(r) > 128 {
 		return string(r[:127]) + "…"
 	}
 	if len(r) < 2 {
-		return s + "  "[:2-len(r)]
+		return s + "··"[:len("·")*(2-len(r))]
 	}
 	return s
 }

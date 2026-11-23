@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { cx, episodeCount, readableTint, relativeTime } from '../lib/format'
+import { focusRing } from '../lib/ui'
 import { useNow } from '../lib/queries'
 import { ProgressBar } from './ui'
 
@@ -44,15 +45,42 @@ export function HoverInfo({ anime, children }: { anime: HoverAnime; children: Re
   const timer = useRef(0)
   const [box, setBox] = useState<{ top: number; left: number } | null>(null)
 
-  useEffect(() => () => window.clearTimeout(timer.current), [])
+  const unscroll = useRef<(() => void) | null>(null)
+  const placedAt = useRef<{ top: number; left: number } | null>(null)
+  useEffect(
+    () => () => {
+      window.clearTimeout(timer.current)
+      unscroll.current?.()
+    },
+    [],
+  )
 
   const open = () => {
     if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) return
     window.clearTimeout(timer.current)
+    if (!unscroll.current) {
+      const scrolled = () => {
+        const el = anchor.current
+        const was = placedAt.current
+        if (!el || !was) return
+        const now = el.getBoundingClientRect()
+        if (Math.abs(now.top - was.top) < 4 && Math.abs(now.left - was.left) < 4) return
+        window.clearTimeout(timer.current)
+        placedAt.current = null
+        setBox(null)
+        unscroll.current?.()
+      }
+      window.addEventListener('scroll', scrolled, { capture: true, passive: true })
+      unscroll.current = () => {
+        window.removeEventListener('scroll', scrolled, { capture: true })
+        unscroll.current = null
+      }
+    }
     timer.current = window.setTimeout(() => {
       const el = anchor.current
       if (!el) return
       const rect = el.getBoundingClientRect()
+      placedAt.current = { top: rect.top, left: rect.left }
       const right = rect.right + GAP
       const left = right + PANEL_WIDTH < window.innerWidth ? right : rect.left - GAP - PANEL_WIDTH
       const top = Math.min(
@@ -65,7 +93,10 @@ export function HoverInfo({ anime, children }: { anime: HoverAnime; children: Re
 
   const close = () => {
     window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(() => setBox(null), CLOSE_DELAY)
+    timer.current = window.setTimeout(() => {
+      setBox(null)
+      unscroll.current?.()
+    }, CLOSE_DELAY)
   }
 
   return (
@@ -168,7 +199,7 @@ function Panel({
             className={cx('size-full object-cover', !anime.banner && 'object-[center_22%]')}
           />
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-base-800 via-base-800/30 to-transparent" />
+        <div className="absolute inset-0 bg-linear-to-t from-base-800 via-base-800/30 to-transparent" />
         {anime.format && (
           <span className="absolute top-2.5 left-2.5 rounded-md bg-base-950/85 px-2 py-0.5 text-xs font-semibold text-base-100 backdrop-blur-sm">
             {FORMATS[anime.format] ?? anime.format.replace('_', ' ')}
@@ -280,7 +311,7 @@ function Panel({
               to={anime.play.to}
               title={anime.play.label}
               aria-label={anime.play.label}
-              className="flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 text-xs font-semibold text-white transition-colors hover:bg-accent-600"
+              className={`flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 text-xs font-semibold text-white transition-colors hover:bg-accent-600 ${focusRing}`}
             >
               <PlayGlyph />
               {anime.play.label}

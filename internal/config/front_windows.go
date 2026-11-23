@@ -30,10 +30,10 @@ const (
 )
 
 var (
-	frontMu    sync.Mutex
-	frontPID   uint32
-	frontFound uintptr
-	frontEnum  = windows.NewCallback(func(hwnd, _ uintptr) uintptr {
+	frontMu   sync.Mutex
+	frontPID  uint32
+	frontAll  []uintptr
+	frontEnum = windows.NewCallback(func(hwnd, _ uintptr) uintptr {
 		var owner uint32
 		getWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&owner)))
 		if owner != frontPID {
@@ -42,17 +42,31 @@ var (
 		if visible, _, _ := isWindowVisible.Call(hwnd); visible == 0 {
 			return 1
 		}
-		frontFound = hwnd
-		return 0
+		frontAll = append(frontAll, hwnd)
+		return 1
 	})
+	getWindowLong = user32.NewProc("GetWindowLongPtrW")
+)
+
+const (
+	gwlExStyle  = ^uintptr(19)
+	wsExTopmost = 0x8
 )
 
 func windowOf(pid int) uintptr {
 	frontMu.Lock()
 	defer frontMu.Unlock()
-	frontPID, frontFound = uint32(pid), 0
+	frontPID, frontAll = uint32(pid), nil
 	enumWindows.Call(frontEnum, 0)
-	return frontFound
+	for _, hwnd := range frontAll {
+		if style, _, _ := getWindowLong.Call(hwnd, gwlExStyle); style&wsExTopmost == 0 {
+			return hwnd
+		}
+	}
+	if len(frontAll) > 0 {
+		return frontAll[0]
+	}
+	return 0
 }
 
 func toFront(pid int) bool {

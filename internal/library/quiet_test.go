@@ -17,8 +17,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// A torrent being hashed is neither paused nor downloading: the startup pass mustn't pause it (finished
-// episodes froze at a tenth done) but come back for it once the check ends.
 func TestQuietRevisitsTorrentsStillChecking(t *testing.T) {
 	var mu sync.Mutex
 	polls := 0
@@ -31,7 +29,6 @@ func TestQuietRevisitsTorrentsStillChecking(t *testing.T) {
 			io.WriteString(w, `{"torrents":[{"id":1,"info_hash":"AAAA","name":"a"}]}`)
 		case strings.HasSuffix(r.URL.Path, "/stats/v1"):
 			polls++
-			// Two passes of checking, then the file turns out incomplete.
 			if polls <= 2 {
 				fmt.Fprintf(w, `{"state":"initializing","finished":false,"progress_bytes":%d,"total_bytes":10000}`, polls*1000)
 			} else {
@@ -78,8 +75,6 @@ func TestQuietRevisitsTorrentsStillChecking(t *testing.T) {
 	t.Fatal("the torrent was never paused once its check ended")
 }
 
-// The re-check passes are for what was being verified at launch. A download the
-// queue started since used to be paused by the next pass and then dropped.
 func TestQuietLeavesDownloadsStartedSinceLaunch(t *testing.T) {
 	var mu sync.Mutex
 	polls := 0
@@ -98,7 +93,6 @@ func TestQuietLeavesDownloadsStartedSinceLaunch(t *testing.T) {
 				io.WriteString(w, `{"state":"live","finished":false,"progress_bytes":4,"total_bytes":10}`)
 			}
 		case strings.Contains(r.URL.Path, "/2/stats"):
-			// Paused at launch; the queue resumed it afterwards.
 			if polls <= 1 {
 				io.WriteString(w, `{"state":"paused","finished":false,"progress_bytes":1,"total_bytes":10}`)
 			} else {

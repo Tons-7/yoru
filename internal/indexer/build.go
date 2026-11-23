@@ -6,17 +6,15 @@ import (
 	"strings"
 )
 
-// Feed formats a configured site can use.
 const (
 	KindNyaa       = "nyaa"
 	KindTokyoTosho = "tokyotosho"
 )
 
-// Build makes a source for a configured site; an adult Nyaa-style one uses the sister site's categories.
 func Build(kind, base string, adult bool) (Source, error) {
 	u, err := url.Parse(base)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return nil, fmt.Errorf("indexer %q: url %q is not a full URL", kind, base)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" {
+		return nil, fmt.Errorf("indexer %q: url %q is not a full http(s) address", kind, base)
 	}
 	switch strings.ToLower(kind) {
 	case KindNyaa:
@@ -25,7 +23,6 @@ func Build(kind, base string, adult bool) (Source, error) {
 		}
 		return NewNyaa(base), nil
 	case KindTokyoTosho:
-		// It would search the general Anime category and find nothing adult.
 		if adult {
 			return nil, fmt.Errorf("indexer %q: adult is only supported for %q sites", kind, KindNyaa)
 		}

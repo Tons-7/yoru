@@ -1,4 +1,3 @@
-// Copied where decoded, converted where not or only claimed, 5.1 to six speakers; episodes 5-6 by YORU_HEVC=1.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -33,7 +32,6 @@ await api('/api/prefs', { key: 'playback.autoplay', value: 'false' })
 const browser = await chromium.launch()
 const errors = []
 
-// Opens an episode in a fresh page, recording every stream open (its caps and the server's answer).
 async function watch(context, episode = 5) {
   const page = await context.newPage()
   page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
@@ -47,7 +45,6 @@ async function watch(context, episode = 5) {
   return { page, opens }
 }
 
-// Copied for a device that decodes it: it plays as sent, with no converted reopen.
 async function copiedAndPlays(context, episode, token, what) {
   const { page, opens } = await watch(context, episode)
   await until(() => opens.length > 0)
@@ -62,7 +59,6 @@ async function copiedAndPlays(context, episode, token, what) {
   await page.close()
 }
 
-// Playing: frames presented and the clock moving.
 const plays = (page) =>
   until(() =>
     page.evaluate(async () => {
@@ -75,7 +71,6 @@ const plays = (page) =>
     }),
   )
 
-// ---------------------------------------------------------------- this browser, as it is
 {
   const context = await browser.newContext({ viewport: { width: 1280, height: 860 } })
   const { page, opens } = await watch(context)
@@ -93,7 +88,6 @@ const plays = (page) =>
   await context.close()
 }
 
-// ---------------------------------------------------------------- claiming HEVC 10-bit and six speakers
 {
   const context = await browser.newContext({ viewport: { width: 1280, height: 860 } })
   await context.addInitScript(() => {
@@ -117,7 +111,6 @@ const plays = (page) =>
     'gets it copied, in a session of its own', `${first.id} · ${first.plan?.reason}`)
   check(first.plan?.channels === 6, 'six speakers get the 5.1 track as 5.1', `channels ${first.plan?.channels}`)
 
-  // This Chromium can't decode HEVC, whatever was claimed: the player reopens it converted.
   const fellBack = await until(() => opens.length > 1, 30_000)
   const second = opens[1]?.body ?? {}
   check(fellBack && second.plan?.videoCopy === false && !opens[1].caps.includes('hevc'),
@@ -131,13 +124,11 @@ const plays = (page) =>
   await context.close()
 }
 
-// ---------------------------------------------------------------- Hi10P here, and both in installed Chrome
 {
   const context = await browser.newContext({ viewport: { width: 1280, height: 860 } })
   await copiedAndPlays(context, 6, 'h264-10', 'Hi10P (10-bit H.264)')
   await context.close()
 }
-// Playwright's Chromium has no HEVC decoder; Chrome uses the GPU's, where it has one.
 const chrome = await chromium.launch({ channel: 'chrome' }).catch(() => null)
 if (!chrome) console.log('skip installed Chrome: not found')
 else {
@@ -147,7 +138,6 @@ else {
   await chrome.close()
 }
 
-// ---------------------------------------------------------------- mpv's picture settings
 {
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } })
   await page.goto(`${BASE}/settings?tab=Sound`, { waitUntil: 'domcontentloaded' })

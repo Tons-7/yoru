@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// fakeDiscord answers like the Discord app on the far end of the pipe and hands back what it was sent.
 func fakeDiscord(t *testing.T, side net.Conn, frames chan<- map[string]any) {
 	t.Helper()
 	readFrame := func() (uint32, map[string]any) {
@@ -47,7 +46,6 @@ func fakeDiscord(t *testing.T, side net.Conn, frames chan<- map[string]any) {
 	}()
 }
 
-// Yoru speaks Discord's IPC: a handshake with its application id, then SET_ACTIVITY frames, replies drained.
 func TestIPCFrames(t *testing.T) {
 	ours, theirs := net.Pipe()
 	frames := make(chan map[string]any, 8)

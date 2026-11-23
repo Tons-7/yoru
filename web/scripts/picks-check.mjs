@@ -99,7 +99,8 @@ try {
   await until(() => page.getByRole('heading', { name: 'Top 10', exact: true }).isVisible())
   check((await page.getByRole('heading', { name: 'For you', exact: true }).count()) === 0 && forYouAsked === 0,
     'and it leaves Home, nothing asked for it', `asked ${forYouAsked}`)
-  await fetch(`${BASE}/api/prefs`, { method: 'POST', body: JSON.stringify({ key: 'home.hidden', value: '[]' }) })
+  const shownAgain = await fetch(`${BASE}/api/prefs`, { method: 'POST', body: JSON.stringify({ key: 'home.hidden', value: '[]' }) })
+  check(shownAgain.ok, 'the hidden rows reset for the next step', String(shownAgain.status))
   await page.close()
 
   page = await fresh()
@@ -124,8 +125,7 @@ try {
   check(await until(async () => path(page) === `/anime/${ANIME}`), 'a shared MyAnimeList link, words and all, opens its show', path(page))
   check(asked[0] === '99', 'asking by its MyAnimeList id', asked.join(','))
   await page.goto(`${BASE}/open?url=${encodeURIComponent('https://myanimelist.net/anime/1/Unknown')}`)
-  check(await until(() => page.getByText("AniList doesn't know that MyAnimeList show.").isVisible()), 'one nobody knows says so')
-  check(await page.getByRole('link', { name: 'Search for it instead' }).isVisible(), 'with a search to try instead')
+  check(await until(async () => path(page) === '/anime/-1'), 'one AniList does not know opens its MyAnimeList page', path(page))
   await page.goto(`${BASE}/open?text=frieren`)
   check(await until(async () => path(page) === '/browse?q=frieren'), 'words without a link are searched for', path(page))
 

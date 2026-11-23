@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// UpNextItem is one episode on the Up next list, in play order.
 type UpNextItem struct {
 	AnimeID      int     `json:"animeId"`
 	Episode      int     `json:"episode"`
@@ -16,26 +15,28 @@ type UpNextItem struct {
 	Cover        *string `json:"cover,omitempty"`
 	EpisodeTitle string  `json:"episodeTitle,omitempty"`
 	Minutes      int     `json:"minutes,omitempty"`
-	// Where a started episode resumes, for the card's bar.
-	Position float64 `json:"position,omitempty"`
-	Duration float64 `json:"duration,omitempty"`
-	// Spoiler: the episode's title is held back by the show's spoiler rule (see markSpoilers).
-	Spoiler bool `json:"spoiler,omitempty"`
+	Position     float64 `json:"position,omitempty"`
+	Duration     float64 `json:"duration,omitempty"`
+	Spoiler      bool    `json:"spoiler,omitempty"`
+	Downloaded   bool    `json:"downloaded,omitempty"`
 }
 
-// Pick is an episode to play.
 type Pick struct {
 	AnimeID int `json:"animeId"`
 	Episode int `json:"episode"`
 }
 
-// UpNext is the list top to bottom: shows in their places, each show's episodes in episode order.
 func (s *Store) UpNext(ctx context.Context) ([]UpNextItem, error) {
 	mode := s.TitleMode(ctx, 0)
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT u.anime_id, u.episode, a.title_romaji, a.title_english, a.cover_url,
 		       coalesce(ep.title_en, ''), coalesce(ep.runtime, a.duration, 0),
-		       coalesce(pb.position_s, 0), coalesce(pb.duration_s, 0)
+		       coalesce(pb.position_s, 0), coalesce(pb.duration_s, 0),
+		       EXISTS (SELECT 1 FROM torrent_file tf
+		               JOIN cache_entry c ON c.info_hash = tf.info_hash AND c.file_index = tf.file_index
+		               WHERE tf.anime_id = u.anime_id AND tf.ep_key = cast(u.episode AS TEXT) AND c.complete = 1)
+		       OR EXISTS (SELECT 1 FROM local_file lf
+		                  WHERE lf.anime_id = u.anime_id AND lf.episode = u.episode AND lf.missing = 0)
 		FROM up_next u
 		JOIN anime a ON a.id = u.anime_id
 		LEFT JOIN episode ep ON ep.anime_id = u.anime_id AND ep.ep_key = cast(u.episode AS TEXT)
@@ -52,7 +53,7 @@ func (s *Store) UpNext(ctx context.Context) ([]UpNextItem, error) {
 		var romaji string
 		var english *string
 		if err := rows.Scan(&it.AnimeID, &it.Episode, &romaji, &english, &it.Cover,
-			&it.EpisodeTitle, &it.Minutes, &it.Position, &it.Duration); err != nil {
+			&it.EpisodeTitle, &it.Minutes, &it.Position, &it.Duration, &it.Downloaded); err != nil {
 			return nil, err
 		}
 		it.Title = PickTitle(mode, romaji, english)
@@ -61,8 +62,6 @@ func (s *Store) UpNext(ctx context.Context) ([]UpNextItem, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// After the cursor closes: these reads need a pool connection of their own. The list holds unwatched
-	// episodes, so the next is the one after the list's progress.
 	type rule struct {
 		mode string
 		next int
@@ -81,7 +80,6 @@ func (s *Store) UpNext(ctx context.Context) ([]UpNextItem, error) {
 	return out, nil
 }
 
-// AddUpNext puts an episode on the list: with its show's other episodes if any are there, else at the bottom.
 func (s *Store) AddUpNext(ctx context.Context, animeID, episode int) (bool, error) {
 	if animeID == 0 || episode <= 0 {
 		return false, nil
@@ -101,7 +99,6 @@ func (s *Store) AddUpNext(ctx context.Context, animeID, episode int) (bool, erro
 	return n > 0, nil
 }
 
-// RemoveUpNext takes an episode off the list, or with episode 0 the whole show.
 func (s *Store) RemoveUpNext(ctx context.Context, animeID, episode int) error {
 	query, args := `DELETE FROM up_next WHERE anime_id = ?`, []any{animeID}
 	if episode > 0 {
@@ -117,7 +114,6 @@ func (s *Store) ClearUpNext(ctx context.Context) error {
 	return err
 }
 
-// MoveUpNext puts a show at place to among the list's shows (0 is the top); its episodes go with it.
 func (s *Store) MoveUpNext(ctx context.Context, animeID, to int) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
@@ -158,8 +154,6 @@ func (s *Store) MoveUpNext(ctx context.Context, animeID, to int) error {
 	return tx.Commit()
 }
 
-// FillUpNext adds the next aired unwatched episode of every show being watched, the latest watched first.
-// A show already on the list, or caught up, is skipped, so a second press adds nothing.
 func (s *Store) FillUpNext(ctx context.Context) (int, error) {
 	rows, err := s.r.QueryContext(ctx, `
 		SELECT e.anime_id, e.progress FROM list_entry e
@@ -204,7 +198,6 @@ func (s *Store) FillUpNext(ctx context.Context) (int, error) {
 	return added, nil
 }
 
-// UpNextAfter is the list as it plays once an episode ends: without that episode, or ones still to broadcast.
 func (s *Store) UpNextAfter(ctx context.Context, animeID, episode int) ([]UpNextItem, error) {
 	items, err := s.UpNext(ctx)
 	if err != nil {
@@ -225,8 +218,6 @@ func (s *Store) UpNextAfter(ctx context.Context, animeID, episode int) ([]UpNext
 	return out, nil
 }
 
-// PlayOrder is what plays after an episode, up to n: the Up next list top to bottom, then past its end the next
-// episodes of the last show. fromList counts the picks that came from the list.
 func (s *Store) PlayOrder(ctx context.Context, animeID, episode, n int) (picks []Pick, fromList int, err error) {
 	items, err := s.UpNextAfter(ctx, animeID, episode)
 	if err != nil {
@@ -246,7 +237,6 @@ func (s *Store) PlayOrder(ctx context.Context, animeID, episode, n int) (picks [
 			return nil, 0, err
 		}
 		if next == 0 {
-			// Past a season's finale, the next season's first episode once it has aired.
 			sequel := s.NextSeason(ctx, last.AnimeID)
 			if sequel == 0 || !s.isFinale(ctx, last) {
 				break
@@ -259,13 +249,11 @@ func (s *Store) PlayOrder(ctx context.Context, animeID, episode, n int) (picks [
 	return picks, fromList, nil
 }
 
-// isFinale: the entry's last episode by its count; NextEpisode's zero also means "not aired yet".
 func (s *Store) isFinale(ctx context.Context, p Pick) bool {
 	total, _ := s.EpisodeCount(ctx, p.AnimeID)
 	return total > 0 && p.Episode >= total
 }
 
-// leaveUpNext takes a watched episode off the list, as a rewatch keeps progress where it was.
 func leaveUpNext(ctx context.Context, tx *sql.Tx, animeID int, epKey string) error {
 	episode, err := strconv.Atoi(epKey)
 	if err != nil {

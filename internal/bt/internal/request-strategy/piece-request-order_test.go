@@ -4,15 +4,12 @@ import (
 	"testing"
 	"unique"
 
-	"github.com/bradfitz/iter"
 	"yoru/internal/bt/metainfo"
 )
 
 func benchmarkPieceRequestOrder[B Btree](
 	b *testing.B,
-	// Initialize the next run, and return a Btree
 	newBtree func() B,
-	// Set any path hinting for the specified piece
 	hintForPiece func(index int),
 	numPieces int,
 ) {
@@ -22,7 +19,7 @@ func benchmarkPieceRequestOrder[B Btree](
 		pro := NewPieceOrder(newBtree(), numPieces)
 		state := PieceRequestOrderState{}
 		doPieces := func(m func(PieceRequestOrderKey) bool) {
-			for i := range iter.N(numPieces) {
+			for i := range numPieces {
 				key := PieceRequestOrderKey{
 					Index:    i,
 					InfoHash: zeroHashHandle,

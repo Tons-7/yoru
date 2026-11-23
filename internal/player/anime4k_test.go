@@ -71,8 +71,6 @@ func TestChainMatchesUpstreamModes(t *testing.T) {
 	}
 }
 
-// The size applies to the primary passes only; the trailing upscale stays M
-// because it runs after the auto-downscale, where a bigger network is wasted.
 func TestSizeAppliesToPrimaryPassesOnly(t *testing.T) {
 	for _, size := range []string{"S", "M", "L", "VL", "UL"} {
 		chain := Anime4KChain("A", size)
@@ -92,15 +90,12 @@ func TestUnknownModeAndSizeFallBack(t *testing.T) {
 	if got, want := Anime4KChain("Z", "XXL"), Anime4KChain("A", "M"); !slices.Equal(got, want) {
 		t.Errorf("nonsense settings = %v, want mode A at M", got)
 	}
-	// Casing comes from a settings field, not a fixed list.
 	if got, want := Anime4KChain("c+a", "vl"), Anime4KChain("C+A", "VL"); !slices.Equal(got, want) {
 		t.Errorf("lowercase mode produced %v", got)
 	}
 }
 
-// Every chain name exists upstream, or the shader argument silently disables upscaling.
 func TestEveryChainNameIsAKnownShader(t *testing.T) {
-	// The full file list from Anime4K v4.0.1.
 	known := map[string]bool{}
 	for _, base := range []string{
 		"Anime4K_Clamp_Highlights", "Anime4K_AutoDownscalePre_x2", "Anime4K_AutoDownscalePre_x4",
@@ -151,17 +146,14 @@ func TestArgsAreOneAppendPerShader(t *testing.T) {
 		if !strings.HasPrefix(a, "--glsl-shaders-append=") {
 			t.Errorf("arg %q does not append", a)
 		}
-		// A list separator would be ambiguous with a Windows drive letter.
 		if strings.Count(a, "--glsl-shaders-append=") != 1 {
 			t.Errorf("arg %q packs several shaders", a)
 		}
 	}
 }
 
-// A missing shader must not stop the episode playing.
 func TestMissingShadersDisableUpscalingRatherThanFailing(t *testing.T) {
 	dir := t.TempDir()
-	// Everything but the last pass.
 	chain := Anime4KChain("A", "VL")
 	for _, name := range chain[:len(chain)-1] {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("// shader"), 0o644); err != nil {

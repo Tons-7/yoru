@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// One request however often it's asked for, one release, and a failing system isn't asked every check.
 func TestKeeperHoldsOnceAndLetsGo(t *testing.T) {
 	var held, released, asked int
 	k := New(slog.New(slog.DiscardHandler))
@@ -40,7 +39,6 @@ func TestKeeperHoldsOnceAndLetsGo(t *testing.T) {
 	}
 }
 
-// The real request on this system: taken and let go without error.
 func TestHoldTakesAndReleases(t *testing.T) {
 	release, err := hold("a test")
 	if err != nil {

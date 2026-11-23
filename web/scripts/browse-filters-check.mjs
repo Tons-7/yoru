@@ -30,7 +30,7 @@ const lastAsk = () => asked.at(-1) ?? ''
 const pageParam = (key) => new URL(page.url()).searchParams.get(key)
 const cards = page.locator('a[href^="/anime/"]')
 const shown = async () => new Set(await cards.evaluateAll((els) => els.map((e) => e.getAttribute('href')))).size
-const results = () => page.locator('body').innerText().then((t) => t.match(/([\d,]+) results?\b/)?.[1]?.replace(',', '') ?? '')
+const results = () => page.locator('body').innerText().then((t) => t.match(/([\d,]+) results?\b/)?.[1]?.replaceAll(',', '') ?? '')
 const count = async (qs) => {
   const until = Date.now() + 8 * 60_000
   while (Date.now() < until) {

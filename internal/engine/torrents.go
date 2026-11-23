@@ -31,6 +31,8 @@ func (e *Engine) awaitInfo(ctx context.Context, t *bt.Torrent) error {
 	select {
 	case <-t.GotInfo():
 		return nil
+	case <-t.Closed():
+		return errRestarting
 	case <-ctx.Done():
 		return fmt.Errorf("metadata: %w", ctx.Err())
 	}
@@ -199,6 +201,17 @@ func (e *Engine) writeFailed(en *entry, err error) {
 	if errors.Is(err, errStorageClosed) {
 		return
 	}
+	if badName(err) {
+		e.mu.Lock()
+		first := en.err == ""
+		en.err = "A file name in this release can't be saved on this drive"
+		e.mu.Unlock()
+		if first {
+			e.log.Error("chunk write failed on a file name the drive refuses", "torrent", en.t.Name(), "err", err)
+		}
+		en.t.DisallowDataDownload()
+		return
+	}
 	e.mu.Lock()
 	first := en.writeErr == ""
 	en.writeErr = "can't write the download to disk: " + err.Error()
@@ -267,14 +280,19 @@ func (e *Engine) remove(en *entry, data bool) error {
 
 	var paths []string
 	var pieces int
+	var unlisted string
 	if info := en.t.Info(); info != nil && data {
 		others := e.held()
 		for _, f := range en.t.Files() {
-			if p := e.names.filePath(en.t, f); !e.names.shared(p, en.t.InfoHash(), others) {
+			if p := e.names.filePath(en.t, f); e.names.owns(en.t, p) && !e.names.shared(p, en.t.InfoHash(), others) {
 				paths = append(paths, p)
 			}
 		}
 		pieces = info.NumPieces()
+	} else if top, ok := e.names.claimed(en.t.InfoHash()); ok && data && safeComponent(top) && !torrent.OwnFolder(top) {
+		if p := filepath.Join(e.opts.CacheDir, top); !e.names.shared(p, en.t.InfoHash(), e.held()) {
+			unlisted = p
+		}
 	}
 	hash := en.t.InfoHash()
 	folder := e.names.folder(en.t)
@@ -305,7 +323,12 @@ func (e *Engine) remove(en *entry, data bool) error {
 			failed = append(failed, p)
 		}
 	}
-	if folder != filepath.Clean(e.opts.CacheDir) {
+	if unlisted != "" {
+		if err := os.RemoveAll(unlisted); err != nil {
+			failed = append(failed, unlisted)
+		}
+	}
+	if base := filepath.Clean(e.opts.CacheDir); folder != base && filepath.Dir(folder) == base && safeComponent(filepath.Base(folder)) {
 		removeEmptyDirs(folder)
 	}
 	e.names.forget(hash)
@@ -403,8 +426,7 @@ func diskComponents(t *bt.Torrent, f *bt.File, names *layout) []string {
 	if !info.IsDir() {
 		return []string{names.top(info.BestName(), t.InfoHash())}
 	}
-	fi := f.FileInfo()
-	return safePath(fi.BestPath())
+	return names.parts(info, t.InfoHash(), f.FileInfo())
 }
 
 func (e *Engine) detail(en *entry) torrent.Detail {

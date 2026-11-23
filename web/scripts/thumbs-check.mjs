@@ -1,4 +1,3 @@
-// Scrub thumbnails of a local episode: the sheet is built, tiles aren't black, the bar shows the right tile.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -30,7 +29,6 @@ const check = (ok, label, detail = '') => {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// ---------------------------------------------------------------- setup
 for (let i = 0; i < 60; i++) {
   try {
     if ((await api('/api/setup')).ok) break
@@ -50,7 +48,6 @@ if (!file) process.exit(1)
 check((await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: EP })).ok, 'file assigned')
 await post('/api/prefs', { key: 'playback.autoplay', value: 'true' })
 
-// ---------------------------------------------------------------- open the player
 const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] })
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const errors = []
@@ -66,7 +63,6 @@ const sid = streamOpen?.id ?? streamOpen?.session?.id ?? streamOpen?.streamId
 check(!!sid, 'stream opened', JSON.stringify(streamOpen ?? {}).slice(0, 160))
 if (!sid) process.exit(1)
 
-// ---------------------------------------------------------------- the sheet
 let sheet
 for (let i = 0; i < 90; i++) {
   const r = await api(`/api/stream/${sid}/thumbnails`)
@@ -84,7 +80,6 @@ if (!sheet) {
 check(sheet.count > 1 && sheet.interval > 0 && sheet.columns > 0, 'sheet has several tiles', `${sheet.count} tiles every ${sheet.interval}s`)
 check(!sheet.partial, 'a complete file gets the whole sheet, not a partial one', JSON.stringify(sheet))
 
-// Every tile's mean brightness, read from the sheet the player will use.
 const tiles = await page.evaluate(async ({ url, sheet }) => {
   const img = new Image()
   img.src = url
@@ -113,8 +108,6 @@ check(
   `${tiles.natural.join('x')} for ${sheet.columns}x${sheet.rows} of ${sheet.width}x${sheet.height}`,
 )
 
-// ---------------------------------------------------------------- hovering the bar
-// A fresh mount asks for the sheet at once, as for a viewer opening a cached episode.
 await page.reload({ waitUntil: 'domcontentloaded' })
 await page.waitForFunction(() => (document.querySelector('video')?.currentTime ?? 0) > 1, null, { timeout: 30_000 }).catch(() => {})
 const bar = page.locator('div.group\\/scrub').first()
@@ -124,7 +117,6 @@ const box = await bar.boundingBox()
 check(!!box, 'scrub bar is on screen')
 
 const previewAt = async (fraction) => {
-  // One pixel in from the right edge, or the pointer has already left the bar.
   await page.mouse.move(box.x + Math.min(box.width - 1, box.width * fraction), box.y + box.height / 2, { steps: 4 })
   await sleep(300)
   return page.evaluate(() => {
@@ -144,15 +136,11 @@ for (const f of [0.2, 0.5, 0.8]) {
 check(positions.length === 3 && new Set(positions.map((p) => p.position)).size === 3, 'each hover point shows a different tile', positions.map((p) => p.position).join(' | '))
 check(positions.length === 3 && positions.every((p) => /\d+:\d\d/.test(p.label)), 'preview carries the hovered time', positions.map((p) => p.label).join(' | '))
 
-// The preview crop is what the sheet promised, not a squashed one.
 check(positions.length === 3 && positions.every((p) => Math.abs(p.width - sheet.width) < 1), 'tile drawn at its native width')
 
-// The very end of the bar must still land on a real frame.
 const last = await previewAt(1)
 check(!!last && last.position === `-${((sheet.count - 1) % sheet.columns) * sheet.width}px -${Math.floor((sheet.count - 1) / sheet.columns) * sheet.height}px`, 'end of the bar shows the last tile', JSON.stringify(last))
 
-// ---------------------------------------------------------------- a downloading file's sheet so far
-// Its first half on disk: a picture there, the time alone over the rest.
 const half = Math.floor(sheet.count / 2)
 await page.route(`**/api/stream/${sid}/thumbnails`, (route) =>
   route.fulfill({

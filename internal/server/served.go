@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -53,6 +54,13 @@ func (w *servedWriter) Write(b []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	return w.ResponseWriter.Write(b)
+}
+
+func (w *servedWriter) ReadFrom(src io.Reader) (int64, error) {
+	if !w.wrote {
+		w.WriteHeader(http.StatusOK)
+	}
+	return io.Copy(w.ResponseWriter, src)
 }
 
 func (w *servedWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

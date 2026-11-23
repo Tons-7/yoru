@@ -10,8 +10,7 @@ import (
 )
 
 type orderedBitmap[T typedRoaring.BitConstraint] struct {
-	bitmap typedRoaring.Bitmap[T]
-	// There should be way more efficient ways to do this.
+	bitmap   typedRoaring.Bitmap[T]
 	order    list.List[T]
 	elements map[T]*list.Element[T]
 }
@@ -20,7 +19,6 @@ func (o *orderedBitmap[T]) IterateSnapshot(f func(T) bool) {
 	o.bitmap.Clone().Iterate(f)
 }
 
-// IterateSnapshotDescending is IterateSnapshot from the highest index down.
 func (o *orderedBitmap[T]) IterateSnapshotDescending(f func(T) bool) {
 	snap := o.bitmap.Clone()
 	for it := snap.ReverseIterator(); it.HasNext(); {

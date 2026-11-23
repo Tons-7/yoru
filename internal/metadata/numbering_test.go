@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// ani.zip keys episodes by the entry's own count; episodeNumber is TheTVDB's
-// position in its season, which for a later cour starts well past one.
 func TestEpisodesCountFromTheEntryAndKeepTheTvdbNumber(t *testing.T) {
 	c := testClient(t, "anizip", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"episodes": {
@@ -31,7 +29,6 @@ func TestEpisodesCountFromTheEntryAndKeepTheTvdbNumber(t *testing.T) {
 	}
 }
 
-// TheTVDB files a film under its show's specials (S00E02); "02" alone is the show's second episode.
 func TestASpecialsNumberIsNoAlias(t *testing.T) {
 	c := testClient(t, "anizip", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"episodes": {

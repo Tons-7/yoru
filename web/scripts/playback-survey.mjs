@@ -1,10 +1,7 @@
-// Real releases without a browser: what is offered, what auto-play picks, whether it streams (live indexers).
-//   SURVEY="19:1,37;185875:1,6" PLAY=1 node scripts/run-player-check.mjs playback-survey.mjs
 import { request } from 'node:http'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 
-// The engine turns away anything with browser headers, which fetch adds, so its streams are read plainly.
 const ranged = (url, from, to) =>
   new Promise((resolve, reject) => {
     const req = request(url, { headers: { Range: `bytes=${from}-${to}` }, timeout: 120000 }, (res) => {
@@ -73,10 +70,8 @@ for (const { id, episodes } of cases) {
 
     if (!PLAY) continue
     const t1 = Date.now()
-    // PICK plays the release whose title matches, as the manual picker does.
     const picked = process.env.PICK && results.find((r) => new RegExp(process.env.PICK, 'i').test((r.Torrent ?? r.torrent).title))
     const infoHash = picked ? (picked.Torrent ?? picked.torrent).infoHash : undefined
-    // Outlasts Yoru's own 6 min wait.
     const play = await call('POST', '/api/play', { animeId: id, episode: ep, infoHash }, 8 * 60000)
     if (play.status !== 200) {
       note(false, 'play', `${play.status} ${JSON.stringify(play.json).slice(0, 400)}`)
@@ -85,7 +80,6 @@ for (const { id, episodes } of cases) {
     const s = play.json
     note(true, `play started in ${((Date.now() - t1) / 1000).toFixed(1)}s`, `${s.title} [file ${s.fileIndex}]`)
 
-    // SEEKS=n: n far reads of the raw file while it downloads, each timed, as a seek or MKV Cues lookup asks.
     const seeks = Number(process.env.SEEKS ?? 0)
     if (seeks > 0) {
       const url = s.streamUrl.startsWith('http') ? s.streamUrl : BASE + s.streamUrl
@@ -94,7 +88,6 @@ for (const { id, episodes } of cases) {
       if (!total) note(false, 'seek probe', `${first.status}, content-range ${first.range}`)
       const times = []
       for (let i = 0; i < seeks && total > 0; i++) {
-        // The same spread every run (15-85% of the file, off piece boundaries), so builds compare.
         const at = Math.floor(total * (0.15 + 0.7 * ((i * 0.618) % 1))) + 12345
         await new Promise((r) => setTimeout(r, 4000))
         const t = Date.now()
@@ -142,7 +135,6 @@ for (const { id, episodes } of cases) {
       note(sub.status === 200 && lines > 0, `subtitle ${t.language ?? t.title}`, `${sub.status}, ${lines} cues`)
     }
 
-    // SPEED=seconds: how fast the episode keeps downloading while it is open.
     const window = Number(process.env.SPEED ?? 0)
     if (window > 0 && s.infoHash) {
       const samples = []

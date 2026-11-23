@@ -6,7 +6,6 @@ import (
 	"yoru/internal/transcode"
 )
 
-// A chapter start within reach wins, nearest first; the chapter at 0 starts no part.
 func TestNearChapter(t *testing.T) {
 	chapters := []transcode.Chapter{{Start: 0}, {Start: 238}, {Start: 325}, {Start: 1334}}
 	for _, c := range []struct {

@@ -1,10 +1,10 @@
-// Package player drives mpv over its JSON IPC socket (a named pipe on Windows), and VLC over HTTP.
 package player
 
 import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -39,34 +39,26 @@ type Event struct {
 }
 
 type Options struct {
-	URL          string
-	Title        string
-	StartAt      float64
-	ChaptersFile string
-	SkipRanges   []SkipRange
-	AutoSkip     bool
-	Anime4K      bool
-	Anime4KMode  string
-	Anime4KSize  string
-	// Audio is the sub/dub preference; mpv picks the matching track of a dual-audio file by language.
-	Audio string
-	// SubLanguages are the settings' ISO 639-1 codes, best first.
-	SubLanguages []string
-	// Sound is what to do to the audio: dialogue lift, night mode, headphones, mono.
-	Sound sound.Options
-	// SubLook is the settings' subtitle look ("", "outline", "yellow", "box", "yellow-box"); see SubtitleLookArgs.
-	SubLook  string
-	SubRaise bool
-	// SoftwareDecode turns off mpv's GPU decoding, which it otherwise uses where it's known safe.
+	URL            string
+	Title          string
+	StartAt        float64
+	ChaptersFile   string
+	SkipRanges     []SkipRange
+	AutoSkip       bool
+	Anime4K        bool
+	Anime4KMode    string
+	Anime4KSize    string
+	Audio          string
+	SubLanguages   []string
+	Sound          sound.Options
+	SubLook        string
+	SubRaise       bool
 	SoftwareDecode bool
-	// Deband smooths the banding of flat gradients, which the high-quality profile no longer does.
-	Deband bool
-	// Soften dims sudden bright flashes (ffmpeg's photosensitivity filter).
-	Soften bool
-	Extra  []string
+	Deband         bool
+	Soften         bool
+	Extra          []string
 }
 
-// SubtitleLookArgs: a look for mpv's text subtitles (ASS keeps its own), named as this mpv names its options.
 func SubtitleLookArgs(look string, raise bool, takes func(option string) bool) []string {
 	var out []string
 	if raise {
@@ -101,7 +93,6 @@ func SubtitleLookArgs(look string, raise bool, takes func(option string) bool) [
 	return out
 }
 
-// AudioLanguages is mpv's --alang list for a preference, empty when either track will do.
 func AudioLanguages(pref string) string {
 	switch pref {
 	case "dub":
@@ -112,7 +103,6 @@ func AudioLanguages(pref string) string {
 	return ""
 }
 
-// languageTags are how files tag a language's tracks, matched as Player.tsx does.
 var languageTags = map[string][]string{
 	"en": {"en", "eng", "english"},
 	"es": {"es", "spa", "spanish", "es-419", "es-es"},
@@ -129,7 +119,6 @@ var languageTags = map[string][]string{
 	"th": {"th", "tha", "thai"},
 }
 
-// SubtitleLanguages is mpv's --slang list for the settings' codes, in order.
 func SubtitleLanguages(codes []string) string {
 	var out []string
 	for _, c := range codes {
@@ -143,14 +132,14 @@ func SubtitleLanguages(codes []string) string {
 }
 
 type MPV struct {
-	binary string
-	// base names the IPC socket; each launch gets its own, so a dying mpv and a second Yoru never answer.
+	binary   string
 	base     string
 	socket   string
 	launches atomic.Int64
 	shaders  string
 	log      *slog.Logger
 
+	playMu sync.Mutex
 	mu     sync.Mutex
 	cmd    *exec.Cmd
 	conn   net.Conn
@@ -161,12 +150,10 @@ type MPV struct {
 	opts     Options
 	lastSkip float64
 
-	// The options and profiles this mpv has: an older one refuses newer ones and won't start.
 	listMu            sync.Mutex
 	options, profiles string
 }
 
-// Warm reads what this mpv takes in the background, so the first Play doesn't wait on it.
 func (m *MPV) Warm() {
 	go func() {
 		m.takes("")
@@ -174,22 +161,23 @@ func (m *MPV) Warm() {
 	}()
 }
 
-// takes says whether this mpv has an option; a build that won't list them is taken at its word for none.
 func (m *MPV) takes(option string) bool {
 	return strings.Contains(m.listing(&m.options, "--list-options"), "--"+option+" ")
 }
 
-// listing is mpv's answer to arg, kept once given; none (mpv not installed yet) is asked again next time.
 func (m *MPV) listing(kept *string, arg string) string {
 	m.listMu.Lock()
 	defer m.listMu.Unlock()
 	if *kept == "" {
-		*kept = m.ask(arg)
+		out, err := m.ask(arg)
+		if out == "" && err == nil {
+			out = " "
+		}
+		*kept = out
 	}
 	return *kept
 }
 
-// profile is the first of these profiles this mpv has (high-quality came in 0.37, gpu-hq is older), or "".
 func (m *MPV) profile(names ...string) string {
 	listed := strings.Fields(m.listing(&m.profiles, "--profile=help"))
 	for _, name := range names {
@@ -200,12 +188,11 @@ func (m *MPV) profile(names ...string) string {
 	return ""
 }
 
-// ask runs mpv for a listing, given up after a while: a hung build mustn't hold up playing.
-func (m *MPV) ask(arg string) string {
+func (m *MPV) ask(arg string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, _ := proc.Hide(exec.CommandContext(ctx, m.binary, "--no-config", arg)).Output()
-	return string(out)
+	out, err := proc.Hide(exec.CommandContext(ctx, m.binary, "--no-config", arg)).Output()
+	return string(out), err
 }
 
 func New(binary, socket string, log *slog.Logger) *MPV {
@@ -213,19 +200,24 @@ func New(binary, socket string, log *slog.Logger) *MPV {
 		socket = defaultSocket()
 	}
 	return &MPV{
-		binary: binary,
-		base:   socket,
-		socket: socket,
-		log:    log,
-		events: make(chan Event, eventBuffer),
-		// The Anime4K shaders sit beside the binary, so no location is configured.
+		binary:  binary,
+		base:    socket,
+		socket:  socket,
+		log:     log,
+		events:  make(chan Event, eventBuffer),
 		shaders: filepath.Join(filepath.Dir(binary), "shaders"),
 	}
 }
 
+func (m *MPV) WithShaders(dir string) *MPV {
+	if dir != "" {
+		m.shaders = dir
+	}
+	return m
+}
+
 const eventBuffer = 64
 
-// Events is the current run's: a late exit from the last mpv ended the next episode's tracking.
 func (m *MPV) Events() <-chan Event {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -233,7 +225,9 @@ func (m *MPV) Events() <-chan Event {
 }
 
 func (m *MPV) Play(ctx context.Context, opts Options) error {
-	m.Stop()
+	m.playMu.Lock()
+	defer m.playMu.Unlock()
+	m.stop()
 
 	events := make(chan Event, eventBuffer)
 	exited := make(chan struct{})
@@ -254,8 +248,6 @@ func (m *MPV) Play(ctx context.Context, opts Options) error {
 		"--force-window=immediate",
 		"--keep-open=no",
 		"--title=" + orDefault(opts.Title, "Yoru"),
-		// The stream is served over HTTP by the engine; without a generous cache
-		// mpv re-requests aggressively and fights the piece scheduler.
 		"--cache=yes",
 		"--demuxer-max-bytes=256MiB",
 		"--demuxer-readahead-secs=30",
@@ -274,11 +266,9 @@ func (m *MPV) Play(ctx context.Context, opts Options) error {
 	}
 	args = append(args, sound.MPVArgs(opts.Sound)...)
 	args = append(args, SubtitleLookArgs(opts.SubLook, opts.SubRaise, m.takes)...)
-	// auto-safe: mpv's own list of GPU decoders that don't break playback; HEVC 10-bit off the CPU.
 	switch {
 	case opts.SoftwareDecode:
 	case opts.Soften:
-		// The flash filter works on frames in memory, which the copy-back decoders hand over.
 		args = append(args, "--hwdec=auto-copy-safe")
 	default:
 		args = append(args, "--hwdec=auto-safe")
@@ -290,40 +280,54 @@ func (m *MPV) Play(ctx context.Context, opts Options) error {
 		args = append(args, "--deband=yes")
 	}
 	if opts.Anime4K {
-		// gpu-next runs the shader chain well; the profile only raises the scaling defaults.
-		if p := m.profile("high-quality", "gpu-hq"); p != "" {
-			args = append(args, "--profile="+p)
+		if shaders := m.anime4kArgs(opts.Anime4KMode, opts.Anime4KSize); len(shaders) > 0 {
+			if p := m.profile("high-quality", "gpu-hq"); p != "" {
+				args = append(args, "--profile="+p)
+			}
+			args = append(args, "--vo=gpu-next")
+			args = append(args, shaders...)
 		}
-		args = append(args, "--vo=gpu-next")
-		args = append(args, m.anime4kArgs(opts.Anime4KMode, opts.Anime4KSize)...)
 	}
 	args = append(args, opts.Extra...)
 	args = append(args, opts.URL)
 
 	cmd := exec.Command(m.binary, args...)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	said := &tail{}
+	cmd.Stdout, cmd.Stderr = said, said
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start mpv: %w", err)
 	}
-
 	m.mu.Lock()
 	m.cmd = cmd
+	socket := m.socket
 	m.mu.Unlock()
 
-	conn, err := m.dial(ctx, 15*time.Second)
+	go func() {
+		cmd.Wait()
+		dropSocket(socket)
+		close(exited)
+	}()
+
+	conn, err := m.dial(ctx, socket, exited, 15*time.Second)
 	if err != nil {
-		// Reaped before Stop waits on it, or Stop sits out its whole wait and the process is never collected.
-		go func() {
-			cmd.Wait()
-			close(exited)
-		}()
-		m.Stop()
+		m.stop()
+		if last := said.String(); last != "" {
+			err = fmt.Errorf("%w: %s", err, last)
+		}
+		m.log.Warn("mpv did not start", "err", err)
 		return err
 	}
 
 	m.mu.Lock()
-	m.conn = conn
+	current := m.cmd == cmd
+	if current {
+		m.conn = conn
+	}
 	m.mu.Unlock()
+	if !current {
+		conn.Close()
+		return errors.New("mpv was stopped while it was starting")
+	}
 
 	go m.readLoop(conn, events)
 	go m.reap(cmd, events, exited)
@@ -334,23 +338,45 @@ func (m *MPV) Play(ctx context.Context, opts Options) error {
 	return nil
 }
 
-// mpv creates the pipe only after it starts, so connecting is a retry loop.
-func (m *MPV) dial(ctx context.Context, timeout time.Duration) (net.Conn, error) {
+func (m *MPV) dial(ctx context.Context, socket string, exited <-chan struct{}, timeout time.Duration) (net.Conn, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		conn, err := dialIPC(ctx, m.socket)
+		conn, err := dialIPC(ctx, socket)
 		if err == nil {
 			return conn, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("mpv ipc %s: %w", m.socket, err)
+			return nil, fmt.Errorf("mpv ipc %s: %w", socket, err)
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		case <-exited:
+			return nil, errors.New("mpv closed before it started playing")
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+type tail struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (t *tail) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	t.buf = append(t.buf, p...)
+	if over := len(t.buf) - 2048; over > 0 {
+		t.buf = t.buf[over:]
+	}
+	t.mu.Unlock()
+	return len(p), nil
+}
+
+func (t *tail) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.TrimSpace(string(t.buf))
 }
 
 type ipcMessage struct {
@@ -411,7 +437,6 @@ func (m *MPV) onPosition(events chan Event, pos, duration float64) {
 	}
 }
 
-// skipTarget is pos's range unless it was the last skipped, or landing on r.End loops.
 func skipTarget(ranges []SkipRange, pos, last float64) (SkipRange, bool) {
 	for _, r := range ranges {
 		if r.Contains(pos) && last != r.End {
@@ -423,10 +448,6 @@ func skipTarget(ranges []SkipRange, pos, last float64) (SkipRange, bool) {
 
 func (m *MPV) Seek(seconds float64) error {
 	return m.send(map[string]any{"command": []any{"seek", seconds, "absolute"}})
-}
-
-func (m *MPV) SetPause(paused bool) error {
-	return m.send(map[string]any{"command": []any{"set_property", "pause", paused}})
 }
 
 func (m *MPV) send(cmd map[string]any) error {
@@ -448,15 +469,13 @@ func (m *MPV) send(cmd map[string]any) error {
 }
 
 func (m *MPV) reap(cmd *exec.Cmd, events chan Event, exited chan struct{}) {
-	cmd.Wait()
-	close(exited)
+	<-exited
 	m.mu.Lock()
 	var conn net.Conn
 	if m.cmd == cmd {
 		conn, m.cmd, m.conn = m.conn, nil, nil
 	}
 	m.mu.Unlock()
-	// mpv exiting on its own never reaches Stop, so the handle is dropped here.
 	if conn != nil {
 		conn.Close()
 	}
@@ -469,8 +488,13 @@ func (m *MPV) Running() bool {
 	return m.cmd != nil
 }
 
-// Stop ends the player and waits briefly for it to go, so the next launch does not share its moment.
 func (m *MPV) Stop() {
+	m.playMu.Lock()
+	defer m.playMu.Unlock()
+	m.stop()
+}
+
+func (m *MPV) stop() {
 	m.mu.Lock()
 	cmd, conn, exited := m.cmd, m.conn, m.exited
 	m.cmd, m.conn, m.exited = nil, nil, nil
@@ -490,7 +514,6 @@ func (m *MPV) Stop() {
 	}
 }
 
-// uniqueSocket is the IPC name for one launch: the base with the pid and a counter, before any extension.
 func uniqueSocket(base string, n int64) string {
 	ext := filepath.Ext(base)
 	if ext != ".sock" {
@@ -499,7 +522,6 @@ func uniqueSocket(base string, n int64) string {
 	return fmt.Sprintf("%s-%d-%d%s", strings.TrimSuffix(base, ext), os.Getpid(), n, ext)
 }
 
-// Dropping events is correct: a stalled consumer must not block playback.
 func emit(events chan Event, e Event) {
 	select {
 	case events <- e:
@@ -507,8 +529,6 @@ func emit(events chan Event, e Event) {
 	}
 }
 
-// deliver is emit for an end or an exit, which the tracker must see to save, unpin and move on: it waits
-// for room (the tracker may be in a database write), but not for a tracker that has gone.
 func deliver(events chan Event, e Event) {
 	select {
 	case events <- e:

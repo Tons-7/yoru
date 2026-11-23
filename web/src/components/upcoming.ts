@@ -24,7 +24,8 @@ export function startGroup(date: string | null | undefined, now = new Date()): S
   const { year, month } = parts(date)
   if (!year || !month) return 'Later'
   const ahead = (year - now.getFullYear()) * 12 + (month - 1 - now.getMonth())
-  if (ahead <= 0) return 'This month'
+  if (ahead < 0) return 'Later'
+  if (ahead === 0) return 'This month'
   if (ahead === 1) return 'Next month'
   return 'Later'
 }

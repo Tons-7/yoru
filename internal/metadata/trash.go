@@ -6,18 +6,15 @@ import (
 	"fmt"
 )
 
-// TrashURL is TRaSH Guides' custom formats for Sonarr (MIT); the anime ones grade release groups.
 const TrashURL = "https://raw.githubusercontent.com/TRaSH-Guides/Guides/master/docs/json/sonarr/cf/"
 
-// GroupTier is one group on one of TRaSH's anime lists: a BD or WEB tier (1 is best), or the low-quality list.
 type GroupTier struct {
-	Kind    string // "bd", "web" or "lq"
+	Kind    string
 	Level   int
 	Name    string
-	Pattern string // TRaSH's regex for the group in a release title
+	Pattern string
 }
 
-// trashLists are the files read, by kind and how many tiers each has.
 var trashLists = []struct {
 	kind, prefix string
 	levels       int
@@ -38,7 +35,6 @@ type trashFormat struct {
 	} `json:"specifications"`
 }
 
-// GroupTiers reads every anime tier list; one failing fails the lot, so a half list never replaces a whole one.
 func (c *Client) GroupTiers(ctx context.Context) ([]GroupTier, error) {
 	var out []GroupTier
 	for _, list := range trashLists {

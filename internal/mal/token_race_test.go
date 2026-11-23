@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// raceClient's token endpoint holds a refresh until release is closed; a login answers at once.
 func raceClient(t *testing.T) (c *Client, started, release chan struct{}, stored func() Token) {
 	t.Helper()
 	started, release = make(chan struct{}), make(chan struct{})
@@ -38,7 +37,6 @@ func raceClient(t *testing.T) (c *Client, started, release chan struct{}, stored
 	return c, started, release, func() Token { mu.Lock(); defer mu.Unlock(); return saved }
 }
 
-// Disconnecting while a refresh is in flight must not end with the refreshed token stored again.
 func TestLogoutDuringRefreshStaysLoggedOut(t *testing.T) {
 	c, started, release, stored := raceClient(t)
 	done := make(chan struct{})
@@ -72,7 +70,6 @@ func TestLogoutDuringRefreshStaysLoggedOut(t *testing.T) {
 	}
 }
 
-// A new login while the old account's refresh is in flight keeps the new account.
 func TestLoginDuringRefreshKeepsTheNewAccount(t *testing.T) {
 	c, started, release, stored := raceClient(t)
 	done := make(chan error)

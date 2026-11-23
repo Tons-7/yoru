@@ -1,5 +1,3 @@
-//go:build !wasm
-
 package bt
 
 import (
@@ -23,7 +21,6 @@ func TestBoltPieceCompletionClosedWhenClientClosed(t *testing.T) {
 	cl, err := NewClient(cfg)
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("%#v", err))
 	cl.Close()
-	// And again: a second client must be able to take the same port.
 	cl, err = NewClient(cfg)
 	require.NoError(t, err)
 	cl.Close()
@@ -51,7 +48,7 @@ func TestIssue335(t *testing.T) {
 	comp, err := storage.NewBoltPieceCompletion(dir)
 	qt.Assert(t, qt.IsNil(err))
 	defer logErr(comp.Close, "closing bolt piece completion")
-	mmapStorage := storage.NewMMapWithCompletion(dir, comp)
+	mmapStorage := storage.NewFileWithCompletion(dir, comp)
 	defer mmapStorage.Close()
 	cfg.DefaultStorage = mmapStorage
 	cl, err := NewClient(cfg)

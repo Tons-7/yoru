@@ -12,7 +12,6 @@ import (
 	"strings"
 )
 
-// Check only looks, never needing root: firewalld or ufw may block the port; macOS asks on its own.
 func Check(ctx context.Context, port int, _ string) (Status, error) {
 	switch runtime.GOOS {
 	case "linux":
@@ -43,7 +42,6 @@ func Check(ctx context.Context, port int, _ string) (Status, error) {
 	return Status{}, nil
 }
 
-// CheckPeers is Check for the torrent peer port, TCP and UDP from anywhere.
 func CheckPeers(ctx context.Context, port int, _ string) (Status, error) {
 	switch runtime.GOOS {
 	case "linux":
@@ -77,7 +75,6 @@ func active(ctx context.Context, unit string) bool {
 	if err != nil || strings.TrimSpace(string(out)) != "active" {
 		return false
 	}
-	// ufw's unit is active even with ufw disabled, Ubuntu's default; its own config says whether it filters.
 	if unit == "ufw" {
 		if conf, err := os.ReadFile("/etc/ufw/ufw.conf"); err == nil {
 			for line := range strings.SplitSeq(string(conf), "\n") {

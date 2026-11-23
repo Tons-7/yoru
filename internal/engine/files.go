@@ -71,6 +71,9 @@ func (e *Engine) deleteFile(en *entry, i int) error {
 func (e *Engine) freeFile(en *entry, i int) error {
 	f := en.t.Files()[i]
 	path := e.names.filePath(en.t, f)
+	if !e.names.owns(en.t, path) {
+		return nil
+	}
 	head, tail := e.sharedEdges(en, f)
 	switch {
 	case head == 0 && tail == 0:
@@ -92,10 +95,10 @@ func (e *Engine) retryFree(en *entry, i int) {
 	for time.Now().Before(until) {
 		time.Sleep(freeRetry)
 		e.mu.Lock()
-		_, held := e.byID[en.id]
+		cur, held := e.byID[en.id]
 		back := en.selected[i]
 		e.mu.Unlock()
-		if !held || back {
+		if !held || cur != en || back {
 			return
 		}
 		err := e.freeFile(en, i)

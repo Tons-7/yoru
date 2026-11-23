@@ -19,7 +19,6 @@ func TestAudioLanguagesForMpv(t *testing.T) {
 	}
 }
 
-// Files tag tracks "eng" or "english" as often as "en"; the order is kept.
 func TestSubtitleLanguagesForMpv(t *testing.T) {
 	if got := SubtitleLanguages([]string{"en", "pt"}); got != "en,eng,english,pt,por,portuguese,pt-br" {
 		t.Errorf("slang = %q", got)
@@ -32,7 +31,6 @@ func TestSubtitleLanguagesForMpv(t *testing.T) {
 	}
 }
 
-// Outlines by the names this mpv has: "outline" from 0.38, the old "border" before; no box, the outline look.
 func TestSubtitleLookFollowsTheMpv(t *testing.T) {
 	newer := func(o string) bool { return o == "sub-outline-color" || o == "sub-border-style" }
 	older := func(o string) bool { return false }

@@ -15,7 +15,6 @@ import (
 	"testing"
 )
 
-// A download not matching its published digest never reaches bin/: these get executed.
 func TestDownloadRefusesAMismatchedChecksum(t *testing.T) {
 	const body = "not really ffmpeg"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +28,6 @@ func TestDownloadRefusesAMismatchedChecksum(t *testing.T) {
 	sum := sha256.Sum256([]byte(body))
 	real := hex.EncodeToString(sum[:])
 
-	// The digest the source published no longer matches what arrived.
 	err := m.download(context.Background(), "ffmpeg", srv.URL, dest, strings.Repeat("a", 64))
 	if err == nil {
 		t.Fatal("a mismatched download was accepted")
@@ -41,7 +39,6 @@ func TestDownloadRefusesAMismatchedChecksum(t *testing.T) {
 		t.Error("the rejected download was left on disk")
 	}
 
-	// The real digest passes, and uppercase is still the same hash.
 	if err := m.download(context.Background(), "ffmpeg", srv.URL, dest, strings.ToUpper(real)); err != nil {
 		t.Fatalf("a matching download was rejected: %v", err)
 	}
@@ -50,7 +47,6 @@ func TestDownloadRefusesAMismatchedChecksum(t *testing.T) {
 		t.Fatalf("file = %q, err = %v", got, err)
 	}
 
-	// No digest published: the install proceeds rather than being blocked.
 	if err := m.download(context.Background(), "ffmpeg", srv.URL, dest, ""); err != nil {
 		t.Fatalf("an unverifiable source should not block the install: %v", err)
 	}
@@ -69,7 +65,6 @@ func TestPublishedSumReadsEitherFormat(t *testing.T) {
 		srv.Close()
 	}
 
-	// Anything that is not a hash leaves the download unverified rather than failing on a moved side file.
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gone", http.StatusNotFound)
 	}))
@@ -80,7 +75,6 @@ func TestPublishedSumReadsEitherFormat(t *testing.T) {
 	}
 }
 
-// Linux's static ffmpeg publishes only an MD5; it still catches a broken or swapped transfer.
 func TestDownloadChecksAnMD5(t *testing.T) {
 	const body = "static ffmpeg"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

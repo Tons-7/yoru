@@ -84,17 +84,33 @@ func zoneFor(offsetMinutes int) *time.Location {
 }
 
 func midnight(t time.Time, offsetMinutes int) time.Time {
-	local := t.In(zoneFor(offsetMinutes))
-	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
+	return midnightIn(t, zoneFor(offsetMinutes))
+}
+
+func midnightIn(t time.Time, zone *time.Location) time.Time {
+	local := t.In(zone)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, zone)
+}
+
+func scheduleZone(name string, offsetMinutes int) *time.Location {
+	if name != "" {
+		if loc, err := time.LoadLocation(name); err == nil {
+			return loc
+		}
+	}
+	return zoneFor(offsetMinutes)
 }
 
 func groupByDay(items []scheduleItem, offsetMinutes int, start int64, count int) []scheduleDay {
+	return groupByDayIn(items, zoneFor(offsetMinutes), start, count)
+}
+
+func groupByDayIn(items []scheduleItem, zone *time.Location, start int64, count int) []scheduleDay {
 	if count < 0 {
 		count = 0
 	} else if count > 28 {
 		count = 28
 	}
-	zone := zoneFor(offsetMinutes)
 	today := time.Now().In(zone).Format("2006-01-02")
 
 	days := make([]scheduleDay, 0, count)
@@ -124,7 +140,7 @@ func groupByDay(items []scheduleItem, offsetMinutes int, start int64, count int)
 
 const scheduleDayFetches = 4
 
-func (s *Server) scheduleDays(ctx context.Context, start, end int64) ([]anilist.ScheduleEntry, error) {
+func (s *Server) scheduleDays(ctx context.Context, start, end int64) ([]anilist.ScheduleEntry, bool, error) {
 	const day = 24 * 3600
 	var spans [][2]int64
 	for from := start; from < end; from += day {
@@ -142,19 +158,31 @@ func (s *Server) scheduleDays(ctx context.Context, start, end int64) ([]anilist.
 		})
 	}
 	wg.Wait()
-	if err := errors.Join(errs...); err != nil {
-		return nil, err
+	err := errors.Join(errs...)
+	if err == nil {
+		return slices.Concat(parts...), false, nil
 	}
-	return slices.Concat(parts...), nil
+	loaded := slices.ContainsFunc(errs, func(e error) bool { return e == nil })
+	if !loaded || ctx.Err() != nil {
+		return nil, false, err
+	}
+	s.log.Warn("schedule days missing", "err", err)
+	for i, e := range errs {
+		if e != nil {
+			parts[i] = nil
+		}
+	}
+	return slices.Concat(parts...), true, nil
 }
 
 func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
 	days, _ := strconv.Atoi(q.Get("days"))
-	if days <= 0 || days > 28 {
+	if days <= 0 {
 		days = 7
 	}
+	days = min(days, 28)
 
 	offset, grouped := 0, false
 	if raw := q.Get("tz"); raw != "" {
@@ -169,12 +197,13 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 	} else if grouped {
 		start = time.Now().Unix()
 	}
+	zone := scheduleZone(q.Get("zone"), offset)
 	if grouped {
-		start = midnight(time.Unix(start, 0), offset).Unix()
+		start = midnightIn(time.Unix(start, 0), zone).Unix()
 	}
-	end := start + int64(days)*24*3600
+	end := time.Unix(start, 0).In(zone).AddDate(0, 0, days).Unix()
 
-	entries, err := s.scheduleDays(r.Context(), start, end)
+	entries, partial, err := s.scheduleDays(r.Context(), start, end)
 	if err != nil {
 		s.fail(w, "schedule", err)
 		return
@@ -185,6 +214,10 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 	}
 	shows := s.decorate(r, media)
 
+	delays, err := s.store.ShowDelays(r.Context())
+	if err != nil {
+		s.log.Warn("show delays", "err", err)
+	}
 	onList, err := s.store.ListProgress(r.Context())
 	if err != nil {
 		s.log.Warn("list progress", "err", err)
@@ -281,7 +314,7 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 				item.Position, item.Duration = p[0], p[1]
 			}
 		}
-		if d, ok := s.store.ShowDelay(r.Context(), e.MediaID); ok && d.Episode == e.Episode {
+		if d, ok := delays[e.MediaID]; ok && d.Episode == e.Episode {
 			item.DelayedFrom = d.WasAt
 		}
 
@@ -294,9 +327,12 @@ func (s *Server) schedule(w http.ResponseWriter, r *http.Request) {
 		"start": start,
 		"end":   end,
 	}
+	if partial {
+		body["partial"] = true
+	}
 
 	if grouped {
-		body["days"] = groupByDay(items, offset, start, days)
+		body["days"] = groupByDayIn(items, zone, start, days)
 	}
 	send(w, http.StatusOK, body)
 }

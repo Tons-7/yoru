@@ -1,5 +1,3 @@
-// Package push sends Web Push alerts, so a new episode reaches a phone with Yoru closed. Encrypted to each
-// device (RFC 8291) and signed as Yoru's (VAPID, RFC 8292), they pass the push services unread.
 package push
 
 import (
@@ -24,6 +22,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"yoru/internal/store"
@@ -31,24 +30,20 @@ import (
 
 var b64 = base64.RawURLEncoding
 
-// Keys is Yoru's VAPID key pair: a subscription takes messages only from the key it was made with.
 type Keys struct {
 	priv *ecdsa.PrivateKey
 }
 
-// NewKeys makes a fresh pair; Encode is what gets stored.
 func NewKeys() (Keys, error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	return Keys{priv}, err
 }
 
-// Encode is the private key as stored, base64url of its 32-byte scalar.
 func (k Keys) Encode() string {
 	raw, _ := k.priv.Bytes()
 	return b64.EncodeToString(raw)
 }
 
-// DecodeKeys reads a stored pair back.
 func DecodeKeys(s string) (Keys, error) {
 	raw, err := b64.DecodeString(s)
 	if err != nil {
@@ -61,30 +56,24 @@ func DecodeKeys(s string) (Keys, error) {
 	return Keys{priv}, nil
 }
 
-// Public is the applicationServerKey a page subscribes with: the uncompressed point, base64url.
 func (k Keys) Public() string {
 	pub, _ := k.priv.PublicKey.ECDH()
 	return b64.EncodeToString(pub.Bytes())
 }
 
-// Alert is what a device shows; Path is the page a tap opens, under the address the device subscribed from.
 type Alert struct {
 	Title, Body, Tag, Path string
-	// Image is a picture of the show; Badge the unread count for the app's icon, 0 for none.
-	Image string
-	Badge int
-	// Buttons acting on the show or episode without opening Yoru: "download", "upnext", "follow", "plan".
-	Actions          []string
-	AnimeID, Episode int
+	Image                  string
+	Badge                  int
+	Actions                []string
+	AnimeID, Episode       int
 }
 
-// Sender sends alerts to every stored subscription and forgets the ones the push service says are gone.
 type Sender struct {
-	keys  Keys
-	store *store.Store
-	http  *http.Client
-	log   *slog.Logger
-	// Contact named in the VAPID claim; push services may write to it about a misbehaving sender.
+	keys    Keys
+	store   *store.Store
+	http    *http.Client
+	log     *slog.Logger
 	subject string
 }
 
@@ -93,41 +82,51 @@ func NewSender(keys Keys, st *store.Store, log *slog.Logger) *Sender {
 		subject: "https://github.com/Tons-7/yoru"}
 }
 
-// PublicKey is the applicationServerKey pages subscribe with.
 func (s *Sender) PublicKey() string { return s.keys.Public() }
 
-// SendTo delivers the alert to one device, as a test from Settings does.
 func (s *Sender) SendTo(ctx context.Context, sub store.PushSubscription, a Alert) error {
 	err := s.sendOne(ctx, sub, a)
 	if errors.Is(err, errGone) {
-		s.store.DeletePushSubscription(ctx, sub.Endpoint)
+		s.forget(ctx, sub.Endpoint)
 	}
 	return err
 }
 
-// Send delivers the alert to every subscribed device; one failing doesn't stop the others.
+func (s *Sender) forget(ctx context.Context, endpoint string) {
+	if err := s.store.DeletePushSubscription(ctx, endpoint); err != nil {
+		s.log.Warn("push: forget a dead subscription", "endpoint", hostOf(endpoint), "err", err)
+	}
+}
+
 func (s *Sender) Send(ctx context.Context, a Alert) {
 	subs, err := s.store.PushSubscriptions(ctx)
 	if err != nil {
 		s.log.Warn("push: read subscriptions", "err", err)
 		return
 	}
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, 4)
 	for _, sub := range subs {
-		err := s.sendOne(ctx, sub, a)
-		switch {
-		case errors.Is(err, errGone):
-			// Unsubscribed, expired, or the app removed: a dead endpoint stays dead.
-			s.store.DeletePushSubscription(ctx, sub.Endpoint)
-		case err != nil:
-			s.log.Warn("push: send", "endpoint", hostOf(sub.Endpoint), "err", err)
-		}
+		wg.Go(func() {
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			err := s.sendOne(ctx, sub, a)
+			switch {
+			case errors.Is(err, errGone):
+				s.forget(ctx, sub.Endpoint)
+			case err != nil:
+				s.log.Warn("push: send", "endpoint", hostOf(sub.Endpoint), "err", err)
+			}
+		})
 	}
+	wg.Wait()
 }
 
-var errGone = errors.New("push: subscription gone")
+var (
+	errGone    = errors.New("push: subscription gone")
+	errTooLong = errors.New("push: alert too long for one record")
+)
 
-// message is the declarative form (RFC 8030's "web_push": 8030): Safari shows it without running any script,
-// and browsers without that hand the same JSON to the service worker.
 func message(origin string, a Alert) map[string]any {
 	note := map[string]any{
 		"title": a.Title, "body": a.Body, "tag": a.Tag, "lang": "en",
@@ -137,7 +136,6 @@ func message(origin string, a Alert) map[string]any {
 		note["app_badge"] = strconv.Itoa(a.Badge)
 	}
 	msg := map[string]any{"web_push": 8030, "notification": note}
-	// Outside the declarative part, which documents no buttons or pictures: only Yoru's worker reads it.
 	if a.Image != "" || len(a.Actions) > 0 {
 		msg["yoru"] = map[string]any{"image": a.Image, "actions": a.Actions, "animeId": a.AnimeID, "episode": a.Episode}
 	}
@@ -164,8 +162,19 @@ func (s *Sender) sendOne(ctx context.Context, sub store.PushSubscription, a Aler
 	salt := make([]byte, 16)
 	rand.Read(salt)
 	body, err := encrypt(payload, uaPublic, auth, ephemeral, salt)
+	for errors.Is(err, errTooLong) && a.Body != "" {
+		runes := []rune(a.Body)
+		a.Body = string(runes[:len(runes)*3/4]) + "…"
+		if len(runes) < 8 {
+			a.Body = ""
+		}
+		if payload, err = json.Marshal(message(sub.Origin, a)); err != nil {
+			return err
+		}
+		body, err = encrypt(payload, uaPublic, auth, ephemeral, salt)
+	}
 	if err != nil {
-		return errGone
+		return err
 	}
 	token, err := s.vapid(sub.Endpoint)
 	if err != nil {
@@ -178,7 +187,6 @@ func (s *Sender) sendOne(ctx context.Context, sub store.PushSubscription, a Aler
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Content-Encoding", "aes128gcm")
-	// A day: an episode alert is still worth showing to a phone that was off overnight.
 	req.Header.Set("TTL", "86400")
 	req.Header.Set("Urgency", "normal")
 	req.Header.Set("Authorization", fmt.Sprintf("vapid t=%s, k=%s", token, s.keys.Public()))
@@ -197,7 +205,6 @@ func (s *Sender) sendOne(ctx context.Context, sub store.PushSubscription, a Aler
 	return nil
 }
 
-// vapid is the signed claim (RFC 8292) that the message comes from the key the subscription was made for.
 func (s *Sender) vapid(endpoint string) (string, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
@@ -215,20 +222,16 @@ func (s *Sender) vapid(endpoint string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// ES256 is r and s side by side, 32 bytes each, not DER.
 	raw := append(r.FillBytes(make([]byte, 32)), sig.FillBytes(make([]byte, 32))...)
 	return signing + "." + b64.EncodeToString(raw), nil
 }
 
-// recordSize is the one record a short alert fits in.
 const recordSize = 4096
 
-// encrypt is RFC 8291's aes128gcm message for one device: its public key and auth secret, a fresh key pair of
-// ours whose public half goes in the header, and a random salt.
 func encrypt(payload, uaPublic, authSecret []byte, ours *ecdh.PrivateKey, salt []byte) ([]byte, error) {
 	ua, err := ecdh.P256().NewPublicKey(uaPublic)
 	if err != nil {
-		return nil, err
+		return nil, errGone
 	}
 	shared, err := ours.ECDH(ua)
 	if err != nil {
@@ -260,10 +263,9 @@ func encrypt(payload, uaPublic, authSecret []byte, ours *ecdh.PrivateKey, salt [
 	if err != nil {
 		return nil, err
 	}
-	// 0x02 marks the last (and only) record, with no padding after it.
 	sealed := gcm.Seal(nil, nonce, append(append([]byte{}, payload...), 0x02), nil)
 	if len(sealed)+86 > recordSize {
-		return nil, errors.New("push: alert too long for one record")
+		return nil, errTooLong
 	}
 
 	var out bytes.Buffer

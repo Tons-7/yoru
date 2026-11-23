@@ -46,7 +46,7 @@ export function fromLocal(hit: LibraryItem): SearchRow {
     format: hit.format ?? null,
     year: hit.seasonYear ?? null,
     episodes: hit.episodes,
-    airing: hit.nextAiringAt ? 'RELEASING' : null,
+    airing: hit.airing ?? (hit.nextAiringAt ? 'RELEASING' : null),
     listStatus: hit.status,
   }
 }

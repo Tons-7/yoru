@@ -31,8 +31,6 @@ func engineID(t *testing.T, s *Store, hash string) (int, bool) {
 	return *id, true
 }
 
-// The engine hands out ids per session and reuses them. Trusting an id recorded
-// before a restart is how a cache sweep deletes the wrong anime.
 func TestReconcileRepointsMovedIDs(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -40,7 +38,6 @@ func TestReconcileRepointsMovedIDs(t *testing.T) {
 	addTorrent(t, s, "aaaa", 1)
 	addTorrent(t, s, "bbbb", 2)
 
-	// After a restart the engine has both, with the numbers swapped.
 	matched, orphaned, err := s.ReconcileTorrents(ctx, map[string]int{"aaaa": 2, "bbbb": 1})
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +54,6 @@ func TestReconcileRepointsMovedIDs(t *testing.T) {
 	}
 }
 
-// A torrent the engine forgot loses its id, which may now mean another one.
 func TestReconcileClearsUnknownTorrents(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -86,7 +82,6 @@ func TestReconcileClearsUnknownTorrents(t *testing.T) {
 	}
 }
 
-// A hash-case difference must not read as "this torrent disappeared".
 func TestReconcileIsCaseInsensitive(t *testing.T) {
 	s := newTestStore(t)
 
@@ -103,7 +98,6 @@ func TestReconcileIsCaseInsensitive(t *testing.T) {
 	}
 }
 
-// An empty listing at startup is no evidence that anything is gone.
 func TestReconcileLeavesEverythingOnAnEmptyListing(t *testing.T) {
 	s := newTestStore(t)
 

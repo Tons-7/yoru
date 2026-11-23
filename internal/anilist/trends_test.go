@@ -15,8 +15,8 @@ func media(id, popularity int) Media {
 
 func TestRankByGainOrdersByWhatWasAddedInTheWindow(t *testing.T) {
 	pool := []Media{
-		media(1, 500_000), // huge, barely moved
-		media(2, 40_000),  // small, moved a lot
+		media(1, 500_000),
+		media(2, 40_000),
 		media(3, 90_000),
 	}
 	baseline := map[int]int{1: 499_000, 2: 25_000, 3: 88_000}
@@ -34,10 +34,9 @@ func TestRankByGainOrdersByWhatWasAddedInTheWindow(t *testing.T) {
 	}
 }
 
-// A title with no reading at the window start is dropped, not credited its whole count.
 func TestRankByGainDropsUnmeasurableTitles(t *testing.T) {
 	pool := []Media{
-		media(1, 61_000), // announced mid-window, no baseline
+		media(1, 61_000),
 		media(2, 470_000),
 	}
 	baseline := map[int]int{2: 467_000}
@@ -66,7 +65,6 @@ func ids(list []Media) []int {
 	return out
 }
 
-// A batch is one request: a title missing the first day is dropped, not a reason to page on.
 func TestPopularityAtReadsOnlyTheWindowsFirstDay(t *testing.T) {
 	day := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
 	first, fourth := day.Unix(), day.AddDate(0, 0, 3).Unix()
@@ -91,7 +89,6 @@ func TestPopularityAtReadsOnlyTheWindowsFirstDay(t *testing.T) {
 	}
 }
 
-// Paging goes on only while the first day's rows may continue on the next page.
 func TestPopularityAtPagesWhileStillOnTheFirstDay(t *testing.T) {
 	day := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
 	first := day.Unix()

@@ -21,22 +21,19 @@ const ranks = (await top.getByText(/^Number \d+$/).allTextContents()).map((t) =>
 check(ranks.length === 10 && ranks.every((n, i) => n === i + 1), 'Top 10 ranks ten shows in order', ranks.join(','))
 await top.screenshot({ path: `${SHOTS}/top-ten.png` })
 
-// Recently released: the hover is the full panel.
 await page.goto(`${BASE}/recent`, { waitUntil: 'domcontentloaded' })
 const card = page.locator('a[href^="/watch/"]').first()
 await card.waitFor({ timeout: 60000 })
 await page.mouse.move(0, 0)
-// The middle of the art: its top-left corner holds the Up next toggle, a control of its own.
 await card.hover()
 const panel = page.locator('div.fixed.z-50.rounded-sheet')
 const shown = await panel.waitFor({ timeout: 5000 }).then(() => true, () => false)
 const text = shown ? await panel.innerText() : await page.locator('body').innerText()
 check(shown, 'hover panel opens on a released card')
-check(/\beps?\b/i.test(text) && /Play ep \d+/.test(text), 'it has the episode count and plays this episode', text.slice(0, 160).replace(/\n/g, ' | '))
+check(/\beps?\b/i.test(text) && /Play Ep \d+/.test(text), 'it has the episode count and plays this episode', text.slice(0, 160).replace(/\n/g, ' | '))
 const box = await panel.boundingBox().catch(() => null)
 if (box) await page.screenshot({ path: `${SHOTS}/released-hover.png`, clip: box })
 
-// Settings: Off / Next episode / Next 2 episodes, and it sticks.
 await page.goto(`${BASE}/settings?tab=Downloads`, { waitUntil: 'domcontentloaded' })
 const select = page.getByRole('combobox', { name: 'Download ahead while watching' })
 await select.waitFor({ timeout: 30000 })

@@ -1,4 +1,3 @@
-// Seeds a scratch E2E database with one cached and one kept download, so Downloads shows both tiers.
 package main
 
 import (
@@ -6,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"yoru/internal/db"
@@ -21,6 +21,10 @@ func main() {
 	flag.Parse()
 	if *path == "" || *anime <= 0 {
 		fmt.Fprintln(os.Stderr, "usage: e2e-seed -db yoru.db -anime 127230 [-pack] [-extras]")
+		os.Exit(2)
+	}
+	if abs, err := filepath.Abs(*path); err != nil || !strings.HasPrefix(strings.ToLower(abs), strings.ToLower(filepath.Clean(os.TempDir()))+string(filepath.Separator)) {
+		fmt.Fprintln(os.Stderr, "e2e-seed only writes to a scratch database under the temp folder")
 		os.Exit(2)
 	}
 	if err := seed(*path, *anime, *pack, *extras); err != nil {
@@ -67,7 +71,6 @@ func seed(path string, anime int, withPack, withExtras bool) error {
 	}
 
 	if withExtras {
-		// Filler is keyed on the MAL id the series page already stored.
 		malID, err := st.MalID(ctx, anime)
 		if err != nil || malID == 0 {
 			return fmt.Errorf("anime %d has no mal id yet; open its page first", anime)
@@ -85,7 +88,6 @@ func seed(path string, anime int, withPack, withExtras bool) error {
 	if !withPack {
 		return nil
 	}
-	// A season pack holding two episodes, so the list folds them into one row.
 	pack := strings.ToLower(fmt.Sprintf("e2e%037x", 999))
 	for i, episode := range []int{4, 5} {
 		if err := st.RecordTorrent(ctx, store.TorrentRecord{

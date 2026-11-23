@@ -16,7 +16,6 @@ func TestDefaultPathEscaper(t *testing.T) {
 	}
 }
 
-// So we can manually check, and use these to seed fuzzing.
 var defaultPathEscapeTestCases = []struct {
 	escaped string
 	parts   []string
@@ -51,8 +50,6 @@ func FuzzDefaultPathEscaper(f *testing.F) {
 			f.Add(tc.parts[0], tc.parts[1])
 		}
 	}
-	// I think a single separator is enough to test special handling around /. Also fuzzing doesn't
-	// let us take []string as an input.
 	f.Fuzz(func(t *testing.T, first, second string) {
 		assertPartsUnescape(t, first+"/"+second, first, second)
 	})

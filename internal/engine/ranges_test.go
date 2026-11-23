@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// A file downloaded whole is one stretch from start to end; one never started has none.
 func TestFileRangesFollowTheDownload(t *testing.T) {
 	f := newFixture(t)
 	c := ctx(t)
@@ -31,7 +30,6 @@ func TestFileRangesFollowTheDownload(t *testing.T) {
 		t.Fatalf("ranges = %+v, want one stretch of %d bytes", got, want)
 	}
 
-	// Episode 1 shares its last piece with episode 2, so that sliver of it is on disk and nothing before.
 	other, err := f.client.Ranges(c, added.ID, 0)
 	if err != nil {
 		t.Fatal(err)

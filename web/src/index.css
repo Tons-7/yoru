@@ -20,6 +20,8 @@
   --color-base-100: #f2f4f8;
   --color-line: rgb(255 255 255 / 0.055);
 
+  --color-accent-100: #e6e2ff;
+  --color-accent-200: #cbc3ff;
   --color-accent-300: #a89cff;
   --color-accent-400: #8b7cff;
   --color-accent-500: #6a55f5;
@@ -38,7 +40,6 @@
 
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-enter: cubic-bezier(0.05, 0.7, 0.1, 1);
-  --ease-out-quint: cubic-bezier(0.05, 0.7, 0.1, 1);
 
   --animate-fade-in: fade-in 0.15s var(--ease-standard);
   --animate-rise: rise 0.24s var(--ease-enter);
@@ -283,14 +284,6 @@
     background-color: var(--color-base-500);
   }
 
-  .no-scrollbar {
-    scrollbar-width: none;
-  }
-
-  .no-scrollbar::-webkit-scrollbar {
-    display: none;
-  }
-
   .section-title {
     @apply flex items-center gap-2.5 font-display text-xl font-semibold tracking-tight text-white;
   }
@@ -306,13 +299,13 @@
   .page-title {
     @apply font-display text-3xl font-bold tracking-tight text-white;
   }
+}
 
-  .tinted {
-    background-image: radial-gradient(
-      120% 80% at 50% 0%,
-      var(--tint, transparent) 0%,
-      transparent 70%
-    );
+@utility no-scrollbar {
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
   }
 }
 

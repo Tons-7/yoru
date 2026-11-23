@@ -105,7 +105,7 @@ function Group({
           ? cards.map((card) => <PosterCard key={card.id} anime={card} onOpen={onOpen} />)
           : Array.from({ length: 12 }, (_, i) => (
               <div key={i}>
-                <Skeleton className="aspect-[2/3] w-full" />
+                <Skeleton className="aspect-2/3 w-full" />
                 <Skeleton className="mt-2 h-4 w-3/4" />
               </div>
             ))}

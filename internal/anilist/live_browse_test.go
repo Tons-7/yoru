@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// Search follows the sort sent, not relevance. Opt-in: YORU_LIVE=1 go test -run LiveBrowseSort -v
 func TestLiveBrowseSortOrdersSearchResults(t *testing.T) {
 	if os.Getenv("YORU_LIVE") == "" {
 		t.Skip("set YORU_LIVE=1 to query AniList")

@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// The list swaps whole: bad entries named and skipped, kept ones keep their cache, adult ones search apart.
 func TestSitesSwapWhileRunning(t *testing.T) {
 	s := NewSites()
 	if Configured(s.General()) || Configured(s.Adult()) {

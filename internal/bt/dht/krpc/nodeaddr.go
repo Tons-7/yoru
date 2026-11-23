@@ -3,6 +3,7 @@ package krpc
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"net/netip"
 	"strconv"
@@ -10,7 +11,6 @@ import (
 	"yoru/internal/bt/bencode"
 )
 
-// This will be deprecated in favour of NodeAddrPort.
 type NodeAddr struct {
 	IP   net.IP
 	Port int
@@ -26,12 +26,14 @@ func (me NodeAddr) ToNodeAddrPort() NodeAddrPort {
 	return NodeAddrPort{netip.AddrPortFrom(addr, uint16(me.Port))}
 }
 
-// A zero Port is taken to mean no port provided, per BEP 7.
 func (me NodeAddr) String() string {
 	return net.JoinHostPort(me.IP.String(), strconv.FormatInt(int64(me.Port), 10))
 }
 
 func (me *NodeAddr) UnmarshalBinary(b []byte) error {
+	if len(b) != net.IPv4len+2 && len(b) != net.IPv6len+2 {
+		return fmt.Errorf("node address of %d bytes", len(b))
+	}
 	me.IP = make(net.IP, len(b)-2)
 	copy(me.IP, b[:len(b)-2])
 	me.Port = int(binary.BigEndian.Uint16(b[len(b)-2:]))

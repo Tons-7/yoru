@@ -2,11 +2,10 @@ package store
 
 import (
 	"context"
+	"math"
 	"testing"
 )
 
-// A push reads the entry, sends it, then clears dirty. An edit that landed
-// meanwhile must stay dirty, or it is never sent and the next pull undoes it.
 func TestClearDirtyKeepsAnEditMadeDuringThePush(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -19,7 +18,6 @@ func TestClearDirtyKeepsAnEditMadeDuringThePush(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Watched on while the push was in flight.
 	if _, err := s.w.ExecContext(ctx,
 		`UPDATE list_entry SET progress = 6, local_updated_at = ?, dirty = 1 WHERE anime_id = 1`,
 		snapshot.Changed+5); err != nil {
@@ -42,7 +40,6 @@ func TestClearDirtyKeepsAnEditMadeDuringThePush(t *testing.T) {
 	}
 }
 
-// A list fetched before our last push can't undo it: rows older than its stored updatedAt are skipped.
 func TestMergeSkipsARemoteRowOlderThanOurPush(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -60,7 +57,6 @@ func TestMergeSkipsARemoteRowOlderThanOurPush(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The stale fetch: progress 6 as of 1000.
 	if _, err := s.ImportList(ctx, nil, []Entry{{ID: 50, AnimeID: 1, Status: &status, Progress: 6, UpdatedAt: 1000}}, ImportMerge); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +64,6 @@ func TestMergeSkipsARemoteRowOlderThanOurPush(t *testing.T) {
 		t.Fatalf("progress = %d, want 7 kept over an older list", got.Progress)
 	}
 
-	// A real edit on the site since then still lands.
 	if _, err := s.ImportList(ctx, nil, []Entry{{ID: 50, AnimeID: 1, Status: &status, Progress: 9, UpdatedAt: 3000}}, ImportMerge); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +72,6 @@ func TestMergeSkipsARemoteRowOlderThanOurPush(t *testing.T) {
 	}
 }
 
-// A deliberate unrate is flagged so its 0 is pushed; a new row's 0 isn't, so it can't wipe the site's.
 func TestUnratingIsFlaggedUntilPushed(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -107,10 +101,10 @@ func TestUnratingIsFlaggedUntilPushed(t *testing.T) {
 	}
 }
 
-// A row the tracker keeps refusing goes to the back of the line, so newer edits still get their turn.
 func TestRefusedPushesGoToTheBackOfTheLine(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
+	s.Pulled(ctx, "mal")
 	for id := 1; id <= 3; id++ {
 		seedShow(t, s, id, 12)
 		if _, err := s.MarkWatched(ctx, id, id); err != nil {
@@ -137,7 +131,7 @@ func TestRefusedPushesGoToTheBackOfTheLine(t *testing.T) {
 	if got := order("anilist"); len(got) != 3 || got[2] != 1 {
 		t.Fatalf("anilist order = %v, want the refused row last", got)
 	}
-	if err := s.ClearDirty(ctx, 1, 0, 1); err != nil {
+	if err := s.ClearDirtyAt(ctx, 1, 0, 1, math.MaxInt64); err != nil {
 		t.Fatal(err)
 	}
 	var failed int64
@@ -160,7 +154,6 @@ func TestRefusedPushesGoToTheBackOfTheLine(t *testing.T) {
 	}
 }
 
-// An entry with no status and no progress has nothing MAL can hold, so it never takes a slot.
 func TestEmptyEntriesAreNotPendingForMAL(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

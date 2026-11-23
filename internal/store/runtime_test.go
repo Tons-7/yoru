@@ -7,8 +7,6 @@ import (
 	"yoru/internal/score"
 )
 
-// A feature-length episode is a bigger file at the same quality, so the size
-// cap has to know how long the thing is. The runtime comes from the catalogue.
 func TestEpisodeRuntimeFeedsTheSizeCap(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -35,7 +33,6 @@ func TestEpisodeRuntimeFeedsTheSizeCap(t *testing.T) {
 		t.Errorf("missing show runtime = %d, want 0", got)
 	}
 
-	// The point of carrying it: a 3 GiB cap does not reject the film.
 	const cap3GiB = 3 << 30
 	prefs := score.Preferences{MaxAutoBytes: cap3GiB}
 	film := score.Candidate{RuntimeMinutes: s.EpisodeRuntime(ctx, 1)}

@@ -1,10 +1,11 @@
-# Weekly version updates, one grouped pull request per ecosystem; security fixes still come on their own.
 version: 2
 updates:
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 14
     groups:
       go:
         patterns: ["*"]
@@ -12,6 +13,8 @@ updates:
     directory: /web
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 14
     groups:
       web:
         patterns: ["*"]

@@ -17,8 +17,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// The Garden of Sinners as AniList has it: ten entries of one film each, chained by sequel
-// edges, and a side story. Chapter 6 is the one a user could not play.
 const (
 	knkCh1, knkCh2, knkCh3, knkCh4, knkCh5 = 2593, 3782, 3783, 4280, 4282
 	knkCh6, knkCh7, knkRemix, knkCh8       = 5204, 5205, 6624, 6954
@@ -83,13 +81,12 @@ func gardenStore(t *testing.T) *store.Store {
 	if err := st.SaveRelations(ctx, nil, rels); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.RebuildFranchises(ctx); err != nil {
+	if _, err := st.RebuildFranchisesFor(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	return st
 }
 
-// askedIndexer answers every query with the same results and remembers what was asked.
 type askedIndexer struct {
 	results []indexer.Torrent
 	mu      sync.Mutex
@@ -110,7 +107,6 @@ func sized(hash, title string, seeders int, gigabytes float64) indexer.Torrent {
 	return t
 }
 
-// What two real sites list for "Kara no Kyoukai".
 func gardenReleases() []indexer.Torrent {
 	return []indexer.Torrent{
 		sized("jsu6", "[JacobSwaggedUp] Kara no Kyoukai 6: Boukyaku Rokuon | The Garden of Sinners Chapter 6: Oblivion Recording (BD 1280x720) [MP4 Movie]", 1, 0.9),
@@ -137,7 +133,6 @@ func findFilm(t *testing.T, st *store.Store, id int, results []indexer.Torrent) 
 	return got, idx
 }
 
-// autoPicks are the releases playback would try, in order.
 func autoPicks(c Candidates) []string {
 	var out []string
 	for _, r := range c.Results {
@@ -171,8 +166,6 @@ func TestFilmOfASeriesSearchesTheSeriesName(t *testing.T) {
 func TestFilmOfASeriesIsOfferedItsBatches(t *testing.T) {
 	got, _ := findFilm(t, gardenStore(t), knkCh6, gardenReleases())
 
-	// A well-seeded batch, not the film's own single release with one seeder. Which batch is the
-	// usual ranking: here the one that plays without re-encoding.
 	if got.Best == nil || !got.Best.Release.Batch || got.Best.Torrent.Seeders < 5 {
 		t.Fatalf("best = %+v", got.Best)
 	}
@@ -187,7 +180,6 @@ func TestFilmOfASeriesIsOfferedItsBatches(t *testing.T) {
 			t.Errorf("%s is blocked: %s", hash, r.Blocked)
 		}
 	}
-	// 80 GB over eleven films is 7 GB for one, inside the limit for an hour of film.
 	if r := byHash(t, got, "ane"); r.EpisodeBytes() > 8<<30 || r.EpisodeBytes() < 6<<30 {
 		t.Errorf("ANE's share for one film = %d bytes", r.EpisodeBytes())
 	}
@@ -204,7 +196,6 @@ func TestFilmOfASeriesIsOfferedItsBatches(t *testing.T) {
 		}
 	}
 
-	// The single release names the film, so it is confirmed; so is a batch saying it holds them all.
 	if !byHash(t, got, "jsu6").Confirmed || !byHash(t, got, "atime").Confirmed {
 		t.Error("the film's own release or a whole-series batch is not confirmed")
 	}
@@ -247,25 +238,21 @@ func TestFilmBatchIsPickedByTheFilmNotAnEpisodeNumber(t *testing.T) {
 		t.Fatalf("picked %q (%d, %v), want file 06", file.Name, i, ok)
 	}
 
-	// The film's own release with unnamed extras beside it: the film is the big file.
 	own := score.Result{Candidate: score.Candidate{Film: &key}}
 	loose := []torrent.File{{Name: "extras/menu.mkv", Length: 30 << 20}, {Name: "movie.mkv", Length: 2 << 30}}
 	if _, i, ok := pickFile(loose, own); !ok || i != 1 {
 		t.Errorf("own release with extras: picked %d, %v", i, ok)
 	}
-	// The same unnamed files in a batch prove nothing.
 	if _, _, ok := pickFile(loose, batch); ok {
 		t.Error("picked an unnamed file out of a batch")
 	}
 
-	// An episode is still found by its number.
 	pack := []torrent.File{{Name: "Show - 01.mkv", Length: 1 << 30}, {Name: "Show - 02.mkv", Length: 1 << 30}}
 	if _, i, ok := pickFile(pack, score.Result{Candidate: score.Candidate{Numbers: []int{2}}}); !ok || i != 1 {
 		t.Errorf("episode 2 of a pack: picked %d, %v", i, ok)
 	}
 }
 
-// A film that belongs to a TV show: the show's packs hold episodes, so "Movie 1" must never be read as file 01.
 func TestFilmAttachedToAShowIsSearchedAsBefore(t *testing.T) {
 	st := openStore(t)
 	ctx := context.Background()
@@ -283,7 +270,7 @@ func TestFilmAttachedToAShowIsSearchedAsBefore(t *testing.T) {
 	if err := st.SaveRelations(ctx, nil, rels); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.RebuildFranchises(ctx); err != nil {
+	if _, err := st.RebuildFranchisesFor(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -291,7 +278,6 @@ func TestFilmAttachedToAShowIsSearchedAsBefore(t *testing.T) {
 	if s := f.filmSeries(ctx, 2); s != nil {
 		t.Fatalf("a film sharing its name with a TV show was treated as a film series: %+v", s.names)
 	}
-	// And an entry with no franchise at all.
 	if s := f.filmSeries(ctx, 999); s != nil {
 		t.Fatal("an unknown entry was treated as a film series")
 	}
@@ -305,8 +291,6 @@ func TestFilmAttachedToAShowIsSearchedAsBefore(t *testing.T) {
 	}
 }
 
-// Groups number the later films differently, so a number with no title confirms nothing; and a
-// patch file filed under the film's name is not the film.
 func TestFilmNumberAloneIsNotConfirmation(t *testing.T) {
 	releases := []indexer.Torrent{
 		sized("named", "[Group] Kara no Kyoukai - Boukyaku Rokuon [BD 1080p]", 9, 2),
@@ -329,7 +313,6 @@ func TestFilmNumberAloneIsNotConfirmation(t *testing.T) {
 	}
 }
 
-// "Movies 1 - 8" numbers the films of the series, not episodes of this one.
 func TestFilmBatchRangeIsNotAnEpisodeList(t *testing.T) {
 	idx := &askedIndexer{results: append(gardenReleases(),
 		sized("aruk", "[Arukoru] Kara No Kyoukai (The Garden of Sinners) Movies 1 - 8 & Remix [1080p x265 10bit BD Eng Sub AAC 5.1]", 98, 20))}
@@ -344,8 +327,6 @@ func TestFilmBatchRangeIsNotAnEpisodeList(t *testing.T) {
 	}
 }
 
-// The release list searches without playback's lookup of what a show is related to. Until the
-// search does that itself, a film never opened before is not known to be one of a series.
 func TestSearchLearnsTheSeriesBeforeLooking(t *testing.T) {
 	st := openStore(t)
 	ctx := context.Background()
@@ -365,7 +346,7 @@ func TestSearchLearnsTheSeriesBeforeLooking(t *testing.T) {
 		if err := st.SaveRelations(ctx, nil, []store.Relation{{AnimeID: knkCh1, RelatedID: knkCh6, Kind: "SEQUEL"}}); err != nil {
 			return err
 		}
-		_, err := st.RebuildFranchises(ctx)
+		_, err := st.RebuildFranchisesFor(ctx, nil, nil)
 		return err
 	})
 
@@ -418,7 +399,6 @@ func TestWholeSeriesSpotsABatchOfEveryFilm(t *testing.T) {
 	}
 }
 
-// A film shipped with extras: the film is the big one, and a trailer under Extras never plays as it.
 func TestStandaloneFilmWithExtrasPlaysTheFilm(t *testing.T) {
 	own := score.Result{Candidate: score.Candidate{Numbers: []int{1}, Episode: 1, TotalEpisodes: 1}}
 	files := []torrent.File{
@@ -430,7 +410,6 @@ func TestStandaloneFilmWithExtrasPlaysTheFilm(t *testing.T) {
 	if file, _, ok := pickFile(files, own); !ok || file.Name != "Film/[G] Film (2016) [BD 1080p].mkv" {
 		t.Errorf("picked %q, %v", file.Name, ok)
 	}
-	// A batch gets no such benefit: its big file may be any film.
 	batch := own
 	batch.Release.Batch = true
 	unnamed := []torrent.File{{Name: "a.mkv", Length: 8 << 30}, {Name: "b.mkv", Length: 7 << 30}}

@@ -43,7 +43,19 @@ const POPULAR_TAGS = [
   'Video Games',
 ]
 
+const choicesFor = new WeakMap<FilterVocabulary, ReturnType<typeof buildTagChoices>>()
+
 export function tagChoices(vocab?: FilterVocabulary) {
+  if (!vocab) return buildTagChoices(undefined)
+  let made = choicesFor.get(vocab)
+  if (!made) {
+    made = buildTagChoices(vocab)
+    choicesFor.set(vocab, made)
+  }
+  return made
+}
+
+function buildTagChoices(vocab?: FilterVocabulary) {
   const all = (vocab?.tags ?? [])
     .filter((t) => !t.isAdult)
     .map((t) => t.name)
@@ -82,13 +94,14 @@ export function useBrowse(params: Record<string, string>, enabled = true, keep =
     retryDelay: 5000,
   })
 
+  const fresh = results.isPlaceholderData ? undefined : results.data
   const count = params.studio
-    ? results.data?.total || undefined
-    : results.data && !results.data.hasMore
-      ? (page - 1) * PER_PAGE + results.data.items.length
+    ? fresh?.total || undefined
+    : fresh && !fresh.hasMore
+      ? (page - 1) * PER_PAGE + fresh.items.length
       : counted.data?.count
   const lastPage =
-    results.data && !results.data.hasMore
+    fresh && !fresh.hasMore
       ? page
       : count === undefined
         ? undefined

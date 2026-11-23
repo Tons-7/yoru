@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// playWithEnding reports ten-second steps up to `to`, as a player that knows the ending's start would.
 func playWithEnding(t *testing.T, s *Store, ep string, to, dur, ending float64) bool {
 	t.Helper()
 	watched := false
@@ -24,7 +23,6 @@ func playWithEnding(t *testing.T, s *Store, ep string, to, dur, ending float64) 
 	}
 }
 
-// Under "when the ending starts", closing in the credits is a finished episode, not a resume point.
 func TestEndingStartCountsAsWatched(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -34,7 +32,6 @@ func TestEndingStartCountsAsWatched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The ending starts at 84%, well before the 90% the share would ask for.
 	if playWithEnding(t, s, "2", 1190, 1435, 1200) {
 		t.Fatal("watched before the ending started")
 	}
@@ -63,7 +60,6 @@ func TestEndingStartCountsAsWatched(t *testing.T) {
 		}
 	}
 
-	// A rewatch stopped before the ending still resumes there.
 	if _, err := s.SavePlayback(ctx, PlaybackState{AnimeID: 1, EpKey: "2", Position: 600, Duration: 1435}); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +68,6 @@ func TestEndingStartCountsAsWatched(t *testing.T) {
 	}
 }
 
-// An ending too early to be the credits, or none known, leaves the 90% share.
 func TestAnImplausibleEndingLeavesTheShare(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -84,7 +79,6 @@ func TestAnImplausibleEndingLeavesTheShare(t *testing.T) {
 		t.Error("with no ending known, 88% ticked the episode")
 	}
 
-	// A song half way through isn't the credits.
 	if playWithEnding(t, s, "4", 800, 1435, 700) {
 		t.Error("an ending at 49% ticked the episode")
 	}
@@ -93,7 +87,6 @@ func TestAnImplausibleEndingLeavesTheShare(t *testing.T) {
 	}
 }
 
-// The ending is only used when chosen; the 90% default ignores it.
 func TestEndingIgnoredUnlessChosen(t *testing.T) {
 	s := newTestStore(t)
 	seedCatalogue(t, s, 1, "FINISHED", 12)

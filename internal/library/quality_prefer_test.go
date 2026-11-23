@@ -11,7 +11,6 @@ import (
 	"yoru/internal/score"
 )
 
-// A tier of no listed resolution ("BD") stays, after the ones the limit allows and before those above it.
 func TestUpToKeepsTiersOfNoResolution(t *testing.T) {
 	ladder := []score.Tier{score.ParseTier("1080p:BD"), score.ParseTier("BD"), score.ParseTier("720p")}
 	got := upTo("720p", ladder)
@@ -26,7 +25,6 @@ func TestUpToKeepsTiersOfNoResolution(t *testing.T) {
 	}
 }
 
-// "Up to 720p" picks the best release at or under it, and a bigger one only when nothing fits.
 func TestPreferredQualityIsAnUpperLimit(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()

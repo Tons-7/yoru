@@ -25,14 +25,14 @@ func TestAnInterruptedDownloadResumesFirstAfterARestart(t *testing.T) {
 		if next.AnimeID == 2 {
 			break
 		}
-		if err := st.FinishQueued(ctx, next.AnimeID, next.EpKey, nil); err != nil {
+		if err := st.FinishQueued(ctx, next.AnimeID, next.EpKey, next.InfoHash, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := st.Enqueue(ctx, 3, 1, []int{1}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Prioritise(ctx, 3, "1"); err != nil {
+	if _, err := st.Promote(ctx, 3, "1"); err != nil {
 		t.Fatal(err)
 	}
 

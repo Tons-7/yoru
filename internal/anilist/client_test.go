@@ -27,8 +27,6 @@ func testClient(t *testing.T, h http.HandlerFunc) *Client {
 	}
 }
 
-// A hidden adult title is only found by asking again without the token. When
-// that fails the missing id is unknown, not gone, and callers must be told.
 func TestMediaByIDsReportsAnUncheckedFallback(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "" {
@@ -45,7 +43,6 @@ func TestMediaByIDsReportsAnUncheckedFallback(t *testing.T) {
 		t.Fatalf("media %d, err %v; want the partial result and ErrIncomplete", len(media), err)
 	}
 
-	// Logged out there is nothing to retry: the missing id is simply missing.
 	anon := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"data":{"Page":{"media":[{"id":1}]}}}`)
 	})
@@ -54,7 +51,6 @@ func TestMediaByIDsReportsAnUncheckedFallback(t *testing.T) {
 	}
 }
 
-// A toggle whose answer was lost may have landed; sending it again undoes it.
 func TestToggleFavouriteIsNeverRetried(t *testing.T) {
 	calls := 0
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +66,6 @@ func TestToggleFavouriteIsNeverRetried(t *testing.T) {
 	}
 }
 
-// Every request carries a referer; without one AniList answers a 403 that reads as an outage.
 func TestEveryRequestSendsTheReferer(t *testing.T) {
 	var got string
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -86,8 +81,6 @@ func TestEveryRequestSendsTheReferer(t *testing.T) {
 	}
 }
 
-// AniList derives the HTTP status from its error array and can return a
-// non-200 alongside usable data, so errors must be read from the body.
 func TestQueryReadsErrorsRegardlessOfStatus(t *testing.T) {
 	for _, status := range []int{200, 400, 404} {
 		c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +156,6 @@ func TestQuerySendsBearerOnlyWhenSet(t *testing.T) {
 	}
 }
 
-// The burst limiter's 429s carry no rate-limit headers, so the fallback needs none of them.
 func TestRetryAfterFallbacks(t *testing.T) {
 	reset := time.Now().Add(30 * time.Second).Unix()
 
@@ -222,7 +214,6 @@ func TestRemainingMissingHeader(t *testing.T) {
 	}
 }
 
-// An exhausted quota must not stall the response that observed it; the caller already has its data.
 func TestExhaustedQuotaReturnsImmediately(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-RateLimit-Remaining", "0")
@@ -245,7 +236,6 @@ func TestExhaustedQuotaReturnsImmediately(t *testing.T) {
 	}
 }
 
-// A 429 seen by one goroutine holds back all of them: the quota is the account's.
 func TestPauseAppliesAcrossCallers(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"data":{}}`)
@@ -289,7 +279,7 @@ func TestAwaitPauseRespectsContext(t *testing.T) {
 func TestBackgroundRequestsLetAPersonGoFirst(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, `{"data":{}}`) })
 	c.limiter = rate.NewLimiter(rate.Every(100*time.Millisecond), 5)
-	c.limiter.AllowN(time.Now(), 4) // one left: under the reserve
+	c.limiter.AllowN(time.Now(), 4)
 
 	start := time.Now()
 	if err := c.Query(context.Background(), "{x}", nil, nil); err != nil {

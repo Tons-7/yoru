@@ -11,7 +11,6 @@ import (
 	"yoru/internal/store"
 )
 
-// AniList down, but Yoru saved the show: the page opens from that, and says so.
 func TestAnimePageFallsBackToSavedRecord(t *testing.T) {
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, `{"errors":[{"message":"Internal Server Error","status":500}]}`)
@@ -35,13 +34,11 @@ func TestAnimePageFallsBackToSavedRecord(t *testing.T) {
 		t.Errorf("anime = %v", anime)
 	}
 
-	// Nothing saved: still the error, not an empty page.
 	if res, _ := h.do(t, "GET", "/api/anime/999"); res.StatusCode != http.StatusBadGateway {
 		t.Errorf("unsaved show during outage: status %d", res.StatusCode)
 	}
 }
 
-// Every show a Browse page returns is kept, and the page says it was live.
 func TestBrowseKeepsWhatItShows(t *testing.T) {
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, `{"data":{"Page":{"pageInfo":{"total":1,"hasNextPage":false},"media":[

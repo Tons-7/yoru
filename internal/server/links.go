@@ -5,7 +5,6 @@ import (
 	"strconv"
 )
 
-// animeFromMal opens a shared MyAnimeList page: its show's AniList id, from what Yoru knows, else AniList's.
 func (s *Server) animeFromMal(w http.ResponseWriter, r *http.Request) {
 	mal, _ := strconv.Atoi(r.URL.Query().Get("id"))
 	if mal <= 0 {

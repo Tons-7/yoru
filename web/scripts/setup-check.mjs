@@ -32,8 +32,14 @@ if (SHOTS) mkdirSync(SHOTS, { recursive: true })
 const binDir = process.env.YORU_BIN_DIR ?? join(tmpdir(), 'yoru-e2e-bin')
 mkdirSync(binDir, { recursive: true })
 const exe = join(binDir, process.platform === 'win32' ? 'yoru.exe' : 'yoru')
-const built = spawnSync('go', ['build', '-o', exe, './cmd/yoru'], { cwd: REPO, stdio: 'inherit', env: { ...process.env, CGO_ENABLED: '0' } })
-check(built.status === 0, 'built Yoru')
+const reuse = process.env.SKIP_BUILD === '1' && existsSync(exe)
+const gui = process.platform === 'win32' ? ['-ldflags', '-H windowsgui'] : []
+const web = reuse ? { status: 0 } : spawnSync('pnpm run build', [], { cwd: join(REPO, 'web'), shell: true, stdio: 'inherit' })
+check(web.status === 0, reuse ? 'reused the built page' : 'built the page')
+const built = reuse
+  ? { status: 0 }
+  : spawnSync('go', ['build', ...gui, '-o', exe, './cmd/yoru'], { cwd: REPO, stdio: 'inherit', env: { ...process.env, CGO_ENABLED: '0' } })
+check(built.status === 0, reuse ? 'reused the built Yoru' : 'built Yoru')
 
 const pathKey = Object.keys(process.env).find((k) => k.toLowerCase() === 'path') ?? 'PATH'
 const tools = ['ffmpeg', 'ffprobe', 'mpv', 'vlc', 'cloudflared'].map((n) => (process.platform === 'win32' ? `${n}.exe` : n))
@@ -43,6 +49,11 @@ writeFileSync(join(root, 'config.toml'), `addr = "127.0.0.1:${PORT}"\n\n[torrent
 const server = spawn(exe, [], {
   cwd: root,
   env: { ...process.env, [pathKey]: bare, YORU_ROOT: root, LOCALAPPDATA: data, APPDATA: data, YORU_NO_WINDOW: '1', YORU_UPDATE_API: 'http://127.0.0.1:9' },
+})
+process.on('exit', () => {
+  if (server.exitCode !== null) return
+  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(server.pid), '/T', '/F'], { stdio: 'ignore' })
+  else server.kill()
 })
 let log = ''
 server.stdout.on('data', (d) => (log += d))
@@ -130,7 +141,12 @@ for (let i = 0; i < 20 && dub !== 'dub'; i++) {
   dub = await pref('audio.prefer')
 }
 check(dub === 'dub', 'a sound choice is saved at once', dub)
-check((await pref('playback.autoskip_op')) === 'auto' && (await pref('playback.autoskip_ed')) === 'auto', 'skipping covers openings and endings')
+let skipsBoth = false
+for (let i = 0; i < 20 && !skipsBoth; i++) {
+  skipsBoth = (await pref('playback.autoskip_op')) === 'auto' && (await pref('playback.autoskip_ed')) === 'auto'
+  if (!skipsBoth) await sleep(250)
+}
+check(skipsBoth, 'skipping covers openings and endings')
 await shot('4-watching')
 await page.getByRole('button', { name: 'Continue' }).click()
 

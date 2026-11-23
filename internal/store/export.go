@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// ExportEntry is a library file row: what a tracker holds, plus Yoru's favourite and note.
 type ExportEntry struct {
 	AnimeID     int    `json:"animeId"`
 	MalID       *int   `json:"malId,omitempty"`
@@ -59,14 +58,9 @@ func (s *Store) ExportLibrary(ctx context.Context) ([]ExportEntry, error) {
 	return out, rows.Err()
 }
 
-// AnimeIDByMAL maps a MyAnimeList id to the catalogue's, from what has been imported or the offline corpus.
 func (s *Store) AnimeIDByMAL(ctx context.Context, malID int) (int, bool, error) {
 	var id int
-	err := s.r.QueryRowContext(ctx, `
-		SELECT id FROM anime WHERE mal_id = ?
-		UNION ALL
-		SELECT anime_id FROM corpus_anime WHERE mal_id = ?
-		LIMIT 1`, malID, malID).Scan(&id)
+	err := s.r.QueryRowContext(ctx, malPick, malID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
@@ -76,13 +70,28 @@ func (s *Store) AnimeIDByMAL(ctx context.Context, malID int) (int, bool, error) 
 	return id, true, nil
 }
 
+const malPick = `
+	SELECT id FROM (
+	    SELECT a.id, 0 AS src,
+	           EXISTS (SELECT 1 FROM list_entry e WHERE e.anime_id = a.id) AS listed,
+	           coalesce((SELECT local_updated_at FROM list_entry e WHERE e.anime_id = a.id), 0) AS touched
+	    FROM anime a WHERE a.mal_id = ?1
+	    UNION ALL
+	    SELECT anime_id, 1, 0, 0 FROM corpus_anime WHERE mal_id = ?1
+	) ORDER BY listed DESC, touched DESC, id > 0 DESC, src, id
+	LIMIT 1`
+
+const importedStatus = `CASE
+	    WHEN list_entry.status = 'COMPLETED' AND coalesce(excluded.status, '') <> 'REPEATING' THEN list_entry.status
+	    WHEN excluded.status = 'PLANNING' AND list_entry.status IS NOT NULL THEN list_entry.status
+	    ELSE coalesce(excluded.status, list_entry.status) END`
+
 type ImportReport struct {
 	Entries    int `json:"entries"`
 	Favourites int `json:"favourites"`
 	Skipped    int `json:"skipped"`
 }
 
-// ImportEntries merges a library file, progress only forward, queuing changes for the trackers.
 func (s *Store) ImportEntries(ctx context.Context, entries []ExportEntry) (ImportReport, error) {
 	var rep ImportReport
 	now := time.Now().Unix()
@@ -94,7 +103,6 @@ func (s *Store) ImportEntries(ctx context.Context, entries []ExportEntry) (Impor
 	defer tx.Rollback()
 
 	for _, e := range entries {
-		// Negative ids are MAL-only titles, which export writes out too.
 		if e.AnimeID == 0 {
 			rep.Skipped++
 			continue
@@ -102,34 +110,50 @@ func (s *Store) ImportEntries(ctx context.Context, entries []ExportEntry) (Impor
 		if err := ensureAnime(ctx, tx, e.AnimeID); err != nil {
 			return rep, err
 		}
-		// A hand-edited or foreign status would be refused by AniList on every push, forever.
 		if !ValidStatus(e.Status) {
 			e.Status = ""
 		}
 
-		// A favourite never added to the list is exported too; an entry for it would put it on AniList's list.
 		listed := e.Status != "" || e.Progress > 0 || e.Score > 0 || e.Repeat > 0
 		if listed {
+			var previous sql.NullString
+			if err := tx.QueryRowContext(ctx, `SELECT status FROM list_entry WHERE anime_id = ?`, e.AnimeID).
+				Scan(&previous); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return rep, err
+			}
+			rewatch := e.Status == StatusRepeating && previous.Valid && previous.String != StatusRepeating
 			if _, err := tx.ExecContext(ctx, `
 			INSERT INTO list_entry (id, anime_id, status, progress, score, repeat_count,
 			                        started_at, completed_at,
 			                        remote_updated_at, local_updated_at, dirty)
 			VALUES ((SELECT min(coalesce(min(id), 0), 0) - 1 FROM list_entry),
-			        ?, ?, ?, ?, ?, ?, ?, 0, ?, 1)
+			        ?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, 1)
 			ON CONFLICT(anime_id) DO UPDATE SET
-			    progress = max(list_entry.progress, excluded.progress),
-			    -- An older export can't move a finished show back to watching; a rewatch it records can.
-			    status = CASE WHEN list_entry.status = 'COMPLETED' AND coalesce(excluded.status, '') <> 'REPEATING'
-			                  THEN list_entry.status ELSE coalesce(excluded.status, list_entry.status) END,
+			    progress = CASE WHEN ?9 THEN excluded.progress ELSE max(list_entry.progress, excluded.progress) END,
+			    status = `+importedStatus+`,
 			    score = CASE WHEN excluded.score > 0 THEN excluded.score ELSE list_entry.score END,
 			    repeat_count = max(list_entry.repeat_count, excluded.repeat_count),
 			    started_at = coalesce(list_entry.started_at, excluded.started_at),
 			    completed_at = coalesce(list_entry.completed_at, excluded.completed_at),
 			    local_updated_at = max(excluded.local_updated_at, list_entry.local_updated_at + 1),
-			    dirty = 1`,
+			    dirty = 1
+			WHERE ?9
+			   OR excluded.progress > list_entry.progress
+			   OR (`+importedStatus+`) IS NOT list_entry.status
+			   OR (excluded.score > 0 AND excluded.score <> list_entry.score)
+			   OR excluded.repeat_count > list_entry.repeat_count
+			   OR (list_entry.started_at IS NULL AND excluded.started_at IS NOT NULL)
+			   OR (list_entry.completed_at IS NULL AND excluded.completed_at IS NOT NULL)`,
 				e.AnimeID, nullable(e.Status), e.Progress, e.Score, e.Repeat,
-				nullable(e.StartedAt), nullable(e.CompletedAt), now); err != nil {
+				nullable(e.StartedAt), nullable(e.CompletedAt), now, rewatch); err != nil {
 				return rep, err
+			}
+			if rewatch {
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE playback SET watched = 0, position_s = 0, played_s = 0, dismissed = 0 WHERE anime_id = ?`,
+					e.AnimeID); err != nil {
+					return rep, err
+				}
 			}
 			rep.Entries++
 		}

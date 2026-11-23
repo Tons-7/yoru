@@ -69,7 +69,6 @@ func TestSetVoiceAcceptsOnlyTheLevelsAndNotesAChange(t *testing.T) {
 	}
 }
 
-// bandLevel is the RMS level, in dB, of the file's sound within a narrow band around hz.
 func bandLevel(t *testing.T, ffmpeg, file string, hz int) float64 {
 	t.Helper()
 	out, err := exec.Command(ffmpeg, "-hide_banner", "-i", file,
@@ -86,7 +85,6 @@ func bandLevel(t *testing.T, ffmpeg, file string, hz int) float64 {
 	return v
 }
 
-// firstSegment plays a clip through a session at the given lift and returns the first segment as a file.
 func firstSegment(t *testing.T, ffmpeg, ffprobe, clip, level string) string {
 	t.Helper()
 	m := NewManager(ffmpeg, ffprobe, t.TempDir(), "libx264", slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -109,15 +107,12 @@ func firstSegment(t *testing.T, ffmpeg, ffprobe, clip, level string) string {
 	return whole
 }
 
-// voiceOverMusic is how far the voice band stands above the music band in a segment.
 func voiceOverMusic(t *testing.T, ffmpeg, ffprobe, clip, level string, voiceHz, musicHz int) float64 {
 	t.Helper()
 	seg := firstSegment(t, ffmpeg, ffprobe, clip, level)
 	return bandLevel(t, ffmpeg, seg, voiceHz) - bandLevel(t, ffmpeg, seg, musicHz)
 }
 
-// A 5.1 mix with the voice (a 1 kHz tone) in the centre and music (3 kHz) in the fronts: the lift
-// moves only the centre, by the dB it promises.
 func TestVoiceLiftsTheCentreOfASurroundMix(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := filepath.Join(t.TempDir(), "surround.mkv")
@@ -133,7 +128,6 @@ func TestVoiceLiftsTheCentreOfASurroundMix(t *testing.T) {
 	medium := voiceOverMusic(t, ffmpeg, ffprobe, clip, "medium", 1000, 3000)
 	high := voiceOverMusic(t, ffmpeg, ffprobe, clip, "high", 1000, 3000)
 	t.Logf("voice over music: off %.1f dB, medium %.1f dB, high %.1f dB", off, medium, high)
-	// The centre gain plus the presence lift's share at 1 kHz, about a dB.
 	if d := medium - off; d < 5.5 || d > 8.5 {
 		t.Errorf("medium lifts the voice by %.1f dB, want about 6 plus presence", d)
 	}
@@ -142,12 +136,9 @@ func TestVoiceLiftsTheCentreOfASurroundMix(t *testing.T) {
 	}
 }
 
-// Stereo: a voice-like, centred tone (both channels alike) against music spread wide (opposite
-// phase on the two sides). The extraction finds the centred voice and lifts it, leaving the music.
 func TestVoiceLiftsACentredVoiceInStereo(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := filepath.Join(t.TempDir(), "stereo.mkv")
-	// Speech changes its spectrum all the time; a steady tone does not, so the voice is frequency-modulated.
 	voice := "0.2*sin(300*2*PI*t+15*sin(5*2*PI*t))"
 	if o, err := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
 		"-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24:duration=14",
@@ -169,7 +160,6 @@ func TestVoiceLiftsACentredVoiceInStereo(t *testing.T) {
 	}
 }
 
-// Lifted sound stays in step with the picture: the filters delay nothing the player can notice.
 func TestVoiceKeepsSoundInStepWithThePicture(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := filepath.Join(t.TempDir(), "clip.mkv")
@@ -202,7 +192,6 @@ func TestVoiceKeepsSoundInStepWithThePicture(t *testing.T) {
 	}
 }
 
-// segmentWith plays the clip with the sound asked for and returns the first segment as a file.
 func segmentWith(t *testing.T, ffmpeg, ffprobe, clip string, o sound.Options) string {
 	t.Helper()
 	m := NewManager(ffmpeg, ffprobe, t.TempDir(), "libx264", slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -225,7 +214,6 @@ func segmentWith(t *testing.T, ffmpeg, ffprobe, clip string, o sound.Options) st
 	return whole
 }
 
-// channelLevel is the RMS level, in dB, of one channel (FL or FR) over a stretch of the file.
 func channelLevel(t *testing.T, ffmpeg, file, channel string, from, to float64) float64 {
 	t.Helper()
 	out, err := exec.Command(ffmpeg, "-hide_banner", "-ss", fmt.Sprint(from), "-to", fmt.Sprint(to), "-i", file,
@@ -245,11 +233,9 @@ func channelLevel(t *testing.T, ffmpeg, file, channel string, from, to float64) 
 	return v
 }
 
-// Night mode narrows the gap between a loud stretch and a quiet one.
 func TestNightModeNarrowsLoudAndQuiet(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := filepath.Join(t.TempDir(), "dyn.mkv")
-	// Loud for the first two seconds, quiet for the next two, and so on.
 	if o, err := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
 		"-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24:duration=12",
 		"-f", "lavfi", "-i", "aevalsrc=(0.425+0.375*sgn(sin(PI*t/2)))*sin(440*2*PI*t)|(0.425+0.375*sgn(sin(PI*t/2)))*sin(440*2*PI*t):c=stereo:s=48000:d=12",
@@ -272,7 +258,6 @@ func TestNightModeNarrowsLoudAndQuiet(t *testing.T) {
 	}
 }
 
-// Mono plays both channels in both ears; headphones mode bleeds a little of a hard-left sound to the right.
 func TestMonoAndHeadphonesReachTheOtherEar(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := filepath.Join(t.TempDir(), "left.mkv")
@@ -305,7 +290,6 @@ func TestMonoAndHeadphonesReachTheOtherEar(t *testing.T) {
 	}
 }
 
-// The volume boost raises the whole mix by the dB it promises, apart from the voice.
 func TestVolumeBoostRaisesTheWholeMix(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := filepath.Join(t.TempDir(), "quiet.mkv")

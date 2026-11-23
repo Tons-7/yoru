@@ -5,21 +5,16 @@ import (
 	"time"
 )
 
-// Var so tests need not wait.
 var censusEvery = 30 * time.Second
 
-// Addresses named per line; a busy swarm's line stays readable.
 const censusNamed = 4
 
-// headcount is who a download was connected to at the last look, and what changed since the last log line.
 type headcount struct {
 	peers        map[string]bool
 	joined, left []string
 	loggedAt     time.Time
 }
 
-// note takes the peers connected now and returns who joined and left since the last line, when one is due:
-// something changed and censusEvery has passed. A peer that came and went in between is reported as both.
 func (h *headcount) note(now time.Time, current []string) (joined, left []string, due bool) {
 	seen := make(map[string]bool, len(current))
 	for _, addr := range current {
@@ -45,8 +40,6 @@ func (h *headcount) note(now time.Time, current []string) (joined, left []string
 	return joined, left, true
 }
 
-// census logs a download's peers when they change: a slow download is either a small swarm or Yoru
-// losing peers it could keep, and only who came and went, beside what is known, tells the two apart.
 func (e *Engine) census(en *entry, now time.Time) {
 	t := en.t
 	if t.Info() == nil {
@@ -62,7 +55,9 @@ func (e *Engine) census(en *entry, now time.Time) {
 	conns := t.PeerConns()
 	current := make([]string, 0, len(conns))
 	for _, c := range conns {
-		current = append(current, c.RemoteAddr.String())
+		if c.RemoteAddr != nil {
+			current = append(current, c.RemoteAddr.String())
+		}
 	}
 
 	e.mu.Lock()
@@ -74,7 +69,6 @@ func (e *Engine) census(en *entry, now time.Time) {
 	st := t.Stats()
 	e.log.Info("download peers changed", "name", t.Name(),
 		"connected", st.ActivePeers, "seeders", st.ConnectedSeeders,
-		// TotalPeers already counts the connected, half-open and waiting addresses.
 		"known", st.TotalPeers, "waiting", st.PendingPeers, "halfOpen", st.HalfOpenPeers,
 		"joined", len(joined), "left", len(left),
 		"joinedFrom", firstFew(joined), "leftFrom", firstFew(left))

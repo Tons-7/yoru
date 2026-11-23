@@ -8,8 +8,7 @@ import (
 	g "github.com/anacrolix/generics"
 )
 
-// The leaf block size for BitTorrent v2 Merkle trees.
-const BlockSize = 1 << 14 // 16KiB
+const BlockSize = 1 << 14
 
 func Root(hashes [][sha256.Size]byte) [sha256.Size]byte {
 	switch len(hashes) {
@@ -22,12 +21,12 @@ func Root(hashes [][sha256.Size]byte) [sha256.Size]byte {
 	if numHashes != RoundUpToPowerOfTwo(uint(len(hashes))) {
 		panic(fmt.Sprintf("expected power of two number of hashes, got %d", numHashes))
 	}
-	var next [][sha256.Size]byte
+	next := make([][sha256.Size]byte, 0, len(hashes)/2)
+	var pair [2 * sha256.Size]byte
 	for i := 0; i < len(hashes); i += 2 {
-		left := hashes[i]
-		right := hashes[i+1]
-		h := sha256.Sum256(append(left[:], right[:]...))
-		next = append(next, h)
+		copy(pair[:sha256.Size], hashes[i][:])
+		copy(pair[sha256.Size:], hashes[i+1][:])
+		next = append(next, sha256.Sum256(pair[:]))
 	}
 	return Root(next)
 }
@@ -40,6 +39,10 @@ func RootWithPadHash(hashes [][sha256.Size]byte, padHash [sha256.Size]byte) [sha
 }
 
 func CompactLayerToSliceHashes(compactLayer string) (hashes [][sha256.Size]byte, err error) {
+	if len(compactLayer)%sha256.Size != 0 {
+		err = fmt.Errorf("compact layer of %d bytes is not whole hashes", len(compactLayer))
+		return
+	}
 	g.MakeSliceWithLength(&hashes, len(compactLayer)/sha256.Size)
 	for i := range hashes {
 		n := copy(hashes[i][:], compactLayer[i*sha256.Size:])

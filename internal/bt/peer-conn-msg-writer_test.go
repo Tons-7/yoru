@@ -28,9 +28,7 @@ func runBenchmarkWriteToBuffer(b *testing.B, length int64) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		//b.StopTimer()
 		writer.writeBuffer.Reset()
-		//b.StartTimer()
 		writer.writeToBuffer(msg)
 	}
 }
@@ -59,9 +57,7 @@ func runBenchmarkMarshalBinaryWrite(b *testing.B, length int64) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		//b.StopTimer()
 		writer.writeBuffer.Reset()
-		//b.StartTimer()
 		writer.writeBuffer.Write(msg.MustMarshalBinary())
 	}
 }

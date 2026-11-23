@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// These drive a real mpv over its IPC socket (a named pipe on Windows); that
-// seam can't be unit tested and is the part most likely to be wrong.
 func binaries(t *testing.T) (mpv, ffmpeg string) {
 	t.Helper()
 
@@ -38,7 +36,6 @@ func exeSuffix() string {
 	return ""
 }
 
-// A generated clip keeps the test deterministic and offline.
 func testClip(t *testing.T, ffmpeg string, seconds int) string {
 	t.Helper()
 
@@ -68,7 +65,6 @@ func itoa(n int) string {
 func newPlayer(t *testing.T, mpv string) *MPV {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	// A unique socket name keeps parallel runs from colliding.
 	p := New(mpv, socketName(t.Name()), log)
 	t.Cleanup(p.Stop)
 	return p
@@ -137,7 +133,6 @@ func TestMPVSeek(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait for the first position report so the file is loaded.
 	waitPosition(t, p, 15*time.Second)
 
 	if err := p.Seek(20); err != nil {
@@ -157,7 +152,6 @@ func TestMPVSeek(t *testing.T) {
 	}
 }
 
-// Auto-skip: the controller watches position and jumps the range untouched.
 func TestMPVAutoSkip(t *testing.T) {
 	mpv, ffmpeg := binaries(t)
 	clip := testClip(t, ffmpeg, 30)
@@ -236,7 +230,6 @@ func waitPosition(t *testing.T, p *MPV, within time.Duration) {
 	}
 }
 
-// The quality profile is the newest this mpv has; an unknown one is left out rather than failing the start.
 func TestMPVProfileIsProbed(t *testing.T) {
 	mpv, _ := binaries(t)
 	p := newPlayer(t, mpv)

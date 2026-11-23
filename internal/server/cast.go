@@ -3,6 +3,8 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -18,37 +20,32 @@ import (
 	"yoru/internal/transcode"
 )
 
-// A Chromecast plays the episode from Yoru itself: a link signed for one stream session (the TV can't carry the
-// browser's cookie) opens its playlist, segments and subtitles, nothing else. Links last as long as an app's.
-
 const castPrefix = "cast:"
 
-// castLink makes the TV's address for a session: the HTTPS name when there is one (the receiver is an HTTPS
-// page, and a phone's own address may be localhost), else the address this request came in on.
 func (s *Server) castLink(w http.ResponseWriter, r *http.Request) {
 	session, ok := s.stream(w, r)
 	if !ok {
 		return
 	}
-	// Bound to this machine alone, Yoru is out of the TV's reach.
 	if s.rebind != nil && !s.bound() {
 		send(w, http.StatusConflict, map[string]any{
 			"error": "the TV can't reach Yoru. Turn on access from other devices under Settings, Devices.",
 		})
 		return
 	}
-	// ?burn=<track>: that track drawn into the picture, shifted by ?delay=, in a session of its own.
 	target, note := session, ""
 	animeID, _, _ := parseSessionID(session.ID)
 	want := s.streamWant(r.Context(), animeID, "")
 	if raw := r.URL.Query().Get("burn"); raw != "" {
-		// A number, as a track is: the rest of its way names files on disk.
 		track, err := strconv.Atoi(raw)
 		if err != nil || track < 0 {
 			send(w, http.StatusBadRequest, map[string]any{"error": "invalid subtitle track"})
 			return
 		}
 		delay, _ := strconv.ParseFloat(r.URL.Query().Get("delay"), 64)
+		if math.IsNaN(delay) || math.IsInf(delay, 0) {
+			delay = 0
+		}
 		burned, err := s.burnedSession(r.Context(), session, track, delay, want)
 		switch {
 		case errors.Is(err, errStillArriving):
@@ -57,14 +54,11 @@ func (s *Server) castLink(w http.ResponseWriter, r *http.Request) {
 			s.log.Warn("cast with subtitles drawn in", "session", session.ID, "err", err)
 			note = "Subtitles go as text: drawing them in failed."
 		default:
-			s.heldOnce(burned)
+			s.tvHold(burned, true)
 			target = burned
 		}
 	}
-	// Unless burned in, the TV gets an any-browser session: it may not decode this copy (HEVC) or want its cap.
 	if plan := session.CurrentPlan(); target == session && (plan.ForDevice || plan.MaxRate > 0) {
-		// The episode's own any-browser session when one plays alike, rather than a third pass of the same plan;
-		// else one of the TV's own, as its track and sound must not change another device's.
 		id := transcode.BaseID(session.ID) + "-cast"
 		if base, ok := s.streams.Get(transcode.BaseID(session.ID)); ok && want == (transcode.Want{}) &&
 			base.Source == session.Source && base.AudioTrack() == session.AudioTrack() && base.Sound() == session.Sound() {
@@ -75,12 +69,14 @@ func (s *Server) castLink(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, "open stream for the TV", err)
 			return
 		}
-		s.heldOnce(tv)
+		s.tvHold(tv, true)
 		if tv.ID != transcode.BaseID(session.ID) {
 			tv.SetAudioTrack(session.AudioTrack())
 			tv.SetSound(session.Sound())
 		}
 		session, target = tv, tv
+	} else if target == session {
+		s.tvHold(session, false)
 	}
 
 	base := s.tvBase(r)
@@ -89,29 +85,27 @@ func (s *Server) castLink(w http.ResponseWriter, r *http.Request) {
 
 	tracks := []castTrack{}
 	for _, sub := range session.Info.Subtitles {
-		// Drawn in, the picture carries them; a text track as well would show them twice.
 		if target != session || !transcode.TextSubtitle(sub.Codec) {
 			continue
 		}
 		tracks = append(tracks, castTrack{Index: sub.Index, Language: sub.Language, Title: sub.Title,
 			URL: root + "sub-" + strconv.Itoa(sub.Index) + ".vtt"})
 	}
+	if note == "" && len(tracks) > 0 && !s.sourceComplete(r.Context(), session) {
+		note = "TV subtitles cover only what's downloaded so far. Cast again once it finishes."
+	}
 	_, episode, _ := parseSessionID(session.ID)
 	send(w, http.StatusOK, map[string]any{
 		"url": root + "playlist.m3u8", "subtitles": tracks, "burned": target != session, "note": note,
-		// ?sub= is the shown track's language, which the queued episodes' text tracks follow.
 		"queue": s.castQueue(r.Context(), animeID, episode, base, expires, r.URL.Query().Get("sub")),
 	})
 }
 
-// tvBase is where a TV reaches Yoru: the HTTPS name if any (a receiver is an HTTPS page; a phone may be on
-// localhost), else this request's own address, the network's for the host's loopback.
 func (s *Server) tvBase(r *http.Request) string {
 	if names := s.httpsNames(); len(names) > 0 && r.TLS == nil {
 		return fmt.Sprintf("https://%s:%s", names[0], s.port())
 	}
 	if lan := lanAddrs(); loopbackHost(r.Host) && len(lan) > 0 {
-		// The host's own window is on loopback, which on the TV is the TV itself.
 		return fmt.Sprintf("http://%s:%s", lan[0], s.port())
 	}
 	return requestOrigin(r)
@@ -119,22 +113,34 @@ func (s *Server) tvBase(r *http.Request) string {
 
 var errStillArriving = errors.New("the episode is still downloading")
 
-// heldOnce keeps one hold on a TV's session however often Cast is pressed; nothing closes it but the reaper.
-func (s *Server) heldOnce(tv *transcode.Session) {
-	if tv.Holders() > 1 {
-		s.streams.Close(tv.ID)
+func (s *Server) tvHold(sess *transcode.Session, opened bool) {
+	s.tvMu.Lock()
+	defer s.tvMu.Unlock()
+	if s.tvHolds == nil {
+		s.tvHolds = map[*transcode.Session]bool{}
 	}
+	for held := range s.tvHolds {
+		if cur, ok := s.streams.Peek(held.ID); !ok || cur != held {
+			delete(s.tvHolds, held)
+		}
+	}
+	if s.tvHolds[sess] {
+		if opened {
+			s.streams.Close(sess.ID)
+		}
+		return
+	}
+	if !opened && !s.streams.Hold(sess.ID) {
+		return
+	}
+	s.tvHolds[sess] = true
 }
 
-// burnedSession opens the episode with one subtitle track drawn in, shifted by delay seconds. The track must be
-// whole: lines still to download would be missing from the picture for good.
 func (s *Server) burnedSession(ctx context.Context, session *transcode.Session, track int, delay float64, want transcode.Want) (*transcode.Session, error) {
-	// Per track, delay and softening: another choice is another picture.
 	id := fmt.Sprintf("%s-burn%d-%d", transcode.BaseID(session.ID), track, int(math.Round(delay*10)))
 	if want.Soften {
 		id += "-soft"
 	}
-	// Pictures are laid over from the episode itself as it is read, each arriving with its stretch of picture.
 	if transcode.PictureSubtitle(session.Info.SubtitleCodec(track)) {
 		return s.streams.OpenBurned(ctx, id, session.Source, s.readable(ctx, session), transcode.Burn{Pictures: track, Delay: delay}, want)
 	}
@@ -152,8 +158,7 @@ func (s *Server) burnedSession(ctx context.Context, session *transcode.Session, 
 	if rec.Code != http.StatusOK {
 		return nil, fmt.Errorf("subtitle track %d: HTTP %d", track, rec.Code)
 	}
-	// Shifted by the player's delay and written as ASS, whatever the track was.
-	file := filepath.Join(session.Dir(), fmt.Sprintf("cast-%d.ass", track))
+	file := filepath.Join(session.Dir(), fmt.Sprintf("cast-%d-%d.ass", track, int(math.Round(delay*1000))))
 	cmd := proc.Hide(exec.CommandContext(ctx, s.cfg.Tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
 		"-itsoffset", fmt.Sprintf("%.3f", delay), "-i", "pipe:0", "-c:s", "ass", file))
 	cmd.Stdin = bytes.NewReader(rec.Body.Bytes())
@@ -168,8 +173,6 @@ func (s *Server) burnedSession(ctx context.Context, session *transcode.Session, 
 	return s.streams.OpenBurned(ctx, id, session.Source, local, transcode.Burn{Subtitles: file, Fonts: fonts}, want)
 }
 
-// waitFonts waits for the session's fonts from the one extraction its folder runs at a time (the browser's
-// may be under way; two would clear each other's files), starting it if none has run.
 func (s *Server) waitFonts(ctx context.Context, session *transcode.Session) bool {
 	started := false
 	for {
@@ -195,9 +198,7 @@ func (s *Server) waitFonts(ctx context.Context, session *transcode.Session) bool
 	}
 }
 
-// castFile serves the TV what a link opens, through the browser player's own handlers.
 func (s *Server) castFile(w http.ResponseWriter, r *http.Request) {
-	// The receiver is another origin reading without credentials: any origin may, the link is the key.
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "Range")
 	w.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Range")
@@ -213,7 +214,6 @@ func (s *Server) castFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.serving()()
 	id := strings.TrimPrefix(g.Source, castPrefix)
-	// A queued episode opens on the TV's first ask, as the page would open it.
 	if isQueued {
 		var err error
 		if id, err = s.queuedSession(r.Context(), queued, episode); err != nil {
@@ -236,7 +236,6 @@ func (s *Server) castFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		track, found := autoTrack(session, lang)
-		// None in that language, or only pictures: an empty track, as one that fails could fail the episode.
 		if !found {
 			w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
 			w.Write([]byte("WEBVTT\n"))
@@ -245,7 +244,6 @@ func (s *Server) castFile(w http.ResponseWriter, r *http.Request) {
 		r.SetPathValue("track", strconv.Itoa(track))
 		s.castSubtitle(w, r, -1)
 	case file == "master.m3u8" || strings.HasPrefix(file, "subs-") && strings.HasSuffix(file, ".m3u8"):
-		// AirPlay's playlists: the picture and its text subtitles.
 		session, live := s.streams.Get(id)
 		if !live {
 			http.NotFound(w, r)
@@ -264,7 +262,6 @@ func (s *Server) castFile(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write([]byte(body))
 	case strings.HasPrefix(file, "subs-") && strings.HasSuffix(file, ".vtt"):
-		// AirPlay's pieces: subs-<track>-<piece>.vtt.
 		track, piece, _ := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(file, "subs-"), ".vtt"), "-")
 		n, err := strconv.Atoi(piece)
 		if err != nil || n < 0 {
@@ -289,8 +286,6 @@ func (s *Server) castFile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// castSubtitle is the track as WebVTT, the one text format the receiver draws: styling and positions go.
-// piece: one of AirPlay's minutes (airplayCues); -1, the whole track, for the Chromecast.
 func (s *Server) castSubtitle(w http.ResponseWriter, r *http.Request, piece int) {
 	rec := httptest.NewRecorder()
 	s.streamSubtitle(rec, r)
@@ -298,12 +293,7 @@ func (s *Server) castSubtitle(w http.ResponseWriter, r *http.Request, piece int)
 		http.Error(w, "subtitles unavailable", rec.Code)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
-	defer cancel()
-	cmd := proc.Hide(exec.CommandContext(ctx, s.cfg.Tool("ffmpeg"), "-hide_banner", "-loglevel", "error",
-		"-i", "pipe:0", "-f", "webvtt", "pipe:1"))
-	cmd.Stdin = bytes.NewReader(rec.Body.Bytes())
-	vtt, err := cmd.Output()
+	vtt, err := s.castVTT(r.Context(), rec.Body.Bytes())
 	if err != nil {
 		s.log.Warn("cast subtitles", "err", err)
 		http.Error(w, "subtitles could not be converted", http.StatusInternalServerError)
@@ -315,4 +305,31 @@ func (s *Server) castSubtitle(w http.ResponseWriter, r *http.Request, piece int)
 	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(vtt)
+}
+
+func (s *Server) castVTT(ctx context.Context, source []byte) ([]byte, error) {
+	sum := sha256.Sum256(source)
+	key := hex.EncodeToString(sum[:])
+	s.castSubsMu.Lock()
+	vtt, ok := s.castSubs[key]
+	s.castSubsMu.Unlock()
+	if ok {
+		return vtt, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	cmd := proc.Hide(exec.CommandContext(ctx, s.cfg.Tool("ffmpeg"), "-hide_banner", "-loglevel", "error",
+		"-i", "pipe:0", "-f", "webvtt", "pipe:1"))
+	cmd.Stdin = bytes.NewReader(source)
+	vtt, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	s.castSubsMu.Lock()
+	if s.castSubs == nil || len(s.castSubs) >= 8 {
+		s.castSubs = map[string][]byte{}
+	}
+	s.castSubs[key] = vtt
+	s.castSubsMu.Unlock()
+	return vtt, nil
 }

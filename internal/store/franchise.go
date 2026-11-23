@@ -18,17 +18,15 @@ type Relation struct {
 }
 
 type Season struct {
-	ID       int     `json:"id"`
-	Ordinal  int     `json:"ordinal"`
-	Romaji   string  `json:"romaji"`
-	English  *string `json:"english"`
-	Cover    *string `json:"cover"`
-	Episodes *int    `json:"episodes"`
-	Year     *int    `json:"year"`
-	Format   *string `json:"format"`
-	Status   *string `json:"status"`
-	// ListStatus is what the user tagged it, which is a different question from
-	// Status: a finished show can be unwatched, and a watched one still airing.
+	ID         int     `json:"id"`
+	Ordinal    int     `json:"ordinal"`
+	Romaji     string  `json:"romaji"`
+	English    *string `json:"english"`
+	Cover      *string `json:"cover"`
+	Episodes   *int    `json:"episodes"`
+	Year       *int    `json:"year"`
+	Format     *string `json:"format"`
+	Status     *string `json:"status"`
 	ListStatus *string `json:"listStatus,omitempty"`
 	Progress   int     `json:"progress"`
 	OnList     bool    `json:"onList"`
@@ -39,15 +37,11 @@ type Franchise struct {
 	Seasons []Season `json:"seasons"`
 }
 
-// RelatedEntry is a film, OVA, special or spin-off of the same franchise.
 type RelatedEntry struct {
 	Season
-	// Kind is AniList's edge type: SIDE_STORY, SPIN_OFF, SUMMARY, ALTERNATIVE…
 	Kind string `json:"kind"`
 }
 
-// Anything the franchise links to that is not part of the season chain, and is
-// not itself a season of it. Newest last: films are listed as they came out.
 const relatedQuery = `
 WITH members AS (
     SELECT anime_id FROM franchise
@@ -63,6 +57,11 @@ linked AS (
            CASE r.kind WHEN 'SIDE_STORY' THEN 'PARENT'
                        WHEN 'SPIN_OFF'   THEN 'PARENT'
                        WHEN 'PARENT'     THEN 'SIDE_STORY'
+                       WHEN 'SUMMARY'    THEN 'PARENT'
+                       WHEN 'COMPILATION' THEN 'CONTAINS'
+                       WHEN 'CONTAINS'   THEN 'COMPILATION'
+                       WHEN 'ADAPTATION' THEN 'SOURCE'
+                       WHEN 'SOURCE'     THEN 'ADAPTATION'
                        ELSE r.kind END AS kind
     FROM relation r JOIN members m ON m.anime_id = r.related_id
 ),
@@ -88,11 +87,8 @@ LEFT JOIN list_entry l   ON l.anime_id = e.id
 ORDER BY coalesce(a.season_year, c.year, cast(substr(a.start_date, 1, 4) AS INTEGER), 9999), a.title_romaji
 LIMIT 200`
 
-// Kinds that are seasons of the same show. Everything else is related material
-// the page lists separately; a spin-off wedged into the chain breaks numbering.
 var SeasonKinds = map[string]bool{"PREQUEL": true, "SEQUEL": true}
 
-// MarkRelationsFetched records a walk, so it reruns once a new sequel could have appeared.
 func (s *Store) MarkRelationsFetched(ctx context.Context, ids []int) error {
 	if len(ids) == 0 {
 		return nil
@@ -119,7 +115,6 @@ func (s *Store) MarkRelationsFetched(ctx context.Context, ids []int) error {
 	return tx.Commit()
 }
 
-// RelationsStale: never walked, or walked longer ago than maxAge.
 func (s *Store) RelationsStale(ctx context.Context, animeID int, maxAge time.Duration) bool {
 	var age int64
 	err := s.r.QueryRowContext(ctx,
@@ -128,14 +123,11 @@ func (s *Store) RelationsStale(ctx context.Context, animeID int, maxAge time.Dur
 	case errors.Is(err, sql.ErrNoRows):
 		return true
 	case err != nil:
-		// A database hiccup is not a reason to crawl AniList.
 		return false
 	}
-	// Inclusive, so a zero window means "always walk it again".
 	return age >= int64(maxAge.Seconds())
 }
 
-// Related is all a franchise links that isn't a season: films, OVAs, specials, spin-offs, versions.
 func (s *Store) Related(ctx context.Context, animeID int) ([]RelatedEntry, error) {
 	rows, err := s.r.QueryContext(ctx, relatedQuery, animeID, animeID, animeID)
 	if err != nil {
@@ -156,7 +148,6 @@ func (s *Store) Related(ctx context.Context, animeID int) ([]RelatedEntry, error
 	return out, rows.Err()
 }
 
-// DeadAnime reports which of ids AniList no longer returns.
 func (s *Store) DeadAnime(ctx context.Context, ids []int) (map[int]bool, error) {
 	out := map[int]bool{}
 	for _, id := range ids {
@@ -171,14 +162,12 @@ func (s *Store) DeadAnime(ctx context.Context, ids []int) (map[int]bool, error) 
 	return out, nil
 }
 
-// IsSaved: Yoru keeps the show's full record, so someone has come across it.
 func (s *Store) IsSaved(ctx context.Context, id int) bool {
 	var n int
 	err := s.r.QueryRowContext(ctx, `SELECT count(*) FROM anime WHERE id = ? AND synced_at > 0`, id).Scan(&n)
 	return err == nil && n > 0
 }
 
-// HasRelations: the graph was walked for this anime, a standalone show's franchise of one included.
 func (s *Store) HasRelations(ctx context.Context, animeID int) (bool, error) {
 	var count int
 	err := s.r.QueryRowContext(ctx, `
@@ -188,8 +177,6 @@ func (s *Store) HasRelations(ctx context.Context, animeID int) (bool, error) {
 	return count > 0, err
 }
 
-// MarkNoRelations records a show as looked up and standalone. A self-edge, not
-// a franchise row: that table is rebuilt from scratch on any other fetch.
 func (s *Store) MarkNoRelations(ctx context.Context, animeID int) error {
 	if animeID == 0 {
 		return nil
@@ -200,7 +187,6 @@ func (s *Store) MarkNoRelations(ctx context.Context, animeID int) error {
 	return err
 }
 
-// SaveRelations replaces answered ids' edges whole, both ways, or a removed edge outlives every rebuild.
 func (s *Store) SaveRelations(ctx context.Context, fetched []int, rels []Relation) error {
 	if len(rels) == 0 && len(fetched) == 0 {
 		return nil
@@ -235,14 +221,7 @@ func (s *Store) SaveRelations(ctx context.Context, fetched []int, rels []Relatio
 	return tx.Commit()
 }
 
-// RebuildFranchises numbers PREQUEL/SEQUEL components in broadcast order; spin-offs are not seasons.
-func (s *Store) RebuildFranchises(ctx context.Context) (int, error) {
-	return s.RebuildFranchisesFor(ctx, nil, nil)
-}
-
-// RebuildFranchisesFor rebuilds only franchises holding ids (all when nil), with the walk's dates.
 func (s *Store) RebuildFranchisesFor(ctx context.Context, ids []int, known map[int]string) (int, error) {
-	// Edges read inside the write, or two rebuilds can commit an older graph over a newer one.
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -273,8 +252,6 @@ func (s *Store) RebuildFranchisesFor(ctx context.Context, ids []int, known map[i
 		return 0, err
 	}
 
-	// The components to rebuild: every one when no ids were named. Named ones bring their old franchises'
-	// members along: a root that lost its edges takes its siblings' rows with it, and they must be regrouped.
 	seen := map[int]bool{}
 	var groups [][]int
 	starts := slices.Collect(maps.Keys(adj))
@@ -318,7 +295,6 @@ func (s *Store) RebuildFranchisesFor(ctx context.Context, ids []int, known map[i
 			return 0, err
 		}
 	} else {
-		// The named ids too: one whose last season edge went is a franchise of nothing now.
 		stale := slices.Clone(ids)
 		for _, members := range groups {
 			stale = append(stale, members...)
@@ -337,7 +313,6 @@ func (s *Store) RebuildFranchisesFor(ctx context.Context, ids []int, known map[i
 	defer stmt.Close()
 
 	for _, members := range groups {
-		// Broadcast order, as edges have no direction; a missing date must not reorder the rest.
 		sort.Slice(members, func(i, j int) bool {
 			di, dj := dateOf(dates, members[i]), dateOf(dates, members[j])
 			if di != dj {
@@ -373,7 +348,6 @@ func component(start int, adj map[int][]int, seen map[int]bool) []int {
 	return out
 }
 
-// A member with no row at all is an announced sequel not yet in the corpus.
 func dateOf(dates map[int]int, id int) int {
 	if d, ok := dates[id]; ok {
 		return d
@@ -381,7 +355,6 @@ func dateOf(dates map[int]int, id int) int {
 	return 99999999
 }
 
-// startDates is YYYYMMDD per member (row, walk, corpus year); a missing one sorts last, not as season one.
 func startDates(ctx context.Context, tx *sql.Tx, groups [][]int, known map[int]string) (map[int]int, error) {
 	out := map[int]int{}
 	for _, members := range groups {
@@ -396,17 +369,37 @@ func startDates(ctx context.Context, tx *sql.Tx, groups [][]int, known map[int]s
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return nil, err
 			}
-			if k := strings.ReplaceAll(known[id], "-", ""); date == "" || (len(date) == 8 && strings.HasSuffix(date, "0000") && len(k) == 8) {
+			if k := strings.ReplaceAll(known[id], "-", ""); date == "" || (len(date) == 8 && len(k) == 8 && precision(k) > precision(date)) {
 				date = k
 			}
 			n := 99999999
 			if v, err := atoiSafe(date); err == nil && v > 0 {
-				n = v
+				n = latestIn(v)
 			}
 			out[id] = n
 		}
 	}
 	return out, nil
+}
+
+func precision(yyyymmdd string) int {
+	switch {
+	case !strings.HasSuffix(yyyymmdd, "00"):
+		return 3
+	case !strings.HasSuffix(yyyymmdd, "0000"):
+		return 2
+	}
+	return 1
+}
+
+func latestIn(yyyymmdd int) int {
+	switch {
+	case yyyymmdd%10000 == 0:
+		return yyyymmdd + 9999
+	case yyyymmdd%100 == 0:
+		return yyyymmdd + 99
+	}
+	return yyyymmdd
 }
 
 const franchiseQuery = `
@@ -424,7 +417,6 @@ WHERE f.root_id = (SELECT root_id FROM franchise WHERE anime_id = ?)
   AND f.anime_id NOT IN (SELECT anime_id FROM dead_anime)
 ORDER BY f.ordinal`
 
-// Franchise returns every season of an id's show in broadcast order; no relations is a franchise of one.
 func (s *Store) Franchise(ctx context.Context, animeID int) (Franchise, error) {
 	rows, err := s.r.QueryContext(ctx, franchiseQuery, animeID)
 	if err != nil {
@@ -453,8 +445,6 @@ func (s *Store) Franchise(ctx context.Context, animeID int) (Franchise, error) {
 	return out, nil
 }
 
-// NextSeason is the franchise's next entry in broadcast order once it has started airing, 0 if none: a finale
-// plays on into it. Only the very next one, so an unaired season 2 never jumps ahead to a season 3.
 func (s *Store) NextSeason(ctx context.Context, animeID int) int {
 	var id int
 	s.r.QueryRowContext(ctx, `
@@ -487,13 +477,11 @@ func (s *Store) soloFranchise(ctx context.Context, animeID int) (Franchise, erro
 	return Franchise{RootID: animeID, Seasons: []Season{season}}, nil
 }
 
-// EnglishTitle returns the English name, since groups post under it as well as the romaji.
 func (s *Store) EnglishTitle(ctx context.Context, animeID int) (string, error) {
 	var title *string
 	err := s.r.QueryRowContext(ctx,
 		`SELECT title_english FROM anime WHERE id = ?`, animeID).Scan(&title)
 	if err != nil || title == nil {
-		// A missing row is normal for anime that were never imported.
 		return "", nil
 	}
 	return *title, nil
@@ -528,7 +516,6 @@ func (s *Store) SearchTitles(ctx context.Context, animeID int) ([]string, error)
 	return out, rows.Err()
 }
 
-// EpisodeRuntime is one episode's length in minutes, 0 when unknown.
 func (s *Store) EpisodeRuntime(ctx context.Context, animeID int) int {
 	var minutes *int
 	err := s.r.QueryRowContext(ctx,

@@ -4,17 +4,14 @@ import (
 	"iter"
 
 	"github.com/anacrolix/btree"
-	"github.com/anacrolix/missinggo/v2/panicif"
 )
 
 type btreeIterator[R any] struct {
 	btree.MapIterator[R, struct{}]
-	version int
 }
 
 type ajwernerBtreeSet[R any] struct {
-	inner   btree.Set[R]
-	version int
+	inner btree.Set[R]
 }
 
 func (me *ajwernerBtreeSet[R]) Delete(r R) (actual R, removed bool) {
@@ -38,12 +35,7 @@ func (me *ajwernerBtreeSet[R]) Len() int {
 func (me *ajwernerBtreeSet[R]) getBtreeIterator() btreeIterator[R] {
 	return btreeIterator[R]{
 		MapIterator: me.inner.Iterator(),
-		version:     me.version,
 	}
-}
-
-func (me *ajwernerBtreeSet[R]) assertIteratorVersion(it btreeIterator[R]) {
-	panicif.NotEq(me.version, it.version)
 }
 
 func (me *ajwernerBtreeSet[R]) Iter(yield func(R) bool) {
@@ -63,7 +55,6 @@ func (me *ajwernerBtreeSet[R]) IterFrom(start R) iter.Seq[R] {
 			if !yield(it.Cur()) {
 				return
 			}
-			me.assertIteratorVersion(it)
 		}
 	}
 }

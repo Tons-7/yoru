@@ -36,7 +36,6 @@ type Torrent struct {
 	TorrentImpl
 }
 
-// Deprecated. Use PieceWithHash, as this doesn't work with pure v2 torrents.
 func (t *Torrent) Piece(p metainfo.Piece) Piece {
 	return t.PieceWithHash(p, g.Some(p.V1Hash().Unwrap().Bytes()))
 }
@@ -58,15 +57,11 @@ type Piece struct {
 
 var _ io.WriterTo = Piece{}
 
-// Why do we have this wrapper? Well PieceImpl doesn't implement io.Reader, so we can't let io.Copy
-// and friends check for io.WriterTo and fallback for us since they expect an io.Reader.
 func (p Piece) WriteTo(w io.Writer) (_ int64, err error) {
 	if i, ok := p.PieceImpl.(io.WriterTo); ok {
 		return i.WriteTo(w)
 	}
 	n := p.mip.Length()
-	// NewReader will do the next smartest thing which may allow more efficient resource use between
-	// ReadAt calls. Worst case it gives us a nopCloser+p.
 	rc, err := p.NewReader()
 	if err != nil {
 		err = fmt.Errorf("opening reader: %w", err)
@@ -78,15 +73,12 @@ func (p Piece) WriteTo(w io.Writer) (_ int64, err error) {
 }
 
 func (p Piece) WriteAt(b []byte, off int64) (n int, err error) {
-	// Writes to a completed piece aren't refused: checking uncached completion on every write costs too much.
 	if off < 0 || off+int64(len(b)) > p.mip.Length() {
 		return 0, errors.New("write overflows piece")
 	}
 	return p.PieceImpl.WriteAt(b, off)
 }
 
-// If you're calling this you're probably doing something very inefficient. Consider WriteTo which
-// handles data spread across multiple objects in storage.
 func (p Piece) ReadAt(b []byte, off int64) (n int, err error) {
 	if off < 0 {
 		err = os.ErrInvalid
@@ -109,11 +101,8 @@ func (p Piece) ReadAt(b []byte, off int64) (n int, err error) {
 	}
 	off += int64(n)
 
-	// Maybe wrong: a read can fail with the data still there (too many open files). A lost-data error
-	// would be exact.
 	if off < p.mip.Length() {
 		if err == io.EOF {
-			// TODO: Hey, this guy over here isn't checking errors.
 			p.MarkNotComplete()
 		}
 	}
@@ -126,7 +115,6 @@ func (p Piece) NewReader() (PieceReader, error) {
 	if ok {
 		return pr.NewReader()
 	}
-	// TODO: Make generic reflect wrapper for nop Closer.
 	return struct {
 		io.ReaderAt
 		io.Closer

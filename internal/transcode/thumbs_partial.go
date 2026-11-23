@@ -22,50 +22,36 @@ import (
 	"yoru/internal/proc"
 )
 
-// While downloading, each Cluster on disk goes to ffmpeg alone behind the header: tiles, with nothing fetched.
-
-// Span is a stretch of a file that is on disk, [From, To) in bytes.
 type Span struct{ From, To int64 }
 
 const (
-	// The most read for one tile: the clusters leading up to its time.
-	tileRead = 24 << 20
-	// How far before a tile's time its keyframe is looked for; encoders put one at least this often.
+	tileRead      = 24 << 20
 	keyframeReach = 20.0
-	// Tiles made per pass, so a pass stays short beside playback.
-	tilesPerPass = 48
-	scanChunk    = 4 << 20
-	scanPerPass  = 256 << 20
+	tilesPerPass  = 48
+	scanChunk     = 4 << 20
+	scanPerPass   = 256 << 20
 )
 
-// mkvClusterID as written, which a scan looks for.
 var mkvClusterID = []byte{0x1F, 0x43, 0xB6, 0x75}
 
-// A Segment of unknown size: a lone cluster after it reads as the stream it came from.
 var openSegment = []byte{0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 
-// cluster is one found on disk: where it starts and ends (-1 when its size is unknown), its time in seconds.
 type cluster struct {
 	at, end int64
 	time    float64
 }
 
-// partial is a downloading file's way to its sheet, kept between passes so no byte is scanned twice.
 type partial struct {
-	// The EBML header, an open Segment, Info and Tracks: what a lone cluster needs before it.
-	head     []byte
-	scale    uint64
-	scanned  []Span
-	clusters []cluster
-	failed   map[int]time.Time
-	// headFailed: the header couldn't be read (not there yet, or not Matroska); used: the last Fill for it.
+	head             []byte
+	scale            uint64
+	scanned          []Span
+	clusters         []cluster
+	failed           map[int]time.Time
 	headFailed, used time.Time
-	// The bytes on disk at the last pass and when it ran: polls with nothing new make nothing.
-	bytes  int64
-	passed time.Time
+	bytes            int64
+	passed           time.Time
 }
 
-// A partial nobody has asked about this long is let go: its episode closed before it finished downloading.
 const partialIdle = time.Hour
 
 func tilePath(dir string, i int) string {
@@ -76,7 +62,6 @@ func partialSheet(dir string) string { return filepath.Join(dir, "partial.jpg") 
 
 func partialIndex(dir string) string { return filepath.Join(dir, "partial.json") }
 
-// Fill adds the tiles whose pictures a downloading file has on disk; Generate's whole sheet replaces it later.
 func (t *Thumbnails) Fill(source, dir string, duration, aspect float64, have []Span) {
 	plan := PlanSheet(duration)
 	if t == nil || plan.Count == 0 || source == "" || len(have) == 0 {
@@ -102,7 +87,6 @@ func (t *Thumbnails) Fill(source, dir string, duration, aspect float64, have []S
 	for _, s := range have {
 		bytes += s.To - s.From
 	}
-	// A tile that failed is tried again after partialRetry, so a pass runs then even with nothing new.
 	if bytes == p.bytes && time.Since(p.passed) < partialRetry {
 		t.mu.Unlock()
 		return
@@ -124,7 +108,6 @@ func (t *Thumbnails) Fill(source, dir string, duration, aspect float64, have []S
 		if err != nil {
 			t.log.Debug("scrub previews so far", "err", err)
 		}
-		// The whole sheet came while this pass ran: what it wrote after Generate cleared up goes too.
 		if _, err := os.Stat(sheetPath(dir)); err == nil {
 			t.dropPartial(dir)
 			return
@@ -138,7 +121,6 @@ func (t *Thumbnails) Fill(source, dir string, duration, aspect float64, have []S
 	}()
 }
 
-// fill scans what arrived since the last pass for clusters, then makes the missing tiles they hold.
 func (t *Thumbnails) fill(ctx context.Context, p *partial, source, dir string, plan Sheet, height int, have []Span) (int, error) {
 	f, err := os.Open(source)
 	if err != nil {
@@ -158,7 +140,6 @@ func (t *Thumbnails) fill(ctx context.Context, p *partial, source, dir string, p
 			return 0, err
 		}
 	}
-	// A file found mostly downloaded is read over several passes, not in one beside playback.
 	budget := int64(scanPerPass)
 	for _, s := range have {
 		for _, gap := range unscanned(s, p.scanned) {
@@ -182,7 +163,6 @@ func (t *Thumbnails) fill(ctx context.Context, p *partial, source, dir string, p
 		if _, err := os.Stat(tilePath(dir, i)); err == nil {
 			continue
 		}
-		// More of the file may arrive in the meantime and hold the keyframe a tile lacked.
 		if at, ok := p.failed[i]; ok && time.Since(at) < partialRetry {
 			continue
 		}
@@ -195,7 +175,7 @@ func (t *Thumbnails) fill(ctx context.Context, p *partial, source, dir string, p
 		if _, err := f.ReadAt(body, from); err != nil && !errors.Is(err, io.EOF) {
 			return made, err
 		}
-		if err := t.tile(ctx, append(slices.Clip(p.head), body...), want, tilePath(dir, i), height); err != nil {
+		if err := t.tile(ctx, p.head, body, want, tilePath(dir, i), height); err != nil {
 			t.log.Debug("scrub preview tile", "tile", i, "err", err)
 			p.failed[i] = time.Now()
 			continue
@@ -205,12 +185,9 @@ func (t *Thumbnails) fill(ctx context.Context, p *partial, source, dir string, p
 	return made, nil
 }
 
-// A tile that found no keyframe is tried again this much later.
 const partialRetry = 2 * time.Minute
 
-// leadingUp: unbroken on-disk clusters from keyframeReach before want to its own; last keyframe is the tile.
 func leadingUp(clusters []cluster, have, scanned []Span, want float64, size int64) (from, to int64, ok bool) {
-	// The last by want in file order, past any stray one whose time is off.
 	k := -1
 	for i, c := range clusters {
 		if c.time <= want {
@@ -221,7 +198,6 @@ func leadingUp(clusters []cluster, have, scanned []Span, want float64, size int6
 		return 0, 0, false
 	}
 	last := clusters[k]
-	// Next comes a cluster, scanned bytes starting none, or the file's end: no later one starts by want.
 	next := k+1 < len(clusters) && clusters[k+1].at == last.end
 	if !covered(have, last.at, last.end) || !next && !covered(scanned, last.end, min(last.end+16, size)) {
 		return 0, 0, false
@@ -237,7 +213,6 @@ func leadingUp(clusters []cluster, have, scanned []Span, want float64, size int6
 	return from, last.end, true
 }
 
-// clusterHead builds what goes before a lone cluster, from a header that must be on disk whole.
 func clusterHead(f io.ReaderAt, size int64, have []Span) ([]byte, uint64, error) {
 	top, err := matroskaTop(f, size)
 	if err != nil {
@@ -269,13 +244,10 @@ func clusterHead(f io.ReaderAt, size int64, have []Span) ([]byte, uint64, error)
 	return head, top.scale, nil
 }
 
-// scanClusters finds clusters starting in s: the ID, a sane size, the Timestamp, then a block.
 func scanClusters(ctx context.Context, r io.ReaderAt, s Span, scale uint64) []cluster {
 	var out []cluster
 	buf := make([]byte, scanChunk+32)
-	// From a little before: a header (ID, size, CRC-32, Timestamp: up to ~30 bytes) can straddle the last edge.
 	for from := max(0, s.From-64); from < s.To && ctx.Err() == nil; from += scanChunk {
-		// Hits start before stride; the 32 bytes past it are room to read the last one's header.
 		stride := int(min(scanChunk, s.To-from))
 		n, _ := r.ReadAt(buf[:stride+32], from)
 		chunk := buf[:n]
@@ -307,7 +279,6 @@ func readCluster(b []byte, scale uint64) (cluster, bool) {
 		return cluster{}, false
 	}
 	rest := b[4+n:]
-	// ffmpeg writes a CRC-32 (0xBF) first; a Void (0xEC) may pad.
 	for skips := 0; skips < 2 && len(rest) > 1 && (rest[0] == 0xBF || rest[0] == 0xEC); skips++ {
 		length, m := vint(rest[1:], false)
 		if m == 0 || length < 0 || length > 16 || len(rest) < 1+m+int(length) {
@@ -323,7 +294,6 @@ func readCluster(b []byte, scale uint64) (cluster, bool) {
 		return cluster{}, false
 	}
 	ticks := uintOf(rest[1+m : 1+m+int(length)])
-	// Then a block, as in every real cluster: four bytes of frame data rarely read as all of this.
 	if after := rest[1+m+int(length):]; len(after) == 0 || !blockStart(after) {
 		return cluster{}, false
 	}
@@ -334,7 +304,6 @@ func readCluster(b []byte, scale uint64) (cluster, bool) {
 	return cluster{end: end, time: float64(ticks) * float64(scale) / 1e9}, true
 }
 
-// blockStart: what follows a cluster's Timestamp (SimpleBlock, BlockGroup, EncryptedBlock, Position, PrevSize).
 func blockStart(b []byte) bool {
 	switch b[0] {
 	case 0xA3, 0xA0, 0xAF, 0xA7, 0xAB:
@@ -343,15 +312,13 @@ func blockStart(b []byte) bool {
 	return false
 }
 
-// tile decodes data, a header and clusters, into a tile at out of its last keyframe by want (in seconds).
-func (t *Thumbnails) tile(ctx context.Context, data []byte, want float64, out string, height int) error {
+func (t *Thumbnails) tile(ctx context.Context, head, body []byte, want float64, out string, height int) error {
 	part := strings.TrimSuffix(out, ".jpg") + ".part.jpg"
-	// The file's own times, so want picks among the keyframes; each one kept overwrites the last.
 	cmd := proc.Background(exec.CommandContext(ctx, t.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
 		"-skip_frame", "nokey", "-copyts", "-f", "matroska", "-i", "pipe:0", "-an", "-sn", "-dn",
 		"-vf", fmt.Sprintf(`select=lte(t\,%.3f),scale=%d:%d`, want+0.001, thumbWidth, height),
 		"-fps_mode", "passthrough", "-update", "1", "-q:v", "6", part))
-	cmd.Stdin = bytes.NewReader(data)
+	cmd.Stdin = io.MultiReader(bytes.NewReader(head), bytes.NewReader(body))
 	said, err := cmd.CombinedOutput()
 	if st, statErr := os.Stat(part); err != nil || statErr != nil || st.Size() == 0 {
 		os.Remove(part)
@@ -360,7 +327,6 @@ func (t *Thumbnails) tile(ctx context.Context, data []byte, want float64, out st
 	return os.Rename(part, out)
 }
 
-// layOut draws the tiles made so far onto one sheet, and lists which there are for the player.
 func layOut(dir string, plan Sheet, height int) error {
 	sheet := image.NewRGBA(image.Rect(0, 0, plan.Columns*thumbWidth, plan.Rows*height))
 	have := bytes.Repeat([]byte{'0'}, plan.Count)
@@ -382,7 +348,6 @@ func layOut(dir string, plan Sheet, height int) error {
 	if err := jpeg.Encode(&out, sheet, &jpeg.Options{Quality: 80}); err != nil {
 		return err
 	}
-	// The picture first: a list older than it only shows fewer tiles than it holds.
 	if err := replaceFile(partialSheet(dir), out.Bytes()); err != nil {
 		return err
 	}
@@ -390,7 +355,6 @@ func layOut(dir string, plan Sheet, height int) error {
 	return replaceFile(partialIndex(dir), index)
 }
 
-// readPartial is the list layOut wrote, "" with none.
 func readPartial(dir string) string {
 	raw, err := os.ReadFile(partialIndex(dir))
 	if err != nil {
@@ -403,7 +367,6 @@ func readPartial(dir string) string {
 	return index.Have
 }
 
-// dropPartial clears a downloading file's tiles once its whole sheet exists.
 func (t *Thumbnails) dropPartial(dir string) {
 	os.RemoveAll(filepath.Join(dir, "tiles"))
 	os.Remove(partialSheet(dir))
@@ -430,7 +393,6 @@ func covered(have []Span, from, to int64) bool {
 	return false
 }
 
-// unscanned is the part of s not in done, which is merged and in order.
 func unscanned(s Span, done []Span) []Span {
 	var out []Span
 	at := s.From

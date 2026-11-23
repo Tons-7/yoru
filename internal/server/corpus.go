@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -129,13 +130,15 @@ func (s *Server) episodes(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"items": eps, "count": len(eps), "titlesPending": titlesPending})
 }
 
+const deriveRetry = 10 * time.Minute
+
 func (s *Server) deriveEpisodesAsync(animeID int) {
 	if s.finder == nil || s.store.EpisodesDerived(context.Background(), animeID) {
 		return
 	}
 
 	s.derivingMu.Lock()
-	if _, busy := s.deriving[animeID]; busy {
+	if _, busy := s.deriving[animeID]; busy || time.Since(s.deriveFailed[animeID]) < deriveRetry {
 		s.derivingMu.Unlock()
 		return
 	}
@@ -155,6 +158,13 @@ func (s *Server) deriveEpisodesAsync(animeID int) {
 		numbers, err := s.finder.EpisodeNumbers(ctx, animeID)
 		if err != nil {
 			s.log.Warn("derive episodes", "anime", animeID, "err", err)
+			s.derivingMu.Lock()
+			if s.deriveFailed == nil {
+				s.deriveFailed = map[int]time.Time{}
+			}
+			maps.DeleteFunc(s.deriveFailed, func(_ int, at time.Time) bool { return time.Since(at) >= deriveRetry })
+			s.deriveFailed[animeID] = time.Now()
+			s.derivingMu.Unlock()
 			return
 		}
 		saved, err := s.store.SaveDerivedEpisodes(ctx, animeID, numbers)

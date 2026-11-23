@@ -1,6 +1,4 @@
 #!/bin/sh
-# Installs Yoru __VERSION__ as Yoru.app and opens it; fetched by curl it has no quarantine flag, so it opens.
-#   curl -fsSL https://github.com/Tons-7/yoru/releases/latest/download/install-mac.sh | sh
 set -eu
 
 version="__VERSION__"
@@ -25,14 +23,12 @@ if [ -z "$want" ] || [ "$want" != "$got" ]; then
 fi
 ditto -x -k "$tmp/$zip" "$tmp/app"
 
-# /Applications when this account may write there (admins can), else the account's own Applications.
 apps=/Applications
 if [ ! -w "$apps" ]; then
   apps="$HOME/Applications"
   mkdir -p "$apps"
 fi
 
-# A running Yoru is stopped first, or the new one would hand its window to the old and quit.
 if pgrep -x yoru >/dev/null 2>&1; then
   echo "Stopping the running Yoru..."
   pkill -INT -x yoru || true
@@ -40,6 +36,10 @@ if pgrep -x yoru >/dev/null 2>&1; then
     pgrep -x yoru >/dev/null 2>&1 || break
     sleep 1
   done
+  if pgrep -x yoru >/dev/null 2>&1; then
+    echo "Yoru: it is still closing. Quit it, then run this again; nothing was changed." >&2
+    exit 1
+  fi
 fi
 
 rm -rf "$apps/Yoru.app"

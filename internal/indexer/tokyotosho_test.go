@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// A trimmed real rss.php response: base32 hash in the description, unspaced size, no peer counts.
 const tokyoFeedXML = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel>
 <title>SubsPlease - Tokyo Toshokan</title>
@@ -76,7 +75,6 @@ func TestTokyoToshoParsesFeed(t *testing.T) {
 	if first.Title != "[SubsPlease] Tefuda ga Oome no Victoria - 09 (1080p) [571DA8F8].mkv" {
 		t.Errorf("title = %q", first.Title)
 	}
-	// base32 OALRUVZ3XR6CGN6JHMX3A7RWFQPA4T35 decoded to hex.
 	if want := "70171a573bbc7c2337c93b2fb07e362c1e0e4f7d"; first.InfoHash != want {
 		t.Errorf("infoHash = %q, want %q", first.InfoHash, want)
 	}
@@ -111,7 +109,6 @@ func TestTokyoToshoParsesFeed(t *testing.T) {
 	}
 }
 
-// Nothing may present TokyoTosho's silence about peers as a dead swarm.
 func TestTokyoToshoReportsSeedersUnknown(t *testing.T) {
 	tt := testTokyo(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(tokyoFeedXML))
@@ -207,8 +204,6 @@ func TestTokyoToshoErrors(t *testing.T) {
 		}
 	})
 
-	// What the live site answers a query with no matches: closing tags only,
-	// which is not a document and used to be reported as a broken feed.
 	t.Run("no matches", func(t *testing.T) {
 		tt := testTokyo(t, func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("</channel>\n</rss>\n"))
@@ -219,13 +214,14 @@ func TestTokyoToshoErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("empty body", func(t *testing.T) {
-		tt := testTokyo(t, func(w http.ResponseWriter, r *http.Request) {})
-		got, err := tt.Search(context.Background(), Query{Text: "x"})
-		if err != nil || len(got) != 0 {
-			t.Fatalf("got %v, %v, want no results and no error", got, err)
-		}
-	})
+	for name, body := range map[string]string{"empty body": "", "an html page": "<!DOCTYPE html><html><body>Just a moment</body></html>"} {
+		t.Run(name, func(t *testing.T) {
+			tt := testTokyo(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) })
+			if got, err := tt.Search(context.Background(), Query{Text: "x"}); err == nil {
+				t.Fatalf("got %v with no error; an answer that is not a feed must not read as no results", got)
+			}
+		})
+	}
 
 	t.Run("empty channel", func(t *testing.T) {
 		tt := testTokyo(t, func(w http.ResponseWriter, r *http.Request) {

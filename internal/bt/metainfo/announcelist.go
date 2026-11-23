@@ -10,7 +10,6 @@ func (al AnnounceList) Clone() AnnounceList {
 	return slices.Clone(al)
 }
 
-// Whether the AnnounceList should be preferred over a single URL announce.
 func (al AnnounceList) OverridesAnnounce(announce string) bool {
 	for _, tier := range al {
 		for _, url := range tier {

@@ -12,7 +12,6 @@ import (
 	"yoru/internal/store"
 )
 
-// Finished, since only a download that has arrived is space to reclaim.
 func entry(hash string, bytes int64, lastPlayed int64, pinned, protected bool) store.CacheEntry {
 	return store.CacheEntry{
 		InfoHash: hash, Bytes: bytes, LastPlayed: lastPlayed,
@@ -20,7 +19,6 @@ func entry(hash string, bytes int64, lastPlayed int64, pinned, protected bool) s
 	}
 }
 
-// A pinned file is playing now, so it is never a candidate, whatever the budget.
 func TestEvictionOrderNeverOffersPinned(t *testing.T) {
 	got := evictionOrder([]store.CacheEntry{
 		entry("pinned", 1<<30, 100, true, false),
@@ -47,8 +45,6 @@ func TestEvictionOrderIsOldestFirst(t *testing.T) {
 	}
 }
 
-// Evicting an episode of a season the user is midway through is the worst
-// available choice, so those go last — but they still go if the budget demands.
 func TestProtectedEntriesAreSacrificedLast(t *testing.T) {
 	got := evictionOrder([]store.CacheEntry{
 		entry("watching-old", 1<<30, 10, false, true),
@@ -80,7 +76,6 @@ func TestEvictionOrderEmptyAndAllPinned(t *testing.T) {
 	}
 }
 
-// Eviction deletes a torrent, so an idle episode in the playing one's batch would take it down.
 func TestPinCoversEverySiblingOfTheSameTorrent(t *testing.T) {
 	playing := entry("batch", 1<<30, 900, true, false)
 	playing.FileIndex = 3
@@ -126,13 +121,11 @@ func cacheState(t *testing.T, s *store.Store, hash string, index int, bytes int6
 	if err := s.SetCacheBytes(ctx, hash, index, bytes, complete); err != nil {
 		t.Fatal(err)
 	}
-	// Recording pins unconditionally, so unpinning is what makes an entry a candidate at all.
 	if err := s.PinCache(ctx, hash, index, pinned); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// Two files of one torrent are one deletion; freed bytes must be counted once.
 func TestSweepCountsATorrentOnce(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -168,7 +161,6 @@ func TestSweepCountsATorrentOnce(t *testing.T) {
 	}
 }
 
-// A download still arriving is not spare space.
 func TestEvictionOrderNeverOffersAnUnfinishedDownload(t *testing.T) {
 	downloading := entry("downloading", 8<<30, 0, false, false)
 	downloading.Complete = false
@@ -179,7 +171,6 @@ func TestEvictionOrderNeverOffersAnUnfinishedDownload(t *testing.T) {
 	}
 }
 
-// A download whose swarm died would hold the budget for good.
 func TestEvictionOrderOffersAStalledDownload(t *testing.T) {
 	stuck := entry("stuck", 8<<30, 0, false, false)
 	stuck.Complete = false
@@ -190,7 +181,6 @@ func TestEvictionOrderOffersAStalledDownload(t *testing.T) {
 	}
 }
 
-// Both files of a batch are spared while any of it is still downloading.
 func TestEvictionOrderSparesEverySiblingOfAnUnfinishedTorrent(t *testing.T) {
 	first := entry("batch", 4<<30, 10, false, false)
 	second := entry("batch", 4<<30, 20, false, false)
@@ -211,7 +201,27 @@ func TestEvictionOrderNeverOffersKept(t *testing.T) {
 	}
 }
 
-// A slow download still arriving is the oldest entry, yet must not be evicted mid-transfer.
+func TestSweepLeavesTheCacheAloneWhenAKeptPackFillsTheBudget(t *testing.T) {
+	c, st := newCache(t)
+	ctx := context.Background()
+	cache(t, st, "pack", 0, 1<<30, false)
+	cache(t, st, "pack", 1, 6<<30, false)
+	if _, err := st.KeepFile(ctx, "pack", 0, true); err != nil {
+		t.Fatal(err)
+	}
+	cache(t, st, "next", 2, 1<<30, false)
+	if err := st.SetSetting(ctx, "cache.budget_bytes", "5368709120"); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := c.Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Evicted != 0 {
+		t.Errorf("evicted %d although nothing it may evict brings the cache under budget", rep.Evicted)
+	}
+}
+
 func TestSweepSparesADownloadStillArriving(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -237,7 +247,6 @@ func TestSweepSparesADownloadStillArriving(t *testing.T) {
 	if len(left) != 1 || left[0].InfoHash != "downloading" {
 		t.Fatalf("remaining = %+v, want the download still in progress", left)
 	}
-	// Still over budget, and that is the right answer: the rest is arriving.
 	if rep.After <= rep.Budget {
 		t.Errorf("after = %d, expected to stay over the %d budget", rep.After, rep.Budget)
 	}
@@ -267,7 +276,6 @@ func TestSweepNeverEvictsKeptDownloads(t *testing.T) {
 		t.Fatalf("evicted %d with the cache under budget", rep.Evicted)
 	}
 
-	// Now the cache itself is over: the oldest cached file goes, the kept one stays.
 	cache(t, st, "cached-too", 3, 3<<30, false)
 	rep, err = c.Sweep(ctx)
 	if err != nil {
@@ -326,7 +334,6 @@ func TestAutoDeleteIsOffByDefault(t *testing.T) {
 	}
 }
 
-// "now": a watched episode goes once nothing plays it; unwatched, pinned and kept ones stay.
 func TestAutoDeleteNowTakesOnlyWatchedCachedEpisodes(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -356,7 +363,6 @@ func TestAutoDeleteNowTakesOnlyWatchedCachedEpisodes(t *testing.T) {
 		t.Fatalf("left = %v", left)
 	}
 
-	// Opting downloads in takes the kept one too.
 	if err := st.SetSetting(ctx, "cache.autodelete_downloads", "true"); err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +374,6 @@ func TestAutoDeleteNowTakesOnlyWatchedCachedEpisodes(t *testing.T) {
 	}
 }
 
-// "keep2": an episode goes once the two after it are watched, so the one before stays.
 func TestAutoDeleteKeep2WaitsForTwoMore(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -398,7 +403,6 @@ func TestAutoDeleteKeep2WaitsForTwoMore(t *testing.T) {
 	}
 }
 
-// The list is past it, but it is being rewatched: leaving it must not delete it.
 func TestAutoDeleteSparesAnEpisodeGoneBackTo(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -420,7 +424,6 @@ func TestAutoDeleteSparesAnEpisodeGoneBackTo(t *testing.T) {
 	}
 }
 
-// Deleting a torrent takes every file in it, so a batch stays while any episode of it is still wanted.
 func TestAutoDeleteSparesABatchWithAnUnwatchedEpisode(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -444,7 +447,6 @@ func TestAutoDeleteSparesABatchWithAnUnwatchedEpisode(t *testing.T) {
 	}
 }
 
-// spare is a cached episode nothing is playing: one gigabyte the budget counts.
 func spare(t *testing.T, s *store.Store, hash string, index, animeID, ep int) {
 	t.Helper()
 	episode(t, s, hash, index, animeID, ep)
@@ -453,8 +455,6 @@ func spare(t *testing.T, s *store.Store, hash string, index, animeID, ep int) {
 	}
 }
 
-// A full cache makes room for the next episode of the show being watched from what is older: another
-// show's episode, or one of this show's already watched. Never this show's unwatched ones.
 func TestMakeRoomEvictsOlderEpisodesNotTheOnesAhead(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -464,7 +464,6 @@ func TestMakeRoomEvictsOlderEpisodesNotTheOnesAhead(t *testing.T) {
 	if _, err := st.MarkWatched(ctx, 7, 1); err != nil {
 		t.Fatal(err)
 	}
-	// Three gigabytes held, a budget of three: one more does not fit.
 	if err := st.SetSetting(ctx, "cache.budget_bytes", fmt.Sprint(3<<30)); err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +476,6 @@ func TestMakeRoomEvictsOlderEpisodesNotTheOnesAhead(t *testing.T) {
 	}
 }
 
-// Evicting everything and still not fitting would be loss for nothing.
 func TestMakeRoomEvictsNothingWhenItCannotBeEnough(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()
@@ -495,7 +493,6 @@ func TestMakeRoomEvictsNothingWhenItCannotBeEnough(t *testing.T) {
 	}
 }
 
-// Room already there costs nothing.
 func TestMakeRoomLeavesACacheWithSpaceAlone(t *testing.T) {
 	c, st := newCache(t)
 	ctx := context.Background()

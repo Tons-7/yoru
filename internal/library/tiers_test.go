@@ -16,7 +16,6 @@ import (
 	"yoru/internal/score"
 )
 
-// TRaSH's lists are mirrored whole and graded into the ranking; a list that fails to load keeps the last one.
 func TestGroupTiersMirrorIntoTheRanking(t *testing.T) {
 	failing := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

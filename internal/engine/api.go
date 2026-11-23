@@ -7,8 +7,8 @@ import (
 	"mime"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"yoru/internal/torrent"
@@ -22,13 +22,16 @@ func (e *Engine) guard(addr string, next http.Handler) http.Handler {
 			http.Error(w, "not for browsers", http.StatusForbidden)
 			return
 		}
-		if !strings.Contains(r.URL.Path, "/stream/") && r.Header.Get(torrent.SecretHeader) != e.secret {
+		open := (r.Method == http.MethodGet || r.Method == http.MethodHead) && streamPath.MatchString(r.URL.Path)
+		if !open && r.Header.Get(torrent.SecretHeader) != e.secret {
 			http.Error(w, "missing engine secret", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+var streamPath = regexp.MustCompile(`^/torrents/[^/]+/stream/[^/]+$`)
 
 func (e *Engine) routes() http.Handler {
 	mux := http.NewServeMux()

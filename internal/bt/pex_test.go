@@ -139,7 +139,7 @@ var testcases = []struct {
 			s.Add(&conns[0])
 			s.Add(&conns[1])
 			s.Drop(&conns[0])
-			s.Drop(&conns[2]) // to be ignored: it wasn't added
+			s.Drop(&conns[2])
 			return s
 		}(),
 		targ: pp.PexMsg{
@@ -161,7 +161,7 @@ var testcases = []struct {
 			s.Add(&conns[0])
 			s.Add(&conns[1])
 			s.Add(&conns[2])
-			s.Drop(&conns[0]) // on hold: s.nc < pexTargAdded
+			s.Drop(&conns[0])
 			s.Drop(&conns[2])
 			s.Drop(&conns[1])
 			return s
@@ -187,8 +187,8 @@ var testcases = []struct {
 			}
 			s := &pexState{nc: pexTargAdded - 1}
 			s.Add(&conns[0])
-			s.Drop(&conns[0]) // on hold: s.nc < pexTargAdded
-			s.Add(&conns[1])  // unholds the above
+			s.Drop(&conns[0])
+			s.Add(&conns[1])
 			return s
 		}(),
 		targ: pp.PexMsg{
@@ -223,15 +223,12 @@ var testcases = []struct {
 	},
 }
 
-// A PexMsg's contents, comparable whatever order pexMsgFactory's maps gave (ElementsMatch can't keep an
-// added addr paired with its flags).
 type comparablePexMsg struct {
 	added, added6           []krpc.NodeAddr
 	addedFlags, added6Flags []pp.PexPeerFlags
 	dropped, dropped6       []krpc.NodeAddr
 }
 
-// Such Rust-inspired.
 func (me *comparablePexMsg) From(f pp.PexMsg) {
 	me.added = f.Added
 	me.addedFlags = f.AddedFlags
@@ -241,8 +238,6 @@ func (me *comparablePexMsg) From(f pp.PexMsg) {
 	me.dropped6 = f.Dropped6
 }
 
-// For PexMsg created by pexMsgFactory, this is as good as it can get without using data structures
-// in pexMsgFactory that preserve insert ordering.
 func (actual comparablePexMsg) AssertEqual(t *testing.T, expected comparablePexMsg) {
 	assert.ElementsMatch(t, expected.added, actual.added)
 	assert.ElementsMatch(t, expected.addedFlags, actual.addedFlags)
@@ -275,7 +270,6 @@ func TestPexGenmsg0(t *testing.T) {
 	}
 }
 
-// generate 𝑛 distinct values of net.Addr
 func addrgen(n int) chan net.Addr {
 	c := make(chan net.Addr)
 	go func() {
@@ -317,7 +311,6 @@ func benchmarkPexInitialN(b *testing.B, npeers int) {
 	}
 }
 
-// obtain at least 5 points, e.g. to plot a graph
 func BenchmarkPexInitial4(b *testing.B)   { benchmarkPexInitialN(b, 4) }
 func BenchmarkPexInitial50(b *testing.B)  { benchmarkPexInitialN(b, 50) }
 func BenchmarkPexInitial100(b *testing.B) { benchmarkPexInitialN(b, 100) }

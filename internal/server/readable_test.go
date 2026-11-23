@@ -11,7 +11,6 @@ import (
 	"yoru/internal/store"
 )
 
-// The disk copy is found for a file and inside a pack's folder, despite a same-named file in the root.
 func TestReadablePathFindsPackEpisodes(t *testing.T) {
 	cache := t.TempDir()
 	h := newHarness(t, config.Config{CacheDir: cache}, nil)

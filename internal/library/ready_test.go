@@ -10,8 +10,6 @@ import (
 	"yoru/internal/store"
 )
 
-// Near an episode's end the next one's torrent is started and read at both ends; held paused by download
-// ahead or not held at all, Auto next decides whether it's fetched now.
 func TestReadyNextGetsTheNextEpisodesStart(t *testing.T) {
 	ctx := context.Background()
 
@@ -36,7 +34,6 @@ func TestReadyNextGetsTheNextEpisodesStart(t *testing.T) {
 		t.Error("the held download of episode 2 was left paused")
 	}
 
-	// Nothing held: only Auto next, which will play it, has it fetched now.
 	engine = newFakeEngine()
 	p = withPrefetch(newPlayback(t, engine, []indexer.Torrent{release(otherHash, "[Best] Sousou no Frieren - 02 [1080p].mkv", 80)}))
 	if _, err := p.ReadyNext(ctx, 1, 1); !errors.Is(err, errNotReadied) || len(engine.added) != 0 {

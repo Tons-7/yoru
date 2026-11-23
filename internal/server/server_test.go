@@ -88,7 +88,6 @@ func (s *stubIndexer) Search(context.Context, indexer.Query) ([]indexer.Torrent,
 func (h *harness) do(t *testing.T, method, target string) (*http.Response, map[string]any) {
 	t.Helper()
 	req := httptest.NewRequest(method, target, nil)
-	// httptest defaults to a public address, which the access guard rejects.
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Host = "127.0.0.1:4321"
 
@@ -123,8 +122,6 @@ func TestHealth(t *testing.T) {
 	}
 }
 
-// Short queries must not reach the network: AniList allows 30 requests a
-// minute and fuzzy matching returns nothing useful below three characters.
 func TestSearchSkipsUpstreamForShortQueries(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 
@@ -182,7 +179,6 @@ func TestLibraryEmptyReturnsArrayNotNull(t *testing.T) {
 	if body["total"].(float64) != 0 {
 		t.Fatalf("total = %v", body["total"])
 	}
-	// A JSON null here would break the frontend's .map().
 	if _, ok := body["items"].([]any); !ok {
 		t.Fatalf("items = %#v, want an array", body["items"])
 	}
@@ -191,7 +187,6 @@ func TestLibraryEmptyReturnsArrayNotNull(t *testing.T) {
 	}
 }
 
-// The frontend needs page size and total to render controls at all.
 func TestLibraryReturnsPagingEnvelope(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	_, body := h.do(t, "GET", "/api/library?page=2&perPage=25")
@@ -204,7 +199,6 @@ func TestLibraryReturnsPagingEnvelope(t *testing.T) {
 	}
 }
 
-// An unbounded perPage would let one request pull the entire corpus.
 func TestPerPageIsClamped(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	_, body := h.do(t, "GET", "/api/library?perPage=100000")
@@ -226,8 +220,6 @@ func TestTorrentsRequiresQuery(t *testing.T) {
 	}
 }
 
-// Each result carries its rebuilt magnet and the parsed release fields, so the
-// UI can filter by group and quality without parsing titles itself.
 func TestTorrentsEnrichesResults(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.indexer.results = []indexer.Torrent{{
@@ -335,7 +327,6 @@ func TestCallbackRejectsBadState(t *testing.T) {
 	}
 }
 
-// An empty stored state must not authorise a callback that also omits it.
 func TestCallbackRejectsMissingState(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 
@@ -357,7 +348,6 @@ func TestCallbackStoresTokenAndViewer(t *testing.T) {
 	ctx := context.Background()
 	h.store.SetSetting(ctx, "anilist.state", "expected")
 
-	// The callback redirects into the app, not to a "close this tab" page.
 	res, _ := h.do(t, "GET", "/callback?code=abc&state=expected")
 	if res.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want a redirect", res.StatusCode)
@@ -378,7 +368,6 @@ func TestCallbackStoresTokenAndViewer(t *testing.T) {
 		}
 	}
 
-	// Reusing a consumed state must not authorise a second callback.
 	if got, _ := h.store.Setting(ctx, "anilist.state"); got != "" {
 		t.Errorf("state was not cleared, got %q", got)
 	}
@@ -386,7 +375,6 @@ func TestCallbackStoresTokenAndViewer(t *testing.T) {
 		t.Error("expiry not recorded; the yearly re-auth warning depends on it")
 	}
 
-	// The token must be live for subsequent requests without a restart.
 	_, health := h.do(t, "GET", "/api/health")
 	if health["anilist"] != true {
 		t.Error("client did not pick up the new token")

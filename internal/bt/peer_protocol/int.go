@@ -8,7 +8,6 @@ import (
 )
 
 type (
-	// An alias for the underlying type of Integer. This is needed for fuzzing.
 	IntegerKind = uint32
 	Integer     IntegerKind
 )
@@ -35,7 +34,6 @@ func (i *Integer) Read(r io.Reader) error {
 	return err
 }
 
-// It's perfectly fine to cast these to an int. TODO: Or is it?
 func (i Integer) Int() int {
 	return int(i)
 }

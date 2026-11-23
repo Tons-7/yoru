@@ -24,7 +24,6 @@ func upNextKeys(t *testing.T, h *harness) string {
 	return strings.Join(keys, " ")
 }
 
-// The list over the API: add, move, fill, what plays after, remove, clear.
 func TestUpNextRoutes(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	ctx := context.Background()

@@ -58,6 +58,7 @@ export function Person() {
   const p = person.data
   useDocumentTitle(p ? personName(p.name) : undefined)
 
+  if (!(id > 0)) return <ErrorState error={new Error('Unknown person')} />
   if (person.isPending) return <PeopleSkeleton />
   if (!p) return <ErrorState error={person.error} retry={() => void person.refetch()} />
 
@@ -85,9 +86,9 @@ export function Person() {
             badge={<ListBadge status={show?.status} />}
             under={
               show && (
-                <Link to={showPath(show)} className="mt-0.5 line-clamp-2 text-xs leading-snug text-base-500 transition-colors hover:text-base-200">
+                <Link to={showPath(show)} className="tap relative mt-0.5 line-clamp-2 text-xs leading-snug text-base-500 transition-colors hover:text-base-200">
                   {show.title}
-                  {c.shows.length > 1 && <span className="text-base-600"> · +{c.shows.length - 1}</span>}
+                  {c.shows.length > 1 && <span className="text-base-500"> · +{c.shows.length - 1}</span>}
                 </Link>
               )
             }

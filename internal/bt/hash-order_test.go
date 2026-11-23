@@ -8,7 +8,6 @@ import (
 	"yoru/internal/bt/storage"
 )
 
-// Hashing went by piece index: a seek's piece waited behind every earlier piece queued before it.
 func TestTheMostUrgentPieceIsHashedFirst(t *testing.T) {
 	dir, mi := testutil.GreetingTestTorrent()
 	defer os.RemoveAll(dir)
@@ -27,7 +26,6 @@ func TestTheMostUrgentPieceIsHashedFirst(t *testing.T) {
 	for i := range 3 {
 		tor.piecesQueuedForHash.Add(i)
 	}
-	// Setting the info starts hashing pieces 0 and 1; under the lock they can be made free to pick again.
 	hashing := [2]bool{tor.piece(0).hashing, tor.piece(1).hashing}
 	tor.piece(0).hashing, tor.piece(1).hashing = false, false
 	defer func() { tor.piece(0).hashing, tor.piece(1).hashing = hashing[0], hashing[1] }()

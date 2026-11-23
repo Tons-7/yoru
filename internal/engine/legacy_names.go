@@ -4,12 +4,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"yoru/internal/bt"
+	"yoru/internal/torrent"
 )
 
-// migrateLegacyNames moves files written before safe names to where they are looked for now, or they'd download
-// again. On Windows "Re:Zero.mkv" went into a hidden stream of "Re"; elsewhere names never changed.
 func (e *Engine) migrateLegacyNames(t *bt.Torrent) {
 	info := t.Info()
 	if info == nil {
@@ -19,8 +20,12 @@ func (e *Engine) migrateLegacyNames(t *bt.Torrent) {
 	for _, f := range t.Files() {
 		now := e.names.filePath(t, f)
 		fi := f.FileInfo()
+		if !legacySafe(info.BestName(), info.IsDir(), fi.BestPath()) || !e.names.owns(t, now) {
+			continue
+		}
 		old := legacyPath(e.opts.CacheDir, top, info.BestName(), info.IsDir(), fi.BestPath())
-		if old == now || exists(now) || !exists(old) {
+		if !torrent.Within(e.opts.CacheDir, old) || old == now || exists(now) || !exists(old) ||
+			e.names.shared(old, t.InfoHash(), e.held()) {
 			continue
 		}
 		if err := moveFile(old, now); err != nil {
@@ -31,8 +36,28 @@ func (e *Engine) migrateLegacyNames(t *bt.Torrent) {
 	}
 }
 
-// legacyPath is where a file went before names were made safe: the torrent's own names, unchanged. A top
-// tagged on a clash was saved in the session and kept, so only the safe form of the torrent's name was new.
+func legacySafe(best string, dir bool, parts []string) bool {
+	if !legacyPart(best) {
+		return false
+	}
+	if !dir {
+		return true
+	}
+	for _, p := range parts {
+		if !legacyPart(p) {
+			return false
+		}
+	}
+	return true
+}
+
+func legacyPart(p string) bool {
+	if !safeComponent(p) || strings.ContainsRune(p, '\\') {
+		return false
+	}
+	return runtime.GOOS != "windows" || strings.TrimRight(p, ". ") == p
+}
+
 func legacyPath(cache, top, best string, dir bool, parts []string) string {
 	if top == safeName(best) {
 		top = best
@@ -43,7 +68,6 @@ func legacyPath(cache, top, best string, dir bool, parts []string) string {
 	return filepath.Join(append([]string{cache, top}, parts...)...)
 }
 
-// moveFile renames, or copies then removes: a file kept in another's hidden stream can't be renamed out of it.
 func moveFile(old, now string) error {
 	if err := os.MkdirAll(filepath.Dir(now), 0o755); err != nil {
 		return err
@@ -71,10 +95,10 @@ func moveFile(old, now string) error {
 		return err
 	}
 	if err := os.Rename(part, now); err != nil {
+		os.Remove(part)
 		return err
 	}
 	in.Close()
-	// Only the stream itself: the file hosting it may hold other episodes' streams yet to move.
 	return os.Remove(old)
 }
 

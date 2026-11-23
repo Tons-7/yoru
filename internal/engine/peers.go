@@ -7,16 +7,11 @@ import (
 	"yoru/internal/bt"
 )
 
-// Vars so tests need not wait.
 var (
-	// A peer holding requests that delivered nothing useful for this long is dropped, freeing its requests.
-	shedAfter = 15 * time.Second
-	// A stream read waiting this long has the peers holding its piece and sending nothing dropped.
+	shedAfter   = 15 * time.Second
 	rescueAfter = 8 * time.Second
 )
 
-// ledger follows each connection's requests and deliveries; bt calls its hooks under the client lock.
-// Queue depth and request stealing are set in internal/bt/request-queue.go.
 type ledger struct {
 	mu    sync.Mutex
 	peers map[*bt.Peer]*peerState
@@ -84,7 +79,6 @@ func (l *ledger) received(ev bt.ReceivedUsefulDataEvent) {
 	l.mu.Unlock()
 }
 
-// oldest is when the peer's longest-waiting request went out, zero when it holds none. Caller holds l.mu.
 func (s *peerState) oldest() time.Time {
 	var at time.Time
 	for _, sent := range s.sent {
@@ -95,7 +89,6 @@ func (s *peerState) oldest() time.Time {
 	return at
 }
 
-// heard is when the peer last sent something useful, or connected if it never has. Caller holds l.mu.
 func (s *peerState) heard() time.Time {
 	if s.lastUseful.After(s.since) {
 		return s.lastUseful
@@ -103,7 +96,6 @@ func (s *peerState) heard() time.Time {
 	return s.since
 }
 
-// silent lists the conns holding requests with nothing useful from them for shedAfter.
 func (l *ledger) silent(conns []*bt.PeerConn, now time.Time) []*bt.PeerConn {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -120,7 +112,6 @@ func (l *ledger) silent(conns []*bt.PeerConn, now time.Time) []*bt.PeerConn {
 	return out
 }
 
-// holding: conns with a request in piece older than age and silent as long, and how many hold one at all.
 func (l *ledger) holding(conns []*bt.PeerConn, piece int, age time.Duration, now time.Time) (stale []*bt.PeerConn, holders int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

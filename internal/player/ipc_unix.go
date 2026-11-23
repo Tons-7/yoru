@@ -14,5 +14,6 @@ func dialIPC(ctx context.Context, socket string) (net.Conn, error) {
 	return d.DialContext(ctx, "unix", socket)
 }
 
-// A unix socket in temp, created and removed by mpv; one instance plays at a time.
 func defaultSocket() string { return filepath.Join(os.TempDir(), "yoru-mpv.sock") }
+
+func dropSocket(socket string) { os.Remove(socket) }

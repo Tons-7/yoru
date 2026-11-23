@@ -14,8 +14,6 @@ import (
 	"yoru/internal/bt/storage"
 )
 
-// The first write lands at the tail (the prewarm reads the end first): a sparse file costs nothing for
-// the stretch before it, where a plain one is zero-filled up to the write.
 func TestTailWriteDoesNotFillTheFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ep.mkv")

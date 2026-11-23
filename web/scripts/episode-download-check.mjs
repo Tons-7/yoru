@@ -1,4 +1,3 @@
-// Every episode not yet on disk has a download button on the series page; one click queues it.
 import { spawnSync } from 'node:child_process'
 import { chromium } from 'playwright'
 
@@ -21,7 +20,6 @@ const until = async (fn, ms = 30_000) => {
   return false
 }
 
-// A kept season pack holding episodes 4 and 5, planted the way the features check does.
 const seeded = spawnSync('go', ['run', './scripts/e2e-seed', '-db', process.env.YORU_DB, '-anime', ANIME, '-pack'], {
   cwd: process.env.YORU_REPO, stdio: 'inherit',
 }).status === 0
@@ -32,7 +30,6 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 
-// Episode 7 is already waiting in the queue, so its row must not offer a second download.
 await page.route('**/api/download/queue', (route) =>
   route.fulfill({ json: { items: [{ animeId: Number(ANIME), epKey: '7', episode: 7, state: 'pending' }], waiting: {}, paused: false } }),
 )

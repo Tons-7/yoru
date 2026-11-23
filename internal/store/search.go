@@ -19,7 +19,6 @@ WHERE anime_fts MATCH ?
 ORDER BY e.anime_id IS NULL, bm25(anime_fts, 10.0, 8.0, 4.0, 2.0), a.popularity DESC
 LIMIT ?`
 
-// The list's shows lead here too, or popular ones push them out of the header box's eight.
 const searchLike = `
 SELECT ` + searchColumns + `
 FROM anime a
@@ -29,7 +28,6 @@ WHERE a.title_romaji LIKE ?1 ESCAPE '\' OR a.title_english LIKE ?1 ESCAPE '\'
 ORDER BY e.anime_id IS NULL, a.popularity DESC
 LIMIT ?2`
 
-// SearchLocal uses FTS, or LIKE for CJK and queries under three characters, which FTS5 can't match.
 func (s *Store) SearchLocal(ctx context.Context, q string, limit int) ([]LibraryItem, error) {
 	q = plainQuotes.Replace(strings.TrimSpace(q))
 	if q == "" {
@@ -45,10 +43,8 @@ func (s *Store) SearchLocal(ctx context.Context, q string, limit int) ([]Library
 	return s.query(ctx, searchFTS, ftsPrefix(q), limit)
 }
 
-// Phone keyboards type curly quotes; titles are stored with straight ones.
 var plainQuotes = strings.NewReplacer("‘", "'", "’", "'", "“", `"`, "”", `"`)
 
-// escapeLike makes the text literal inside a LIKE pattern, for use with ESCAPE '\'.
 func escapeLike(q string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
 }
@@ -65,7 +61,6 @@ func needsSubstringMatch(q string) bool {
 	return false
 }
 
-// A trailing * prefix-matches the last token while typing; quoting keeps FTS5 operators out.
 func ftsPrefix(q string) string {
 	fields := strings.Fields(q)
 	for i, f := range fields {

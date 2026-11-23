@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base32"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,9 +16,10 @@ import (
 	"golang.org/x/net/html"
 )
 
-// The RSS feed returns only the 75 newest uploads and ignores sort/page params;
-// the HTML listing honours them, the only way to reach back-catalogue episodes.
 func (n *Nyaa) searchHTML(ctx context.Context, q Query) ([]Torrent, error) {
+	if err := n.backedOff(); err != nil {
+		return nil, err
+	}
 	if err := n.limiter.Wait(ctx); err != nil {
 		return nil, err
 	}
@@ -48,12 +50,13 @@ func (n *Nyaa) searchHTML(ctx context.Context, q Query) ([]Torrent, error) {
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("nyaa: HTTP %d", res.StatusCode)
+		n.backOff(res)
+		return nil, fmt.Errorf("HTTP %d", res.StatusCode)
 	}
 
 	doc, err := html.Parse(io.LimitReader(res.Body, 8<<20))
 	if err != nil {
-		return nil, fmt.Errorf("nyaa: parse listing: %w", err)
+		return nil, fmt.Errorf("parse listing: %w", err)
 	}
 
 	var out []Torrent
@@ -66,11 +69,28 @@ func (n *Nyaa) searchHTML(ctx context.Context, q Query) ([]Torrent, error) {
 			}
 		}
 	}
-	// No row parsing means the markup changed, not an empty search: an error, logged and not cached.
 	if len(rows) > 0 && len(out) == 0 {
-		return nil, fmt.Errorf("nyaa: listing layout not recognised (%d rows, 0 parsed)", len(rows))
+		return nil, fmt.Errorf("listing layout not recognised (%d rows, 0 parsed)", len(rows))
+	}
+	if len(rows) == 0 && !isListing(doc) {
+		return nil, errors.New("the answer is not a search listing")
 	}
 	return out, nil
+}
+
+func isListing(n *html.Node) bool {
+	if n.Type == html.ElementNode && n.Data == "table" && strings.Contains(attr(n, "class"), "torrent-list") {
+		return true
+	}
+	if n.Type == html.TextNode && strings.Contains(strings.ToLower(n.Data), "no results found") {
+		return true
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if isListing(c) {
+			return true
+		}
+	}
+	return false
 }
 
 func findRows(n *html.Node) []*html.Node {
@@ -100,8 +120,6 @@ func findRows(n *html.Node) []*html.Node {
 	return rows
 }
 
-// Columns: category, title, links, size, date, seeders, leechers, completed.
-// The title cell has two anchors when a torrent has comments, so select by href.
 func parseRow(row *html.Node) (Torrent, bool) {
 	cells := children(row, "td")
 	if len(cells) < 7 {
@@ -146,7 +164,6 @@ func parseRow(row *html.Node) (Torrent, bool) {
 		t.Downloads = atoi(text(cells[7]))
 	}
 
-	// Nyaa colours rows rather than labelling them: trusted is green, remake is red.
 	switch class := attr(row, "class"); {
 	case strings.Contains(class, "success"):
 		t.Trusted = true
@@ -168,7 +185,6 @@ func infoHashFromMagnet(magnet string) string {
 	}
 	rest = strings.TrimSpace(rest)
 
-	// TokyoTosho writes the hash in base32; everything downstream wants hex.
 	if len(rest) == 32 {
 		raw, err := base32.StdEncoding.WithPadding(base32.NoPadding).
 			DecodeString(strings.ToUpper(rest))
@@ -177,7 +193,6 @@ func infoHashFromMagnet(magnet string) string {
 		}
 		return hex.EncodeToString(raw)
 	}
-	// A truncated hash would rank like any other and burn a play attempt.
 	rest = strings.ToLower(rest)
 	if len(rest) != 40 {
 		return ""

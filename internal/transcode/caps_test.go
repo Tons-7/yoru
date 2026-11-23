@@ -15,7 +15,6 @@ import (
 	"yoru/internal/sound"
 )
 
-// A device that decodes HEVC 10-bit, Hi10P or E-AC-3 gets them copied; without saying so, as before.
 func TestPlanCopiesWhatTheDeviceDecodes(t *testing.T) {
 	hevc := &MediaInfo{Video: &Stream{Codec: "hevc", BitDepth: 10}, Audio: []Stream{{Codec: "eac3", Channels: 6}}}
 	for _, tt := range []struct {
@@ -36,7 +35,6 @@ func TestPlanCopiesWhatTheDeviceDecodes(t *testing.T) {
 		}
 	}
 
-	// Said, a device's list is the whole truth: AV1 and FLAC it didn't name are converted.
 	av1 := &MediaInfo{Video: &Stream{Codec: "av1", BitDepth: 10}, Audio: []Stream{{Codec: "flac", Channels: 2}}}
 	if p := planFor(av1, "", 0, sound.Options{}, nil); !p.VideoCopy || !p.AudioCopy || p.ForDevice {
 		t.Errorf("any browser: %+v, want both copied as before", p)
@@ -44,11 +42,9 @@ func TestPlanCopiesWhatTheDeviceDecodes(t *testing.T) {
 	if p := planFor(av1, "", 0, sound.Options{}, ParseCaps("ch2")); p.VideoCopy || p.AudioCopy {
 		t.Errorf("a device without AV1 or FLAC: %+v, want both converted", p)
 	}
-	// Copied for any browser too, so not this device's doing: a TV would be sent them as well.
 	if p := planFor(av1, "", 0, sound.Options{}, ParseCaps("av1-10,flac")); !p.VideoCopy || !p.AudioCopy || p.ForDevice {
 		t.Errorf("a device with both: %+v", p)
 	}
-	// Lossless goes as FLAC only where it plays: a device without FLAC (or the converted fallback) gets AAC.
 	truehd := &MediaInfo{Video: &Stream{Codec: "h264", BitDepth: 8}, Audio: []Stream{{Codec: "truehd", Channels: 6}}}
 	if p := planFor(truehd, "", 0, sound.Options{}, ParseCaps("ch2")); p.AudioCodec != "aac" {
 		t.Errorf("no FLAC here: %s", p.AudioCodec)
@@ -56,14 +52,12 @@ func TestPlanCopiesWhatTheDeviceDecodes(t *testing.T) {
 	if p := planFor(truehd, "", 0, sound.Options{}, ParseCaps("flac,ch2")); p.AudioCodec != "flac" {
 		t.Errorf("FLAC here: %s", p.AudioCodec)
 	}
-	// H.264 8-bit and AAC are every device's: copying them is never this device's doing.
 	h264 := &MediaInfo{Video: &Stream{Codec: "h264", BitDepth: 8}, Audio: []Stream{{Codec: "aac"}}}
 	if p := planFor(h264, "", 0, sound.Options{}, ParseCaps("ch2")); !p.VideoCopy || !p.AudioCopy || p.ForDevice {
 		t.Errorf("h264 and aac: %+v", p)
 	}
 }
 
-// Surround reaches surround speakers as 5.1, a stereo device a dialogue-safe fold, a lossless track its layout.
 func TestChannelsFollowTheDevice(t *testing.T) {
 	ac3 := Stream{Codec: "ac3", Channels: 6}
 	truehd := Stream{Codec: "truehd", Channels: 8}
@@ -97,7 +91,6 @@ func TestChannelsFollowTheDevice(t *testing.T) {
 	}
 }
 
-// Devices share the episode's session when their plan is any browser's, and get one per plan otherwise.
 func TestVariantsArePerPlan(t *testing.T) {
 	hevc := &MediaInfo{Video: &Stream{Codec: "hevc", BitDepth: 10}, Audio: []Stream{{Codec: "aac", Channels: 2}}}
 	h264 := &MediaInfo{Video: &Stream{Codec: "h264", BitDepth: 8}, Audio: []Stream{{Codec: "aac", Channels: 2}}}
@@ -121,7 +114,6 @@ func TestVariantsArePerPlan(t *testing.T) {
 	}
 }
 
-// HDR is converted only by an ffmpeg that can tone-map; without one (or before it is found) it is sent as it is.
 func TestHDRConvertsOnlyWithAToneMap(t *testing.T) {
 	hdr := &MediaInfo{Video: &Stream{Codec: "hevc", BitDepth: 10, Transfer: "smpte2084"}, Audio: []Stream{{Codec: "aac", Channels: 2}}}
 	caps := ParseCaps("hevc-10")
@@ -136,7 +128,6 @@ func TestHDRConvertsOnlyWithAToneMap(t *testing.T) {
 	}
 }
 
-// Encoder options: animation tuning for x264, the trial's set for the GPU encoder only, HEVC tagged for Safari.
 func TestEncoderOptions(t *testing.T) {
 	tuned := map[string][]string{"h264_nvenc": {"-spatial-aq", "1"}}
 	args := func(codec string) string {
@@ -146,7 +137,6 @@ func TestEncoderOptions(t *testing.T) {
 	if got := args("h264_nvenc"); !strings.Contains(got, "-spatial-aq 1") {
 		t.Errorf("nvenc: %s", got)
 	}
-	// After a fallback the session's codec is libx264: the GPU's options must not follow it there.
 	if got := args("libx264"); strings.Contains(got, "spatial-aq") || !strings.Contains(got, "-tune animation") {
 		t.Errorf("libx264: %s", got)
 	}
@@ -156,7 +146,6 @@ func TestEncoderOptions(t *testing.T) {
 	}
 }
 
-// Real HEVC 10-bit: converted for any browser, copied (hvc1) where decoded, from one probe; 5.1 AC-3 to stereo.
 func TestDeviceVariantSession(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	dir := t.TempDir()
@@ -206,7 +195,6 @@ func TestDeviceVariantSession(t *testing.T) {
 	if err != nil || !bytes.Contains(init, []byte("hvc1")) {
 		t.Errorf("init is not tagged hvc1 (%v)", err)
 	}
-	// A segment is read with its init, as the player does.
 	seg, _ := os.ReadFile(device.SegmentPath(0))
 	joined := filepath.Join(dir, "joined.mp4")
 	if err := os.WriteFile(joined, append(init, seg...), 0o644); err != nil {

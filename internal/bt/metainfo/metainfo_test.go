@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/anacrolix/missinggo/v2"
-	"github.com/davecgh/go-spew/spew"
 	qt "github.com/go-quicktest/qt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,7 +51,6 @@ func TestFile(t *testing.T) {
 	qt.Check(t, qt.ErrorMatches(err, ".*expected EOF"))
 }
 
-// Ensure that the correct number of pieces are generated when hashing files.
 func TestNumPieces(t *testing.T) {
 	for _, _case := range []struct {
 		PieceLength int64
@@ -147,14 +145,11 @@ func TestMetainfoWithStringURLList(t *testing.T) {
 		}, "&")))
 }
 
-// The decoder buffer wasn't cleared before starting the next dict item after
-// a syntax error on a field with the ignore_unmarshal_type_error tag.
 func TestStringCreationDate(t *testing.T) {
 	var mi MetaInfo
 	assert.NoError(t, bencode.Unmarshal([]byte("d13:creation date23:29.03.2018 22:18:14 UTC4:infodee"), &mi))
 }
 
-// An empty string where the nodes list belongs is no nodes, not an error.
 func TestUnmarshalEmptyStringNodes(t *testing.T) {
 	var mi MetaInfo
 	err := bencode.Unmarshal([]byte("d5:nodes0:e"), &mi)
@@ -166,7 +161,6 @@ func TestUnmarshalV2Metainfo(t *testing.T) {
 	qt.Assert(t, qt.IsNil(err))
 	info, err := mi.UnmarshalInfo()
 	qt.Assert(t, qt.IsNil(err))
-	spew.Dump(info)
 	qt.Check(t, qt.Not(qt.Equals(info.NumPieces(), 0)))
 	err = ValidatePieceLayers(mi.PieceLayers, &info.FileTree, info.PieceLength)
 	qt.Check(t, qt.IsNil(err))

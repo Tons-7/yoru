@@ -15,7 +15,10 @@ function AssetSum($repo) {
   $rows = gh release view $tag -R $repo --json assets --jq '.assets[] | [.name, .digest] | @tsv'
   foreach ($row in $rows) {
     $name, $digest = $row -split "`t"
-    if ($name -eq $asset) { return ($digest -replace '^sha256:', '').ToLower() }
+    if ($name -eq $asset) {
+      if (-not $digest) { throw "$repo $tag lists $asset without a digest" }
+      return ($digest -replace '^sha256:', '').ToLower()
+    }
   }
   return $null
 }
@@ -61,4 +64,4 @@ if (-not $check.Contains("`"$plain`"") -or -not $check.Contains("`"$sum`"")) { t
 
 Remove-Item -Recurse -Force $dir
 "FlyHigh pinned to $tag ($sum), types updated."
-"Next: go test ./internal/deps/ ./internal/server/, npx tsc -b --force in web/, the smooth motion check, then watch an episode."
+"Next: go test ./internal/deps/ ./internal/server/, pnpm typecheck in web/, the smooth motion check, then watch an episode."

@@ -2,6 +2,7 @@ package udp
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -13,24 +14,19 @@ import (
 	"github.com/anacrolix/missinggo/v2"
 )
 
+const maxSkippedReadErrors = 1000
+
 type listenPacketFunc func(network, addr string) (net.PacketConn, error)
 
 type NewConnClientOpts struct {
-	// The network to operate to use, such as "udp4", "udp", "udp6".
-	Network string
-	// Tracker address
-	Host string
-	// If non-nil, forces either IPv4 or IPv6 in the UDP tracker wire protocol.
-	Ipv6 *bool
-	// Logger to use for internal errors.
-	Logger *slog.Logger
-	// Custom function to use as a substitute for net.ListenPacket
+	Network      string
+	Host         string
+	Ipv6         *bool
+	Logger       *slog.Logger
 	ListenPacket listenPacketFunc
-	// Looks Host up; nil is the system resolver.
-	Resolver *net.Resolver
+	Resolver     *net.Resolver
 }
 
-// Manages a Client with a specific connection.
 type ConnClient struct {
 	Client    Client
 	conn      net.PacketConn
@@ -41,15 +37,19 @@ type ConnClient struct {
 }
 
 func (cc *ConnClient) reader() {
-	b := make([]byte, 0x800)
+	b := make([]byte, 0x10000)
+	skipped := 0
 	for {
 		n, addr, err := cc.conn.ReadFrom(b)
 		if err != nil {
-			// TODO: Do bad things to the dispatcher, and incoming calls to the client if we have a
-			// read error.
+			if !errors.Is(err, net.ErrClosed) && skipped < maxSkippedReadErrors && (isErrMessageTooLong(err) || isErrConnReset(err)) {
+				skipped++
+				continue
+			}
 			cc.Close()
 			break
 		}
+		skipped = 0
 		err = cc.d.Dispatch(b[:n], addr)
 		if err != nil {
 			cc.newOpts.Logger.Debug("error dispatching received packet",
@@ -74,7 +74,6 @@ func ipv6(opt *bool, network string, remoteAddr net.Addr) bool {
 	return rip.To16() != nil && rip.To4() == nil
 }
 
-// Allows a UDP Client to write packets to an endpoint without knowing about the network specifics.
 type clientWriter struct {
 	pc       net.PacketConn
 	network  string
@@ -90,7 +89,6 @@ func (me clientWriter) Write(p []byte) (n int, err error) {
 	return me.pc.WriteTo(p, addr)
 }
 
-// resolve is net.ResolveUDPAddr through the resolver: IPv4 first unless the network names a family.
 func (me clientWriter) resolve() (*net.UDPAddr, error) {
 	if me.resolver == nil {
 		return net.ResolveUDPAddr(me.network, me.address)
@@ -151,7 +149,6 @@ func NewConnClient(opts NewConnClientOpts) (cc *ConnClient, err error) {
 	return
 }
 
-// Close is safe from the reader goroutine and any caller at once.
 func (cc *ConnClient) Close() error {
 	cc.closeOnce.Do(func() { cc.closeErr = cc.conn.Close() })
 	return cc.closeErr

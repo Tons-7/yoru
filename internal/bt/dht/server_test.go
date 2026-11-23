@@ -2,96 +2,92 @@ package dht
 
 import (
 	"context"
-	"crypto/ed25519"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/anacrolix/log"
 	"github.com/stretchr/testify/require"
-	"yoru/internal/bt/bencode"
 
-	"yoru/internal/bt/dht/bep44"
+	"yoru/internal/bt/dht/krpc"
+	peer_store "yoru/internal/bt/dht/peer-store"
+	"yoru/internal/bt/metainfo"
 )
 
-func TestPutGet(t *testing.T) {
-	require := require.New(t)
-
+func TestPutAndGetAreRefused(t *testing.T) {
 	l := log.Default.WithNames(t.Name())
 	s1 := newServer(t, l.WithNames("s1"))
 	s2 := newServer(t, l.WithNames("s2"))
-
 	s2Addr := NewAddr(s2.Addr())
+	seq := int64(1)
+	for _, q := range []string{"get", "put"} {
+		qr := s1.Query(context.TODO(), s2Addr, q, QueryInput{MsgArgs: krpc.MsgArgs{
+			ID:     s1.ID(),
+			Target: krpc.ID{1},
+			Seq:    &seq,
+			Token:  "x",
+			V:      "hello",
+		}})
+		require.Error(t, qr.ToError(), q)
+		require.NotNil(t, qr.Reply.E, q)
+		require.Equal(t, krpc.ErrorMethodUnknown.Code, qr.Reply.E.Code, q)
+	}
+}
 
-	immuItem, err := bep44.NewItem("Hello World! immu", nil, 1, 1, nil)
-	require.NoError(err)
+func TestAnnouncePeerNeedsToken(t *testing.T) {
+	type call struct {
+		port   int
+		portOk bool
+	}
+	calls := make(chan call, 4)
+	cfg := NewDefaultServerConfig()
+	cfg.WaitToReply = true
+	cfg.Conn = mustListen("localhost:0")
+	cfg.PeerStore = &peer_store.InMemory{}
+	cfg.OnAnnouncePeer = func(_ metainfo.Hash, _ net.IP, port int, portOk bool) { calls <- call{port, portOk} }
+	host, err := NewServer(cfg)
+	require.NoError(t, err)
+	t.Cleanup(host.Close)
+	asker := newServer(t, log.Default.WithNames("asker"))
+	otherCfg := NewDefaultServerConfig()
+	otherCfg.WaitToReply = true
+	otherCfg.Conn = mustListen("127.0.0.2:0")
+	other, err := NewServer(otherCfg)
+	require.NoError(t, err)
+	t.Cleanup(other.Close)
+	hostAddr := NewAddr(host.Addr())
+	ih := krpc.ID{9}
+	announce := func(from *Server, token string, port int, implied bool) {
+		from.Query(context.TODO(), hostAddr, "announce_peer", QueryInput{MsgArgs: krpc.MsgArgs{
+			ID: from.ID(), InfoHash: ih, Token: token, Port: &port, ImpliedPort: implied,
+		}, NumTries: 1})
+	}
+	noCall := func(why string) {
+		select {
+		case c := <-calls:
+			t.Fatalf("%s: got a call %+v", why, c)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 
-	// send get request to s2, we need a write token to put data
-	qr := s1.Get(context.TODO(), s2Addr, immuItem.Target(), nil, QueryRateLimiting{})
-	require.NoError(qr.ToError())
-	require.NotNil(qr.Reply.R)
-	require.NotNil(qr.Reply.R.Token)
+	announce(asker, "made up", 1234, false)
+	noCall("made-up token")
 
-	// send put request to s2
-	qr = s1.Put(context.TODO(), s2Addr, immuItem.ToPut(), *qr.Reply.R.Token, QueryRateLimiting{})
-	require.NoError(qr.ToError())
+	qr := asker.Query(context.TODO(), hostAddr, "get_peers", QueryInput{MsgArgs: krpc.MsgArgs{ID: asker.ID(), InfoHash: ih}})
+	require.NoError(t, qr.ToError())
+	require.NotNil(t, qr.Reply.R.Token)
+	token := *qr.Reply.R.Token
 
-	qr = s1.Get(context.TODO(), s2Addr, immuItem.Target(), nil, QueryRateLimiting{})
-	require.NoError(qr.ToError())
-	var vStr string // heueahea
-	require.NoError(bencode.Unmarshal(qr.Reply.R.V, &vStr))
-	require.Equal("Hello World! immu", vStr)
+	announce(other, token, 1234, false)
+	noCall("token made for another address")
 
-	_, priv, err := ed25519.GenerateKey(nil)
-	require.NoError(err)
+	announce(asker, token, 1234, false)
+	require.Equal(t, call{1234, true}, <-calls)
 
-	mutItem, err := bep44.NewItem("Hello World!", []byte("s1"), 1, 1, priv)
-	require.NoError(err)
-
-	// send get request to s2, we need a write token to put data
-	qr = s1.Get(context.TODO(), s2Addr, mutItem.Target(), nil, QueryRateLimiting{})
-	require.NoError(qr.ToError())
-	require.NotNil(qr.Reply.R)
-
-	mutToken := qr.Reply.R.Token
-	require.NotNil(mutToken)
-
-	// send put request to s2
-	qr = s1.Put(context.TODO(), s2Addr, mutItem.ToPut(), *mutToken, QueryRateLimiting{})
-	require.NoError(qr.ToError())
-
-	qr = s1.Get(context.TODO(), s2Addr, mutItem.Target(), nil, QueryRateLimiting{})
-	require.NoError(qr.ToError())
-	require.NoError(bencode.Unmarshal(qr.Reply.R.V, &vStr))
-	require.Equal("Hello World!", vStr)
-
-	ii, err := s2.store.Get(immuItem.Target())
-	require.NoError(err)
-	require.Equal("Hello World! immu", ii.V)
-
-	mi, err := s2.store.Get(mutItem.Target())
-	require.NoError(err)
-	require.Equal("Hello World!", mi.V)
-
-	// change mutable item
-	ok := mutItem.Modify("Bye World!", priv)
-	require.True(ok)
-	qr = s1.Put(context.TODO(), s2Addr, mutItem.ToPut(), *mutToken, QueryRateLimiting{})
-	require.NoError(qr.ToError())
-
-	mi, err = s2.store.Get(mutItem.Target())
-	require.NoError(err)
-	require.Equal("Bye World!", mi.V)
-
-	qr = s1.Get(context.TODO(), s2Addr, mutItem.Target(), nil, QueryRateLimiting{})
-	require.NoError(qr.ToError())
-	require.NoError(bencode.Unmarshal(qr.Reply.R.V, &vStr))
-	require.Equal("Bye World!", vStr)
-
-	seqPtr := new(int64)
-	*seqPtr = 3
-	qr = s1.Get(context.TODO(), s2Addr, mutItem.Target(), seqPtr, QueryRateLimiting{})
-	require.NoError(qr.ToError())
-	require.Nil(qr.Reply.R.V)
-	require.Equal(int64(2), *qr.Reply.R.Seq)
+	announce(asker, token, 1, true)
+	got := <-calls
+	require.True(t, got.portOk)
+	require.Equal(t, asker.Addr().(*net.UDPAddr).Port, got.port)
 }
 
 func newServer(t *testing.T, l log.Logger) *Server {

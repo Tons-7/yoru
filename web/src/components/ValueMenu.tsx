@@ -41,7 +41,7 @@ export function ValueMenu({
   const show = () => setOpen(true)
   const pick = (next: string) => {
     close()
-    if (next !== current?.value) onChange(next)
+    if (next !== value) onChange(next)
   }
 
   const walk = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -122,7 +122,7 @@ export function ValueMenu({
               top: below ? box.bottom + 6 : Math.max(8, box.top - 6 - height),
               right: Math.max(8, document.documentElement.clientWidth - box.right),
             }}
-            className="fixed z-[60] max-h-[calc(100dvh-1rem)] w-max max-w-[min(22rem,calc(100vw-1rem))] min-w-48 animate-rise overflow-y-auto rounded-card bg-base-750 p-1 shadow-panel scrollbar-thin"
+            className="fixed z-60 max-h-[calc(100dvh-1rem)] w-max max-w-[min(22rem,calc(100vw-1rem))] min-w-48 animate-rise overflow-y-auto rounded-card bg-base-750 p-1 shadow-panel scrollbar-thin"
           >
             {items(false)}
           </div>,

@@ -28,18 +28,20 @@ function pretty(value: string, labels?: Record<string, string>) {
 
 export function FilterSheet({
   params,
+  q,
   vocab,
   onApply,
   onClose,
 }: {
   params: Record<string, string>
+  q?: string
   vocab?: FilterVocabulary
   onApply: (next: Record<string, string>) => void
   onClose: () => void
 }) {
   const [draft, setDraft] = useState(() => Object.fromEntries(Object.entries(params).filter(([k]) => k !== 'page')))
   const asked = useDebounced(draft, 400)
-  const { results, count, capped } = useBrowse(asked)
+  const { results, count, capped } = useBrowse(q ? { ...asked, q } : asked)
   const settled = JSON.stringify(asked) === JSON.stringify(draft) && !results.isPending
   const set = (key: string, value?: string) =>
     setDraft((d) => {

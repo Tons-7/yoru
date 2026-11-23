@@ -1,4 +1,3 @@
-// Every page at desktop and phone width: screenshots for review, and none throws or scrolls sideways.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -42,7 +41,6 @@ for (const [width, height, tag] of [
   for (const [name, path] of pages) {
     errors.length = 0
     await page.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded' })
-    // AniList-backed pages start cold in a fresh harness.
     await page.waitForTimeout(['watch', 'home', 'anime', 'browse', 'browse-filtered'].includes(name) ? 12000 : 5000)
     await page.screenshot({ path: `${SHOTS}/tour-${tag}-${name}.png`, fullPage: name !== 'watch' })
     const sideways = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)

@@ -8,8 +8,6 @@ import (
 	"yoru/internal/bt/dht/krpc"
 )
 
-// A node's address. String is called a lot, so it's quick; no Network, so it isn't a net.Addr: OS calls
-// need the address underneath.
 type Addr interface {
 	Raw() net.Addr
 	Port() int
@@ -18,7 +16,6 @@ type Addr interface {
 	KRPC() krpc.NodeAddr
 }
 
-// Speeds up some of the commonly called Addr methods.
 type cachedAddr struct {
 	raw  net.Addr
 	port int

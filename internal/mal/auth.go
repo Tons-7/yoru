@@ -12,17 +12,14 @@ import (
 	"time"
 )
 
-// refreshWindow renews early, so a slow request can't start valid and finish expired.
 const refreshWindow = 5 * time.Minute
 
-// Verifier is the PKCE secret; MAL takes only the plain method, so it leaves only in the token exchange.
 func Verifier() string {
 	b := make([]byte, 64)
 	rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// AuthURL is where the user authorises the app. state is checked on return.
 func (c *Client) AuthURL(verifier, state, redirect string) string {
 	q := url.Values{
 		"response_type":         {"code"},
@@ -45,6 +42,8 @@ type tokenResponse struct {
 }
 
 func (c *Client) Exchange(ctx context.Context, code, verifier, redirect string) (Token, error) {
+	c.refreshing.Lock()
+	defer c.refreshing.Unlock()
 	id, secret := c.credentials()
 	form := url.Values{
 		"client_id":     {id},
@@ -61,8 +60,6 @@ func (c *Client) Exchange(ctx context.Context, code, verifier, redirect string) 
 	return c.token1(ctx, form, "")
 }
 
-// Refresh trades the refresh token for a new pair. MAL revokes the old access
-// token immediately, so the result must be stored before the next request.
 func (c *Client) Refresh(ctx context.Context) (Token, error) {
 	current := c.Token()
 	if current.Refresh == "" {
@@ -81,10 +78,8 @@ func (c *Client) Refresh(ctx context.Context) (Token, error) {
 	return c.token1(ctx, form, current.Refresh)
 }
 
-// errSuperseded: the account was disconnected or replaced while a refresh was in flight.
 var errSuperseded = errors.New("mal: token changed during refresh")
 
-// token1 posts to the OAuth endpoint, outside do(): no API host, no bearer. spent is the refresh token traded.
 func (c *Client) token1(ctx context.Context, form url.Values, spent string) (Token, error) {
 	if !c.Configured() {
 		return Token{}, errors.New("mal: client_id not configured")
@@ -122,12 +117,10 @@ func (c *Client) token1(ctx context.Context, form url.Values, spent string) (Tok
 		Refresh: parsed.RefreshToken,
 		Expires: time.Now().Add(time.Duration(parsed.ExpiresIn) * time.Second),
 	}
-	// A refresh response without a new refresh token leaves the old one valid.
 	if token.Refresh == "" {
 		token.Refresh = spent
 	}
 
-	// A logout or a new login since the request went out wins: storing this would reconnect the old account.
 	c.mu.Lock()
 	if spent != "" && c.token.Refresh != spent {
 		c.mu.Unlock()
@@ -141,7 +134,6 @@ func (c *Client) token1(ctx context.Context, form url.Values, spent string) (Tok
 	return token, nil
 }
 
-// Forget drops the token and runs clear with no refresh in flight, so none can write the token back.
 func (c *Client) Forget(clear func() error) error {
 	c.refreshing.Lock()
 	defer c.refreshing.Unlock()
@@ -149,7 +141,6 @@ func (c *Client) Forget(clear func() error) error {
 	return clear()
 }
 
-// ensureToken renews before the hour is up, or every later call would 401.
 func (c *Client) ensureToken(ctx context.Context) error {
 	due := func() bool {
 		t := c.Token()
@@ -161,16 +152,14 @@ func (c *Client) ensureToken(ctx context.Context) error {
 	}
 	c.refreshing.Lock()
 	defer c.refreshing.Unlock()
-	// Another caller may have refreshed while this one waited.
 	if !due() {
 		return nil
 	}
 
 	if _, err := c.Refresh(ctx); errors.Is(err, errSuperseded) {
-		return nil // the request goes out with whatever replaced it
+		return nil
 	} else if err != nil {
 		c.log.Warn("mal token refresh failed", "err", err)
-		// Refreshed ahead of time: a hiccup at MAL leaves a token good for minutes yet, so the request goes.
 		if !Unauthorized(err) && time.Now().Before(c.Token().Expires) {
 			return nil
 		}
@@ -180,6 +169,23 @@ func (c *Client) ensureToken(ctx context.Context) error {
 	return nil
 }
 
-func asError(err error, target **Error) bool {
-	return errors.As(err, target)
+func (c *Client) renewRejected(ctx context.Context, rejected string) bool {
+	c.refreshing.Lock()
+	defer c.refreshing.Unlock()
+	t := c.Token()
+	if t.Access == "" {
+		return false
+	}
+	if t.Access != rejected {
+		return true
+	}
+	if t.Refresh == "" {
+		return false
+	}
+	if _, err := c.Refresh(ctx); err != nil {
+		c.log.Warn("mal token refresh after a rejected token failed", "err", err)
+		return errors.Is(err, errSuperseded)
+	}
+	c.log.Info("mal token refreshed after a rejection")
+	return true
 }

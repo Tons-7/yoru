@@ -8,7 +8,6 @@ import (
 	"yoru/internal/store"
 )
 
-// An entry is one season from one, so omitting the season never yields a later season's episode 1.
 func TestSeasonComesFromTheShowsOwnTitle(t *testing.T) {
 	for _, tc := range []struct {
 		title string
@@ -25,7 +24,6 @@ func TestSeasonComesFromTheShowsOwnTitle(t *testing.T) {
 	}
 }
 
-// A first season's episode 1 rejects a release marked as a later season.
 func TestLaterSeasonIsRejectedForAFirstSeasonRequest(t *testing.T) {
 	rel := parse.Parse("[Judas] Frieren - S02E01.mkv")
 	if rel.Season != 2 {
@@ -39,7 +37,6 @@ func TestLaterSeasonIsRejectedForAFirstSeasonRequest(t *testing.T) {
 	}
 }
 
-// Conan's 1218 is TheTVDB's S34E32; the show's own episode 32, from 1996, is not it.
 func TestTvdbSeasonRestartIsNotTheShowsOwnNumber(t *testing.T) {
 	req := Request{Episode: 1218, Season: 1, Alias: store.EpisodeAlias{Tvdb: 32, TvdbSeason: 34, StatedTvdb: true}}
 	for _, tc := range []struct {

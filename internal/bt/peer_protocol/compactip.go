@@ -6,7 +6,6 @@ import (
 	"yoru/internal/bt/bencode"
 )
 
-// Marshals to the smallest compact byte representation.
 type CompactIp net.IP
 
 var _ bencode.Marshaler = CompactIp{}

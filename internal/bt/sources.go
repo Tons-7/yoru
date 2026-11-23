@@ -15,8 +15,6 @@ import (
 	"yoru/internal/bt/metainfo"
 )
 
-// Add HTTP endpoints that serve the metainfo. They will be used if the torrent info isn't obtained
-// yet. The Client HTTP client is used.
 func (t *Torrent) AddSources(sources []string) {
 	for _, s := range sources {
 		_, loaded := t.activeSources.LoadOrStore(s, nil)
@@ -27,7 +25,6 @@ func (t *Torrent) AddSources(sources []string) {
 	}
 }
 
-// Tries fetching metainfo from a (HTTP) source until no longer necessary.
 func (t *Torrent) sourcer(source string) {
 	var err error
 	defer func() {
@@ -40,7 +37,10 @@ func (t *Torrent) sourcer(source string) {
 		if err == nil || ctx.Err() != nil {
 			return
 		}
-		t.slogger().Warn("error using torrent source", "source", source, "err", err)
+		t.cl.lock()
+		logger := t.slogger()
+		t.cl.unlock()
+		logger.Warn("error using torrent source", "source", source, "err", err)
 		if !retry.Ok {
 			return
 		}
@@ -51,7 +51,6 @@ func (t *Torrent) sourcer(source string) {
 	}
 }
 
-// If retry is None, take the error you get as final.
 func (t *Torrent) trySource(source string) (retry g.Option[time.Duration], err error) {
 	t.sourceMutex.Lock()
 	defer t.sourceMutex.Unlock()
@@ -86,7 +85,6 @@ func getTorrentSource(ctx context.Context, source string, hc *http.Client) (mi m
 		err = fmt.Errorf("unexpected response status code: %v", resp.StatusCode)
 		return
 	}
-	// A source is whatever a magnet named; real .torrent files stay far below this.
 	dec := bencode.NewDecoder(io.LimitReader(resp.Body, 64<<20))
 	dec.MaxStrLen = 32 << 20
 	err = dec.Decode(&mi)

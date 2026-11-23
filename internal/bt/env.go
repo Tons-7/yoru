@@ -4,7 +4,6 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/anacrolix/missinggo/v2/panicif"
 	"golang.org/x/exp/constraints"
 )
 
@@ -22,6 +21,8 @@ func strconvFromEnv[T, U constraints.Integer](key string, defaultValue T, bitSiz
 		return defaultValue
 	}
 	i64, err := conv(s, 10, bitSize)
-	panicif.Err(err)
+	if err != nil || i64 <= 0 {
+		return defaultValue
+	}
 	return T(i64)
 }

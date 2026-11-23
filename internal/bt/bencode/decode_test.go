@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/big"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -15,7 +16,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A few bytes of nesting must not recurse until the stack runs out.
+func TestUnmarshalStringLongerThanInput(t *testing.T) {
+	var s struct {
+		T string `bencode:"t"`
+	}
+	var arr [20]byte
+	var plain string
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	assert.Error(t, Unmarshal([]byte("134217727:"), &plain))
+	assert.Error(t, Unmarshal([]byte("d1:t134217727:"), &s))
+	assert.Error(t, Unmarshal([]byte("d1:a20000000:"), &arr))
+	assert.Error(t, NewDecoder(strings.NewReader("134217727:abc")).Decode(&plain))
+	runtime.ReadMemStats(&after)
+	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(1<<20))
+}
+
+func TestAnyElementsStopAtTheirListsEnd(t *testing.T) {
+	var s struct {
+		A []any `bencode:"a"`
+		B int   `bencode:"b"`
+	}
+	require.NoError(t, Unmarshal([]byte("d1:ale1:bi1ee"), &s))
+	assert.Empty(t, s.A)
+	assert.Equal(t, 1, s.B)
+	require.NoError(t, Unmarshal([]byte("d1:ali7e3:xyze1:bi2ee"), &s))
+	assert.Equal(t, []any{int64(7), "xyz"}, s.A)
+	assert.Equal(t, 2, s.B)
+}
+
+func TestHugeIntegerIsRefusedQuickly(t *testing.T) {
+	var v any
+	assert.Error(t, Unmarshal([]byte("i"+strings.Repeat("7", 1<<20)+"e"), &v))
+	require.NoError(t, Unmarshal([]byte("i"+strings.Repeat("7", 40)+"e"), &v))
+	assert.IsType(t, new(big.Int), v)
+}
+
 func TestDecodeDepthIsBounded(t *testing.T) {
 	deep := strings.Repeat("l", 100000) + strings.Repeat("e", 100000)
 	var v any
@@ -24,7 +60,6 @@ func TestDecodeDepthIsBounded(t *testing.T) {
 		A []any `bencode:"a"`
 	}
 	qt.Check(t, qt.IsNotNil(Unmarshal([]byte("d1:a"+deep+"e"), &typed)))
-	// A field with its own UnmarshalBencode (the torrent's "info") is read raw first, by another path.
 	var raw struct {
 		Info Bytes `bencode:"info"`
 	}
@@ -172,11 +207,9 @@ func TestIgnoreUnmarshalTypeError(t *testing.T) {
 	assert.EqualValues(t, 42, s.Ignore)
 }
 
-// Unmarshalling []byte into another type of the same kind.
 func TestDecodeCustomSlice(t *testing.T) {
 	type flag byte
 	var fs3, fs2 []flag
-	// A longer slice then a shorter, to catch shared buffers.
 	d := NewDecoder(bytes.NewBufferString("3:\x01\x10\xff2:\x04\x0f"))
 	require.NoError(t, d.Decode(&fs3))
 	require.NoError(t, d.Decode(&fs2))
@@ -197,7 +230,6 @@ func TestUnmarshalByteArray(t *testing.T) {
 }
 
 func TestDecodeDictIntoUnsupported(t *testing.T) {
-	// Any type that a dict shouldn't be unmarshallable into.
 	var i int
 	err := Unmarshal([]byte("d1:a1:be"), &i)
 	t.Log(err)
@@ -205,7 +237,6 @@ func TestDecodeDictIntoUnsupported(t *testing.T) {
 }
 
 func TestUnmarshalDictKeyNotString(t *testing.T) {
-	// Any type that a dict shouldn't be unmarshallable into.
 	var i int
 	err := Unmarshal([]byte("di42e3:yese"), &i)
 	t.Log(err)
@@ -231,7 +262,6 @@ func decodeHugeString(t *testing.T, strLen int64, header, tail string, v any, ma
 	return d.Decode(v)
 }
 
-// Ensure that bencode strings in various places obey the Decoder.MaxStrLen field.
 func TestDecodeMaxStrLen(t *testing.T) {
 	t.Parallel()
 	test := func(header, tail string, v any, maxStrLen MaxStrLen) {
@@ -250,7 +280,6 @@ func TestDecodeMaxStrLen(t *testing.T) {
 	}), 69)
 }
 
-// This is for the "yoru/internal/bt/metainfo".Info.Private field.
 func TestDecodeStringIntoBoolPtr(t *testing.T) {
 	var m struct {
 		Private *bool `bencode:"private,omitempty"`
@@ -269,8 +298,6 @@ func TestDecodeStringIntoBoolPtr(t *testing.T) {
 	check("d7:privatei1ee", false, true)
 	check("d7:privatei0ee", false, false)
 	check("d7:privatei42ee", false, true)
-	// An empty string for a bool (bad serializers aren't rare) is false; telling it apart would take a
-	// custom Unmarshaler.
 	check("d7:private0:e", false, false)
 	check("d7:private1:te", false, true)
 	check("d7:private5:falsee", false, false)
@@ -278,7 +305,6 @@ func TestDecodeStringIntoBoolPtr(t *testing.T) {
 	check("d7:private11:bunnyfoofooe", false, true)
 }
 
-// To set expectations about how our Decoder should work.
 func TestJsonDecoderBehaviour(t *testing.T) {
 	test := func(input string, items int, finalErr error) {
 		d := json.NewDecoder(strings.NewReader(input))

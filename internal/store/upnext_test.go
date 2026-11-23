@@ -34,7 +34,6 @@ func upNextShows(t *testing.T, s *Store, entries ...Entry) {
 	}
 }
 
-// A show's episodes stay together in episode order, and moving a show moves them all.
 func TestUpNextGroupsByShow(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -83,7 +82,6 @@ func TestUpNextGroupsByShow(t *testing.T) {
 	}
 }
 
-// Watched episodes leave by themselves: played here, ticked, or watched elsewhere and pulled from the tracker.
 func TestUpNextWatchedEpisodesLeave(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -101,7 +99,6 @@ func TestUpNextWatchedEpisodesLeave(t *testing.T) {
 	if got := upNextOrder(t, s); got != "1:2 1:8 1:9 2:1" {
 		t.Fatalf("after playing 7 to the end: %q", got)
 	}
-	// A short play is not a watch.
 	s.SavePlayback(ctx, PlaybackState{AnimeID: 1, EpKey: "8", Position: 60, Duration: 200, Played: 60})
 	if got := upNextOrder(t, s); got != "1:2 1:8 1:9 2:1" {
 		t.Fatalf("a partly played episode left: %q", got)
@@ -114,7 +111,6 @@ func TestUpNextWatchedEpisodesLeave(t *testing.T) {
 		t.Fatalf("after ticking 2:1: %q", got)
 	}
 
-	// Watched elsewhere up to 9: 8 and 9 go; 2, added again to rewatch, stays.
 	if _, err := s.ImportList(ctx, nil, []Entry{{ID: 10, AnimeID: 1, Status: &current, Progress: 9, UpdatedAt: 200}}, ImportMerge); err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +123,6 @@ func TestUpNextWatchedEpisodesLeave(t *testing.T) {
 	}
 }
 
-// Add next episodes takes one aired unwatched episode per show being watched, most recently watched first.
 func TestFillUpNext(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -148,7 +143,6 @@ func TestFillUpNext(t *testing.T) {
 	}, ImportMerge); err != nil {
 		t.Fatal(err)
 	}
-	// Show 2 was played last, so it comes first.
 	s.SavePlayback(ctx, PlaybackState{AnimeID: 1, EpKey: "2", Position: 30, Duration: 200, Played: 30})
 	s.w.ExecContext(ctx, `UPDATE playback SET last_played_at = last_played_at - 60 WHERE anime_id = 1`)
 	s.SavePlayback(ctx, PlaybackState{AnimeID: 2, EpKey: "1", Position: 30, Duration: 200, Played: 30})
@@ -165,7 +159,6 @@ func TestFillUpNext(t *testing.T) {
 	}
 }
 
-// After an episode the list plays in order, past its end the last show's next, and when empty the show's own.
 func TestPlayOrder(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -193,7 +186,6 @@ func TestPlayOrder(t *testing.T) {
 	for _, p := range []Pick{{1, 5}, {4, 5}, {3, 1}, {3, 2}} {
 		s.AddUpNext(ctx, p.AnimeID, p.Episode)
 	}
-	// 1:5 is the one playing and 4:5 airs tomorrow, so neither plays next.
 	if got := order(1, 5, 3); got != "3:1 3:2 3:3 (2 from the list)" {
 		t.Errorf("from the list: %s", got)
 	}

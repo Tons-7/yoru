@@ -5,7 +5,20 @@ import (
 	"testing"
 )
 
-// The root losing its sequel edge leaves its old seasons a franchise of their own, not two loose shows.
+func TestASequelDatedByYearSortsAfterItsSeason(t *testing.T) {
+	for _, c := range []struct{ season, sequel int }{
+		{20260108, 20260000},
+		{20261003, 20261000},
+	} {
+		if latestIn(c.sequel) <= latestIn(c.season) {
+			t.Errorf("%d sorts ahead of %d", c.sequel, c.season)
+		}
+	}
+	if latestIn(20250000) >= latestIn(20260101) {
+		t.Error("a sequel known to an earlier year sorted after a later one")
+	}
+}
+
 func TestDetachedRootKeepsItsSiblingsGrouped(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -19,10 +32,9 @@ func TestDetachedRootKeepsItsSiblingsGrouped(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RebuildFranchises(ctx); err != nil {
+	if _, err := s.RebuildFranchisesFor(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	// 70 is fetched again and has no season edges any more.
 	if err := s.SaveRelations(ctx, []int{70}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +49,6 @@ func TestDetachedRootKeepsItsSiblingsGrouped(t *testing.T) {
 	}
 }
 
-// A sequel the walk found but no row describes yet must not become season one.
 func TestUnknownMemberSortsLast(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -52,7 +63,7 @@ func TestUnknownMemberSortsLast(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RebuildFranchises(ctx); err != nil {
+	if _, err := s.RebuildFranchisesFor(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

@@ -65,7 +65,6 @@ func TestAssignAndForgetLocalFiles(t *testing.T) {
 		t.Fatalf("missing id: HTTP %d", res.StatusCode)
 	}
 
-	// A later scan without gone.mkv flags it; forgetting drops only that row.
 	next, _ := h.store.NextScanStamp(ctx)
 	h.store.SaveLocalFiles(ctx, next, []store.LocalFile{{Path: `D:\lib\mystery.mkv`, Size: 1, Modified: 1, AnimeID: 1, Episode: 7}})
 	h.store.SweepLocal(ctx, next, []string{`D:\lib`})
@@ -85,7 +84,6 @@ func TestAssignAndForgetLocalFiles(t *testing.T) {
 	}
 }
 
-// A MAL-only show's id is negative; its per-show switch used to write the global.
 func TestPerShowPreferenceOnAMALOnlyShow(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	ctx := context.Background()
@@ -106,8 +104,6 @@ func TestPerShowPreferenceOnAMALOnlyShow(t *testing.T) {
 	}
 }
 
-// The per-show group control writes an anime-scoped override, and the release
-// picker used to read the account-wide settings, so the control did nothing.
 func TestPerShowPreferencesReachTheReleasePicker(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	ctx := context.Background()

@@ -12,34 +12,27 @@ import (
 	"yoru/internal/bt/metainfo"
 )
 
-// File-based storage for torrents, that isn't yet bound to a particular torrent.
 type fileClientImpl struct {
 	opts NewFileClientOpts
 }
 
-// All Torrent data stored in this baseDir. The info names of each torrent are used as directories.
 func NewFile(baseDir string) ClientImplCloser {
 	return NewFileWithCompletion(baseDir, pieceCompletionForDir(baseDir))
 }
 
 type NewFileClientOpts struct {
-	// The base directory for all downloads.
 	ClientBaseDir   string
 	FilePathMaker   FilePathMaker
 	TorrentDirMaker TorrentDirFilePathMaker
-	// If part files are enabled, this will default to inferring completion from file names at
-	// startup, and keep the rest in memory.
 	PieceCompletion PieceCompletion
 	UsePartFiles    g.Option[bool]
 	Logger          *slog.Logger
 }
 
-// The specific part-files option or the default.
 func (me NewFileClientOpts) partFiles() bool {
 	return me.UsePartFiles.UnwrapOr(true)
 }
 
-// NewFileOpts creates a new ClientImplCloser that stores files using the OS native filesystem.
 func NewFileOpts(opts NewFileClientOpts) ClientImplCloser {
 	if opts.TorrentDirMaker == nil {
 		opts.TorrentDirMaker = defaultPathMaker

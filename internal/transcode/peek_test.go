@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// The loaded bar asks while paused, so its look must leave an idle session to the reaper; real use doesn't.
 func TestPeekLeavesTheSessionIdle(t *testing.T) {
 	s := &Session{touched: time.Now().Add(-time.Hour)}
 	m := &Manager{sessions: map[string]*Session{"a": s}}

@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 )
 
-// Nearly every AniList field is nullable, so pointers keep "absent" apart from "zero".
 type Media struct {
 	ID              int       `json:"id"`
 	IDMal           *int      `json:"idMal"`
@@ -129,11 +130,9 @@ const searchQuery = `query Search($q: String!, $perPage: Int!) {
   }
 }`
 
-// Search is fuzzy, not prefix-based, and not self-consistent: "narut" returns
-// nothing while "naruto" works. Treat an empty short-query result as "keep typing".
 func (c *Client) Search(ctx context.Context, q string, limit int) ([]Media, error) {
 	if limit <= 0 || limit > 50 {
-		limit = 20 // perPage is silently clamped to 50 server-side.
+		limit = 20
 	}
 	var out page
 	err := c.Query(ctx, searchQuery, map[string]any{"q": q, "perPage": limit}, &out)
@@ -147,8 +146,6 @@ const seasonQuery = `query Season($season: MediaSeason!, $year: Int!, $perPage: 
   }
 }`
 
-// Fetched separately: AniList caps query complexity at 500 nodes, which nesting
-// an edge list in a 50-result page exceeds. relationType version 2 is required.
 const relationsQuery = `query Relations($ids: [Int]!) {
   Page(page: 1, perPage: 25) {
     media(id_in: $ids, type: ANIME) {
@@ -202,7 +199,6 @@ func (c *Client) Relations(ctx context.Context, ids []int) ([]RelatedMedia, erro
 	return out.Page.Media, err
 }
 
-// airingAt is unix UTC (callers group by local day); total is a fixed 5000, so paging follows hasNextPage.
 const scheduleQuery = `query Schedule($start: Int!, $end: Int!, $page: Int!) {
   Page(page: $page, perPage: 50) {
     pageInfo { hasNextPage }
@@ -256,7 +252,6 @@ const byIDsQuery = `query ByIDs($ids: [Int]!) {
   }
 }`
 
-// MediaByIDs fetches up to 50 anime per request; a missing id is omitted, not a null response.
 func (c *Client) MediaByIDs(ctx context.Context, ids []int) ([]Media, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -271,7 +266,6 @@ func (c *Client) MediaByIDs(ctx context.Context, ids []int) ([]Media, error) {
 		return out.Page.Media, err
 	}
 
-	// AniList hides adult titles from accounts not opted in, but the schedule lists them, so they must open.
 	var anon page
 	if err := c.queryAnonymous(ctx, byIDsQuery, map[string]any{"ids": ids}, &anon); err != nil {
 		return out.Page.Media, fmt.Errorf("%w: %v", ErrIncomplete, err)
@@ -282,24 +276,52 @@ func (c *Client) MediaByIDs(ctx context.Context, ids []int) ([]Media, error) {
 	return out.Page.Media, nil
 }
 
-// Recommended is one show AniList's community recommends after another, with the recommendation's rating.
 type Recommended struct {
 	From, ID, Rating int
 	Adult            bool
 }
 
-// Recommendations asks after each show's top community recommendations in one request, one alias per show.
+const missingFor = 24 * time.Hour
+
+func (c *Client) knownMissing(id int) bool {
+	c.missingMu.Lock()
+	defer c.missingMu.Unlock()
+	at, ok := c.missing[id]
+	if ok && time.Since(at) > missingFor {
+		delete(c.missing, id)
+		return false
+	}
+	return ok
+}
+
+func (c *Client) noteMissing(id int) {
+	c.missingMu.Lock()
+	defer c.missingMu.Unlock()
+	if c.missing == nil {
+		c.missing = map[int]time.Time{}
+	}
+	c.missing[id] = time.Now()
+}
+
 func (c *Client) Recommendations(ctx context.Context, ids []int, per int) ([]Recommended, error) {
+	ids = slices.DeleteFunc(slices.Clone(ids), c.knownMissing)
+	if len(ids) == 0 {
+		return nil, nil
+	}
 	recs, err := c.recommendations(ctx, ids, per)
 	errs, ok := errors.AsType[Errors](err)
-	if !ok || !errs.NotFound() || len(ids) < 2 {
+	if !ok || !errs.NotFound() {
 		return recs, err
 	}
-	// A show AniList no longer has (or hides) fails every alias: asked one by one, that one left out.
+	if len(ids) < 2 {
+		c.noteMissing(ids[0])
+		return recs, err
+	}
 	recs = nil
 	for _, id := range ids {
 		one, err := c.recommendations(ctx, []int{id}, per)
 		if errs, ok := errors.AsType[Errors](err); ok && errs.NotFound() {
+			c.noteMissing(id)
 			continue
 		}
 		if err != nil {
@@ -348,16 +370,20 @@ func (c *Client) recommendations(ctx context.Context, ids []int, per int) ([]Rec
 	return recs, nil
 }
 
-// IDForMal is the AniList id of a MyAnimeList one; 0 when AniList has none.
 func (c *Client) IDForMal(ctx context.Context, malID int) (int, error) {
 	var out struct {
 		Media *struct {
 			ID int `json:"id"`
 		} `json:"Media"`
 	}
-	err := c.Query(ctx, `query ($mal: Int) { Media(idMal: $mal, type: ANIME) { id } }`, map[string]any{"mal": malID}, &out)
+	const query = `query ($mal: Int) { Media(idMal: $mal, type: ANIME) { id } }`
+	vars := map[string]any{"mal": malID}
+	err := c.Query(ctx, query, vars, &out)
 	if errs, ok := errors.AsType[Errors](err); ok && errs.NotFound() {
-		return 0, nil
+		if !c.Authenticated() || c.queryAnonymous(ctx, query, vars, &out) != nil || out.Media == nil {
+			return 0, nil
+		}
+		return out.Media.ID, nil
 	}
 	if err != nil || out.Media == nil {
 		return 0, err
@@ -365,10 +391,8 @@ func (c *Client) IDForMal(ctx context.Context, malID int) (int, error) {
 	return out.Media.ID, nil
 }
 
-// ErrIncomplete comes with a partial result; the missing ids may be hidden, not gone.
 var ErrIncomplete = errors.New("anilist: some titles could not be checked")
 
-// missingAny reports that an id was asked for and not returned.
 func missingAny(ids []int, got []Media) bool {
 	have := make(map[int]struct{}, len(got))
 	for _, m := range got {
@@ -382,8 +406,6 @@ func missingAny(ids []int, got []Media) bool {
 	return false
 }
 
-// StreamingEpisode is one entry of the streaming-site listing. Titles look like
-// "Episode 4 - The Perfect Crimson", so the number is parsed from the string.
 type StreamingEpisode struct {
 	Title     string `json:"title"`
 	Thumbnail string `json:"thumbnail"`
@@ -397,8 +419,6 @@ const streamingQuery = `query Streaming($id: Int!) {
   }
 }`
 
-// StreamingEpisodes is fetched one show at a time, kept out of mediaFields:
-// nesting an unbounded list in a fifty-result page exceeds the complexity limit.
 func (c *Client) StreamingEpisodes(ctx context.Context, id int) ([]StreamingEpisode, error) {
 	var out struct {
 		Media struct {
@@ -406,7 +426,6 @@ func (c *Client) StreamingEpisodes(ctx context.Context, id int) ([]StreamingEpis
 		} `json:"Media"`
 	}
 	if err := c.Query(ctx, streamingQuery, map[string]any{"id": id}, &out); err != nil {
-		// Adult titles hide from an authenticated account, and a missing thumbnail can't fail the page.
 		if c.queryAnonymous(ctx, streamingQuery, map[string]any{"id": id}, &out) != nil {
 			return nil, err
 		}

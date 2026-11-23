@@ -7,7 +7,6 @@ import (
 	"github.com/anacrolix/multiless"
 )
 
-// This is a comparable replacement for NodeAddr.
 type NodeAddrPort struct {
 	netip.AddrPort
 }

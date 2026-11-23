@@ -243,6 +243,9 @@ func (d *Downloader) Restart(ctx context.Context, animeID int, epKey string) (bo
 	if d == nil {
 		return false, nil
 	}
+	if _, err := d.store.SetQueuedPaused(ctx, animeID, epKey, false); err != nil {
+		return false, err
+	}
 	moved, err := d.store.Promote(ctx, animeID, epKey)
 	if err != nil || !moved {
 		return moved, err
@@ -427,11 +430,12 @@ func (d *Downloader) quiet(ctx context.Context, only map[string]bool) map[string
 			}
 		}
 	}
+	resumed := d.store.HandResumed(ctx)
 	keep := func(hash string) bool {
 		if d.userPausedHash(hash) && !pinned[hash] {
 			return false
 		}
-		return started[hash] || pinned[hash] || d.prefetch.Claimed(hash) || (only != nil && !only[hash])
+		return started[hash] || pinned[hash] || resumed[strings.ToLower(hash)] || d.prefetch.Claimed(hash) || (only != nil && !only[hash])
 	}
 
 	paused, kept, checking, err := d.prefetch.torrent.PauseUnfinished(ctx, keep)
@@ -738,9 +742,14 @@ func (d *Downloader) PauseEpisode(ctx context.Context, animeID int, epKey string
 	}
 	if paused {
 		d.StopEpisode(animeID, epKey)
-	} else {
-		d.Wake()
+		return changed, nil
 	}
+	if rec, ok, err := d.store.TorrentForEpisode(ctx, animeID, epKey); err == nil && ok && d.prefetch != nil {
+		d.prefetch.Unpause(ctx, rec)
+		d.markUserPaused(rec.InfoHash, false)
+		d.markUserPaused(FileKey(rec.InfoHash, rec.FileIndex), false)
+	}
+	d.Wake()
 	return changed, nil
 }
 
@@ -786,6 +795,11 @@ func (d *Downloader) markUserPaused(hash string, paused bool) {
 		delete(d.userPaused, strings.ToLower(hash))
 	}
 	d.mu.Unlock()
+	if paused {
+		if err := d.store.SetHandResumed(context.Background(), hash, false); err != nil {
+			d.log.Debug("forget a hand resume", "err", err)
+		}
+	}
 	if d.prefetch != nil {
 		d.prefetch.SetUserPaused(hash, paused)
 	}
@@ -834,7 +848,18 @@ func (d *Downloader) Forget(ctx context.Context, hash string, fileIndex int, epi
 	if d == nil {
 		return
 	}
+	other := map[string]bool{}
+	if rows, err := d.store.QueuedDownloads(ctx); err == nil {
+		for _, r := range rows {
+			if r.InfoHash != "" && !strings.EqualFold(r.InfoHash, hash) {
+				other[lineKey(r.AnimeID, r.EpKey)] = true
+			}
+		}
+	}
 	for _, e := range episodes {
+		if other[lineKey(e.AnimeID, e.EpKey)] {
+			continue
+		}
 		if _, err := d.Cancel(ctx, e.AnimeID, e.EpKey); err != nil {
 			d.log.Warn("drop a removed episode from the queue", "err", err)
 		}
@@ -902,7 +927,7 @@ func (d *Downloader) work(parent, ctx context.Context, next store.QueuedDownload
 			d.log.Info("queue stood down, episode back in line",
 				"anime", next.AnimeID, "episode", next.Episode)
 		} else {
-			d.log.Info("queued download cancelled",
+			d.log.Info("queued download stopped",
 				"anime", next.AnimeID, "episode", next.Episode)
 		}
 		return
@@ -947,7 +972,7 @@ func (d *Downloader) work(parent, ctx context.Context, next store.QueuedDownload
 		}
 	}
 
-	if err := d.store.FinishQueued(parent, next.AnimeID, next.EpKey, err); err != nil {
+	if err := d.store.FinishQueued(parent, next.AnimeID, next.EpKey, next.InfoHash, err); err != nil {
 		d.log.Warn("finish queued download", "err", err)
 	}
 }

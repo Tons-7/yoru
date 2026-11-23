@@ -9,6 +9,9 @@ import (
 )
 
 func (s *Server) hasFlyHigh() bool {
+	if s.cfg.BinDir == "" {
+		return false
+	}
 	for _, f := range deps.FlyHighFiles {
 		if !fileExists(filepath.Join(s.cfg.BinDir, deps.FlyHighDir, f)) {
 			return false

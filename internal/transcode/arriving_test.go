@@ -20,9 +20,6 @@ import (
 	"time"
 )
 
-// Diagnostic: a source still arriving, served as the engine's stream (reads block on a hole). ARRIVE=1 runs it.
-
-// hole is the stretch [from, to) not yet downloaded; fail makes reads in it error (a paused torrent), not wait.
 type hole struct {
 	mu       sync.Mutex
 	from, to int64
@@ -101,7 +98,6 @@ func (r *holeyReader) Seek(off int64, whence int) (int64, error) {
 	return r.pos, nil
 }
 
-// engineLike serves path as the engine does: http.ServeContent over a reader that blocks in the hole.
 func engineLike(t *testing.T, path string, h *hole) string {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -124,7 +120,6 @@ func engineLike(t *testing.T, path string, h *hole) string {
 	return srv.URL + "/torrents/1/stream/0"
 }
 
-// arrivingClip is a Matroska remux like a CR WEB-DL: 8-bit H.264 at a steady rate, 2 s GOPs, AAC, an ASS track.
 func arrivingClip(t *testing.T, ffmpeg string, seconds int) string {
 	dir := t.TempDir()
 	var ass strings.Builder
@@ -156,24 +151,21 @@ func assTime(s float64) string {
 	return fmt.Sprintf("%d:%02d:%05.2f", h, m, sec)
 }
 
-// served is what the player got for one segment, read the moment it was answered.
 type served struct {
-	n         int
-	at        time.Duration
-	tries     int
-	bytes     int
-	vFrom     float64
-	vTo       float64
-	aFrom     float64
-	aTo       float64
-	frames    int
-	headFrom  int
-	headTo    int
-	running   bool
-	fileReady bool
+	n        int
+	at       time.Duration
+	tries    int
+	bytes    int
+	vFrom    float64
+	vTo      float64
+	aFrom    float64
+	aTo      float64
+	frames   int
+	headFrom int
+	headTo   int
+	running  bool
 }
 
-// fetch asks like hls.js: 10 s to the first byte, then again, for up to `patience`.
 func fetch(t *testing.T, s *Session, n int, start time.Time, patience time.Duration) (served, []byte, []byte, error) {
 	deadline := time.Now().Add(patience)
 	for tries := 1; ; tries++ {
@@ -194,7 +186,6 @@ func fetch(t *testing.T, s *Session, n int, start time.Time, patience time.Durat
 	}
 }
 
-// spans reads the packet times of a served segment: video and audio first pts to last pts+duration.
 func spans(t *testing.T, ffprobe string, init, seg []byte, sv *served) {
 	f := filepath.Join(t.TempDir(), fmt.Sprintf("seg%d.mp4", sv.n))
 	os.WriteFile(f, append(append([]byte{}, init...), seg...), 0o644)
@@ -257,7 +248,6 @@ func newArriveRig(t *testing.T, seconds int, holeAt float64, encode bool) *arriv
 	if encode {
 		s.Plan.VideoCopy, s.Plan.VideoCodec = false, "libx264"
 	}
-	// The hole opens once probing is done, from holeAt to 2 MB before the end (the Cues stay readable).
 	from := int64(float64(info.Size()) * holeAt)
 	h.set(from, info.Size()-2<<20, false)
 	t.Logf("clip %d bytes, plan %+v, segments %d, hole [%d, %d) ~ %.0fs..", info.Size(), s.Plan, s.Segments, from, info.Size()-2<<20, holeAt*float64(seconds))
@@ -280,7 +270,6 @@ func (r *arriveRig) play(t *testing.T, from, to int, patience time.Duration) {
 	}
 }
 
-// holes reports gaps between consecutive served segments, and any served segment shorter than its slot.
 func (r *arriveRig) holes(t *testing.T) (bad int) {
 	for i, sv := range r.results {
 		if sv.bytes == 0 {
@@ -305,7 +294,6 @@ func (r *arriveRig) holes(t *testing.T) (bad int) {
 	return bad
 }
 
-// The pass blocks at the hole like an engine read; the hole fills after a while. Does everything come?
 func TestArrivingBlockedThenFilled(t *testing.T) {
 	arriveEnabled(t)
 	for _, encode := range []bool{false, true} {
@@ -325,7 +313,6 @@ func TestArrivingBlockedThenFilled(t *testing.T) {
 	}
 }
 
-// Reads in the hole fail for a while (a pause: the engine ends a waiting read), then succeed again.
 func TestArrivingReadFailsThenResumes(t *testing.T) {
 	arriveEnabled(t)
 	for _, encode := range []bool{false, true} {
@@ -342,7 +329,6 @@ func TestArrivingReadFailsThenResumes(t *testing.T) {
 			if bad := r.holes(t); bad > 0 {
 				t.Errorf("%d bad segments", bad)
 			}
-			// What a player re-asking for the segments around the hole would now get.
 			for _, sv := range r.results {
 				if sv.bytes > 0 && sv.vTo-sv.vFrom < SegmentSeconds-2.5 && sv.n < r.s.Segments-1 {
 					again, init, seg, err := fetch(t, r.s, sv.n, r.start, 30*time.Second)
@@ -356,7 +342,6 @@ func TestArrivingReadFailsThenResumes(t *testing.T) {
 	}
 }
 
-// Blocked at the hole, the player seeks far ahead and back; the hole fills later.
 func TestArrivingSeekWhileBlocked(t *testing.T) {
 	arriveEnabled(t)
 	r := newArriveRig(t, 240, 0.5, false)
@@ -375,7 +360,6 @@ func TestArrivingSeekWhileBlocked(t *testing.T) {
 	}
 }
 
-// starts records every "encoder started" line, to see restarts the player caused.
 type starts struct {
 	slog.Handler
 	mu   *sync.Mutex
@@ -400,7 +384,6 @@ func (s starts) WithAttrs(a []slog.Attr) slog.Handler {
 }
 func (s starts) WithGroup(n string) slog.Handler { return starts{s.Handler.WithGroup(n), s.mu, s.from} }
 
-// A player at 1x with a 20 s buffer target, as hls.js is configured; the download frontier sits at holeAt.
 func TestArrivingRealtimePlayer(t *testing.T) {
 	arriveEnabled(t)
 	for _, encode := range []bool{false, true} {
@@ -422,7 +405,6 @@ func TestArrivingRealtimePlayer(t *testing.T) {
 			if encode {
 				s.Plan.VideoCopy, s.Plan.VideoCodec = false, "libx264"
 			}
-			// Frontier at ~90 s of 180; the tail (Cues) is there, as a prewarm would leave it.
 			h.set(info.Size()/2, info.Size()-2<<20, false)
 			fill := 120 * time.Second
 			start := time.Now()
@@ -480,7 +462,6 @@ func TestArrivingRealtimePlayer(t *testing.T) {
 	}
 }
 
-// Reads fail mid-segment (a pause while the pass waits), then work again: what is served, then and later?
 func TestArrivingCutMidSegment(t *testing.T) {
 	arriveEnabled(t)
 	r := newArriveRig(t, 240, 0.53, false)

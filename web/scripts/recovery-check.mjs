@@ -1,4 +1,3 @@
-// Keepalive and recovery: pings while playing, a reaped session reopened in place, a frozen clock poked.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -30,7 +29,6 @@ const check = (ok, label, detail = '') => {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// ---------------------------------------------------------------- setup
 for (let i = 0; i < 60; i++) {
   try {
     const r = await api('/api/setup')
@@ -58,7 +56,6 @@ const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gestur
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const errors = []
 page.on('console', (m) => {
-  // A killed session's deliberate 404s log as resource errors, which are the point.
   if (m.type() === 'error' && !/Failed to load resource|404/.test(m.text())) {
     errors.push(m.text().slice(0, 200))
   }
@@ -68,7 +65,6 @@ page.on('pageerror', (e) => errors.push(`uncaught: ${e.message.slice(0, 200)}`))
 let playlistFetches = 0
 let opens = 0
 let streamOpen = null
-// Every stream response, so a failure can say what the player was actually fed.
 const streamHits = []
 page.on('request', (r) => {
   if (r.url().includes('/playlist.m3u8')) playlistFetches++
@@ -113,8 +109,6 @@ check(!!s && s.t > 2 && !s.paused, 'playback started', JSON.stringify(s))
 check(!!streamOpen?.id, 'stream session opened', streamOpen?.id ?? '')
 const sid = streamOpen.id
 
-// ---------------------------------------------------------------- keepalive
-// hls.js never re-reads a VOD playlist, so requests every 45s while playing are the keepalive.
 await sleep(2000)
 const before = playlistFetches
 await sleep(50_000)
@@ -122,8 +116,6 @@ check(playlistFetches > before, 'playlist pinged while playing', `${before} → 
 let alive = await api(`/api/stream/${sid}/playlist.m3u8`)
 check(alive.ok, 'session still alive after the keepalive window', String(alive.status))
 
-// ---------------------------------------------------------------- tab return
-// Reap the session, then return to the tab: the visibility ping reopens it untouched.
 const preKill = await state()
 const opensBefore = opens
 await api(`/api/stream/${sid}`, { method: 'DELETE' })
@@ -139,7 +131,6 @@ for (let i = 0; i < 20 && !reopened; i++) {
 check(reopened, 'tab return reopens the lost session', `opens ${opensBefore} → ${opens}`)
 alive = await api(`/api/stream/${sid}/playlist.m3u8`)
 check(alive.ok, 'session exists again', String(alive.status))
-// Near where it was, not merely moving: a rebuild from zero also "advances".
 for (let i = 0; i < 15; i++) {
   await sleep(1000)
   s = await state()
@@ -151,7 +142,6 @@ check(
   `${JSON.stringify(s)} preKill=${preKill.t}`,
 )
 
-// A seek into unproduced segments proves the rebuilt session really serves.
 await page.evaluate(() => {
   const v = document.querySelector('video')
   v.currentTime = 120
@@ -166,8 +156,6 @@ for (let i = 0; i < 40; i++) {
 check(sought.t > 121 && sought.error === null, 'rebuilt session serves a seek', JSON.stringify(sought))
 await page.screenshot({ path: `${shots}/recovery-after-reopen.png` })
 
-// ---------------------------------------------------------------- unpause
-// Paused past the reaper: the play press itself must notice and reopen.
 await page.evaluate(() => document.querySelector('video')?.pause())
 await sleep(1000)
 const pausedAt = await state()
@@ -192,8 +180,6 @@ check(
   `${JSON.stringify(s)} pausedAt=${pausedAt.t} hits: ${streamHits.slice(-15).join(' ')}`,
 )
 
-// ---------------------------------------------------------------- watchdog
-// Back to the middle so the episode cannot end mid-check.
 await page.evaluate(() => {
   const v = document.querySelector('video')
   v.currentTime = 60
@@ -206,7 +192,6 @@ for (let i = 0; i < 30; i++) {
 }
 check(s.t > 61 && !s.paused, 'playing again before the watchdog check', JSON.stringify(s))
 
-// Freeze the reported clock while the video plays on: the watchdog must poke it.
 const poked = await page.evaluate(async () => {
   const v = document.querySelector('video')
   const frozen = v.currentTime
@@ -222,13 +207,11 @@ const poked = await page.evaluate(async () => {
   delete v.currentTime
   return { frozen, set }
 })
-// The watchdog's +0.05 or hls.js's gap controller: either pokes the clock forward.
 check(
   poked.set !== null && poked.set > poked.frozen && poked.set < poked.frozen + 1,
   'watchdog nudges a frozen clock',
   JSON.stringify(poked),
 )
-// The escalation may have detached the media mid-sample; wait for the clock to run again.
 let seen = (await state()).t
 for (let i = 0; i < 15; i++) {
   await sleep(1000)

@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// A truncated session.json (a crash mid-write) must not lose every download: the list is rebuilt from
-// the saved torrents, paused, with the files that are on disk selected, and the damaged file kept aside.
 func TestDamagedSessionIsRebuiltFromTheSavedTorrents(t *testing.T) {
 	seedDir := t.TempDir()
 	mi, content := makePack(t, seedDir)
@@ -32,8 +30,6 @@ func TestDamagedSessionIsRebuiltFromTheSavedTorrents(t *testing.T) {
 		t.Fatalf("live = %v %v, want the saved torrent back", live, err)
 	}
 	id := live[hash]
-	// Paused until someone asks (WaitLive is such an ask), with only the file on disk selected: a whole
-	// pack selected would make the next play fetch every episode.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		st, _ := f.client.Stats(c, id)

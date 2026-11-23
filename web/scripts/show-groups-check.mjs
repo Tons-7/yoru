@@ -1,4 +1,3 @@
-// A release group preferred for one show only, and the release picking that follows.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -58,7 +57,6 @@ check(
   'and the show resolves to its own',
 )
 
-// Avoided groups sit beside them, stored the same way.
 const avoid = page.getByLabel('Avoid groups')
 check(await avoid.isVisible(), 'with a field for groups to avoid')
 await avoid.fill('BadGroup')
@@ -69,7 +67,6 @@ check(
 )
 
 await page.reload({ waitUntil: 'domcontentloaded' })
-// Closed again, the row says what's set in a line; Edit opens the fields with it.
 check(await until(() => page.getByText('Prefer SubsPlease, Erai-raws · Avoid BadGroup').isVisible()), 'it survives a reload, summed up')
 await page.getByRole('button', { name: 'Edit release groups' }).click()
 check(await until(() => page.getByLabel('Prefer groups').inputValue().then((v) => v === 'SubsPlease, Erai-raws')), 'and in its field')

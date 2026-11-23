@@ -13,7 +13,6 @@ type torrentUnlockActions struct {
 	updateComplete                 bool
 }
 
-// A non-dynamic way to register handlers to run just once when the client is unlocked.
 type clientUnlockHandlers struct {
 	torrentActions     map[*Torrent]torrentUnlockActions
 	changedPieceStates map[*Piece]struct{}
@@ -40,18 +39,19 @@ func (me *clientUnlockHandlers) addUpdateComplete(t *Torrent) {
 func (me *clientUnlockHandlers) run(logger *slog.Logger) {
 	trackers := 0
 	started := time.Now()
-	for t, v := range me.torrentActions {
-		if v.updateRegularTrackerAnnouncing {
-			trackers++
-			t.updateRegularTrackerAnnouncing()
+	for len(me.torrentActions) > 0 {
+		for t, v := range me.torrentActions {
+			delete(me.torrentActions, t)
+			if v.updateRegularTrackerAnnouncing {
+				trackers++
+				t.updateRegularTrackerAnnouncing()
+			}
+			if v.updateComplete {
+				t.updateComplete()
+			}
 		}
-		if v.updateComplete {
-			t.updateComplete()
-		}
-		delete(me.torrentActions, t)
 	}
 	since := time.Since(started)
-	// Around here the Go scheduler starts to do crazy stuff.
 	if since > 20*time.Millisecond {
 		logger.Warn("client unlock handlers took a long time", "duration", since, "trackers", trackers)
 	}

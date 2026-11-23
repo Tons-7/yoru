@@ -89,6 +89,7 @@ async function measure(label, prefs, rateMode) {
   await video.evaluate((v) => (v.currentTime = 2))
   await sleep(8000)
   const target = Number(await page.evaluate(() => document.querySelector('video')?.previousElementSibling?.dataset?.target ?? 0))
+  const precise = await page.evaluate(() => document.querySelector('video')?.previousElementSibling?.dataset?.precise ?? '')
   const from = await video.evaluate((v) => v.currentTime)
   await page.evaluate(() => (window.__shown = []))
   await sleep(SECONDS * 1000)
@@ -125,6 +126,7 @@ async function measure(label, prefs, rateMode) {
       engine: status.version,
       rate: rateMode,
       target,
+      precise: precise === '1' ? 'on' : precise === '0' ? 'off' : 'unknown',
       clip: `${from.toFixed(0)}-${to.toFixed(0)}s`,
       picturesPerSecond: +(times.length / span).toFixed(1),
       gapMs: { p50: +quantile(sorted, 0.5).toFixed(1), p95: +quantile(sorted, 0.95).toFixed(1), p99: +quantile(sorted, 0.99).toFixed(1), max: +(sorted.at(-1) ?? 0).toFixed(1) },

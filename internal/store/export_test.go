@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"math"
 	"testing"
 )
 
@@ -100,7 +101,6 @@ func TestImportRestoresIntoAnEmptyLibrary(t *testing.T) {
 		t.Error("the favourite was not restored")
 	}
 
-	// Imported rows are local edits, so they reach the trackers.
 	dirty, err := st.DirtyEntries(ctx, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,6 @@ func TestImportRestoresIntoAnEmptyLibrary(t *testing.T) {
 	}
 }
 
-// An import is a merge, not a reset: a file older than what is here must not wind progress back.
 func TestImportNeverMovesProgressBackwards(t *testing.T) {
 	st := exportStore(t)
 	ctx := context.Background()
@@ -137,7 +136,46 @@ func TestImportNeverMovesProgressBackwards(t *testing.T) {
 	}
 }
 
-// A negative id is a MAL-only title, which export writes out; only no id at all is unusable.
+func TestImportKeepsAStartedShowStarted(t *testing.T) {
+	st := exportStore(t)
+	ctx := context.Background()
+	st.MarkWatched(ctx, 100, 5)
+	st.ClearDirtyAt(ctx, 100, 1, 1, math.MaxInt64)
+	st.ImportEntries(ctx, []ExportEntry{{AnimeID: 100, Status: "PLANNING"}})
+	if e, _ := st.ListEntry(ctx, 100); e.Status != "CURRENT" || e.Dirty {
+		t.Errorf("after an older file: %s dirty=%v, want CURRENT and nothing to push", e.Status, e.Dirty)
+	}
+	st.ImportEntries(ctx, []ExportEntry{{AnimeID: 100, Status: "CURRENT", Progress: 5}})
+	if e, _ := st.ListEntry(ctx, 100); e.Dirty {
+		t.Error("an identical entry was queued for a push again")
+	}
+}
+
+func TestImportedRewatchStartsOver(t *testing.T) {
+	st := exportStore(t)
+	ctx := context.Background()
+	if _, err := st.w.Exec(`UPDATE anime SET episode_count = 12 WHERE id = 100`); err != nil {
+		t.Fatal(err)
+	}
+	for n := 1; n <= 12; n++ {
+		st.MarkWatched(ctx, 100, n)
+	}
+	if _, err := st.w.Exec(`INSERT INTO playback (anime_id, ep_key, position_s, watched, last_played_at)
+		VALUES (100, '7', 1400, 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	st.ImportEntries(ctx, []ExportEntry{{AnimeID: 100, Status: StatusRepeating, Progress: 3}})
+	e, _ := st.ListEntry(ctx, 100)
+	if e.Status != StatusRepeating || e.Progress != 3 {
+		t.Errorf("rewatch imported as %s %d, want REPEATING 3", e.Status, e.Progress)
+	}
+	var watched int
+	st.r.QueryRow(`SELECT coalesce(sum(watched), 0) FROM playback WHERE anime_id = 100`).Scan(&watched)
+	if watched != 0 {
+		t.Errorf("%d episodes still ticked from the first watch", watched)
+	}
+}
+
 func TestImportSkipsUnusableRows(t *testing.T) {
 	st := exportStore(t)
 
@@ -157,7 +195,6 @@ func TestImportSkipsUnusableRows(t *testing.T) {
 	}
 }
 
-// An id the corpus has never seen still has to import: the placeholder row is what keeps the foreign key.
 func TestImportAcceptsUnknownAnime(t *testing.T) {
 	st := exportStore(t)
 	ctx := context.Background()
@@ -206,7 +243,6 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 }
 
-// A favourite never on the list comes back as a favourite, not as an empty list entry pushed to AniList.
 func TestImportKeepsFavouriteOnlyShowsOffTheList(t *testing.T) {
 	st := exportStore(t)
 	ctx := context.Background()
@@ -226,5 +262,15 @@ func TestImportKeepsFavouriteOnlyShowsOffTheList(t *testing.T) {
 	}
 	if b, _ := st.Bookmark(ctx, 200); !b.Favourite {
 		t.Fatal("the favourite was lost")
+	}
+}
+
+func TestImportKeepsAFinishedShowFinished(t *testing.T) {
+	st := exportStore(t)
+	ctx := context.Background()
+	st.ImportEntries(ctx, []ExportEntry{{AnimeID: 100, Status: "COMPLETED", Progress: 12}})
+	st.ImportEntries(ctx, []ExportEntry{{AnimeID: 100, Status: "CURRENT", Progress: 4}})
+	if e, _ := st.ListEntry(ctx, 100); e.Status != "COMPLETED" || e.Progress != 12 {
+		t.Errorf("an older file turned a finished show into %s %d", e.Status, e.Progress)
 	}
 }

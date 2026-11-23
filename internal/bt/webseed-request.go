@@ -8,16 +8,11 @@ import (
 	"yoru/internal/bt/webseed"
 )
 
-// A wrapper around webseed.Request with extra state for webseedPeer.
 type webseedRequest struct {
-	// Fingers out.
-	request webseed.Request
-	logger  *slog.Logger
-	// First assigned in the range.
-	begin RequestIndex
-	// The next to be read.
-	next RequestIndex
-	// One greater than the end of the range.
+	request   webseed.Request
+	logger    *slog.Logger
+	begin     RequestIndex
+	next      RequestIndex
 	end       RequestIndex
 	cancelled atomic.Bool
 }
@@ -26,8 +21,6 @@ func (me *webseedRequest) Close() {
 	me.request.Close()
 }
 
-// Record that it was exceptionally cancelled. Require that Torrent be passed so we can ensure
-// announce dispatcher is updated.
 func (me *webseedRequest) Cancel(cause string, t *Torrent) bool {
 	me.request.Cancel(stringError(cause))
 	if !me.cancelled.Swap(true) {

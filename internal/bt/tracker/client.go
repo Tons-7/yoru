@@ -9,25 +9,21 @@ import (
 
 	trHttp "yoru/internal/bt/tracker/http"
 	"yoru/internal/bt/tracker/udp"
-	"yoru/internal/bt/types/infohash"
 )
 
 type Client interface {
 	Announce(context.Context, AnnounceRequest, AnnounceOpt) (AnnounceResponse, error)
-	Scrape(ctx context.Context, ihs []infohash.T) (out udp.ScrapeResponse, err error)
 	Close() error
 }
 
 type AnnounceOpt = trHttp.AnnounceOpt
 
 type NewClientOpts struct {
-	Http trHttp.NewClientOpts
-	// Overrides the network in the scheme. Probably a legacy thing.
+	Http         trHttp.NewClientOpts
 	UdpNetwork   string
 	Logger       log.Logger
 	ListenPacket func(network, addr string) (net.PacketConn, error)
-	// Looks UDP trackers up; nil is the system resolver.
-	Resolver *net.Resolver
+	Resolver     *net.Resolver
 }
 
 func NewClient(urlStr string, opts NewClientOpts) (Client, error) {

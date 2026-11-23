@@ -15,7 +15,6 @@ import (
 	"time"
 )
 
-// Stands in for the VLC process: the test binary re-run, doing nothing until killed.
 func TestVLCStandIn(t *testing.T) {
 	if os.Getenv("YORU_VLC_STAND_IN") != "1" {
 		t.Skip("only as the stand-in process")
@@ -23,7 +22,6 @@ func TestVLCStandIn(t *testing.T) {
 	time.Sleep(time.Minute)
 }
 
-// fakeVLC is VLC's control interface answering one scripted status per poll, the last one for ever.
 type fakeVLC struct {
 	mu     sync.Mutex
 	script []vlcStatus
@@ -51,7 +49,6 @@ func (f *fakeVLC) handler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(st)
 }
 
-// watched runs the tracking loop against the script and returns every event until the channel closes.
 func watched(t *testing.T, opts Options, script ...vlcStatus) ([]Event, *fakeVLC, *exec.Cmd) {
 	t.Helper()
 	fake := &fakeVLC{script: script}
@@ -94,12 +91,10 @@ func last(events []Event, kind EventKind) (Event, bool) {
 	return Event{}, false
 }
 
-// Stopping within the last seconds is the episode ending; VLC is closed so the next one can open.
 func TestVLCReachingTheEndIsReportedAsTheEnd(t *testing.T) {
 	events, fake, _ := watched(t, Options{},
 		vlcStatus{State: "playing", Time: 10, Length: 100},
 		vlcStatus{State: "paused", Time: 11, Length: 100},
-		// Position is a fraction of the length and more exact than the whole-second time.
 		vlcStatus{State: "playing", Time: 98, Length: 100, Position: 0.985},
 		vlcStatus{State: "stopped"},
 	)
@@ -125,10 +120,9 @@ func TestVLCReachingTheEndIsReportedAsTheEnd(t *testing.T) {
 	}
 }
 
-// Stopped part-way is the viewer's own stop: the episode is not finished.
 func TestVLCStoppedPartWayIsNotTheEnd(t *testing.T) {
 	events, _, _ := watched(t, Options{},
-		vlcStatus{State: "stopped"}, // not started yet: VLC reports stopped while it opens the stream
+		vlcStatus{State: "stopped"},
 		vlcStatus{State: "playing", Time: 40, Length: 100},
 		vlcStatus{State: "stopped"},
 	)
@@ -168,13 +162,11 @@ func TestVLCClosedByTheViewerReportsWhereItWas(t *testing.T) {
 	}
 }
 
-// Inside the opening with auto-skip on, VLC is told to jump to its end, once.
 func TestVLCAutoSkipSeeksPastTheOpeningOnce(t *testing.T) {
 	opts := Options{AutoSkip: true, SkipRanges: []SkipRange{{Kind: "op", Start: 10, End: 40}}}
 	_, fake, _ := watched(t, opts,
 		vlcStatus{State: "playing", Time: 5, Length: 100},
 		vlcStatus{State: "playing", Time: 12, Length: 100},
-		// Still inside on the next poll: the seek has not landed yet.
 		vlcStatus{State: "playing", Time: 13, Length: 100},
 		vlcStatus{State: "playing", Time: 41, Length: 100},
 		vlcStatus{State: "stopped"},
@@ -183,5 +175,23 @@ func TestVLCAutoSkipSeeksPastTheOpeningOnce(t *testing.T) {
 	defer fake.mu.Unlock()
 	if len(fake.seeks) != 1 || fake.seeks[0] != "40" {
 		t.Fatalf("seeks = %v, want one to 40", fake.seeks)
+	}
+}
+
+func TestVLCSkippedEndingIsTheEnd(t *testing.T) {
+	got, fake, _ := watched(t, Options{AutoSkip: true, SkipRanges: []SkipRange{{Kind: "ed", Start: 1290, End: 1419}}},
+		vlcStatus{State: "playing", Time: 1300, Length: 1420},
+		vlcStatus{State: "stopped"})
+	var end *Event
+	for i := range got {
+		if got[i].Kind == EventEnd {
+			end = &got[i]
+		}
+	}
+	if end == nil || end.Reason != "eof" || end.Position != 1419 {
+		t.Fatalf("end = %+v, want eof at 1419", end)
+	}
+	if len(fake.seeks) != 1 || fake.seeks[0] != "1419" {
+		t.Fatalf("seeks = %v, want one to 1419", fake.seeks)
 	}
 }

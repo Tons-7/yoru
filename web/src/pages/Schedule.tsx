@@ -105,6 +105,7 @@ function Airing({ switcher, onOut }: { switcher: ReactNode; onOut: () => void })
             </ToggleChip>
             {roomy && (
               <Segmented
+                label="Schedule view"
                 options={[
                   { value: 'day', label: 'Day' },
                   { value: 'week', label: 'Week' },
@@ -118,6 +119,14 @@ function Airing({ switcher, onOut }: { switcher: ReactNode; onOut: () => void })
       />
 
       {isError && data && <RefreshFailed retry={() => refetch()} />}
+      {!isError && data?.partial && (
+        <div role="status" className="flex flex-wrap items-center gap-2 text-[13px] text-amber-200">
+          <span>Some days couldn't load.</span>
+          <Button size="sm" onClick={() => void refetch()}>
+            Try again
+          </Button>
+        </div>
+      )}
       {isError && !data ? (
         <ErrorState error={error} retry={() => refetch()} />
       ) : isPending ? (
@@ -140,11 +149,15 @@ function Airing({ switcher, onOut }: { switcher: ReactNode; onOut: () => void })
           )}
 
           {week ? (
-            <WeekView days={days.slice(0, 7)} now={now} nextUp={nextUp} />
+            <WeekView days={days.slice(1, 8)} now={now} nextUp={nextUp} />
           ) : (
             <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
               {!active || active.items.length === 0 ? (
-                <Empty title="Nothing airing this day" hint={mine ? 'Nothing from your list, at least.' : undefined} />
+                <Empty
+                  title="Nothing airing this day"
+                  hint={mine ? 'Nothing from your list, at least.' : undefined}
+                  action={mine && <Button onClick={() => setMine(false)}>Show every show</Button>}
+                />
               ) : (
                 <ul className="surface divide-y divide-line overflow-hidden">
                   {earlier.length > 0 && (
@@ -298,7 +311,7 @@ function DayStrip({
                   ? 'bg-accent-500 text-white ring-accent-400 sm:bg-accent-500/15 sm:ring-accent-400/60'
                   : day.today
                     ? 'bg-base-900 ring-accent-400/70 hover:bg-base-850'
-                    : 'bg-base-900/60 ring-white/[0.06] hover:bg-base-850 hover:ring-white/10',
+                    : 'bg-base-900/60 ring-white/6 hover:bg-base-850 hover:ring-white/10',
               )}
             >
               <span
@@ -340,29 +353,31 @@ function DayStrip({
   )
 }
 
-function rowMeta(item: ScheduleItem, isNext: boolean, now: number, weekday: string): ReactNode[] {
+function rowMeta(item: ScheduleItem, isNext: boolean, now: number, weekday: string): { parts: ReactNode[]; detail: string } {
   const parts: ReactNode[] = [`Ep ${item.episode}`]
-  if (isNext) parts.push(<span className="text-accent-300">Next</span>)
-  if (!item.watched && item.behind > 0) parts.push(`${item.behind} behind`)
-  else if (item.onList && !item.watched && item.behind === 0 && item.airingAt > now) parts.push('On list')
-  if (item.delayedFrom) {
-    parts.push(
-      <span className="text-amber-300">
-        Delayed, was due {new Date(item.delayedFrom * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-      </span>,
-    )
-  }
-  if (item.jstWeekday !== weekday) parts.push(`${item.jstWeekday} in Japan`)
+  const facts: string[] = []
+  if (!item.watched && item.behind > 0) facts.push(`${item.behind} behind`)
+  else if (item.onList && !item.watched && item.behind === 0 && item.airingAt > now) facts.push('On list')
+  const delayed = item.delayedFrom
+    ? `Delayed, was due ${new Date(item.delayedFrom * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+    : ''
+  if (item.jstWeekday !== weekday) facts.push(`${item.jstWeekday} in Japan`)
   const state = releaseState(item, now)
   if (state) {
     parts.push(
       <span className={TONE_TEXT[state.tone]}>
-        {state.tone === 'wait' ? 'Aired · not found yet' : state.word}
+        {state.tone === 'wait' ? 'Not found yet' : state.word}
         {state.checked && ` · ${state.checked}`}
       </span>,
     )
+    if (delayed) facts.unshift(delayed)
+  } else if (delayed) {
+    parts.push(<span className="text-amber-300">{delayed}</span>)
+  } else if (isNext) {
+    parts.push(<span className="text-accent-300">Next</span>)
   }
-  return parts
+  if (facts.length) parts.push(facts[0])
+  return { parts, detail: facts.join(', ') }
 }
 
 function ScheduleRow({
@@ -412,13 +427,14 @@ function ScheduleRow({
           >
             {item.title}
           </span>
-          <span className="mt-0.5 block text-sm text-base-400 sm:text-xs">
-            {meta.map((part, i) => (
+          <span className="mt-0.5 block truncate text-sm text-base-400 sm:text-xs">
+            {meta.parts.map((part, i) => (
               <span key={i}>
                 {i > 0 && ' · '}
                 {part}
               </span>
             ))}
+            {meta.detail && <span className="sr-only">. {meta.detail}</span>}
           </span>
         </span>
       </Link>
@@ -448,7 +464,7 @@ function RowControl({ item, aired, alertsOff }: { item: ScheduleItem; aired: boo
         aria-label={`Play episode ${item.episode} of ${item.title}`}
         className={cx(
           'press grid size-9 shrink-0 place-items-center rounded-full transition-colors pointer-coarse:size-11',
-          item.out ? 'bg-accent-500 text-white hover:bg-accent-600' : 'bg-white/[0.08] text-white hover:bg-white/15',
+          item.out ? 'bg-accent-500 text-white hover:bg-accent-600' : 'bg-white/8 text-white hover:bg-white/15',
         )}
       >
         <svg viewBox="0 0 24 24" className="size-4" aria-hidden>
@@ -479,7 +495,7 @@ function AirsNext({ item, now, alertsOff }: { item: ScheduleItem; now: number; a
   const art = item.show?.banner ?? item.coverLarge ?? item.cover
   return (
     <section className="surface overflow-hidden">
-      <div className="relative aspect-[16/9] bg-base-850">
+      <div className="relative aspect-16/9 bg-base-850">
         {art && <img src={art} alt="" className="size-full object-cover object-top" />}
         <p className="absolute top-3 left-3 rounded-md bg-base-950/90 px-2 py-0.5 text-xs font-semibold text-base-100">
           Airs next
@@ -534,7 +550,7 @@ function WeekView({ days, now, nextUp }: { days: ScheduleDay[]; now: number; nex
               key={day.date}
               data-week-day
               aria-label={`${dayName(day.date, day.weekday, today)}, ${dayDate(day.date)}`}
-              className={cx('min-w-0 rounded-card', day.today ? 'bg-accent-500/[0.07] ring-1 ring-accent-500/30' : 'bg-base-900/40')}
+              className={cx('min-w-0 rounded-card', day.today ? 'bg-accent-500/7 ring-1 ring-accent-500/30' : 'bg-base-900/40')}
             >
               {day.items.length === 0 ? (
                 <p className="px-2.5 py-3 text-xs text-base-500">Nothing airs.</p>

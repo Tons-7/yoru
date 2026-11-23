@@ -8,7 +8,6 @@ import (
 	"yoru/internal/config"
 )
 
-// Another device playing keeps the computer awake until its reports stop, unless Settings say otherwise.
 func TestAnotherDeviceWatchingKeepsTheComputerAwake(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	ctx := context.Background()
@@ -34,7 +33,6 @@ func TestAnotherDeviceWatchingKeepsTheComputerAwake(t *testing.T) {
 		t.Errorf("the phone stopped, yet awake: %q", why)
 	}
 
-	// A TV reading a cast stream counts while it reads.
 	done := h.server.serving()
 	if why := h.server.awakeReason(ctx); why != "another device is watching" {
 		t.Errorf("a TV casting: %q", why)

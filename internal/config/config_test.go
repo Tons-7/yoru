@@ -13,7 +13,6 @@ func TestRedirectURI(t *testing.T) {
 		{"garbage", "http://localhost:4321/callback"},
 	}
 
-	// Must match the URL registered on AniList exactly, including the port.
 	for _, tt := range tests {
 		if got := (Config{Addr: tt.addr}).RedirectURI(); got != tt.want {
 			t.Errorf("addr %q gave %q, want %q", tt.addr, got, tt.want)

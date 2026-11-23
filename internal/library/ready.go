@@ -28,7 +28,7 @@ func (p *Playback) ReadyNext(ctx context.Context, animeID, episode int) (store.P
 		return next, err
 	}
 	if !held {
-		if rec, held = p.prefetch.Fetching(next.AnimeID, next.Episode); !held {
+		if rec, held = p.prefetch.peekFetching(next.AnimeID, next.Episode); !held {
 			prefs, err := p.store.Prefs(ctx, next.AnimeID)
 			if err != nil || !prefs.Bool("playback.autonext") {
 				return next, errNotReadied

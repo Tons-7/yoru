@@ -1,7 +1,5 @@
 import { useEffect, useRef } from 'react'
 
-// Subtitles as the browser's own text track, for windows showing only those; dialogue only, not placed signs.
-
 export interface Cue {
   start: number
   end: number
@@ -13,7 +11,6 @@ const time = (t: string) => {
   return Number(h) * 3600 + Number(m) * 60 + Number(s)
 }
 
-/** The spoken lines of an ASS track, its tags dropped. */
 export function assCues(ass: string): Cue[] {
   const out: Cue[] = []
   let format: string[] = []
@@ -30,11 +27,9 @@ export function assCues(ass: string): Cue[] {
       continue
     }
     if (!line.startsWith('Dialogue:') || format.length === 0) continue
-    // The text is the last field and may hold commas of its own.
     const fields = line.slice(9).split(',')
     const text = fields.slice(format.length - 1).join(',')
     const at = (name: string) => fields[format.indexOf(name)] ?? ''
-    // Placed or drawn: a sign, not a line said.
     if (/\\(pos|move)\(|\\p[1-9]/.test(text)) continue
     const plain = text
       .replace(/\{[^}]*\}/g, '')
@@ -47,7 +42,6 @@ export function assCues(ass: string): Cue[] {
   return out
 }
 
-/** url's lines as the video's text track, shown only when the page can't draw them; re-asked while growing. */
 export function useNativeCaptions(
   video: HTMLVideoElement | null,
   source: { url: string; whole?: boolean } | undefined,
@@ -56,22 +50,25 @@ export function useNativeCaptions(
 ) {
   const track = useRef<{ video: HTMLVideoElement; tt: TextTrack } | null>(null)
   const cues = useRef<Cue[]>([])
-  // Read at each refresh, so a refresh after the viewer moves the delay keeps the new one.
+  const loaded = useRef<string | undefined>(undefined)
   const shift = useRef(delay)
   const url = source?.url
   const whole = !!source?.whole
 
   useEffect(() => {
     if (!video || !url || !showing) return
-    // One per element: a text track can't be taken off again.
     if (track.current?.video !== video) track.current = { video, tt: video.addTextTrack('subtitles', 'Subtitles') }
     const tt = track.current.tt
+    if (loaded.current !== url) {
+      loaded.current = url
+      cues.current = []
+      place(tt, [], 0)
+    }
     let stop = false
     let timer: number | undefined
     const fill = async () => {
       try {
         const res = await fetch(url)
-        // The session is gone; so is the player, shortly. Any other failure keeps what is shown and asks again.
         if (stop || res.status === 404) return
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const body = await res.text()
@@ -92,7 +89,6 @@ export function useNativeCaptions(
     }
   }, [video, url, whole, showing])
 
-  // A delay moved is applied without fetching again.
   useEffect(() => {
     shift.current = delay
     if (track.current && showing) place(track.current.tt, cues.current, delay)

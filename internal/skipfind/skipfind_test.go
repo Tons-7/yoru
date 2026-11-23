@@ -32,7 +32,6 @@ func ffmpeg(t *testing.T) string {
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
-// song is the same 90 s tune in every episode; the rest is each episode's own tune.
 const song = "aevalsrc='0.4*sin(2*PI*(220+55*floor(mod(t*2,12)))*t)+0.3*sin(2*PI*(330+40*floor(mod(t,7)))*t)':s=44100:d=90"
 
 func episode(t *testing.T, ff string, before, after, seed int) string {
@@ -64,7 +63,6 @@ func print(t *testing.T, ff, path string, start, length float64) []uint32 {
 
 func near(got, want float64) bool { return math.Abs(got-want) <= 2 }
 
-// Against real releases: set REALPAIR to two episodes of one season, "a|b".
 func TestRealPair(t *testing.T) {
 	pair := strings.Split(os.Getenv("REALPAIR"), "|")
 	if len(pair) != 2 {
@@ -104,7 +102,6 @@ func duration(t *testing.T, ff, path string) float64 {
 	return float64(h*3600+mi*60) + s
 }
 
-// Two episodes with the opening at different times: found in both, to within two seconds.
 func TestTheSharedSongIsFoundInBoth(t *testing.T) {
 	ff := ffmpeg(t)
 	a, b := episode(t, ff, 30, 100, 1), episode(t, ff, 70, 60, 7)
@@ -117,13 +114,11 @@ func TestTheSharedSongIsFoundInBoth(t *testing.T) {
 		t.Errorf("found at %.1fs and %.1fs for %.1fs, want 30, 70 and 90", at, bt, m.Seconds())
 	}
 
-	// Kept as a print, the song is found in a third episode on its own.
 	c := episode(t, ff, 12, 120, 13)
 	if got, ok := Covers(pa[m.AStart:m.AEnd], print(t, ff, c, 0, OpeningWindow)); !ok || !near(float64(got.BStart)*Point, 12) {
 		t.Errorf("the kept print found %+v (ok %v), want the song at 12s", got, ok)
 	}
 
-	// The episodes' own sound shares nothing.
 	if got, ok := Shared(print(t, ff, a, 125, 60), print(t, ff, b, 165, 60)); ok {
 		t.Errorf("unrelated sound matched: %+v", got)
 	}

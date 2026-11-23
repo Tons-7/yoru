@@ -91,11 +91,9 @@ func betterFor(ctx context.Context, st *store.Store, kept []store.KeptCopy, pref
 		parsed[i] = seaPick{SeaDexPick: p, files: files, rel: rel}
 	}
 	numbers := map[string][]int{}
-	keptRank := 0.0
 	heldGroups := map[string]bool{}
 	for _, k := range kept {
 		rel := keptRelease(k)
-		keptRank = max(keptRank, score.ResolutionRank(rel.Resolution, prefs))
 		if rel.Group != "" {
 			heldGroups[strings.ToLower(rel.Group)] = true
 		}
@@ -128,14 +126,14 @@ func betterFor(ctx context.Context, st *store.Store, kept []store.KeptCopy, pref
 		}
 		files, rel := p.files, p.rel
 		rank := score.ResolutionRank(rel.Resolution, prefs)
-		if rank < keptRank {
-			continue
-		}
 		key := strings.ToLower(p.Group) + "\x00" + rel.Resolution + "\x00" + strconv.FormatBool(p.DualAudio)
 		all[key] = append(all[key], hash)
 		o := offers[key]
 		for _, k := range open {
 			if o != nil && o.hashes[k.EpKey] != "" {
+				continue
+			}
+			if rank < score.ResolutionRank(keptRelease(k).Resolution, prefs) {
 				continue
 			}
 			nums := numbers[k.EpKey]
@@ -311,10 +309,18 @@ func ReplaceWithBetter(ctx context.Context, st *store.Store, scope ScopeFor, ani
 	if !ok {
 		return 0, fmt.Errorf("that release is no longer offered for this show")
 	}
+	seasons := map[string]int{}
+	if kept, err := st.KeptCopies(ctx); err == nil {
+		for _, k := range kept {
+			if k.AnimeID == animeID {
+				seasons[k.EpKey] = keptRelease(k).Season
+			}
+		}
+	}
 	var queued int
 	for _, ep := range o.Episodes {
 		n, _ := strconv.Atoi(ep)
-		if err := st.EnqueueRelease(ctx, animeID, 0, n, o.hashes[ep], o.Release); err != nil {
+		if err := st.EnqueueRelease(ctx, animeID, seasons[ep], n, o.hashes[ep], o.Release); err != nil {
 			return queued, err
 		}
 		queued++

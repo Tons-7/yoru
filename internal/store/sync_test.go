@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"math"
 	"testing"
 )
 
@@ -51,7 +52,6 @@ func TestMarkWatchedCreatesEntry(t *testing.T) {
 	}
 }
 
-// Rewatching an early episode of a finished series must not reset the count.
 func TestMarkWatchedOnlyMovesForward(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -74,7 +74,6 @@ func TestMarkWatchedOnlyMovesForward(t *testing.T) {
 	}
 }
 
-// AniList applies no such rule server-side, so the client has to complete the entry itself.
 func TestMarkWatchedCompletesOnFinalEpisode(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -95,7 +94,6 @@ func TestMarkWatchedCompletesOnFinalEpisode(t *testing.T) {
 	}
 }
 
-// An airing show has no count; guessing one would complete it after episode 1.
 func TestMarkWatchedDoesNotCompleteWithUnknownLength(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -107,14 +105,13 @@ func TestMarkWatchedDoesNotCompleteWithUnknownLength(t *testing.T) {
 	}
 }
 
-// Storing the server's timestamp stops the next pull reading our write as remote.
 func TestClearDirtyRecordsRemoteState(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedShow(t, s, 1, 12)
 
 	s.MarkWatched(ctx, 1, 3)
-	if err := s.ClearDirty(ctx, 1, 40942016, 1786000000); err != nil {
+	if err := s.ClearDirtyAt(ctx, 1, 40942016, 1786000000, math.MaxInt64); err != nil {
 		t.Fatal(err)
 	}
 
@@ -144,7 +141,6 @@ func TestMarkWatchedIgnoresInvalidInput(t *testing.T) {
 	}
 }
 
-// Completing a show already marked completed must not flip it back.
 func TestMarkWatchedKeepsCompletedStatus(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

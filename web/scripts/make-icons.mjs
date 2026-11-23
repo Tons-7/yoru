@@ -1,10 +1,7 @@
-// Renders public/icon.svg to the PNGs Android wants to install Yoru as an app.
-// Run from web/ after changing the icon: node scripts/make-icons.mjs
 import { readFileSync } from 'node:fs'
 import { chromium } from 'playwright'
 
 const svg = readFileSync('public/icon.svg', 'utf8')
-// Maskable: the launcher cuts its own shape, so the background runs to the edge.
 const fullBleed = svg.replace(' rx="112"', '')
 
 const browser = await chromium.launch()

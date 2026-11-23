@@ -1,4 +1,3 @@
-import { useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { copyText } from '../lib/downloads'
@@ -7,6 +6,7 @@ import { toast } from '../lib/toast'
 import { useDismiss, useModalFocus } from '../lib/hooks'
 import { buttonClass } from '../lib/ui'
 import { appleTouchDevice } from '../lib/install'
+import { CloseButton } from './ui'
 
 interface ExternalLink {
   url: string
@@ -14,7 +14,6 @@ interface ExternalLink {
   expires: string
 }
 
-/** How each app is asked to play a link: Android lists every video app; iOS has no chooser, so two by name. */
 function appLinks(link: ExternalLink): { label: string; href: string }[] {
   const ua = navigator.userAgent
   if (/Android/i.test(ua)) {
@@ -37,23 +36,20 @@ function appLinks(link: ExternalLink): { label: string; href: string }[] {
   return []
 }
 
-/** Hands the episode's own file to a video app: VLC and mpv draw its subtitles as made, signs and all. */
 export function OpenInApp({ source, open, onClose }: { source: string; open: boolean; onClose: () => void }) {
-  const close = useCallback(() => onClose(), [onClose])
-  const panel = useDismiss<HTMLDivElement>(close, open)
+  const panel = useDismiss<HTMLDivElement>(onClose, open)
   useModalFocus(panel, open)
-  // Made when the sheet opens, so each choice is a plain link the tap follows (a phone won't hand off else).
-  // Fresh every time: a restart of Yoru ends every link made before it.
   const link = useQuery({
     queryKey: ['external-link', source],
     queryFn: () => api.post<ExternalLink>('/api/stream/external', { source }),
     enabled: open,
     staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
   })
 
   if (!open) return null
   const apps = link.data ? appLinks(link.data) : []
-  // copyText: a phone on plain http has no clipboard API, which the old way still covers.
   const copy = async () => {
     if (await copyText(link.data!.url, panel.current ?? undefined)) toast('Link copied', 'info')
     else toast('Copy the link from the box instead; this page may not use the clipboard')
@@ -77,20 +73,14 @@ export function OpenInApp({ source, open, onClose }: { source: string; open: boo
               hours. Another app can't tell Yoru how far you got, so mark the episode watched when you're done.
             </p>
           </div>
-          <button
-            onClick={close}
-            aria-label="Close"
-            className="min-h-11 min-w-11 rounded-md text-base-400 hover:bg-base-800 hover:text-base-100"
-          >
-            ✕
-          </button>
+          <CloseButton onClick={onClose} />
         </div>
 
-        {link.isPending || link.isFetching ? (
+        {link.isPending ? (
           <p className="py-3 text-sm text-base-400">Making a link…</p>
         ) : link.isError ? (
           <div className="flex items-center justify-between gap-3 py-2">
-            <p className="text-sm text-recap">{(link.error as Error).message}</p>
+            <p className="text-sm text-red-300">{(link.error as Error).message}</p>
             <button onClick={() => link.refetch()} className={buttonClass()}>
               Retry
             </button>
@@ -117,10 +107,9 @@ export function OpenInApp({ source, open, onClose }: { source: string; open: boo
             {apps.length === 0 && (
               <p className="text-xs text-base-500">Paste it into VLC or mpv on any device that can reach this Yoru.</p>
             )}
-            {/* A copy to watch without Yoru: into the device's downloads, or VLC's own list. */}
             <div className="flex gap-2 pt-1">
               <a href={`${link.data.url}?download=1`} download={link.data.name} className={cx(buttonClass(), 'flex min-h-11 flex-1')}>
-                Save to this device
+                Download the file
               </a>
               {appleTouchDevice() && (
                 <a

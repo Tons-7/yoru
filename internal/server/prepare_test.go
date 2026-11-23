@@ -10,7 +10,6 @@ import (
 	"yoru/internal/library"
 )
 
-// The series page readies an episode unless playback is already starting it: two searches could disagree.
 func TestPrepareStandsAsideWhileTheEpisodeIsStarting(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	var playback *library.Playback

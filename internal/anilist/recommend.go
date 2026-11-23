@@ -2,7 +2,6 @@ package anilist
 
 import "context"
 
-// Recommendations are user-voted, so a negative rating means the community disagreed.
 const recommendQuery = `query Recommend($id: Int!, $perPage: Int!) {
   Media(id: $id, type: ANIME) {
     genres
@@ -25,8 +24,6 @@ type Recommendations struct {
 	Items  []Recommendation `json:"items"`
 }
 
-// Recommend returns what the community says is similar. Entries the community
-// voted down are dropped: a negative score means "this is not like that".
 func (c *Client) Recommend(ctx context.Context, animeID, limit int) (Recommendations, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
@@ -43,13 +40,15 @@ func (c *Client) Recommend(ctx context.Context, animeID, limit int) (Recommendat
 			} `json:"recommendations"`
 		} `json:"Media"`
 	}
-	if err := c.Query(ctx, recommendQuery, map[string]any{"id": animeID, "perPage": limit}, &out); err != nil {
-		return Recommendations{}, err
+	vars := map[string]any{"id": animeID, "perPage": limit}
+	if err := c.Query(ctx, recommendQuery, vars, &out); err != nil {
+		if !c.Authenticated() || c.queryAnonymous(ctx, recommendQuery, vars, &out) != nil {
+			return Recommendations{}, err
+		}
 	}
 
 	rec := Recommendations{Genres: out.Media.Genres}
 	for _, n := range out.Media.Recommendations.Nodes {
-		// A deleted or manga recommendation comes back as null.
 		if n.Media == nil || n.Rating < 0 {
 			continue
 		}

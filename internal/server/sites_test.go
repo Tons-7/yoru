@@ -39,7 +39,6 @@ func sendJSON(t *testing.T, h *harness, method, target string, body any) (*http.
 	return res, out
 }
 
-// config.toml's blocks are shown until a list is saved in the app; saving replaces them and searches at once.
 func TestReleaseSitesSavedInTheApp(t *testing.T) {
 	sites := indexer.NewSites()
 	h := newHarness(t, config.Config{Indexers: []config.Indexer{{Type: "nyaa", URL: "https://from-config.example"}}}, nil,
@@ -79,7 +78,6 @@ func TestReleaseSitesSavedInTheApp(t *testing.T) {
 	}
 }
 
-// Test searches the site as given and says what came back, before anything is saved.
 func TestReleaseSiteTest(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	answering := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, siteFeed) }))

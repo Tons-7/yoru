@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -42,6 +43,20 @@ type component struct {
 	glob    string
 	into    string
 	resolve func(context.Context, *Manager) (Release, error)
+}
+
+func (c *component) wants(name string) bool {
+	base := path.Base(strings.ReplaceAll(name, `\`, "/"))
+	if c.glob != "" {
+		ok, _ := filepath.Match(c.glob, base)
+		return ok
+	}
+	for _, want := range c.files {
+		if ok, _ := filepath.Match(want, base); ok {
+			return true
+		}
+	}
+	return false
 }
 
 var components = []component{
@@ -111,7 +126,7 @@ func (m *Manager) Latest(ctx context.Context, name string) (string, error) {
 	if spec == nil {
 		return "", fmt.Errorf("unknown component %q", name)
 	}
-	rel, err := spec.resolve(ctx, m)
+	rel, err := spec.resolve(context.WithValue(ctx, versionOnlyKey{}, true), m)
 	if err != nil {
 		return "", err
 	}
@@ -169,7 +184,7 @@ func (m *Manager) Install(name string) error {
 	m.mu.Unlock()
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		if err := m.install(ctx, spec); err != nil {
@@ -250,7 +265,7 @@ func (m *Manager) install(ctx context.Context, spec *component) error {
 	}
 
 	unpacked := filepath.Join(staging, "unpacked")
-	if err := extract(ctx, archive, unpacked); err != nil {
+	if err := extract(ctx, archive, unpacked, spec.wants); err != nil {
 		return fmt.Errorf("extract: %w", err)
 	}
 
@@ -377,15 +392,15 @@ func (c *counter) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func extract(ctx context.Context, archive, dest string) error {
+func extract(ctx context.Context, archive, dest string, keep func(string) bool) error {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
 	switch strings.ToLower(filepath.Ext(archive)) {
 	case ".zip":
-		return unzip(archive, dest)
+		return unzip(archive, dest, keep)
 	case ".7z":
-		return un7z(archive, dest)
+		return un7z(archive, dest, keep)
 	}
 
 	name := filepath.Base(archive)
@@ -420,7 +435,7 @@ func exists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func unzip(archive, dest string) error {
+func unzip(archive, dest string, keep func(string) bool) error {
 	r, err := zip.OpenReader(archive)
 	if err != nil {
 		return err
@@ -431,6 +446,9 @@ func unzip(archive, dest string) error {
 		target := filepath.Join(dest, filepath.FromSlash(f.Name))
 		if !strings.HasPrefix(target, filepath.Clean(dest)+string(os.PathSeparator)) {
 			return fmt.Errorf("archive entry escapes the target directory: %s", f.Name)
+		}
+		if keep != nil && !f.FileInfo().IsDir() && !keep(f.Name) {
+			continue
 		}
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, 0o755); err != nil {
@@ -448,7 +466,7 @@ func unzip(archive, dest string) error {
 	return nil
 }
 
-func un7z(archive, dest string) error {
+func un7z(archive, dest string, keep func(string) bool) error {
 	r, err := sevenzip.OpenReader(archive)
 	if err != nil {
 		return err
@@ -459,6 +477,9 @@ func un7z(archive, dest string) error {
 		target := filepath.Join(dest, filepath.FromSlash(f.Name))
 		if !strings.HasPrefix(target, filepath.Clean(dest)+string(os.PathSeparator)) {
 			return fmt.Errorf("archive entry escapes the target directory: %s", f.Name)
+		}
+		if keep != nil && !f.FileInfo().IsDir() && !keep(f.Name) {
+			continue
 		}
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, 0o755); err != nil {
@@ -499,6 +520,11 @@ func writeEntry(f entry, target string) error {
 
 func install(src, dest string) error {
 	fresh := dest + ".new"
+	os.Remove(fresh)
+	if os.Rename(src, fresh) == nil {
+		os.Chmod(fresh, 0o755)
+		return swapIn(fresh, dest)
+	}
 	if err := copyTo(src, fresh); err != nil {
 		os.Remove(fresh)
 		return err
@@ -534,6 +560,7 @@ func swapIn(fresh, dest string) error {
 	}
 	if err := os.Rename(fresh, dest); err != nil {
 		os.Rename(old, dest)
+		os.Remove(fresh)
 		return fmt.Errorf("replace %s: %w", filepath.Base(dest), err)
 	}
 	os.Remove(old)
@@ -575,9 +602,14 @@ func findAll(root, pattern string) ([]string, error) {
 
 var obsolete = []string{"rqbit"}
 
+const installInFlight = time.Hour
+
 func (m *Manager) RemoveObsolete() []string {
 	staging, _ := filepath.Glob(filepath.Join(m.binDir, ".install-*"))
 	for _, p := range staging {
+		if info, err := os.Stat(p); err == nil && time.Since(info.ModTime()) < installInFlight {
+			continue
+		}
 		os.RemoveAll(p)
 	}
 	for _, c := range components {
@@ -592,6 +624,11 @@ func (m *Manager) RemoveObsolete() []string {
 			}
 		}
 		for _, p := range leftovers {
+			if dest, wasOld := strings.CutSuffix(p, ".old"); wasOld {
+				if _, err := os.Stat(dest); errors.Is(err, os.ErrNotExist) && os.Rename(p, dest) == nil {
+					continue
+				}
+			}
 			os.Remove(p)
 		}
 	}

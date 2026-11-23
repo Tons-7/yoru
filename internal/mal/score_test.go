@@ -40,7 +40,6 @@ func TestSetProgressSendsScoreOnlyWhenRated(t *testing.T) {
 	if form.Get("score") != "9" {
 		t.Fatalf("score = %q, want 9", form.Get("score"))
 	}
-	// Set back to unrated on purpose: that 0 has to reach the site.
 	if err := c.SetProgress(t.Context(), 1, 3, "CURRENT", 0, 0, true); err != nil {
 		t.Fatal(err)
 	}

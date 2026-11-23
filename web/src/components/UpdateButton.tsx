@@ -137,7 +137,7 @@ export function UpdateRestartDialog({ busy, version, onClose }: { busy: string[]
   useModalFocus(panel)
   const { restart } = useUpdateActions()
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-60 flex items-center justify-center p-4">
       <div className="absolute inset-0 animate-fade-in bg-black/70 backdrop-blur-sm" />
       <div
         ref={panel}
@@ -158,7 +158,7 @@ export function UpdateRestartDialog({ busy, version, onClose }: { busy: string[]
             ))}
           </ul>
         </div>
-        {restart.isError && <p className="mt-3 text-xs text-recap">{(restart.error as Error).message}</p>}
+        {restart.isError && <p className="mt-3 text-xs text-red-300">{(restart.error as Error).message}</p>}
         <div className="mt-7 flex justify-end gap-3">
           <button type="button" onClick={onClose} className={cx(buttonClass('secondary'), 'h-11 px-5 text-[15px]')}>
             Not now
@@ -201,7 +201,7 @@ export function UpdateRestarting() {
 
   if (!restarting) return null
   return createPortal(
-    <div role="alertdialog" aria-modal="true" aria-labelledby="updating-title" className="fixed inset-0 z-[70] flex animate-fade-in flex-col items-center justify-center gap-4 bg-base-950/90 p-6 text-center backdrop-blur-sm">
+    <div role="alertdialog" aria-modal="true" aria-labelledby="updating-title" className="fixed inset-0 z-70 flex animate-fade-in flex-col items-center justify-center gap-4 bg-base-950/90 p-6 text-center backdrop-blur-sm">
       {!stuck && <span aria-hidden className="size-9 animate-spin rounded-full border-[3px] border-accent-400/25 border-t-accent-400 motion-reduce:animate-none" />}
       <h2 id="updating-title" className="font-display text-2xl font-bold text-white">
         {stuck ? "Yoru hasn't come back" : 'Updating Yoru'}

@@ -2,8 +2,6 @@ package parse
 
 import "testing"
 
-// "Show 08 1080p": no dash, no E prefix. The number went unparsed and stayed
-// in the title, which then named a different show than the one asked for.
 func TestBareNumberBeforeTheQualityRun(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -14,15 +12,12 @@ func TestBareNumberBeforeTheQualityRun(t *testing.T) {
 			"BLEACH: Sennen Kessen-hen", 8},
 		{"[Group] Some Show 12 [1080p][HEVC]", "Some Show", 12},
 		{"Another Show 105 WEB-DL AAC", "Another Show", 105},
-		// A version still rides along.
 		{"[Group] Some Show 08v2 1080p", "Some Show", 8},
 
-		// Not episodes: a year, a numeric title, one digit, a number with no quality run after.
 		{"[NoobSubs] your name. 2016 (1080p Blu-ray Dual Audio 8bit AC3)", "your name. 2016", 0},
 		{"[Group] 86 1080p", "86", 0},
 		{"[Group] Show 8 1080p", "Show 8", 0},
 		{"[Group] Show 08 something else", "Show 08 something else", 0},
-		// The separator is part of a number of its own.
 		{"Evangelion.3.33.1080p.BluRay.x264", "Evangelion 3 33", 0},
 		{"[Group] Show 5.1 1080p", "Show 5.1", 0},
 	}
@@ -37,7 +32,6 @@ func TestBareNumberBeforeTheQualityRun(t *testing.T) {
 	}
 }
 
-// The 264 of "H.264" is a codec, not episode 264: packs and films named that way vanished from results.
 func TestCodecIsNotABareEpisode(t *testing.T) {
 	for _, name := range []string{
 		"[FLE] The Apothecary Diaries - S02 (BD Remux 1080p H.264 FLAC) [Dual Audio]",
@@ -51,7 +45,6 @@ func TestCodecIsNotABareEpisode(t *testing.T) {
 	}
 }
 
-// A number before " - EE" is the title's or season's, not a range start: single episodes.
 func TestTitleNumberBeforeTheEpisodeIsNotARange(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -68,7 +61,6 @@ func TestTitleNumberBeforeTheEpisodeIsNotARange(t *testing.T) {
 			t.Errorf("%q: %d-%d batch=%v, want episode %d", c.name, got.Episode, got.EpisodeEnd, got.Batch, c.episode)
 		}
 	}
-	// Real spans still read as ranges.
 	for _, name := range []string{
 		"[Group] Bocchi the Rock! - 01 ~ 12 [1080p]",
 		"[SubsPlease] Show (01-12) (1080p) [Batch]",
@@ -94,7 +86,6 @@ func TestResolutionGluedToTheSource(t *testing.T) {
 	}
 }
 
-// A finale marker belongs to the episode, not the title, or short titles fail the show check.
 func TestFinaleMarkerLeavesTheTitle(t *testing.T) {
 	for _, name := range []string{
 		"[Erai-raws] Oshi no Ko - 12 END [1080p]",
@@ -122,6 +113,9 @@ func TestNumeralSeason(t *testing.T) {
 		{"Kaiju No. 8", 8, false},
 		{"Sousou no Frieren", 0, false},
 		{"Mob Psycho 100", 0, false},
+		{"SPY x FAMILY Part 2", 0, false},
+		{"Shingeki no Kyojin: The Final Season Part 2", 0, false},
+		{"Vinland Saga Cour II", 0, false},
 	}
 	for _, c := range cases {
 		if n, roman := NumeralSeason(c.title); n != c.n || roman != c.roman {
@@ -130,7 +124,6 @@ func TestNumeralSeason(t *testing.T) {
 	}
 }
 
-// The version suffix is the one piece of the bare form worth keeping.
 func TestBareNumberCarriesItsVersion(t *testing.T) {
 	got := Parse("[Group] Some Show 08v2 1080p")
 	if got.Version != 2 {

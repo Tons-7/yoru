@@ -8,7 +8,6 @@ import (
 	"yoru/internal/anilist"
 )
 
-// Conan (two TV entries, dozens of films) is the hard case. Opt-in: YORU_LIVE=1 go test -run LiveRelated -v
 func TestLiveRelatedFindsTheFilms(t *testing.T) {
 	if os.Getenv("YORU_LIVE") == "" {
 		t.Skip("set YORU_LIVE=1 to query AniList")
@@ -49,7 +48,6 @@ func TestLiveRelatedFindsTheFilms(t *testing.T) {
 		}
 	}
 
-	// The walk stores bare ids; the page fills the titles, as the handler does.
 	var blank []int
 	for _, e := range related {
 		if e.Romaji == "" {

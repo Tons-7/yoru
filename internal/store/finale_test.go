@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// A season's finale plays on into the next season once it has aired; mid-season, or before it airs, it doesn't.
 func TestTheFinalePlaysIntoTheNextSeason(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

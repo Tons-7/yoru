@@ -28,6 +28,8 @@ export function EditHomeSheet({ open, onClose, layout }: { open: boolean; onClos
   }, [onClose])
 
   const moveTo = (id: HomeRowId, to: number, control: 'grip' | 'menu') => {
+    const from = layout.order.indexOf(id)
+    if (from < 0 || to === from || to < 0 || to >= layout.order.length) return
     refocus.current = { id, control }
     layout.move(id, to)
   }

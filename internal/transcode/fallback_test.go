@@ -16,8 +16,6 @@ import (
 	"yoru/internal/sound"
 )
 
-// The test binary doubles as an ffmpeg that refuses one encoder and passes the
-// rest to the real one. A batch file cannot carry "%d.mp4" through cmd.exe intact.
 func TestMain(m *testing.M) {
 	if real := os.Getenv("YORU_FAKE_FFMPEG"); real != "" {
 		os.Exit(fakeFFmpeg(real, os.Getenv("YORU_FAKE_FAIL"), os.Args[1:]))
@@ -42,7 +40,6 @@ func fakeFFmpeg(real, refuse string, args []string) int {
 	return 0
 }
 
-// fakeBinary points the package at the test binary as ffmpeg, refusing one encoder.
 func fakeBinary(t *testing.T, ffmpeg, refuse string) string {
 	t.Helper()
 	t.Setenv("YORU_FAKE_FFMPEG", absolute(ffmpeg))
@@ -50,7 +47,6 @@ func fakeBinary(t *testing.T, ffmpeg, refuse string) string {
 	return os.Args[0]
 }
 
-// tenBitClip is the source that needs re-encoding in the field: 10-bit HEVC.
 func tenBitClip(t *testing.T, ffmpeg string, seconds int) string {
 	t.Helper()
 	out, _ := exec.Command(ffmpeg, "-hide_banner", "-encoders").Output()
@@ -71,7 +67,6 @@ func tenBitClip(t *testing.T, ffmpeg string, seconds int) string {
 	return path
 }
 
-// A listed hardware encoder that dies at the first frame is noticed, and software finishes.
 func TestHardwareEncoderFailureFallsBackToSoftware(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := tenBitClip(t, ffmpeg, 4)
@@ -103,7 +98,6 @@ func TestHardwareEncoderFailureFallsBackToSoftware(t *testing.T) {
 	}
 }
 
-// A software failure isn't retried: nothing is left, and restarts would hide the error.
 func TestSoftwareFailureIsNotRetried(t *testing.T) {
 	const initFail = "InitializeEncoder failed: invalid param (8)"
 
@@ -117,7 +111,6 @@ func TestSoftwareFailureIsNotRetried(t *testing.T) {
 		t.Error("a session that already fell back must not loop")
 	}
 
-	// Once a segment exists the encoder worked; whatever killed it was not the encoder.
 	s = &Session{Plan: Plan{VideoCodec: "h264_nvenc"}, dir: t.TempDir()}
 	os.WriteFile(s.SegmentPath(3), []byte("x"), 0o644)
 	if s.canFallBack(3, initFail) {
@@ -127,13 +120,11 @@ func TestSoftwareFailureIsNotRetried(t *testing.T) {
 		t.Error("a pass that produced nothing after an init failure is a fallback")
 	}
 
-	// A lost input exits like an init failure, but switching to software wouldn't help.
 	if s.canFallBack(4, "tcp://127.0.0.1: Connection refused\nError opening input") {
 		t.Error("a source read error is not an encoder failure")
 	}
 }
 
-// An encoder failing every pass is reported, not relaunched per ask; a new sound plan retries.
 func TestEncoderFailingEveryPassIsReported(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := tenBitClip(t, ffmpeg, 4)
@@ -145,7 +136,6 @@ func TestEncoderFailingEveryPassIsReported(t *testing.T) {
 	}
 	t.Cleanup(func() { m.Close("1-1") })
 
-	// As the player asks: init, each a pass or two, every answer as soon as the pass has died.
 	asked := time.Now()
 	var last error
 	for range failedPasses {
@@ -181,7 +171,6 @@ func TestEncoderFailingEveryPassIsReported(t *testing.T) {
 	}
 }
 
-// Detection runs a real encode, as the encoder list is the same everywhere.
 func TestDetectEncoderSkipsOneThatCannotEncode(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	ctx := context.Background()
@@ -199,11 +188,8 @@ func TestDetectEncoderSkipsOneThatCannotEncode(t *testing.T) {
 	}
 }
 
-// A killed pass leaves the segment it was writing short, and a short file was
-// being served as whole. Only the last one a pass wrote can be short.
 func TestDropTailRemovesOnlyTheLastSegmentOfThePass(t *testing.T) {
 	s := &Session{dir: t.TempDir()}
-	// An earlier pass's segments, right after where this one will stop.
 	for _, n := range []int{13, 14} {
 		os.WriteFile(s.SegmentPath(n), []byte("x"), 0o644)
 		old := time.Now().Add(-time.Hour)
@@ -240,7 +226,6 @@ func TestLastLinesKeepsTheCause(t *testing.T) {
 	}
 }
 
-// clipWithCues muxes n cues, standing in for a file at stages of a download.
 func clipWithCues(t *testing.T, ffmpeg string, n int) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -285,7 +270,6 @@ func backdate(t *testing.T, path string) {
 	}
 }
 
-// A growing file's track is reread, never replaced by a read that recovered less.
 func TestPartialTrackIsReadAgainUntilComplete(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	s := NewSubtitles(ffmpeg)
@@ -303,7 +287,6 @@ func TestPartialTrackIsReadAgainUntilComplete(t *testing.T) {
 		t.Fatalf("first read: %d cues, want 2", got)
 	}
 
-	// More arrives: an immediate request gets the recent read, a later one the growth.
 	copyFile(t, clipWithCues(t, ffmpeg, 5), source)
 	if _, err := s.Extract(ctx, source, dir, track, "ass", false); err != nil {
 		t.Fatal(err)
@@ -319,7 +302,6 @@ func TestPartialTrackIsReadAgainUntilComplete(t *testing.T) {
 		t.Errorf("after the download grew: %d cues, want 5", got)
 	}
 
-	// A read that recovers less — holes moved — does not replace the better one.
 	copyFile(t, clipWithCues(t, ffmpeg, 3), source)
 	backdate(t, path)
 	if _, err := s.Extract(ctx, source, dir, track, "ass", false); err != nil {
@@ -329,7 +311,6 @@ func TestPartialTrackIsReadAgainUntilComplete(t *testing.T) {
 		t.Errorf("a shorter read replaced the track: %d cues", got)
 	}
 
-	// Complete: read once more and then left alone, however old it gets.
 	copyFile(t, clipWithCues(t, ffmpeg, 6), source)
 	backdate(t, path)
 	if _, err := s.Extract(ctx, source, dir, track, "ass", true); err != nil {

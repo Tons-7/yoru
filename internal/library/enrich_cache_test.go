@@ -7,7 +7,6 @@ import (
 	"yoru/internal/metadata"
 )
 
-// The caches hold at most cacheShows shows, the oldest going first, and drop what has expired.
 func TestPruneBoundsTheEnricherCaches(t *testing.T) {
 	at := func(c castEntry) time.Time { return c.at }
 	m := map[int]castEntry{}
@@ -30,7 +29,6 @@ func TestPruneBoundsTheEnricherCaches(t *testing.T) {
 	}
 }
 
-// An answer missing its staff is asked for again soon; a whole one is kept for the cast's TTL.
 func TestPartialExtraIsNotKeptForLong(t *testing.T) {
 	stale := time.Now().Add(-partialTTL - time.Second)
 	if (extraEntry{extra: metadata.Extra{StaffMissing: true}, at: stale}).fresh() {

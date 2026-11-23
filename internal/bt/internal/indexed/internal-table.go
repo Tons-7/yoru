@@ -1,18 +1,17 @@
 package indexed
 
 import (
-	"fmt"
 	"iter"
 
 	g "github.com/anacrolix/generics"
 	"github.com/anacrolix/missinggo/v2/panicif"
 	"yoru/internal/bt/internal/amortize"
+	"yoru/internal/bt/internal/check"
 )
 
 type table[R Record] struct {
-	minRecord g.Option[R]
-	set       btreeSet[R]
-	// Tracks changes to the btree
+	minRecord     g.Option[R]
+	set           btreeSet[R]
 	version       int
 	cmp           CompareFunc[R]
 	indexes       []genericRelation
@@ -51,10 +50,6 @@ func (me *table[R]) incVersion() {
 	me.version++
 }
 
-func (me *table[R]) assertIteratorVersion(it btreeIterator[R]) {
-	panicif.NotEq(me.version, it.version)
-}
-
 func (me *table[R]) IterFrom(start R) iter.Seq[R] {
 	if me.minRecord.Ok {
 		panicif.LessThan(me.cmp(start, me.minRecord.Value), 0)
@@ -80,24 +75,6 @@ func (me *table[R]) SelectFirstIf(gte R, filter func(r R) bool) (ret g.Option[R]
 	return
 }
 
-func (me *table[R]) checkWhereGotFirst(first g.Option[R], where func(r R) bool) {
-	if !amortize.Try() {
-		return
-	}
-	var slowRet g.Option[R]
-	for r := range me.Iter {
-		if where(r) {
-			slowRet.Set(r)
-			break
-		}
-	}
-	if first.Ok != slowRet.Ok || first.Ok && me.cmp(first.Value, slowRet.Value) != 0 {
-		fmt.Printf("%#v\n", first.Value)
-		fmt.Printf("%#v\n", slowRet.Value)
-		panic("herp")
-	}
-}
-
 func (me *table[R]) SelectFirstWhere(gte R, where func(r R) bool) (ret g.Option[R]) {
 	for r := range me.IterFromWhile(gte, where) {
 		ret.Set(r)
@@ -120,7 +97,7 @@ func (me *table[R]) CreateOrReplace(r R) {
 
 func (me *table[R]) Iter(yield func(R) bool) {
 	for r := range me.set.Iter {
-		if me.minRecord.Ok && amortize.Try() {
+		if check.Enabled && me.minRecord.Ok && amortize.Try() {
 			panicif.LessThan(me.cmp(r, me.minRecord.Value), 0)
 		}
 		if !yield(r) {
@@ -155,20 +132,16 @@ func (me *table[R]) Update(r R, updateFunc func(r R) R) (existed bool) {
 	return true
 }
 
-// Should this only return a single value ever? Should we check?
 func (me *table[R]) Contains(r R) bool {
 	return me.set.Contains(r)
 }
 
 func (me *table[R]) Changed(old, new g.Option[R]) {
-	// You should not even be trying to change a table underneath iterators. We want to know about
-	// this even if nothing happens.
 	me.incVersion()
 	if !old.Ok && !new.Ok {
 		return
 	}
 	if old.Ok && new.Ok {
-		// I believe we have that Records are value-comparable.
 		if old.Value == new.Value {
 			return
 		}
@@ -179,16 +152,12 @@ func (me *table[R]) Changed(old, new g.Option[R]) {
 	me.runTriggers(old, new)
 }
 
-// When you know the existing state and the destination state. Most efficient.
 func (me *table[R]) Change(old, new g.Option[R]) {
 	if old.Ok {
 		if new.Ok {
-			// We can't guard deletion in case the compare function is partial, because we may be
-			// updating unordered fields.
 			_, deleted := me.set.Delete(old.Value)
 			panicif.False(deleted)
 			_, overwrote := me.set.Upsert(new.Value)
-			// What about deleting only if the upsert doesn't clobber here?
 			panicif.True(overwrote)
 		} else {
 			_, deleted := me.set.Delete(old.Value)
@@ -210,15 +179,13 @@ func (me *table[R]) GetFirst() (r R, ok bool) {
 		ok = true
 		break
 	}
-	if amortize.Try() {
+	if check.Enabled && amortize.Try() {
 		panicif.NotEq(g.OptionFromTuple(r, ok), me.GetGte(me.MinRecord()))
 	}
 	return
 }
 
-// Gets the first record greater than or equal. Hope to avoid allocation for iterator.
 func (me *table[R]) GetGte(r R) (ret g.Option[R]) {
-	// Don't need version checking since we don't iterate.
 	for ret.Value = range me.IterFrom(r) {
 		ret.Ok = true
 		break
@@ -226,13 +193,10 @@ func (me *table[R]) GetGte(r R) (ret g.Option[R]) {
 	return
 }
 
-// Not count because that could imply more than O(1) work.
 func (me *table[R]) Len() int {
 	return me.set.Len()
 }
 
-// MinRecord is the least R (not always its zero value), panicking if unset; a start midway may need its
-// middle fields set by hand.
 func (me *table[R]) MinRecord() (_ R) {
 	return me.minRecord.Unwrap()
 }

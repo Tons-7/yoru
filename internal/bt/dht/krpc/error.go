@@ -7,12 +7,10 @@ import (
 )
 
 const (
-	// These are documented in BEP 5.
-	ErrorCodeGenericError  = 201
-	ErrorCodeServerError   = 202
-	ErrorCodeProtocolError = 203
-	ErrorCodeMethodUnknown = 204
-	// BEP 44
+	ErrorCodeGenericError                  = 201
+	ErrorCodeServerError                   = 202
+	ErrorCodeProtocolError                 = 203
+	ErrorCodeMethodUnknown                 = 204
 	ErrorCodeMessageValueFieldTooBig       = 205
 	ErrorCodeInvalidSignature              = 206
 	ErrorCodeSaltFieldTooBig               = 207
@@ -25,7 +23,6 @@ var ErrorMethodUnknown = Error{
 	Msg:  "Method Unknown",
 }
 
-// Represented as a string or list in bencode.
 type Error struct {
 	Code int
 	Msg  string

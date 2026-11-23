@@ -1,5 +1,3 @@
-// Each Anime4K tier draws a picture on this device, Off draws none, and a phone's Auto stays off.
-// Headed by default: WebGPU needs the real GPU, which headless Chromium does not always get.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -21,10 +19,10 @@ await post('/api/prefs', { key: 'playback.anime4k', value: 'true' })
 
 const browser = await chromium.launch({
   headless: process.env.HEADLESS === '1',
+  ...(process.env.HEADLESS === '1' ? { channel: 'chromium' } : {}),
   args: ['--autoplay-policy=no-user-gesture-required', '--enable-unsafe-webgpu', '--enable-features=Vulkan'],
 })
 
-// One profile per case, with the device choice stored before the page loads.
 async function watch(choice, contextOptions = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, ...contextOptions })
   if (choice) await context.addInitScript((c) => localStorage.setItem('yoru.anime4k', c), choice)
@@ -40,7 +38,6 @@ async function watch(choice, contextOptions = {}) {
     await video.evaluate((v) => v.play().catch(() => {})).catch(() => {})
     await sleep(1000)
   }
-  // The upscaled canvas is the one before the video; shown means opacity 1.
   const shown = async () =>
     page.evaluate(() => {
       const canvas = document.querySelector('video')?.previousElementSibling
@@ -76,7 +73,6 @@ if (gpu) {
       return v.currentTime - t > 0.5
     })
     check(moving, `${tier}: playback keeps going`)
-    // The canvas covers the video, so a frozen renderer would show one frame over a running clock.
     const frame = () => run.page.locator('video').screenshot()
     const before = await frame()
     await sleep(1200)

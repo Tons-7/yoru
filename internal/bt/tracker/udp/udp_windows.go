@@ -9,3 +9,7 @@ import (
 func isErrMessageTooLong(err error) bool {
 	return errors.Is(err, windows.WSAEMSGSIZE)
 }
+
+func isErrConnReset(err error) bool {
+	return errors.Is(err, windows.WSAECONNRESET)
+}

@@ -1,12 +1,9 @@
-// Yoru's worker: pushed alerts, a page for when Yoru can't be reached, and episodes saved on this device.
 const OFFLINE = 'yoru-offline-1'
-// Kept across updates: saved episodes, and a copy of the app per build to play them in.
 const SAVED = 'yoru-saved'
 const SHELL = 'yoru-shell-'
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()
-  // Without the copy the worker still does alerts; the browser's own error page shows instead.
   event.waitUntil(caches.open(OFFLINE).then((c) => c.add('/offline.html')).catch(() => {}))
 })
 self.addEventListener('activate', (event) =>
@@ -33,7 +30,19 @@ async function saved(req) {
   return hit || new Response('{"error":"not saved on this device"}', { status: 404, headers: { 'Content-Type': 'application/json' } })
 }
 
-async function shell() {
+let shellLookup = null
+
+function shell() {
+  if (!shellLookup) {
+    shellLookup = findShell()
+    setTimeout(() => {
+      shellLookup = null
+    }, 2000)
+  }
+  return shellLookup
+}
+
+async function findShell() {
   for (const name of (await caches.keys()).filter((k) => k.startsWith(SHELL)).reverse()) {
     const cache = await caches.open(name)
     if (await cache.match('/__ready')) return cache
@@ -41,7 +50,6 @@ async function shell() {
   return null
 }
 
-// Named by their contents, so the kept file is the same one; a PC asleep never holds it up.
 async function asset(req) {
   const cache = await shell()
   return (cache && (await cache.match(req, { ignoreSearch: true }))) || fetch(req)
@@ -50,8 +58,9 @@ async function asset(req) {
 async function page(req, url) {
   const app = await shell()
   if (app && url.searchParams.has('offline')) return (await app.match('/')) || Response.error()
+  if (url.pathname.startsWith('/api/')) return fetch(req)
   const ctl = new AbortController()
-  const timer = setTimeout(() => ctl.abort(), 3000)
+  const timer = setTimeout(() => ctl.abort(), 6000)
   try {
     return await fetch(req, { signal: ctl.signal })
   } catch {
@@ -62,8 +71,24 @@ async function page(req, url) {
   }
 }
 
-// The server sends the declarative form ({ web_push: 8030, notification: {...} }), which Safari can show by
-// itself; here it is shown for the browsers that hand it to the worker.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  const options = event.oldSubscription ? event.oldSubscription.options : null
+  if (!options) return
+  event.waitUntil(
+    self.registration.pushManager
+      .subscribe(options)
+      .then((sub) =>
+        fetch('/api/push/subscribe', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sub.toJSON()),
+        }),
+      )
+      .catch(() => {}),
+  )
+})
+
 self.addEventListener('push', (event) => {
   let data = {}
   try {
@@ -72,7 +97,6 @@ self.addEventListener('push', (event) => {
     data = { notification: { title: 'Yoru', body: event.data ? event.data.text() : '' } }
   }
   const n = data.notification || {}
-  // Yoru's own part: the show's picture, and the buttons acting on its show or episode.
   const y = data.yoru || {}
   const shown = self.registration.showNotification(n.title || 'Yoru', {
     body: n.body,
@@ -88,7 +112,6 @@ self.addEventListener('push', (event) => {
   event.waitUntil(Promise.all([shown, badged]))
 })
 
-// An alert's buttons: what each asks of Yoru, and how the result is said.
 const ACTIONS = {
   download: {
     title: 'Download',
@@ -104,7 +127,6 @@ const ACTIONS = {
   },
   follow: {
     title: 'Follow',
-    // Not /api/follow: this also lifts alerts turned off for the show, as the button promises.
     path: (d) => `/api/anime/${d.animeId}/notify`,
     body: () => ({ on: true }),
     done: () => 'Following: new episodes will alert you',
@@ -117,7 +139,6 @@ const ACTIONS = {
   },
 }
 
-// A button pressed: done without opening Yoru, then said in a short alert of its own.
 async function act(name, d, tag) {
   const a = ACTIONS[name]
   let text
@@ -135,7 +156,6 @@ async function act(name, d, tag) {
   return self.registration.showNotification('Yoru', { body: text, tag, icon: '/icon-192.png' })
 }
 
-// A tap opens the episode: in a Yoru window already open on this address, or a new one.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const d = event.notification.data || {}
@@ -148,7 +168,13 @@ self.addEventListener('notificationclick', (event) => {
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
       const open = windows.find((w) => new URL(w.url).origin === new URL(url).origin)
       if (!open) return self.clients.openWindow(url)
-      return open.navigate(url).then((w) => (w || open).focus(), () => open.focus())
+      return open.navigate(url).then(
+        (w) => (w || open).focus(),
+        () => {
+          open.postMessage({ type: 'open', url })
+          return open.focus()
+        },
+      )
     }),
   )
 })

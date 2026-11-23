@@ -4,8 +4,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
-	"math/big"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -20,11 +20,6 @@ import (
 	"yoru/internal/bt/dht/int160"
 	"yoru/internal/bt/dht/krpc"
 )
-
-func TestSetNilBigInt(t *testing.T) {
-	i := new(big.Int)
-	i.SetBytes(make([]byte, 2))
-}
 
 func TestMarshalCompactNodeInfo(t *testing.T) {
 	cni := krpc.CompactIPv4NodeInfo{krpc.NodeInfo{
@@ -118,8 +113,6 @@ func TestServerCustomNodeId(t *testing.T) {
 	var id [20]byte
 	n := copy(id[:], idBytes)
 	require.Equal(t, 20, n)
-	// How to test custom *secure* ID when tester computers will have
-	// different IDs? Generate custom ids for local IPs and use mini-ID?
 	s, err := NewServer(&ServerConfig{
 		NodeId: id,
 		Conn:   mustListen(":0"),
@@ -147,23 +140,18 @@ func TestAnnounceTimeout(t *testing.T) {
 	s.Close()
 }
 
-func TestEqualPointers(t *testing.T) {
-	assert.EqualValues(t, &krpc.Msg{R: &krpc.Return{}}, &krpc.Msg{R: &krpc.Return{}})
-}
-
 func TestHook(t *testing.T) {
 	pinger, err := NewServer(&ServerConfig{
-		Conn:     mustListen("127.0.0.1:5678"),
+		Conn:     mustListen("127.0.0.1:0"),
 		PublicIP: net.IPv4(127, 0, 0, 1),
 	})
 	require.NoError(t, err)
 	defer pinger.Close()
-	// Establish server with a hook attached to "ping"
 	hookCalled := make(chan struct{}, 1)
 	receiver, err := NewServer(&ServerConfig{
-		Conn:          mustListen("127.0.0.1:5679"),
+		Conn:          mustListen("127.0.0.1:0"),
 		PublicIP:      net.IPv4(127, 0, 0, 1),
-		StartingNodes: addrResolver("127.0.0.1:5678"),
+		StartingNodes: addrResolver(pinger.Addr().String()),
 		OnQuery: func(m *krpc.Msg, addr net.Addr) bool {
 			t.Logf("receiver got msg: %v", m)
 			if m.Q == "ping" {
@@ -178,18 +166,14 @@ func TestHook(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer receiver.Close()
-	// Ping receiver from pinger to trigger hook. Should also receive a response.
 	t.Log("TestHook: Servers created, hook for ping established. Calling Ping.")
 	res := pinger.Ping(&net.UDPAddr{
 		IP:   []byte{127, 0, 0, 1},
 		Port: receiver.Addr().(*net.UDPAddr).Port,
 	})
 	assert.NoError(t, res.Err)
-	// Await signal that hook has been called.
 	select {
 	case <-hookCalled:
-		// Success, hook was triggered. TODO: Ensure that "ok" channel
-		// receives, also, indicating normal handling proceeded also.
 		t.Log("TestHook: Received ping, hook called and returned to normal execution!")
 		t.Log("TestHook: Sender received response from pinged hook server, so normal execution resumed.")
 	case <-time.After(time.Second * 1):
@@ -197,14 +181,31 @@ func TestHook(t *testing.T) {
 	}
 }
 
-// Address resolution doesn't reject SendTo addresses that are invalid.
 func TestResolveBadAddr(t *testing.T) {
 	ua, err := net.ResolveUDPAddr("udp", "0.131.255.145:33085")
 	require.NoError(t, err)
 	assert.False(t, validNodeAddr(ua))
 }
 
+func TestAddrsForNetwork(t *testing.T) {
+	v4 := NewAddr(&net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 6881})
+	v6 := NewAddr(&net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 6881})
+	all := []Addr{v4, v6}
+	if got := AddrsForNetwork("udp4", append([]Addr(nil), all...)); len(got) != 1 || got[0].String() != v4.String() {
+		t.Fatalf("udp4 kept %v", got)
+	}
+	if got := AddrsForNetwork("udp6", append([]Addr(nil), all...)); len(got) != 1 || got[0].String() != v6.String() {
+		t.Fatalf("udp6 kept %v", got)
+	}
+	if got := AddrsForNetwork("udp", append([]Addr(nil), all...)); len(got) != 2 {
+		t.Fatalf("udp kept %v", got)
+	}
+}
+
 func TestGlobalBootstrapAddrs(t *testing.T) {
+	if os.Getenv("YORU_LIVE") == "" {
+		t.Skip("set YORU_LIVE=1 to resolve the bootstrap routers")
+	}
 	addrs, err := GlobalBootstrapAddrs("udp")
 	if err != nil {
 		t.Skip(err)
@@ -242,7 +243,6 @@ func TestBadGetPeersResponse(t *testing.T) {
 	}()
 	a, err := s.Announce([20]byte{}, 0, true)
 	require.NoError(t, err)
-	// Drain the Announce until it closes.
 	for range a.Peers {
 	}
 }

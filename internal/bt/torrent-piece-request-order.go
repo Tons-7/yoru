@@ -6,11 +6,10 @@ import (
 	"github.com/RoaringBitmap/roaring/v2"
 	g "github.com/anacrolix/generics"
 	"yoru/internal/bt/internal/amortize"
+	"yoru/internal/bt/internal/check"
 	requestStrategy "yoru/internal/bt/internal/request-strategy"
 )
 
-// It's probably possible to track whether the piece moves around in the btree to be more efficient
-// about triggering request updates.
 func (t *Torrent) updatePieceRequestOrderPiece(pieceIndex int) (changed bool) {
 	if t.storage == nil {
 		return false
@@ -23,7 +22,6 @@ func (t *Torrent) updatePieceRequestOrderPiece(pieceIndex int) (changed bool) {
 	if t.hasStorageCap() {
 		return pro.pieces.Update(key, t.requestStrategyPieceOrderState(pieceIndex))
 	}
-	// TODO: This might eject a piece that could count toward being unverified?
 	pending := !t.ignorePieceForRequests(pieceIndex)
 	if pending {
 		newState := t.requestStrategyPieceOrderState(pieceIndex)
@@ -93,7 +91,7 @@ func (t *Torrent) getPieceRequestOrder() *requestStrategy.PieceRequestOrder {
 }
 
 func (t *Torrent) checkPendingPiecesMatchesRequestOrder() {
-	if !amortize.Try() {
+	if !check.Enabled || t.dataDownloadDisallowed.IsSet() || !amortize.Try() {
 		return
 	}
 	short := *t.canonicalShortInfohash()

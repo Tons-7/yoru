@@ -39,7 +39,7 @@ func testReceiveChunkStorageFailure(t *testing.T, seederFast bool) {
 	seederClientConfig := bt.TestingConfig(t)
 	seederClientConfig.Debug = true
 	justOneNetwork(seederClientConfig)
-	seederClientStorage := storage.NewMMap(seederDataDir)
+	seederClientStorage := storage.NewFile(seederDataDir)
 	defer seederClientStorage.Close()
 	seederClientConfig.DefaultStorage = seederClientStorage
 	seederClientConfig.Seed = true
@@ -51,7 +51,6 @@ func testReceiveChunkStorageFailure(t *testing.T, seederFast bool) {
 	defer testutil.ExportStatusWriter(seederClient, "s", t)()
 	leecherClientConfig := bt.TestingConfig(t)
 	leecherClientConfig.Debug = true
-	// Fast isn't required, so seeders with and without it are both tried.
 	leecherClientConfig.MinPeerExtensions.SetBit(pp.ExtensionBitFast, false)
 	justOneNetwork(leecherClientConfig)
 	leecherClient, err := bt.NewClient(leecherClientConfig)
@@ -73,19 +72,14 @@ func testReceiveChunkStorageFailure(t *testing.T, seederFast bool) {
 	assert.True(t, new)
 	seederTorrent, err := seederClient.AddTorrent(metainfo)
 	require.NoError(t, err)
-	// Tell the seeder to find the leecher. Is it guaranteed seeders will always try to do this?
 	seederTorrent.AddClientPeer(leecherClient)
 	<-leecherTorrent.GotInfo()
 	r := leecherTorrent.Files()[0].NewReader()
 	defer r.Close()
-	// We can't use assertReadAllGreeting here, because the default storage write error handler
-	// disables data downloads, which now causes Readers to error when they're blocked.
 	if false {
 		assertReadAllGreeting(t, leecherTorrent.NewReader())
 	} else {
 		for func() bool {
-			// We don't seem to need to seek, but that's probably just because the storage failure is
-			// happening on the first read.
 			r.Seek(0, io.SeekStart)
 			if err := iotest.TestReader(r, []byte(testutil.GreetingFileContents)); err != nil {
 				t.Logf("got error while reading: %v", err)
@@ -95,7 +89,6 @@ func testReceiveChunkStorageFailure(t *testing.T, seederFast bool) {
 		}() {
 		}
 	}
-	// TODO: Check that PeerConns fastEnabled matches seederFast?
 }
 
 type pieceState struct {

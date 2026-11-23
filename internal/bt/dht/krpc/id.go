@@ -28,7 +28,6 @@ var (
 )
 
 func (h ID) Format(f fmt.State, c rune) {
-	// See metainfo.Hash.
 	f.Write([]byte(h.String()))
 }
 
@@ -48,9 +47,10 @@ func (id *ID) UnmarshalBencode(b []byte) error {
 	if err := bencode.Unmarshal(b, &s); err != nil {
 		return err
 	}
-	if n := copy(id[:], s); n != 20 {
-		return fmt.Errorf("string has wrong length: %d", n)
+	if len(s) != len(id) {
+		return fmt.Errorf("string has wrong length: %d", len(s))
 	}
+	copy(id[:], s)
 	return nil
 }
 

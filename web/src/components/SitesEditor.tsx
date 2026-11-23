@@ -4,7 +4,8 @@ import { api } from '../lib/api'
 import { useHeldData } from '../lib/hooks'
 import { useAccess } from '../lib/queries'
 import { toast } from '../lib/toast'
-import { Badge, Button, FilterToggle, RefreshFailed, Select, Skeleton, TextInput } from './ui'
+import { Badge, Button, ErrorState, FilterToggle, Select, Skeleton, TextInput } from './ui'
+import { iconButton as railButton } from './DownloadsBits'
 
 export interface Site {
   type: string
@@ -14,7 +15,6 @@ export interface Site {
 
 interface SitesState {
   sites: Array<Site & { problem?: string }>
-  /** False while the list is config.toml's, before one is saved here. */
   saved: boolean
   configPath: string
   kinds: string[]
@@ -22,11 +22,8 @@ interface SitesState {
 
 const KIND_LABEL: Record<string, string> = { nyaa: 'Nyaa-style', tokyotosho: 'TokyoTosho' }
 
-// Same-size labelled icons, 44px on touch screens, as on the downloads page.
-const iconButton =
-  'grid size-7 shrink-0 place-items-center rounded-md text-base-400 transition-colors hover:bg-base-800 hover:text-white disabled:opacity-40 pointer-coarse:size-11'
+const iconButton = `${railButton} disabled:opacity-40`
 
-/** The torrent sites Yoru searches, edited in place: saved at once and searched with, no restart. */
 export function SitesEditor() {
   const qc = useQueryClient()
   const sites = useQuery({ queryKey: ['sites'], queryFn: () => api.get<SitesState>('/api/sites') })
@@ -43,16 +40,24 @@ export function SitesEditor() {
   })
 
   if (sites.isPending) return <Skeleton className="h-24 w-full" />
-  if (sites.isError && !sites.data) return <RefreshFailed retry={() => void sites.refetch()} />
+  if (sites.isError && !sites.data) return <ErrorState error={sites.error} retry={() => void sites.refetch()} />
 
   const rows = sites.data.sites
-  // A broken block from config.toml can't be searched; saved with the rest, it would refuse every change.
   const usable = (from: typeof rows): Site[] => from.filter((s) => !s.problem).map(({ type, url, adult }) => ({ type, url, adult }))
   const list = usable(rows)
   const remove = (i: number) => {
     const gone = rows[i]
     save.mutate(usable(rows.filter((_, j) => j !== i)), {
-      onSuccess: () => toast(`Removed ${gone.url}`, 'info', { label: 'Undo', run: () => save.mutate(list) }),
+      onSuccess: () =>
+        toast(`Removed ${gone.url}`, 'info', {
+          label: 'Undo',
+          run: () => {
+            const now = usable(qc.getQueryData<SitesState>(['sites'])?.sites ?? [])
+            if (now.some((s) => s.type === gone.type && s.url === gone.url)) return
+            const { type, url, adult } = gone
+            save.mutate([...now.slice(0, i), { type, url, adult }, ...now.slice(i)])
+          },
+        }),
     })
   }
   const raise = (i: number) => save.mutate(usable([...rows.slice(0, i - 1), rows[i], rows[i - 1], ...rows.slice(i + 1)]))
@@ -66,7 +71,7 @@ export function SitesEditor() {
       ) : (
         <ul className="space-y-2">
           {rows.map((site, i) => (
-            <li key={`${site.type} ${site.url} ${site.adult}`} className="flex flex-wrap items-center gap-2 rounded-lg bg-base-850/60 px-3 py-2">
+            <li key={`${i} ${site.type} ${site.url} ${site.adult}`} className="flex flex-wrap items-center gap-2 rounded-lg bg-base-850/60 px-3 py-2">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm text-base-100" title={site.url}>
                   {site.url}
@@ -76,7 +81,7 @@ export function SitesEditor() {
                   {i === 0 && rows.length > 1 ? ' · first, so its record wins a release several sites carry' : ''}
                 </p>
                 {site.problem && (
-                  <p className="mt-0.5 text-xs text-recap">{site.problem}. Left out when the list is next saved.</p>
+                  <p className="mt-0.5 text-xs text-red-300">{site.problem}. Left out when the list is next saved.</p>
                 )}
               </div>
               {site.adult && <Badge tone="recap">Adult titles only</Badge>}
@@ -112,7 +117,7 @@ export function SitesEditor() {
           From {sites.data.configPath}. A change here moves the list into Yoru, and config.toml's blocks are then ignored.
         </p>
       )}
-      {save.isError && <p className="text-xs text-recap">{(save.error as Error).message}</p>}
+      {save.isError && <p className="text-xs text-red-300">{(save.error as Error).message}</p>}
 
       {host ? (
         <AddSite
@@ -134,7 +139,6 @@ function AddSite({
 }: {
   kinds: string[]
   adding: boolean
-  /** added runs once it is saved: a refused address stays typed in, to be fixed. */
   onAdd: (site: Site, added: () => void) => void
 }) {
   const [type, setType] = useState(kinds[0] ?? 'nyaa')
@@ -146,7 +150,6 @@ function AddSite({
     meta: { inline: true },
     mutationFn: (s: Site) => api.post<{ count: number; ms: number }>('/api/sites/test', s),
   })
-  // A result speaks for the address it was run on, not one edited since.
   const tested = test.variables && test.variables.url === site.url && test.variables.type === site.type
   const result = useHeldData(test)
 
@@ -194,11 +197,11 @@ function AddSite({
         </p>
       )}
       {tested && test.isError && (
-        <p className="flex basis-full flex-wrap items-center gap-2 text-xs text-recap">
+        <p className="flex basis-full flex-wrap items-center gap-2 text-xs text-red-300">
           <span>{(test.error as Error).message}</span>
-          <button type="button" onClick={() => test.mutate(site)} className="text-accent-300 underline-offset-2 hover:underline">
+          <Button type="button" size="sm" onClick={() => test.mutate(site)}>
             Try again
-          </button>
+          </Button>
         </p>
       )}
     </form>

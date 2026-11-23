@@ -39,7 +39,6 @@ func slimeStore(t *testing.T) *store.Store {
 	return st
 }
 
-// Earlier-season packs beside the real season-three releases.
 var slimeReleases = []indexer.Torrent{
 	release(strings.Repeat("a", 40), "[Trix] Tensei Shitara Slime Datta Ken S01+02+OADs+Tensura Nikki - AV1 MiNi", 900),
 	release(strings.Repeat("b", 40), "[Judas] Tensei Shitara Slime Datta Ken (That Time I Got Reincarnated as a Slime) S02SP01-02 [1080p][HEVC x265 10bit][Multi-Subs] (Weekly)", 400),
@@ -91,7 +90,6 @@ func TestCandidatesWithoutASeasonNeverPickAnEarlierSeasonPack(t *testing.T) {
 	}
 }
 
-// What /api/play used to do; documents the failure.
 func TestForcingSeasonOneIsWhatBroke(t *testing.T) {
 	st := slimeStore(t)
 	f := NewFinder(st, fixedIndexer{results: slimeReleases}, slog.New(slog.NewTextHandler(io.Discard, nil)))

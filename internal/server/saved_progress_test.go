@@ -12,7 +12,6 @@ import (
 	"yoru/internal/config"
 )
 
-// One late report of a whole episode counts; a place older than Yoru's own is ignored.
 func TestSavedProgressCountsWhatWasWatchedAway(t *testing.T) {
 	h := watchHarness(t)
 	now := time.Now().UnixMilli()

@@ -1,5 +1,3 @@
-// Reports the subtitles each real release of a show carries and whether they render.
-//   YORU_EXTRA_CONFIG='[[indexer]] ...' YORU_SHOW='Some title' EPISODES=1,2 node scripts/run-player-check.mjs subs-live-check.mjs
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -34,14 +32,12 @@ for (const ep of EPISODES) {
   }
 }
 
-// Nothing plays unless asked; the question is what the viewer would see.
 await fetch(`${BASE}/api/prefs`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ key: 'playback.autoplay', value: 'true' }),
 })
 
-// What the server extracts for a track, independent of the renderer.
 const dialogueOf = async (streamId, track) => {
   const res = await fetch(`${BASE}/api/stream/${streamId}/subtitle/${track}`)
   const body = res.ok ? await res.text() : ''
@@ -66,7 +62,6 @@ for (const ep of EPISODES) {
   const onResponse = async (res) => {
     const url = res.url()
     try {
-      // This episode's only: a late answer for the previous page must not count.
       if (url.includes('/api/stream/open') && url.includes(`episode=${ep}&`)) {
         opens++
         stream = await res.json()
@@ -74,7 +69,6 @@ for (const ep of EPISODES) {
       else if (url.endsWith('/api/play')) play = await res.json()
       else if (url.includes('/subtitle/')) {
         const body = await res.text()
-        // Lines where the check plays from (4:00), not just the opening.
         const nearPlayhead = (body.match(/^Dialogue: \d+,0:0[345]:\d\d/gm) ?? []).length
         subtitleFetches.push({
           status: res.status(),
@@ -84,7 +78,6 @@ for (const ep of EPISODES) {
         })
       }
     } catch {
-      // A body already consumed or a closed page.
     }
   }
   page.on('response', onResponse)
@@ -111,7 +104,6 @@ for (const ep of EPISODES) {
     }
   }
 
-  // Playing, then into the episode past any cold open, where there is dialogue.
   const started = Date.now()
   while (Date.now() - started < 4 * 60_000) {
     const t = await page.evaluate(() => document.querySelector('video')?.currentTime ?? 0)

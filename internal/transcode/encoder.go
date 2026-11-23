@@ -12,20 +12,16 @@ import (
 	"yoru/internal/proc"
 )
 
-// Hardware encoders per system, fastest first, each tried here. Only H.264: every browser decodes it.
 var hardwareEncoders = map[string][]string{
 	"windows": {"h264_nvenc", "h264_qsv", "h264_amf"},
 	"darwin":  {"h264_videotoolbox"},
 	"linux":   {"h264_nvenc", "h264_qsv", "h264_vaapi"},
 }[runtime.GOOS]
 
-// VA-API encodes from a render node's surfaces, which frames are uploaded to after every filter.
 const vaapiDevice = "/dev/dri/renderD128"
 
-// IsHardwareEncoder: a GPU encoder, which transcodes HEVC/10-bit in real time.
 func IsHardwareEncoder(codec string) bool { return usesHardware(codec) }
 
-// DetectEncoder picks the first hardware encoder that really encodes here (all builds list nvenc), or libx264.
 func DetectEncoder(ctx context.Context, ffmpeg string, log *slog.Logger) string {
 	out, err := proc.Hide(exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-encoders")).Output()
 	if err != nil {
@@ -46,7 +42,6 @@ func DetectEncoder(ctx context.Context, ffmpeg string, log *slog.Logger) string 
 	return softwareEncoder
 }
 
-// CanEncode: ffmpeg has libx264 (Fedora's ffmpeg-free lacks it) or a working hardware encoder.
 func CanEncode(ctx context.Context, ffmpeg string) bool {
 	out, err := proc.Hide(exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-encoders")).Output()
 	if err != nil {
@@ -64,7 +59,6 @@ func CanEncode(ctx context.Context, ffmpeg string) bool {
 	return false
 }
 
-// Version is the version ffmpeg or ffprobe reports, or "".
 func Version(ctx context.Context, binary string) string {
 	out, err := proc.Hide(exec.CommandContext(ctx, binary, "-hide_banner", "-version")).Output()
 	if err != nil {

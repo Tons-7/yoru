@@ -12,8 +12,6 @@ import (
 	"yoru/internal/store"
 )
 
-// LibraryFile is what an export writes and an import reads. The version is
-// there so a future change can be recognised rather than half-applied.
 type LibraryFile struct {
 	Kind       string              `json:"kind"`
 	Version    int                 `json:"version"`
@@ -22,8 +20,7 @@ type LibraryFile struct {
 }
 
 const (
-	libraryKind = "yoru.library"
-	// legacyLibraryKind marks files exported by kuro, which read the same.
+	libraryKind       = "yoru.library"
 	legacyLibraryKind = "kuro.library"
 	libraryVersion    = 1
 )
@@ -89,7 +86,6 @@ func orDash(s string) string {
 	return s
 }
 
-// importLibrary merges a Yoru, kuro or MAL export: progress never goes back, and changes queue for trackers.
 func (s *Server) importLibrary(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<20))
 	if err != nil {
@@ -139,12 +135,13 @@ func (s *Server) importLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	rep.Skipped += unmatched
 
-	// Titles for ids the corpus lacks arrive after the reply; a big file is many rate-limited requests.
 	ids := make([]int, 0, len(file.Entries))
 	for _, e := range file.Entries {
 		ids = append(ids, e.AnimeID)
 	}
 	go func() {
+		s.hydrating.Lock()
+		defer s.hydrating.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		s.hydrate(ctx, ids)

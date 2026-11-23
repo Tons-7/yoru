@@ -27,6 +27,7 @@ import {
   useFranchise,
   useNow,
   usePrefs,
+  newToYou,
   useRecommendations,
   useRemoveStatus,
   useSetNotify,
@@ -55,6 +56,7 @@ import {
   inputClass,
   LinkButton,
   SaveHint,
+  ScorePicker,
   Skeleton,
   Switch,
   TextInput,
@@ -155,13 +157,13 @@ function seasonName(media: Media): string | null {
 }
 
 function airLabel(unix: number, now: number): string {
-  if (unix * 1000 - now < DAY) return relativeTime(unix)
+  if (unix * 1000 - now < DAY) return relativeTime(unix, now)
   return new Date(unix * 1000).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
 }
 
 function outLabel(unix: number, now: number): string {
   const ms = unix * 1000 - now
-  if (ms < DAY) return relativeTime(unix)
+  if (ms < DAY) return relativeTime(unix, now)
   return new Date(unix * 1000).toLocaleDateString(undefined, ms < 6 * DAY ? { weekday: 'short' } : { day: 'numeric', month: 'short' })
 }
 
@@ -349,8 +351,14 @@ function Genres({ genres }: { genres: string[] }) {
   )
 }
 
+const parsed = { html: '', text: '' }
+
 function plainText(html: string): string {
-  return new DOMParser().parseFromString(html, 'text/html').body.textContent ?? ''
+  if (html !== parsed.html) {
+    parsed.html = html
+    parsed.text = new DOMParser().parseFromString(html, 'text/html').body.textContent ?? ''
+  }
+  return parsed.text
 }
 
 function Synopsis({ text }: { text: string }) {
@@ -365,7 +373,7 @@ function Synopsis({ text }: { text: string }) {
     check()
     window.addEventListener('resize', check)
     return () => window.removeEventListener('resize', check)
-  }, [text])
+  }, [text, open])
 
   return (
     <div className="mt-4 max-w-[45rem]">
@@ -401,7 +409,7 @@ function TrailerButton({ videoId, className }: { videoId: string; className?: st
         type="button"
         onClick={() => setShowing(true)}
         className={cx(
-          'press flex h-11 items-center gap-1.5 rounded-card bg-base-950/70 px-4 text-sm font-medium text-white ring-1 ring-white/[0.06] backdrop-blur-sm transition-[background-color,transform] hover:bg-base-950/90',
+          'press flex h-11 items-center gap-1.5 rounded-card bg-base-950/70 px-4 text-sm font-medium text-white ring-1 ring-white/6 backdrop-blur-sm transition-[background-color,transform] hover:bg-base-950/90',
           className,
         )}
       >
@@ -443,7 +451,8 @@ export function Anime() {
   const finished =
     !resume &&
     (detail.data?.listStatus === 'COMPLETED' || (progress > 0 && total > 0 && progress >= total && !next))
-  const unaired = !resume && !finished && progress > 0 && !!next?.airDate && next.airDate > now
+  const unaired = !resume && !finished && !!next?.airDate && next.airDate > now
+  const notOut = !resume && !finished && !unaired && progress === 0 && detail.data?.anime.status === 'NOT_YET_RELEASED'
   const lead: Lead = resume
     ? {
         kind: 'play',
@@ -454,7 +463,9 @@ export function Anime() {
       ? { kind: 'rewatch' }
       : unaired
         ? { kind: 'wait', label: `Ep ${next!.display} out ${outLabel(next!.airDate!, clock)}` }
-        : { kind: 'play', label: `Play Ep ${firstLabel}` }
+        : notOut
+          ? { kind: 'wait', label: 'Not out yet' }
+          : { kind: 'play', label: `Play Ep ${firstLabel}` }
   const ready = !!detail.data && !episodes.isPending
 
   const navigate = useNavigate()
@@ -507,9 +518,9 @@ export function Anime() {
                 banner ? 'object-center' : 'object-[center_20%] sm:scale-125 sm:opacity-50 sm:blur-2xl',
               )}
             />
-            <div className="absolute inset-0 bg-gradient-to-t from-base-950 to-transparent to-40% sm:hidden" />
-            <div className="absolute inset-0 hidden bg-gradient-to-t from-base-950 via-base-950/80 to-base-950/30 sm:block" />
-            <div className="absolute inset-0 hidden bg-gradient-to-r from-base-950/70 to-transparent sm:block" />
+            <div className="absolute inset-0 bg-linear-to-t from-base-950 to-transparent to-40% sm:hidden" />
+            <div className="absolute inset-0 hidden bg-linear-to-t from-base-950 via-base-950/80 to-base-950/30 sm:block" />
+            <div className="absolute inset-0 hidden bg-linear-to-r from-base-950/70 to-transparent sm:block" />
             {trailer && <TrailerButton videoId={trailer} className="absolute right-4 bottom-3 z-10 sm:hidden" />}
           </div>
         )}
@@ -528,7 +539,7 @@ export function Anime() {
               src={cover}
               alt=""
               loading="lazy"
-              className="hidden h-72 w-48 shrink-0 rounded-card object-cover shadow-lift ring-1 ring-white/[0.06] sm:block sm:[view-transition-name:show-art]"
+              className="hidden h-72 w-48 shrink-0 rounded-card object-cover shadow-lift ring-1 ring-white/6 sm:block sm:[view-transition-name:show-art]"
             />
           ) : null}
 
@@ -671,9 +682,9 @@ export function Anime() {
           <CharacterRail animeId={id} />
           <ShowCredits animeId={id} />
 
-          {(recommended.data?.items?.length ?? 0) > 0 && (
+          {newToYou(recommended.data?.items ?? []).length > 0 && (
             <Rail title={recommended.data?.source === 'genre' ? 'Similar genres' : 'More like this'}>
-              {recommended.data!.items.map((anime: DiscoverItem) => (
+              {newToYou(recommended.data?.items ?? []).map((anime: DiscoverItem) => (
                 <RailItem key={anime.id}>
                   <PosterCard anime={toCard(anime)} />
                 </RailItem>
@@ -692,7 +703,7 @@ export function Anime() {
         {wide && detail.data && (
           <aside
             aria-label="This show"
-            className="sticky top-20 max-h-[calc(100dvh-6rem)] space-y-6 overflow-y-auto rounded-card bg-base-900 p-4 scrollbar-thin"
+            className="sticky top-20 max-h-[calc(100dvh-6rem)] space-y-6 overflow-y-auto surface p-4 scrollbar-thin"
           >
             <section>
               <h2 className="text-base font-semibold text-base-100">This show</h2>
@@ -740,11 +751,11 @@ function Tile({
   return (
     <button ref={ref} type="button" className={cx(TILE, className)} {...props}>
       {icon}
-      <span className="flex items-center gap-0.5 sm:hidden">
-        {label}
+      <span className="flex max-w-full min-w-0 items-center gap-0.5 sm:hidden">
+        <span className="truncate">{label}</span>
         {chevron && <ChevronDown />}
       </span>
-      {caption && <span className="text-xs font-normal text-base-400 sm:hidden">{caption}</span>}
+      {caption && <span className="max-w-full truncate text-xs font-normal text-base-400 sm:hidden">{caption}</span>}
       <span className="hidden items-center gap-1.5 sm:flex">
         {wide ?? label}
         {chevron && <ChevronDown />}
@@ -874,7 +885,12 @@ function RateAction({ animeId, score }: { animeId: number; score: number }) {
       void qc.invalidateQueries({ queryKey: ['library'] })
     },
   })
-  const tens = Math.round(score / 10)
+  const resetScore = set.reset
+  const landed = set.isSuccess && set.variables === score
+  useEffect(() => {
+    if (landed) resetScore()
+  }, [landed, resetScore])
+  const tens = Math.round((set.isError || set.variables === undefined ? score : set.variables) / 10)
   const [open, setOpen] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
   const pick = (n: number) => {
@@ -888,43 +904,14 @@ function RateAction({ animeId, score }: { animeId: number; score: number }) {
         ref={trigger}
         icon={<StarIcon filled={tens > 0} />}
         label={tens > 0 ? `${tens}/10` : 'Rate'}
-        aria-label="Your score"
+        aria-label={tens > 0 ? `Your score: ${tens} out of 10` : 'Your score: not rated'}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen(true)}
       />
       <PopSheet open={open} onClose={() => setOpen(false)} title="Your score" anchor={trigger} width={272}>
-        <div role="menu" aria-label="Your score" className="grid grid-cols-5 gap-1.5 sm:p-1">
-          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-            <button
-              key={n}
-              type="button"
-              role="menuitemradio"
-              aria-checked={n === tens}
-              autoFocus={n === tens}
-              disabled={set.isPending}
-              onClick={() => pick(n)}
-              className={cx(
-                'h-12 rounded-lg text-base font-semibold tabular-nums transition-colors sm:h-10 sm:text-sm',
-                n === tens ? 'bg-accent-500 text-white' : 'bg-base-800 text-base-100 hover:bg-base-700',
-              )}
-            >
-              {n}
-            </button>
-          ))}
-          <button
-            type="button"
-            role="menuitemradio"
-            aria-checked={tens === 0}
-            disabled={set.isPending}
-            onClick={() => pick(0)}
-            className={cx(
-              'col-span-5 h-12 rounded-lg text-[15px] font-medium transition-colors sm:h-10 sm:text-sm',
-              tens === 0 ? 'bg-base-700 text-base-100' : 'bg-base-800 text-base-300 hover:bg-base-700',
-            )}
-          >
-            Unrated
-          </button>
+        <div className="sm:p-1">
+          <ScorePicker value={tens} onChange={pick} pending={set.isPending} />
         </div>
       </PopSheet>
     </>
@@ -935,9 +922,18 @@ function useSetBookmark(animeId: number) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (b: Partial<Bookmark>) => api.post('/api/bookmarks', { animeId, ...b }),
-    onSuccess: () => {
+    onMutate: async (b) => {
+      await qc.cancelQueries({ queryKey: ['anime', animeId] })
+      const before = qc.getQueryData<{ bookmark?: Bookmark }>(['anime', animeId])
+      if (before) qc.setQueryData(['anime', animeId], { ...before, bookmark: { ...before.bookmark, ...b } })
+      return { before }
+    },
+    onError: (_e, _b, context) => {
+      if (context?.before) qc.setQueryData(['anime', animeId], context.before)
+    },
+    onSettled: () => {
       void qc.invalidateQueries({ queryKey: ['anime', animeId] })
-      void qc.invalidateQueries({ queryKey: ['bookmarks'] })
+      void qc.invalidateQueries({ queryKey: ['library'] })
     },
   })
 }
@@ -974,7 +970,10 @@ function DownloadAction({ animeId, episodes }: { animeId: number; episodes: Epis
 
   const waiting = queue.data?.waiting?.[String(animeId)] ?? 0
   const aired = episodes.filter((e) => !isUnaired(e, clock))
-  const missing = aired.filter((e) => !e.onDisk && !e.local)
+  const inLine = new Set(
+    (queue.data?.items ?? []).filter((q) => q.animeId === animeId && q.state !== 'failed').map((q) => q.episode),
+  )
+  const missing = aired.filter((e) => !e.onDisk && !e.local && !inLine.has(e.number))
   const unwatched = missing.filter((e) => !e.watched)
   const toDownload = (unwatched.length ? unwatched : missing).map((e) => e.number)
   const what =
@@ -1018,11 +1017,11 @@ function DownloadAction({ animeId, episodes }: { animeId: number; episodes: Epis
       },
     })
   const start = () => (wontFit ? setStep('space') : queueAll())
-  const back = () => (guest ? setStep('choose') : close())
+  const back = () => (guest || waiting > 0 ? setStep('choose') : close())
   const press = () => {
     setNote(null)
     downloadAll.reset()
-    if (!guest && waiting > 0) setStep('stop')
+    if (!guest && waiting > 0) setStep('choose')
     else if (!guest && toDownload.length > 0) {
       if (!wontFit) return queueAll()
       setStep('space')
@@ -1085,7 +1084,7 @@ function DownloadAction({ animeId, episodes }: { animeId: number; episodes: Epis
             <ConfirmInline
               tone="accent"
               label={downloadAll.isPending ? 'Queuing…' : 'Download anyway'}
-              note={`${toDownload.length === 1 ? 'It needs' : `These ${toDownload.length} need`} about ${bytes(need)}, and ${room.data?.drive} has ${bytes(free ?? 0)} free.`}
+              note={`${toDownload.length === 1 ? 'It needs' : `These ${toDownload.length} need`} about ${bytes(need)}, and ${room.data?.drive || 'the drive'} has ${bytes(free ?? 0)} free.`}
               pending={downloadAll.isPending}
               onConfirm={queueAll}
               onCancel={back}
@@ -1110,11 +1109,15 @@ function DownloadAction({ animeId, episodes }: { animeId: number; episodes: Epis
                   <span className="block text-sm font-medium text-base-100">{waiting} queued on the PC</span>
                   <span className="block text-[13px] text-base-400">They download one at a time</span>
                 </span>
+                <LinkButton to="/downloads" size="sm">
+                  Open Downloads
+                </LinkButton>
                 <Button size="sm" onClick={() => setStep('stop')}>
                   Stop
                 </Button>
               </div>
-            ) : toDownload.length > 0 ? (
+            ) : null}
+            {waiting > 0 && toDownload.length === 0 ? null : toDownload.length > 0 ? (
               <button type="button" onClick={start} disabled={downloadAll.isPending} className={OPTION}>
                 <DownloadIcon className="size-5 shrink-0 text-base-300" />
                 <span className="min-w-0 flex-1">
@@ -1260,7 +1263,7 @@ function ThisShowRow({
         type="button"
         aria-haspopup="dialog"
         onClick={() => setOpen(true)}
-        className="press mt-4 flex min-h-14 w-full items-center gap-3 rounded-card bg-base-900 px-4 py-2.5 text-left transition-[background-color,transform] hover:bg-base-800 sm:max-w-xl"
+        className="press mt-4 flex min-h-14 w-full items-center gap-3 surface px-4 py-2.5 text-left transition-[background-color,transform] hover:bg-base-800 sm:max-w-xl"
       >
         <BellIcon on={!!notify?.on && !allOff} />
         <span className="min-w-0 flex-1">
@@ -1321,7 +1324,7 @@ function ShowRow({ label, hint, control, children }: { label: string; hint?: Rea
           <span className="block text-[15px] text-base-100 sm:text-sm">{label}</span>
           {hint && <span className="mt-0.5 block text-[13px] text-base-400">{hint}</span>}
         </span>
-        <ControlLabel.Provider value={label}>{control}</ControlLabel.Provider>
+        <ControlLabel value={label}>{control}</ControlLabel>
       </label>
       {children}
     </div>
@@ -1503,7 +1506,8 @@ function ShowList({
   const saved = own.join(', ')
   const [text, setText] = useState(saved)
   const [shown, setShown] = useState(saved)
-  if (shown !== saved) {
+  const [focused, setFocused] = useState(false)
+  if (shown !== saved && !focused) {
     setShown(saved)
     setText(saved)
   }
@@ -1514,7 +1518,7 @@ function ShowList({
     const value = items.join(',')
     if (value === own.join(',') || value === sent.current) return
     sent.current = value
-    setPref.mutate({ animeId, key: setting, value: items.length > 0 ? JSON.stringify(items) : '' })
+    setPref.mutate({ animeId, key: setting, value: items.length > 0 ? JSON.stringify(items) : '' }, { onError: () => { sent.current = saved } })
   }
   const latest = useRef(save)
   useEffect(() => {
@@ -1532,7 +1536,11 @@ function ShowList({
         id={id}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        onBlur={save}
+        onFocus={() => setFocused(true)}
+        onBlur={() => {
+          setFocused(false)
+          save()
+        }}
         onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
         placeholder={inherited.length > 0 ? inherited.join(', ') : fallback}
         className="min-w-40 flex-1"
@@ -1561,7 +1569,8 @@ function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
   const [text, setText] = useState(saved)
   const [open, setOpen] = useState(!!saved)
   const [shown, setShown] = useState(saved)
-  if (shown !== saved) {
+  const [focused, setFocused] = useState(false)
+  if (shown !== saved && !focused) {
     setShown(saved)
     setText(saved)
   }
@@ -1570,7 +1579,7 @@ function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
   const save = () => {
     if (text === saved || text === sent.current || (!text.trim() && !saved)) return
     sent.current = text
-    set.mutate({ note: text })
+    set.mutate({ note: text }, { onError: () => { sent.current = saved } })
   }
   const latest = useRef(save)
   useEffect(() => {
@@ -1617,7 +1626,9 @@ function Note({ animeId, bookmark }: { animeId: number; bookmark?: Bookmark }) {
         autoFocus={!saved}
         value={text}
         onChange={(e) => setText(e.target.value)}
+        onFocus={() => setFocused(true)}
         onBlur={() => {
+          setFocused(false)
           save()
           if (!text.trim() && !saved) setOpen(false)
         }}

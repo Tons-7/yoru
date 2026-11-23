@@ -11,7 +11,6 @@ import (
 	infohash_v2 "yoru/internal/bt/types/infohash-v2"
 )
 
-// Provides access to regions of torrent data that correspond to its files.
 type File struct {
 	t           *Torrent
 	path        string
@@ -31,28 +30,22 @@ func (f *File) Torrent() *Torrent {
 	return f.t
 }
 
-// Data for this file begins this many bytes into the Torrent.
 func (f *File) Offset() int64 {
 	return f.offset
 }
 
-// The FileInfo from the metainfo.Info to which this file corresponds.
 func (f *File) FileInfo() metainfo.FileInfo {
 	return f.fi
 }
 
-// The file's path components including the directory name joined by '/'.
 func (f *File) Path() string {
 	return f.path
 }
 
-// The file's length in bytes.
 func (f *File) Length() int64 {
 	return f.length
 }
 
-// Number of bytes of the entire file we have completed. This is the sum of
-// completed pieces, and dirtied chunks of incomplete pieces.
 func (f *File) BytesCompleted() (n int64) {
 	f.t.cl.rLock()
 	n = f.bytesCompletedLocked()
@@ -121,19 +114,15 @@ func (f *File) bytesLeft() (left int64) {
 	)
 }
 
-// The relative file path for a multi-file torrent, and the torrent name for a
-// single-file torrent. Dir separators are '/'.
 func (f *File) DisplayPath() string {
 	return f.displayPath
 }
 
-// The download status of a piece that comprises part of a File.
 type FilePieceState struct {
-	Bytes int64 // Bytes within the piece that are part of this File.
+	Bytes int64
 	PieceState
 }
 
-// Returns the state of pieces in this file.
 func (f *File) State() (ret []FilePieceState) {
 	f.t.cl.rLock()
 	defer f.t.cl.rUnlock()
@@ -153,7 +142,6 @@ func (f *File) State() (ret []FilePieceState) {
 	return
 }
 
-// Requests that all pieces containing data in the file be downloaded.
 func (f *File) Download() {
 	f.SetPriority(PiecePriorityNormal)
 }
@@ -164,16 +152,10 @@ func byteRegionExclusivePieces(off, size, pieceSize int64) (begin, end int) {
 	return
 }
 
-// Deprecated: Use File.SetPriority.
-func (f *File) Cancel() {
-	f.SetPriority(PiecePriorityNone)
-}
-
 func (f *File) NewReader() Reader {
 	return f.t.newReader(f.Offset(), f.Length())
 }
 
-// Sets the minimum priority for pieces in the File.
 func (f *File) SetPriority(prio PiecePriority) {
 	f.t.cl.lock()
 	if prio != f.prio {
@@ -183,7 +165,6 @@ func (f *File) SetPriority(prio PiecePriority) {
 	f.t.cl.unlock()
 }
 
-// Returns the priority per File.SetPriority.
 func (f *File) Priority() (prio PiecePriority) {
 	f.t.cl.rLock()
 	prio = f.prio
@@ -191,12 +172,10 @@ func (f *File) Priority() (prio PiecePriority) {
 	return
 }
 
-// Returns the index of the first piece containing data for the file.
 func (f *File) BeginPieceIndex() int {
 	return f.fi.BeginPieceIndex(int64(f.t.usualPieceSize()))
 }
 
-// Returns the index of the piece after the last one containing data for the file.
 func (f *File) EndPieceIndex() int {
 	return f.fi.EndPieceIndex(int64(f.t.usualPieceSize()))
 }

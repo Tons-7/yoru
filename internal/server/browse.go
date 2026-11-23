@@ -2,8 +2,10 @@ package server
 
 import (
 	"errors"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -139,6 +141,7 @@ func (c *browseCounts) get(key string, measure func() (n int, keep bool, err err
 		c.mu.Lock()
 		delete(c.running, key)
 		if err == nil && keep {
+			maps.DeleteFunc(c.done, func(_ string, e countEntry) bool { return time.Since(e.at) >= countTTL })
 			c.done[key] = countEntry{n: n, at: time.Now()}
 		}
 		c.mu.Unlock()
@@ -162,12 +165,7 @@ func (s *Server) studios(w http.ResponseWriter, r *http.Request) {
 }
 
 func containsFold(list []string, v string) bool {
-	for _, x := range list {
-		if strings.EqualFold(x, v) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(list, func(x string) bool { return strings.EqualFold(x, v) })
 }
 
 func deref(s *string) string {
@@ -194,6 +192,10 @@ func (s *Server) remember(r *http.Request, media []anilist.Media) {
 
 func (s *Server) decorate(r *http.Request, media []anilist.Media) []discoverItem {
 	s.remember(r, media)
+	return s.decorateOnly(r, media)
+}
+
+func (s *Server) decorateOnly(r *http.Request, media []anilist.Media) []discoverItem {
 	onList, err := s.store.ListEntries(r.Context())
 	if err != nil {
 		s.log.Warn("list entries", "err", err)
@@ -337,7 +339,7 @@ func (s *Server) filters(w http.ResponseWriter, r *http.Request) {
 	}
 
 	season, year := anilist.Season(time.Now())
-	years := make([]int, 0, year-1939)
+	years := make([]int, 0, year-1938)
 	for y := year + 1; y >= 1940; y-- {
 		years = append(years, y)
 	}

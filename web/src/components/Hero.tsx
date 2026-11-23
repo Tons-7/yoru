@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import type { DiscoverItem } from '../lib/api'
-import { cx, tint } from '../lib/format'
+import { cx, playLabel, tint } from '../lib/format'
+import { focusRing } from '../lib/ui'
 import { useMediaQuery } from '../lib/hooks'
 import { PlayIcon } from './PosterCard'
 import { StatusMenu } from './StatusMenu'
@@ -23,7 +24,10 @@ type Touch = { id: number; x: number; y: number; t: number; dx: number; axis?: '
 export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boolean }) {
   const slides = pick(items)
   const n = slides.length
-  const [picked, setPicked] = useState(0)
+  const [pickedId, setPickedId] = useState<number | null>(null)
+  const found = pickedId == null ? -1 : slides.findIndex((s) => s.anime.id === pickedId)
+  const picked = found >= 0 ? found : 0
+  const setPicked = (to: number) => setPickedId(slides[to]?.anime.id ?? null)
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
   const [stopped, setStopped] = useState(false)
@@ -40,14 +44,15 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
   const index = picked < n ? picked : 0
   const rotating = n > 1 && !hovered && !focused && !stopped && !calm && !drag
 
+  const nextId = n > 0 ? (slides[(index + 1) % n]?.anime.id ?? null) : null
   useEffect(() => {
     if (!rotating) return
     const timer = window.setTimeout(() => {
       setGone(null)
-      setPicked((index + 1) % n)
+      setPickedId(nextId)
     }, ROTATE_MS)
     return () => window.clearTimeout(timer)
-  }, [rotating, index, n])
+  }, [rotating, index, nextId])
 
   useEffect(() => {
     if (!settle) return
@@ -144,7 +149,7 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
   const next = (active.progress ?? 0) + 1
   const done = caughtUp(active)
   const button =
-    'press flex h-11 items-center justify-center rounded-xl px-5 text-[15px] whitespace-nowrap transition-[background-color,transform] pointer-coarse:h-12 max-sm:px-4'
+    `press flex h-11 items-center justify-center rounded-xl px-5 text-[15px] whitespace-nowrap transition-[background-color,transform] pointer-coarse:h-12 max-sm:px-4 ${focusRing}`
 
   return (
     <section
@@ -230,7 +235,7 @@ export function Hero({ items, loading }: { items?: DiscoverItem[]; loading?: boo
                   className={cx(button, 'gap-2 bg-accent-500 font-semibold text-white hover:bg-accent-600 max-sm:flex-1')}
                 >
                   <PlayIcon />
-                  {active.progress ? `Resume Ep ${next}` : `Play Ep ${next}`}
+                  {playLabel(next, !!active.progress)}
                 </Link>
               )}
               <Link
@@ -329,14 +334,14 @@ function Art({ anime, shown }: { anime: DiscoverItem; shown: boolean }) {
             className="size-full object-cover object-top sm:scale-125 sm:opacity-60 sm:blur-3xl sm:saturate-150"
           />
         ))}
-      <div className="absolute inset-0 bg-gradient-to-r from-base-950/90 via-base-950/70 via-35% to-transparent to-60% max-sm:hidden" />
-      <div className="absolute inset-0 bg-gradient-to-t from-base-950 via-base-950/75 via-50% to-transparent sm:via-base-950/10" />
+      <div className="absolute inset-0 bg-linear-to-r from-base-950/90 via-base-950/70 via-35% to-transparent to-60% max-sm:hidden" />
+      <div className="absolute inset-0 bg-linear-to-t from-base-950 via-base-950/75 via-50% to-transparent sm:via-base-950/10" />
       {shown && !anime.banner && (
         <img
           src={cover}
           alt=""
           decoding="async"
-          className="absolute inset-y-0 right-0 aspect-[4/3] h-full object-cover object-[center_20%] [mask-image:linear-gradient(to_right,transparent,black_40%)] max-sm:hidden"
+          className="absolute inset-y-0 right-0 aspect-4/3 h-full object-cover object-[center_20%] [mask-image:linear-gradient(to_right,transparent,black_40%)] max-sm:hidden"
         />
       )}
       <div
@@ -385,6 +390,7 @@ function caughtUp(anime: DiscoverItem) {
   return (
     anime.listStatus === 'COMPLETED' ||
     anime.status === 'NOT_YET_RELEASED' ||
+    (anime.status === 'RELEASING' && !aired) ||
     (!!aired && (anime.progress ?? 0) >= aired)
   )
 }

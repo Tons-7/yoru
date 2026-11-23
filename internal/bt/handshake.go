@@ -12,14 +12,12 @@ import (
 	pp "yoru/internal/bt/peer_protocol"
 )
 
-// A raw connection as the message loop wants it.
 type deadlineReader struct {
 	nc net.Conn
 	r  io.Reader
 }
 
 func (r deadlineReader) Read(b []byte) (int, error) {
-	// Keep-alives should be received every 2 mins. Give a bit of gracetime.
 	err := r.nc.SetReadDeadline(time.Now().Add(150 * time.Second))
 	if err != nil {
 		return 0, fmt.Errorf("error setting read deadline: %s", err)
@@ -27,7 +25,6 @@ func (r deadlineReader) Read(b []byte) (int, error) {
 	return r.r.Read(b)
 }
 
-// Handles stream encryption for inbound connections.
 func handleEncryption(
 	rw io.ReadWriter,
 	skeys mse.SecretKeyIter,
@@ -39,14 +36,12 @@ func handleEncryption(
 	cryptoMethod mse.CryptoMethod,
 	err error,
 ) {
-	// Tries to start an unencrypted stream.
 	if !policy.RequirePreferred || !policy.Preferred {
 		var protocol [len(pp.Protocol)]byte
 		_, err = io.ReadFull(rw, protocol[:])
 		if err != nil {
 			return
 		}
-		// Put the protocol back into the stream.
 		rw = struct {
 			io.Reader
 			io.Writer
@@ -59,7 +54,6 @@ func handleEncryption(
 			return
 		}
 		if policy.RequirePreferred {
-			// We are here because we require unencrypted connections.
 			err = fmt.Errorf("unexpected protocol string %q and header obfuscation disabled", protocol)
 			return
 		}

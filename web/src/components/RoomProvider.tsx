@@ -62,6 +62,28 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     return () => setPlayers((n) => n - 1)
   }, [])
 
+  const member = seat?.member
+  useEffect(() => {
+    if (!together || !member || typeof BroadcastChannel === 'undefined') return
+    const channel = new BroadcastChannel(`yoru.together.seat.${together.code}.${member}`)
+    let fresh = true
+    channel.onmessage = (e: MessageEvent<string>) => {
+      if (e.data === 'who' && !fresh) channel.postMessage('mine')
+      if (e.data === 'mine' && fresh) {
+        saveSeat(together, null)
+        setSeat(null)
+      }
+    }
+    channel.postMessage('who')
+    const settled = window.setTimeout(() => {
+      fresh = false
+    }, 300)
+    return () => {
+      window.clearTimeout(settled)
+      channel.close()
+    }
+  }, [together, member])
+
   const ended = !!seat && room.status === 'ended'
   useEffect(() => {
     if (!ended) return
@@ -84,5 +106,5 @@ export function RoomProvider({ children }: { children: ReactNode }) {
     () => ({ together, seat, invite: seat?.invite, room, inRoom, isHost, canPick, open, sit, leave, drop, attach }),
     [together, seat, room, inRoom, isHost, canPick, open, sit, leave, drop, attach],
   )
-  return <RoomSessionContext.Provider value={value}>{children}</RoomSessionContext.Provider>
+  return <RoomSessionContext value={value}>{children}</RoomSessionContext>
 }

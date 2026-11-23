@@ -15,9 +15,8 @@ func seasonPack() []File {
 	return files
 }
 
-// The filename's number decides, not size, which picks whichever episode is biggest.
 func TestPickEpisodeUsesTheNumberNotTheSize(t *testing.T) {
-	got, idx, ok := PickEpisode(seasonPack(), 10, 0)
+	got, idx, ok := pickEpisode(seasonPack(), 10, 0)
 	if !ok {
 		t.Fatal("episode 10 not found")
 	}
@@ -25,20 +24,18 @@ func TestPickEpisodeUsesTheNumberNotTheSize(t *testing.T) {
 		t.Fatalf("picked %q at index %d", got.Name, idx)
 	}
 
-	// Episode 11 is the largest file; asking for 1 must not return it.
-	first, _, _ := PickEpisode(seasonPack(), 1, 0)
+	first, _, _ := pickEpisode(seasonPack(), 1, 0)
 	if first.Name != "Show/Show - 01 [1080p].mkv" {
 		t.Fatalf("picked %q for episode 1", first.Name)
 	}
 }
 
 func TestPickEpisodeIgnoresSamplesAndSubtitles(t *testing.T) {
-	if _, _, ok := PickEpisode(seasonPack(), 99, 0); ok {
+	if _, _, ok := pickEpisode(seasonPack(), 99, 0); ok {
 		t.Fatal("a missing episode should report not found")
 	}
 
-	// The sample is an mkv containing no episode number and is far below the median size.
-	got, _, ok := PickEpisode(seasonPack(), 2, 0)
+	got, _, ok := pickEpisode(seasonPack(), 2, 0)
 	if !ok || got.Name != "Show/Show - 02 [1080p].mkv" {
 		t.Fatalf("picked %q", got.Name)
 	}
@@ -48,50 +45,46 @@ func TestPickEpisodeSingleFileTorrent(t *testing.T) {
 	files := []File{{Name: "[Group] Show - 07 [1080p].mkv", Length: 1400 << 20}}
 
 	for _, ep := range []int{7, 0} {
-		got, _, ok := PickEpisode(files, ep, 0)
+		got, _, ok := pickEpisode(files, ep, 0)
 		if !ok || got.Name != files[0].Name {
 			t.Fatalf("episode %d picked %q", ep, got.Name)
 		}
 	}
 
-	// A cour released as 01-12 but catalogued as 17-28.
 	cour := []File{{Name: "[Group] Show - 02 [1080p].mkv", Length: 1400 << 20}}
-	if _, _, ok := PickEpisode(cour, 18, 2); !ok {
+	if _, _, ok := pickEpisode(cour, 18, 2); !ok {
 		t.Fatal("the alternate numbering was not accepted")
 	}
 }
 
-// A lone file used to be taken on trust, so a feature film played as episode 1202 of a long-running series.
 func TestPickEpisodeRejectsALoneFileThatIsNotTheEpisode(t *testing.T) {
 	film := []File{{
 		Name:   "Detective.Conan.The.Bride.of.Halloween.2022.1080p.BluRay.x264.mkv",
 		Length: 6 << 30,
 	}}
-	if _, _, ok := PickEpisode(film, 1202, 0); ok {
+	if _, _, ok := pickEpisode(film, 1202, 0); ok {
 		t.Fatal("a film with no episode number was accepted as episode 1202")
 	}
 
 	wrong := []File{{Name: "[Group] Show - 03 [1080p].mkv", Length: 1400 << 20}}
-	if _, _, ok := PickEpisode(wrong, 1202, 0); ok {
+	if _, _, ok := pickEpisode(wrong, 1202, 0); ok {
 		t.Fatal("episode 3 was accepted as episode 1202")
 	}
 
-	// A one-episode entry is the case an unnumbered file legitimately covers.
-	if _, _, ok := PickEpisode(film, 1, 0); !ok {
+	if _, _, ok := pickEpisode(film, 1, 0); !ok {
 		t.Fatal("a film should still play as the single episode of its own entry")
 	}
 }
 
 func TestPickEpisodeNoVideos(t *testing.T) {
-	if _, _, ok := PickEpisode([]File{{Name: "readme.txt", Length: 100}}, 1, 0); ok {
+	if _, _, ok := pickEpisode([]File{{Name: "readme.txt", Length: 100}}, 1, 0); ok {
 		t.Fatal("matched a non-video file")
 	}
-	if _, _, ok := PickEpisode(nil, 1, 0); ok {
+	if _, _, ok := pickEpisode(nil, 1, 0); ok {
 		t.Fatal("matched something in an empty list")
 	}
 }
 
-// Resolution, codec, year and CRC are all numbers in a filename.
 func TestEpisodeInName(t *testing.T) {
 	tests := map[string]int{
 		"[SubsPlease] Sousou no Frieren - 10 (1080p) [7D35515E]": 10,
@@ -103,7 +96,6 @@ func TestEpisodeInName(t *testing.T) {
 		"sample":                            0,
 		"cover":                             0,
 		"[Group] Show [1080p][x265][10bit]": 0,
-		// The audio layout after an episode stated outright, Monster's BluRay pack.
 		"Monster.2004.S01E01.Herr.Dr.Tenma.1080p.BluRay.DUAL.FLAC.2.0.x264-Kitsune":  1,
 		"Monster.2004.S01E11.511.Kinderheim.1080p.BluRay.DUAL.FLAC.2.0.x264-Kitsune": 11,
 		"[CBM]_Monster_-_11_-_511_Kinderheim_[6C70C4E4]":                             11,

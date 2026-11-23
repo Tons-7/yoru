@@ -1,5 +1,3 @@
-// Audits every picture the main pages show: broken, stretched, or drawn larger than the file it came from.
-// Reads live catalogue data, so it runs by hand: PAGES=/a,/b overrides the pages, DPR sets the screen density.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -24,7 +22,6 @@ for (const path of PAGES) {
   failed.length = 0
   await page.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded' })
   await sleep(5000)
-  // Lazy pictures load as they near the screen.
   const height = await page.evaluate(() => document.documentElement.scrollHeight)
   for (let y = 0; y < height; y += 700) {
     await page.evaluate((to) => window.scrollTo(0, to), y)
@@ -33,7 +30,6 @@ for (const path of PAGES) {
   await sleep(2500)
 
   const found = await page.evaluate(async (dpr) => {
-    // A picture chosen from a 2x set reports half its width; the file loaded on its own reports all of it.
     const fileWidth = (src) =>
       new Promise((resolve) => {
         const probe = new Image()
@@ -65,14 +61,10 @@ for (const path of PAGES) {
         visible: box.width > 0 && box.height > 0,
         broken: img.complete && img.naturalWidth === 0,
         pending: !img.complete,
-        // Drawn with more screen pixels than the file has.
         stretch: img.naturalWidth ? (box.width * dpr) / (widths.get(img) || img.naturalWidth) : 0,
-        // "fill" squashes a picture whose shape differs from its box; cover and contain do not.
         distorted: fit === 'fill' && img.naturalWidth > 0 && Math.abs(natural - shown) / natural > 0.06,
-        // How much of the picture a cover crop throws away.
         cropped: fit === 'cover' && img.naturalWidth > 0 ? 1 - Math.min(natural / shown, shown / natural) : 0,
         fit,
-        // A backdrop blurred on purpose is not expected to be sharp.
         blurred: getComputedStyle(img).filter.includes('blur'),
         where: (img.closest('[aria-label]')?.getAttribute('aria-label') ?? img.alt ?? '').slice(0, 40),
       }
@@ -88,7 +80,6 @@ for (const path of PAGES) {
   const shown = found.imgs.filter((i) => i.visible)
   const broken = shown.filter((i) => i.broken)
   const pending = shown.filter((i) => i.pending)
-  // Banners are exempt: 1900 wide is the largest the catalogue has.
   const soft = shown.filter((i) => i.stretch > 1.3 && !i.blurred && !i.src.includes('/banner/'))
   const distorted = shown.filter((i) => i.distorted)
   const cropped = shown.filter((i) => i.cropped > 0.35)

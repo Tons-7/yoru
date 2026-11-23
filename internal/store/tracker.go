@@ -5,32 +5,26 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
+	"strconv"
 	"time"
 )
 
-// TrackerEntry is one anime that a tracker has not been told about yet.
 type TrackerEntry struct {
-	AnimeID  int // AniList id, Yoru's canonical key
-	RemoteID int // the id this tracker uses
-	Status   string
-	Progress int
-	Episodes int
-	// Repeat is the finished-rewatch count, MAL's num_times_rewatched.
-	Repeat int
-	// Score on Yoru's 0-100 scale; each tracker converts.
-	Score int
-	// LastScore is what the tracker was last told, so a 0 now is a clear.
+	AnimeID   int
+	RemoteID  int
+	Status    string
+	Progress  int
+	Episodes  int
+	Repeat    int
+	Score     int
 	LastScore int
 }
 
-// sharesMALID: another entry on this MAL id speaks for it, or the two overwrite each other every cycle.
 const sharesMALID = `
 	SELECT 1 FROM list_entry o JOIN anime oa ON oa.id = o.anime_id
 	WHERE oa.mal_id = a.mal_id AND o.anime_id <> e.anime_id
 	  AND (o.local_updated_at > e.local_updated_at OR (o.local_updated_at = e.local_updated_at AND o.anime_id < e.anime_id))`
 
-// pendingMAL selects entries whose local progress or status differs from what
-// MyAnimeList was last told. Anime with no MAL id are skipped; animeID 0 means all.
 const pendingMAL = `
 	SELECT e.anime_id, a.mal_id, coalesce(e.status, ''), e.progress,
 	       coalesce(a.episode_count, 0), e.repeat_count, e.score, coalesce(p.score, 0)
@@ -40,6 +34,7 @@ const pendingMAL = `
 	WHERE a.mal_id IS NOT NULL AND a.mal_id > 0
 	  AND (?2 = 0 OR e.anime_id = ?2)
 	  AND NOT EXISTS (` + sharesMALID + `)
+	  AND (?4 OR p.anime_id IS NOT NULL)
 	  AND (p.anime_id IS NULL
 	       OR p.progress <> e.progress
 	       OR p.status <> coalesce(e.status, '')
@@ -49,10 +44,9 @@ const pendingMAL = `
 	ORDER BY e.mal_failed_at, e.local_updated_at
 	LIMIT ?3`
 
-// PendingMALPush returns the one entry for animeID, or a zero value when MAL is already up to date on it.
 func (s *Store) PendingMALPush(ctx context.Context, tracker string, animeID int) (TrackerEntry, error) {
 	var e TrackerEntry
-	err := s.r.QueryRowContext(ctx, pendingMAL, tracker, animeID, 1).Scan(
+	err := s.r.QueryRowContext(ctx, pendingMAL, tracker, animeID, 1, true).Scan(
 		&e.AnimeID, &e.RemoteID, &e.Status, &e.Progress, &e.Episodes, &e.Repeat, &e.Score, &e.LastScore)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TrackerEntry{}, nil
@@ -61,7 +55,8 @@ func (s *Store) PendingMALPush(ctx context.Context, tracker string, animeID int)
 }
 
 func (s *Store) PendingMALPushes(ctx context.Context, tracker string, limit int) ([]TrackerEntry, error) {
-	rows, err := s.r.QueryContext(ctx, pendingMAL, tracker, 0, clampLimit(limit, 25, 200))
+	pulled, _ := s.Setting(ctx, tracker+".pulled_at")
+	rows, err := s.r.QueryContext(ctx, pendingMAL, tracker, 0, clampLimit(limit, 25, 200), pulled != "")
 	if err != nil {
 		return nil, err
 	}
@@ -78,14 +73,19 @@ func (s *Store) PendingMALPushes(ctx context.Context, tracker string, limit int)
 	return out, rows.Err()
 }
 
-// ForgetPushed drops what a tracker was told, so the next account reads as new.
 func (s *Store) ForgetPushed(ctx context.Context, tracker string) error {
-	_, err := s.w.ExecContext(ctx, `DELETE FROM tracker_push WHERE tracker = ?`, tracker)
+	if _, err := s.w.ExecContext(ctx, `DELETE FROM tracker_push WHERE tracker = ?`, tracker); err != nil {
+		return err
+	}
+	_, err := s.w.ExecContext(ctx, `DELETE FROM setting WHERE key = ?`, tracker+".pulled_at")
+	s.settingsChanged()
 	return err
 }
 
-// MarkPushed records what the tracker now holds. Storing the value rather than
-// clearing a flag means a later local change is detected by comparison.
+func (s *Store) Pulled(ctx context.Context, tracker string) error {
+	return s.SetSetting(ctx, tracker+".pulled_at", strconv.FormatInt(time.Now().Unix(), 10))
+}
+
 func (s *Store) MarkPushed(ctx context.Context, tracker string, animeID, progress int, status string, score int) error {
 	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO tracker_push (tracker, anime_id, progress, status, score, pushed_at)
@@ -102,7 +102,6 @@ func (s *Store) MarkPushed(ctx context.Context, tracker string, animeID, progres
 	return err
 }
 
-// Pushed is what the tracker was last told, or false when it never was.
 func (s *Store) Pushed(ctx context.Context, tracker string, animeID int) (TrackerEntry, bool, error) {
 	var e TrackerEntry
 	err := s.r.QueryRowContext(ctx, `
@@ -115,8 +114,6 @@ func (s *Store) Pushed(ctx context.Context, tracker string, animeID int) (Tracke
 	return e, err == nil, err
 }
 
-// SeedPushed records a tracker's existing state without pushing anything, so
-// connecting an account does not immediately re-send the whole list back to it.
 func (s *Store) SeedPushed(ctx context.Context, tracker string, entries []TrackerEntry) (int, error) {
 	if len(entries) == 0 {
 		return 0, nil
@@ -155,7 +152,6 @@ func (s *Store) SeedPushed(ctx context.Context, tracker string, entries []Tracke
 	return n, tx.Commit()
 }
 
-// AniListIDsForMAL maps MAL ids to AniList ids in one scan, a shared id going where pendingMAL pushes it.
 func (s *Store) AniListIDsForMAL(ctx context.Context, malIDs []int) (map[int]int, error) {
 	out := make(map[int]int, len(malIDs))
 	if len(malIDs) == 0 {
@@ -207,9 +203,16 @@ func (s *Store) AniListIDsForMAL(ctx context.Context, malIDs []int) (map[int]int
 	return out, nil
 }
 
-// speaksForMAL picks among anime sharing a MAL id: the listed one edited last, else the lowest id.
 func (s *Store) speaksForMAL(ctx context.Context, ids []int) (int, error) {
-	slices.Sort(ids)
+	slices.SortFunc(ids, func(a, b int) int {
+		if (a > 0) != (b > 0) {
+			if a > 0 {
+				return -1
+			}
+			return 1
+		}
+		return a - b
+	})
 	pick, best := ids[0], int64(-1)
 	for _, id := range ids {
 		var changed int64

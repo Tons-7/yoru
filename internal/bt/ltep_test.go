@@ -21,25 +21,18 @@ const (
 func countHandler(
 	t *testing.T,
 	wg *sync.WaitGroup,
-	// Name of the endpoint that this handler is for, for logging.
 	handlerName string,
-	// Whether we expect evens or odds
 	expectedMod2 uint,
-	// Extension name of messages we expect to handle.
 	answerToName pp.ExtensionName,
-	// Extension name of messages we expect to send.
 	replyToName pp.ExtensionName,
-	// Signal done when this value is seen.
 	doneValue uint,
 ) func(event PeerConnReadExtensionMessageEvent) {
 	return func(event PeerConnReadExtensionMessageEvent) {
-		// Read handshake, don't look it up.
 		if event.ExtensionNumber == 0 {
 			return
 		}
 		name, builtin, err := event.PeerConn.LocalLtepProtocolMap.LookupId(event.ExtensionNumber)
 		qt.Assert(t, qt.IsNil(err))
-		// Not a user protocol.
 		if builtin {
 			return
 		}
@@ -71,7 +64,6 @@ func TestUserLtep(t *testing.T) {
 
 	makeCfg := func() *ClientConfig {
 		cfg := TestingConfig(t)
-		// Only want a single connection to between the clients.
 		cfg.DisableUTP = true
 		cfg.DisableIPv6 = true
 		return cfg
@@ -79,12 +71,8 @@ func TestUserLtep(t *testing.T) {
 
 	evensCfg := makeCfg()
 	evensCfg.Callbacks.ReadExtendedHandshake = func(pc *PeerConn, msg *pp.ExtendedHandshakeMessage) {
-		// The client lock is held while handling this event, so we have to do synchronous work in a
-		// separate goroutine.
 		go func() {
-			// Check sending an extended message for a protocol the peer doesn't support is an error.
 			qt.Check(t, qt.IsNotNil(pc.WriteExtendedMessage("pm_me_floats", []byte("3.142"))))
-			// Kick things off by sending a 1.
 			qt.Check(t, qt.IsNil(pc.WriteExtendedMessage(testRepliesToOddsExtensionName, []byte("1"))))
 		}()
 	}
@@ -117,10 +105,8 @@ func TestUserLtep(t *testing.T) {
 	t2, _ := cl2.AddTorrentOpt(addOpts)
 	defer testutil.ExportStatusWriter(cl1, "cl1", t)()
 	defer testutil.ExportStatusWriter(cl2, "cl2", t)()
-	// Expect one PeerConn to see the value.
 	wg.Add(1)
 	added := t1.AddClientPeer(cl2)
-	// Ensure some addresses for the other client were added.
 	qt.Assert(t, qt.Not(qt.Equals(added, 0)))
 	wg.Wait()
 	_ = t2

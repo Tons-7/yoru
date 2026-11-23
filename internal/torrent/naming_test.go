@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// The names a download can sit under: this torrent's tagged ones first, then its own, then older versions'.
 func TestDiskNames(t *testing.T) {
 	got := DiskNames("Show - 01.mkv", "ABCDEF0123")
 	want := []string{"Show - 01 [abcdef01].mkv", "Show - 01.mkv [abcdef01]", "Show - 01.mkv"}

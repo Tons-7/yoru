@@ -8,8 +8,6 @@ import (
 	"yoru/internal/store"
 )
 
-// Finishing the last episode completes the entry, and AniList is sent today as its finish date: a slip here
-// writes a wrong or empty date to the user's public profile for every show they finish.
 func TestPushSendsTheFinishDate(t *testing.T) {
 	up := &aniServer{list: `{"data":{"MediaListCollection":{"lists":[]}}}`}
 	sync, st := newAniSync(t, up)
@@ -46,7 +44,7 @@ func TestPushSendsTheFinishDate(t *testing.T) {
 func TestFuzzyDate(t *testing.T) {
 	for _, c := range []struct {
 		in               string
-		year, month, day int // 0: no date
+		year, month, day int
 	}{
 		{"2026-10-19", 2026, 10, 19},
 		{"", 0, 0, 0},

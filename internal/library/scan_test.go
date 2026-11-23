@@ -30,8 +30,6 @@ func newScanner(t *testing.T) (*Scanner, *store.Store) {
 	return NewScanner(st, slog.New(slog.NewTextHandler(io.Discard, nil))), st
 }
 
-// Confidence 1 means assigned by hand and is never changed by a rescan; the raw
-// match score (6 and up) stored as confidence froze every guess that way.
 func TestScanConfidenceStaysBelowAHandAssignment(t *testing.T) {
 	for _, score := range []float64{6, 16, 30, 200} {
 		if c := scanConfidence(score); c >= 1 || c <= 0 {
@@ -43,7 +41,6 @@ func TestScanConfidenceStaysBelowAHandAssignment(t *testing.T) {
 	}
 }
 
-// write creates a file large enough to count as an episode.
 func write(t *testing.T, path string, size int) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -103,7 +100,6 @@ func TestScanFindsAndMatchesEpisodes(t *testing.T) {
 	}
 }
 
-// Samples and trailers are video too; playing one is worse than finding nothing.
 func TestScanSkipsSmallFilesAndExtras(t *testing.T) {
 	s, st := newScanner(t)
 	root := t.TempDir()
@@ -123,7 +119,6 @@ func TestScanSkipsSmallFilesAndExtras(t *testing.T) {
 	}
 }
 
-// Bare episode filenames are common; the folder carries the show name.
 func TestScanFallsBackToFolderName(t *testing.T) {
 	s, st := newScanner(t)
 	root := t.TempDir()
@@ -145,7 +140,6 @@ func TestScanFallsBackToFolderName(t *testing.T) {
 	}
 }
 
-// An unrecognised show still has to be recorded so it can be assigned by hand.
 func TestUnmatchedFilesAreKept(t *testing.T) {
 	s, st := newScanner(t)
 	root := t.TempDir()
@@ -169,7 +163,6 @@ func TestUnmatchedFilesAreKept(t *testing.T) {
 		t.Fatalf("%d unmatched files listed", len(page.Items))
 	}
 
-	// Assigning by hand makes it playable.
 	if err := st.AssignLocalFile(context.Background(), page.Items[0].ID, 154587, 3); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +171,6 @@ func TestUnmatchedFilesAreKept(t *testing.T) {
 	}
 }
 
-// A deleted file stops being offered but keeps its record, so an unplugged drive wipes nothing.
 func TestRescanMarksDeletedFilesMissing(t *testing.T) {
 	s, st := newScanner(t)
 	root := t.TempDir()
@@ -229,7 +221,6 @@ func TestScanWithoutConfiguredRootsIsANoOp(t *testing.T) {
 	}
 }
 
-// A root that does not exist is reported, not fatal: one bad path must not stop the others being scanned.
 func TestUnreadableRootIsReportedNotFatal(t *testing.T) {
 	s, st := newScanner(t)
 	good := t.TempDir()

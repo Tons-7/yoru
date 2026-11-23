@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { chromium } from 'playwright'
 
 const REPO = process.env.YORU_REPO ?? join(process.cwd(), '..')
-const RELEASED_TAG = process.env.YORU_TAG ?? '13c57fb9da3c328895d7b40e60c33a0da17b0dfa'
+const RELEASED_TAG = process.env.YORU_TAG ?? 'dd7ad5f1fbb16e02d3f6033b49d4b14fd749834f'
 const PORT = 4398
 const BASE = `http://127.0.0.1:${PORT}`
 const OLD = '1.0.0'
@@ -43,7 +43,24 @@ const api = async (path, init) => {
 const post = (path, body) => api(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
 
 const scratch = join(tmpdir(), 'yoru-update-check')
-rmSync(scratch, { recursive: true, force: true })
+const sweep = () => {
+  spawnSync('powershell', [
+    '-NoProfile', '-Command',
+    `Get-Process yoru -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '${scratch}*' } | Stop-Process -Force`,
+  ])
+  spawnSync('git', ['worktree', 'remove', '--force', join(scratch, 'released-src')], { cwd: REPO, stdio: 'ignore' })
+  spawnSync('git', ['worktree', 'prune'], { cwd: REPO, stdio: 'ignore' })
+  try {
+    rmSync(scratch, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
+  } catch (err) {
+    console.log(`could not remove ${scratch}: ${err.message}`)
+  }
+}
+sweep()
+let swept = false
+process.on('exit', () => {
+  if (!swept) sweep()
+})
 const root = join(scratch, 'app')
 const data = join(scratch, 'data')
 const release = join(scratch, 'release')
@@ -161,6 +178,7 @@ const env = {
   LOCALAPPDATA: data,
   APPDATA: data,
   YORU_UPDATE_API: ghBase(),
+  YORU_ANILIST_API: 'http://127.0.0.1:9',
   YORU_TOGETHER_LOCAL: '1',
   YORU_NO_WINDOW: '1',
 }
@@ -192,8 +210,18 @@ check(checked.ok && checked.body.available && checked.body.latest?.version === N
 const versions = (list) => (list ?? []).map((n) => n.version).join(',')
 check(versions(checked.body.pending) === `${NEW},${MID}`, 'every release since this one is offered, newest first', versions(checked.body.pending))
 
-const applied = await post('/api/update/apply')
-check(applied.status === 202, 'apply accepted', JSON.stringify(applied.body))
+let staged = (await api('/api/update')).body
+if (staged.stage !== 'ready' && staged.stage !== 'downloading' && staged.stage !== 'verifying') {
+  const started = await post('/api/update/download')
+  check(started.status === 202, 'download accepted', JSON.stringify(started.body))
+}
+for (let i = 0; i < 120 && staged.stage !== 'ready'; i++) {
+  await sleep(250)
+  staged = (await api('/api/update')).body
+}
+check(staged.stage === 'ready', 'the update is downloaded and verified', staged.stage)
+const applied = await post('/api/update/restart')
+check(applied.status === 202, 'restart to update accepted', JSON.stringify(applied.body))
 
 check(await waitVersion(NEW, 60), `Yoru ${NEW} answering on the same port`)
 for (let i = 0; i < 40 && oldExit === null; i++) await sleep(250)
@@ -221,15 +249,27 @@ check(updated.length === 1, 'an "Updated to Yoru" notification is raised once')
 
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
-const openAbout = async () => {
+const openAbout = async (dismiss = true) => {
   await page.goto(`${BASE}/settings?tab=About`, { waitUntil: 'domcontentloaded' })
   await page.waitForURL(/\/setup/, { timeout: 5000 }).catch(() => {})
   await page.evaluate(() => {
     history.pushState(null, '', '/settings?tab=About')
     dispatchEvent(new PopStateEvent('popstate'))
   })
+  if (!dismiss) return
+  const got = page.getByRole('button', { name: 'Got it' })
+  if (await got.waitFor({ timeout: 4000 }).then(() => true, () => false)) await got.click()
 }
+await openAbout(false)
+const big = page.getByRole('dialog', { name: `Yoru ${NEW}` })
+check(await big.waitFor({ timeout: 15000 }).then(() => true, () => false), "after the update a big What's new opens")
+check((await big.innerText().catch(() => '')).includes(`Updated from ${OLD}`), 'it says which version it came from')
+check((await big.getByRole('heading', { name: 'The big one' }).count()) === 1, 'with the notes as headings and lists')
+await big.getByRole('button', { name: 'Got it' }).click()
+check(await big.waitFor({ state: 'detached', timeout: 3000 }).then(() => true, () => false), 'Got it closes it')
 await openAbout()
+await page.waitForTimeout(1500)
+check((await big.count()) === 0, 'and it does not come back')
 const whatsNew = page.getByRole('heading', { name: `What's new since ${OLD}` })
 const shown = await whatsNew.waitFor({ timeout: 15000 }).then(() => true, () => false)
 check(shown, "the About tab says what's new since the old version")
@@ -334,14 +374,10 @@ await browser.close()
 
 if (failures) console.log(oldLog.slice(-2000))
 
-spawnSync('powershell', [
-  '-NoProfile', '-Command',
-  `Get-Process yoru -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '${root}*' } | Stop-Process -Force`,
-])
 gh.close()
 await sleep(500)
-spawnSync('git', ['worktree', 'remove', '--force', oldTree], { cwd: REPO, stdio: 'inherit' })
-rmSync(scratch, { recursive: true, force: true })
+sweep()
+swept = true
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nall checks passed')
 process.exit(failures ? 1 : 0)

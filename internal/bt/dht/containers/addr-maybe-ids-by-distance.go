@@ -20,7 +20,6 @@ type stmSettishWrapper struct {
 	set stmutil.Settish[addrMaybeId]
 }
 
-// Next is the closest; callers check Len first, as an empty set has none.
 func (me stmSettishWrapper) Next() addrMaybeId {
 	for x := range me.set.All() {
 		return x

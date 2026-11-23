@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api, type ScheduleItem } from '../lib/api'
-import { cx, posterSet, whenLabel } from '../lib/format'
+import { cx, playLabel, posterSet, whenLabel } from '../lib/format'
 import { minutesLeft, releaseState, TONE_TEXT } from '../lib/aired'
 import { refreshListState, useNow, useUpNextEdit } from '../lib/queries'
 import { toast } from '../lib/toast'
@@ -9,6 +9,7 @@ import { useInUpNext } from '../lib/upnext'
 import { toCard } from '../lib/cards'
 import { HoverInfo } from './HoverInfo'
 import { MoreMenu, type MoreItem } from './MoreMenu'
+import { Badge } from './ui'
 
 function span(numbers: number[]) {
   const lo = numbers[0]
@@ -17,7 +18,7 @@ function span(numbers: number[]) {
 }
 
 export function ReleasedCard({ item, episodes }: { item: ScheduleItem; episodes?: ScheduleItem[] }) {
-  const all = episodes && episodes.length > 0 ? [...episodes].sort((a, b) => a.episode - b.episode) : [item]
+  const all = episodes && episodes.length > 0 ? episodes.toSorted((a, b) => a.episode - b.episode) : [item]
   const newest = all[all.length - 1]
   const play = all.find((it) => !it.watched) ?? item
   const now = useNow() / 1000
@@ -39,23 +40,41 @@ export function ReleasedCard({ item, episodes }: { item: ScheduleItem; episodes?
   const unwatched = all.filter((it) => !it.watched)
   const { add, remove } = useUpNextEdit()
   const mark = useMutation({
+    meta: { inline: true },
     mutationFn: (v: { episode: number; watched: boolean }) =>
-      api.post('/api/watched', { animeId: play.animeId, episode: v.episode, watched: v.watched }),
+      api.post('/api/watched', { animeId: play.animeId, episode: v.episode, watched: v.watched, ...(v.watched && { undoable: true }) }),
     onSettled: () => refreshListState(qc),
     onError: (e) => toast(`Couldn't change ${play.title}: ${e.message}`, 'error'),
   })
 
-  const markWatched = () =>
+  const markWatched = () => {
+    const from = play.episode
     mark.mutate(
       { episode: newest.episode, watched: true },
       {
         onSuccess: () =>
-          toast(`Marked ${several ? `up to episode ${newest.episode}` : `episode ${newest.episode}`} of ${play.title} watched`, 'info'),
+          toast(`Marked ${several ? `up to episode ${newest.episode}` : `episode ${newest.episode}`} of ${play.title} watched`, 'info', {
+            label: 'Undo',
+            run: () => mark.mutate({ episode: from, watched: false }),
+          }),
       },
     )
+  }
 
+  const rest = unwatched.filter((it) => !queued.has(it.episode))
   const items: MoreItem[] = [
     { label: `Play episode ${play.episode}`, to: watch },
+    ...(inUpNext.length > 0 && rest.length > 0
+      ? [
+          {
+            label: 'Add the rest to Up next',
+            note: rest.length > 1 ? span(rest.map((it) => it.episode)) : `Episode ${rest[0].episode}`,
+            run: () => {
+              for (const it of rest) add.mutate({ animeId: it.animeId, episode: it.episode })
+            },
+          },
+        ]
+      : []),
     inUpNext.length > 0
       ? {
           label: 'Remove from Up next',
@@ -101,14 +120,15 @@ export function ReleasedCard({ item, episodes }: { item: ScheduleItem; episodes?
           color: play.colour,
           cover: play.cover,
           progress: play.progress,
-          play: { to: watch, label: `Play ep ${play.episode}` },
+          play: { to: watch, label: playLabel(play.episode, false) },
         }}
       >
         <Link
           to={watch}
+          aria-label={`${playLabel(play.episode, false)}: ${play.title}`}
           className="block rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-400"
         >
-          <div className="relative aspect-video overflow-hidden rounded-card bg-base-850 shadow-card ring-1 ring-white/[0.06] transition-[transform,box-shadow] duration-300 ease-out-quint group-hover/released:-translate-y-0.5 group-hover/released:shadow-lift">
+          <div className="relative aspect-video overflow-hidden rounded-card bg-base-850 shadow-card ring-1 ring-white/6 transition-[transform,box-shadow] duration-300 ease-enter group-hover/released:-translate-y-0.5 group-hover/released:shadow-lift">
             {play.cover && (
               <img
                 src={play.cover}
@@ -122,8 +142,8 @@ export function ReleasedCard({ item, episodes }: { item: ScheduleItem; episodes?
               />
             )}
             {badge && (
-              <span className="absolute top-1.5 right-1.5 rounded-md bg-base-950/90 px-1.5 py-0.5 text-xs leading-tight font-semibold whitespace-nowrap text-base-100">
-                {badge}
+              <span className="absolute top-1.5 right-1.5">
+                <Badge tone="overlay">{badge}</Badge>
               </span>
             )}
             {left && play.duration && (
@@ -135,19 +155,22 @@ export function ReleasedCard({ item, episodes }: { item: ScheduleItem; episodes?
               </span>
             )}
           </div>
-          <p className="mt-2 line-clamp-2 text-[15px] leading-5 font-semibold text-base-100 transition-colors group-hover/released:text-white">
-            {play.title}
-          </p>
-          <div className="flex min-h-11 flex-col justify-center pr-11 text-[13px] leading-[18px] tabular-nums">
-            <span className="text-base-400">{line}</span>
-            {state && (
-              <span className={TONE_TEXT[state.tone]}>
-                {state.word}
-                {state.checked && <span className="text-base-500"> · {state.checked}</span>}
-              </span>
-            )}
-          </div>
         </Link>
+        <Link
+          to={`/anime/${play.animeId}`}
+          className="mt-2 line-clamp-2 block rounded text-[15px] leading-5 font-semibold text-base-100 transition-colors group-hover/released:text-white hover:underline focus-visible:outline-2 focus-visible:outline-accent-400"
+        >
+          {play.title}
+        </Link>
+        <div className="flex min-h-11 flex-col justify-center pr-11 text-[13px] leading-[18px] tabular-nums">
+          <span className="text-base-400">{line}</span>
+          {state && (
+            <span className={TONE_TEXT[state.tone]}>
+              {state.word}
+              {state.checked && <span className="text-base-500"> · {state.checked}</span>}
+            </span>
+          )}
+        </div>
       </HoverInfo>
       <div className="absolute right-0 bottom-0">
         <MoreMenu

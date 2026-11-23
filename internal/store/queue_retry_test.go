@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// A deferred episode waits its time out behind the rest, then is taken up again with its tries counted.
 func TestDeferredEpisodeWaitsForItsTime(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -47,7 +46,6 @@ func TestDeferredEpisodeWaitsForItsTime(t *testing.T) {
 		t.Errorf("deferred row = %+v, want pending, one try, a retry time and the reason", deferred)
 	}
 
-	// Due now: taken up again, the count carried along.
 	if err := s.Defer(ctx, 100, "2", errors.New("stalled"), time.Now().Add(-time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +57,6 @@ func TestDeferredEpisodeWaitsForItsTime(t *testing.T) {
 	}
 }
 
-// Asking for the episode again, or moving it to the front, is a wish to try now, not later.
 func TestAskingAgainEndsTheWait(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -86,7 +83,7 @@ func TestAskingAgainEndsTheWait(t *testing.T) {
 	if next, ok, _ := s.NextQueued(ctx); !ok || next.Episode != 1 || next.Attempts != 0 {
 		t.Errorf("after download pressed again: next = %+v %v, want episode 1 with its tries reset", next, ok)
 	}
-	if moved, err := s.Prioritise(ctx, 100, "2"); err != nil || !moved {
+	if moved, err := s.Promote(ctx, 100, "2"); err != nil || !moved {
 		t.Fatalf("moved=%v err=%v", moved, err)
 	}
 	if next, ok, _ := s.NextQueued(ctx); !ok || next.Episode != 2 {

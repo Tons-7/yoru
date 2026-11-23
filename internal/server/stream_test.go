@@ -53,14 +53,11 @@ Dialogue: 0,0:00:01.00,0:00:05.00,Default,the first line
 Dialogue: 0,0:00:06.00,0:00:19.00,Default,the second line
 `
 
-// streamHarness is a server with a real transcoder and one twenty-second library
-// episode (two audio tracks, one subtitle track); it returns the episode's source route.
 func streamHarness(t *testing.T) (*harness, string) {
 	t.Helper()
 	return streamHarnessWith(t, streamASS)
 }
 
-// streamHarnessWith is streamHarness with the subtitle track's own text.
 func streamHarnessWith(t *testing.T, ass string) (*harness, string) {
 	t.Helper()
 	ffmpeg, ffprobe := ffmpegBinaries(t)
@@ -122,7 +119,6 @@ func (h *harness) fetch(t *testing.T, method, target string) (int, http.Header, 
 	return rec.Code, rec.Header(), rec.Body.Bytes()
 }
 
-// The whole path a browser takes to play an episode: open, playlist, init, a segment, subtitles, close.
 func TestAnEpisodeStreamsFromOpenToClose(t *testing.T) {
 	h, source := streamHarness(t)
 
@@ -169,7 +165,6 @@ func TestAnEpisodeStreamsFromOpenToClose(t *testing.T) {
 		t.Fatalf("segment %s answered %d with %d bytes that are not a fragment", first, code, len(segment))
 	}
 
-	// A library file is whole, so its subtitles arrive complete and the player stops asking.
 	code, header, track := h.fetch(t, "GET", subs[0].(map[string]any)["url"].(string))
 	if code != http.StatusOK || !bytes.Contains(track, []byte("the first line")) || !bytes.Contains(track, []byte("the second line")) {
 		t.Fatalf("subtitles answered %d: %.200s", code, track)
@@ -190,7 +185,6 @@ func TestAnEpisodeStreamsFromOpenToClose(t *testing.T) {
 	}
 }
 
-// An episode already on disk has nothing to give back, so the queue keeps downloading while it plays.
 func TestWatchingAnEpisodeOnDiskDoesNotHoldTheQueue(t *testing.T) {
 	h, source := streamHarness(t)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -204,7 +198,6 @@ func TestWatchingAnEpisodeOnDiskDoesNotHoldTheQueue(t *testing.T) {
 	}
 }
 
-// The dialogue lift is asked for on open and switched mid-stream; either way the next segment carries it.
 func TestVoiceBoostOnOpenAndMidStream(t *testing.T) {
 	h, source := streamHarness(t)
 
@@ -218,7 +211,6 @@ func TestVoiceBoostOnOpenAndMidStream(t *testing.T) {
 	}
 	base := "/api/stream/" + opened["id"].(string)
 
-	// One parameter at a time changes that one and keeps the rest.
 	code, body := h.call(t, "POST", base+"/sound?voice=high", "")
 	snd, _ = body["sound"].(map[string]any)
 	if code != http.StatusOK || snd["voice"] != "high" || snd["night"] != true || body["changed"] != true {
@@ -250,7 +242,6 @@ func TestStreamRefusesSegmentsThatCannotExist(t *testing.T) {
 	}
 	base := "/api/stream/" + sessionID(1, 1)
 
-	// Past the end would start an encoder with nothing to encode.
 	if code, _, _ := h.fetch(t, "GET", base+"/9999.mp4"); code != http.StatusNotFound {
 		t.Errorf("a segment past the end answered %d, want 404", code)
 	}
@@ -279,14 +270,12 @@ func TestStreamOpenRefusesWhatItCannotPlay(t *testing.T) {
 		t.Errorf("a session never opened answered %d, want 404", code)
 	}
 
-	// No transcoder at all is said plainly rather than failing inside ffmpeg.
 	bare := newHarness(t, config.Config{}, nil)
 	if code, _ := bare.call(t, "POST", "/api/stream/open?id=1&episode=1&source="+source, ""); code != http.StatusServiceUnavailable {
 		t.Errorf("open without a transcoder answered %d, want 503", code)
 	}
 }
 
-// A library file plays without the network: the whole bar is loaded from the first look.
 func TestLoadedCoversAWholeLibraryFile(t *testing.T) {
 	h, source := streamHarness(t)
 	code, opened := h.call(t, "POST", "/api/stream/open?id=1&episode=1&source="+source, "")
@@ -307,7 +296,6 @@ func TestLoadedCoversAWholeLibraryFile(t *testing.T) {
 	}
 }
 
-// Downloaded bytes map onto the episode's time as if spread evenly.
 func TestLoadedSecondsSpreadBytesOverTheEpisode(t *testing.T) {
 	got := loadedSeconds(torrent.FileRanges{Length: 1000, Ranges: []torrent.ByteRange{{From: 0, To: 250}, {From: 500, To: 1000}}}, 100)
 	if len(got) != 2 || got[0] != [2]float64{0, 25} || got[1] != [2]float64{50, 100} {
@@ -316,4 +304,32 @@ func TestLoadedSecondsSpreadBytesOverTheEpisode(t *testing.T) {
 	if n := len(loadedSeconds(torrent.FileRanges{}, 100)); n != 0 {
 		t.Errorf("no length, yet %d stretches", n)
 	}
+}
+
+func TestStreamOpenPinsThePlayingTorrent(t *testing.T) {
+	h, source := streamHarness(t)
+	ctx := context.Background()
+	if err := h.store.RecordTorrent(ctx, store.TorrentRecord{InfoHash: "held", EngineID: 1, Name: "held", AnimeID: 1,
+		EpKey: "1", FilePath: "Show - 01.mkv", TotalSize: 100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.SetCacheBytes(ctx, "held", 0, 100, true); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := h.call(t, "POST", "/api/stream/open?id=1&episode=1&source="+source, ""); code != http.StatusOK {
+		t.Fatalf("open answered %d: %v", code, body)
+	}
+	entries, err := h.store.CacheEntries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.InfoHash == "held" {
+			if !e.Pinned {
+				t.Fatal("the episode playing in the browser is not pinned against deletion")
+			}
+			return
+		}
+	}
+	t.Fatal("the held download vanished")
 }

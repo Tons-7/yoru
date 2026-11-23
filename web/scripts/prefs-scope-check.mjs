@@ -1,4 +1,3 @@
-// The player's toggles change the value they show: the per-show one, not the global.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -53,11 +52,9 @@ check(!!file, 'test file listed')
 if (!file) process.exit(1)
 await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: 1 })
 
-// What the user set globally, in Settings.
 await post('/api/prefs', { key: 'playback.autoplay', value: 'true' })
 await post('/api/prefs', { key: 'playback.autonext', value: 'true' })
 await post('/api/prefs', { key: 'playback.autoskip_op', value: 'false' })
-// A per-show override, which only this show carries.
 await post('/api/prefs', { key: 'playback.autoskip_op', value: 'true', animeId: ANIME })
 const served = (await api(`/api/prefs?anime=${ANIME}`)).body
 check(
@@ -101,7 +98,6 @@ check(
   'the global setting was left alone',
 )
 
-// A key with no override still edits the global, the default for every other show.
 await page.getByRole('menuitem', { name: 'Back from Skipping' }).click()
 await autoNext.click()
 check(await until(async () => (await autoNext.getAttribute('aria-checked')) === 'false'), 'a switch with no override still flips')

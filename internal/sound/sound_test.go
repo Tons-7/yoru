@@ -50,7 +50,6 @@ func TestTheOtherEffectsStackInOrder(t *testing.T) {
 	if i, j := strings.Index(all, "acompressor"), strings.Index(all, "0.5*FL+0.5*FR"); i > j {
 		t.Error("the fold to mono comes after the compressor")
 	}
-	// Without the voice, a surround track is still folded down before the rest.
 	if c := Chain(Options{Night: true}, 6); !strings.HasPrefix(c, Stereo+",acompressor") {
 		t.Errorf("surround night = %s", c)
 	}
@@ -61,7 +60,7 @@ func TestTheOtherEffectsStackInOrder(t *testing.T) {
 
 func TestMPVAndVLCRenderings(t *testing.T) {
 	mpv := MPVArgs(Options{Voice: "medium", Night: true})
-	if len(mpv) != 2 || mpv[0] != "--audio-channels=stereo" || !strings.HasPrefix(mpv[1], "--af=lavfi=[dialoguenhance") || !strings.HasSuffix(mpv[1], "]") {
+	if len(mpv) != 2 || mpv[0] != "--audio-channels=stereo" || !strings.HasPrefix(mpv[1], "--af=lavfi=[aformat=channel_layouts=stereo,dialoguenhance") || !strings.HasSuffix(mpv[1], "]") {
 		t.Errorf("mpv = %v", mpv)
 	}
 
@@ -76,7 +75,6 @@ func TestMPVAndVLCRenderings(t *testing.T) {
 	}
 }
 
-// The volume boost is its own switch, last in the chain and limited.
 func TestVolumeBoostIsSeparateFromTheVoice(t *testing.T) {
 	c := Chain(Options{Boost: "medium"}, 2)
 	if c != "volume=6dB,"+limiter || Chain(Options{Boost: "high"}, 2) != "volume=12dB,"+limiter {

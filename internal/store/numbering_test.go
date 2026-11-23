@@ -10,7 +10,6 @@ import (
 	"yoru/internal/metadata"
 )
 
-// The migration re-keys TheTVDB-numbered cours from one, with everything filed under the old keys.
 func TestMigrationRekeysALaterCourByItsOwnNumbering(t *testing.T) {
 	conn, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -39,7 +38,6 @@ func TestMigrationRekeysALaterCourByItsOwnNumbering(t *testing.T) {
 		exec(`INSERT INTO episode (anime_id, ep_key, number) VALUES (?,?,?)`, plain, strconv.Itoa(n), n)
 	}
 
-	// Episode 5 was played under both keys, the catalogue's more recently.
 	exec(`INSERT INTO playback (anime_id, ep_key, position_s, last_played_at) VALUES (?, '45', 100, 200)`, bleach)
 	exec(`INSERT INTO playback (anime_id, ep_key, position_s, last_played_at) VALUES (?, '5', 50, 100)`, bleach)
 	exec(`INSERT INTO playback (anime_id, ep_key, position_s, last_played_at) VALUES (?, '44', 10, 100)`, bleach)
@@ -53,7 +51,6 @@ func TestMigrationRekeysALaterCourByItsOwnNumbering(t *testing.T) {
 	exec(`INSERT INTO download_queue (anime_id, ep_key, episode, queued_at) VALUES (?, '5', 5, 1)`, bleach)
 	exec(`INSERT INTO download_queue (anime_id, ep_key, episode, queued_at) VALUES (?, '45', 45, 2)`, bleach)
 
-	// Progress 44 of 10 completed a show still airing.
 	exec(`INSERT INTO list_entry (id, anime_id, status, progress, completed_at) VALUES (-1, ?, 'COMPLETED', 44, '2026-08-19')`, bleach)
 	exec(`INSERT INTO list_entry (id, anime_id, status, progress) VALUES (-2, ?, 'COMPLETED', 12)`, plain)
 	exec(`INSERT INTO notification (kind, anime_id, episode, title, created_at) VALUES ('release', ?, 45, 't', 0)`, bleach)
@@ -125,7 +122,6 @@ func TestMigrationRekeysALaterCourByItsOwnNumbering(t *testing.T) {
 		t.Errorf("notification episode = %d (%v), want 5", episode, err)
 	}
 
-	// A show counted from one everywhere is left alone.
 	plainEps, _ := s.Episodes(ctx, plain)
 	if len(plainEps) != 12 || plainEps[4].EpKey != "5" {
 		t.Errorf("plain show changed: %d episodes", len(plainEps))
@@ -136,8 +132,6 @@ func TestMigrationRekeysALaterCourByItsOwnNumbering(t *testing.T) {
 	}
 }
 
-// The catalogue keeps the entry's numbering and TVDB's beside it; a refresh
-// that no longer lists a numbered row drops it, since it was keyed the old way.
 func TestSaveEpisodesKeepsAliasesAndPrunesStaleRows(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -176,7 +170,6 @@ func TestSaveEpisodesKeepsAliasesAndPrunesStaleRows(t *testing.T) {
 		t.Errorf("numbers = %v", got)
 	}
 
-	// Numbered the same everywhere: nothing to alias.
 	if err := s.EnsureAnime(ctx, 8); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +183,6 @@ func TestSaveEpisodesKeepsAliasesAndPrunesStaleRows(t *testing.T) {
 		t.Errorf("unknown show has alias %+v", alias)
 	}
 
-	// A number with no season is TheTVDB's specials: no alias, and not stated either.
 	if err := s.EnsureAnime(ctx, 10); err != nil {
 		t.Fatal(err)
 	}

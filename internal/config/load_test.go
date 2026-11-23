@@ -63,7 +63,6 @@ func TestFolderSettingsResolveAgainstTheExe(t *testing.T) {
 	}
 }
 
-// A setting uncommented where it sits in the template must take effect, not land in the table above it.
 func TestTemplateSettingsAreNotInsideATable(t *testing.T) {
 	dir := inTempDir(t)
 	body := strings.NewReplacer(
@@ -89,6 +88,27 @@ func TestTemplateSettingsAreNotInsideATable(t *testing.T) {
 		if got != want {
 			t.Errorf("got %s, want %s", got, want)
 		}
+	}
+}
+
+func TestLoadStartsFromAReadOnlyFolder(t *testing.T) {
+	dir := inTempDir(t)
+	was := writeTemplate
+	writeTemplate = func(string, []byte, os.FileMode) error { return os.ErrPermission }
+	t.Cleanup(func() { writeTemplate = was })
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UnwrittenConfig() == nil {
+		t.Error("the failed write is not reported")
+	}
+	if want := filepath.Join(dir, "appdata", Name, "cache"); cfg.CacheDir != want {
+		t.Errorf("cache = %q, want %q", cfg.CacheDir, want)
+	}
+	if want := filepath.Join(dir, "appdata", Name, "bin"); cfg.BinDir != want {
+		t.Errorf("bin = %q, want %q", cfg.BinDir, want)
 	}
 }
 
@@ -141,7 +161,6 @@ client_secret = "shh"
 	}
 }
 
-// An exe opened inside a zip gets a temp root, which the page must be able to say.
 func TestLoadKnowsATemporaryRoot(t *testing.T) {
 	dir := inTempDir(t)
 	cfg, err := Load()
@@ -165,7 +184,22 @@ func TestLoadKnowsATemporaryRoot(t *testing.T) {
 	}
 }
 
-// SetDataDir writes data_dir above any table, so it stays a top-level key.
+func TestMisspeltKeysAreReported(t *testing.T) {
+	dir := inTempDir(t)
+	body := "addr = \"127.0.0.1:4321\"\ncache-dir = \"x\"\n\n[torrent]\nlisten-port = 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(cfg.UnknownKeys(), ",")
+	if !strings.Contains(got, "cache-dir") || !strings.Contains(got, "torrent.listen-port") || strings.Contains(got, "addr") {
+		t.Fatalf("unknown keys = %q", got)
+	}
+}
+
 func TestDataDirIsChosenAndWrittenBack(t *testing.T) {
 	dir := inTempDir(t)
 	cfg, err := Load()
@@ -191,7 +225,6 @@ func TestDataDirIsChosenAndWrittenBack(t *testing.T) {
 		t.Errorf("the indexer table was disturbed: %+v", cfg.Indexers)
 	}
 
-	// Set again: the line is replaced, not duplicated; empty is the default.
 	if err := cfg.SetDataDir(""); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +237,6 @@ func TestDataDirIsChosenAndWrittenBack(t *testing.T) {
 	}
 }
 
-// Sites are the user's to name: a fresh config has none, a written one keeps its order.
 func TestLoadReadsIndexersInOrder(t *testing.T) {
 	dir := inTempDir(t)
 	if cfg, err := Load(); err != nil || len(cfg.Indexers) != 0 {

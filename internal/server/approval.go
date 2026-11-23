@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -108,7 +109,7 @@ func (s *Server) admit(w http.ResponseWriter, r *http.Request) bool {
 		w.Write([]byte(waitingPage(status, name)))
 	default:
 		send(w, http.StatusForbidden, map[string]any{
-			"error": "this device is waiting for the host to accept it", "approval": status,
+			"error": "this device is waiting for the host to accept it", "approval": cmp.Or(status, "needed"),
 		})
 	}
 	return false
@@ -125,7 +126,7 @@ func (s *Server) requestAccess(w http.ResponseWriter, r *http.Request, id, name 
 	if pending >= maxPending {
 		return "full"
 	}
-	if id == "" && s.deniedAddr(r) {
+	if _, known := a.status[id]; !known && s.deniedAddr(r) {
 		return store.DeviceDenied
 	}
 	addr := clientAddr(r)
@@ -228,8 +229,14 @@ func (s *Server) setApproval(w http.ResponseWriter, r *http.Request) {
 	a := &s.approvals
 	a.mu.Lock()
 	s.loadApprovals(r.Context())
+	was := a.mode
 	a.mode = body.Mode
 	a.mu.Unlock()
+	if (was == "" || was == approvalOff) && body.Mode != approvalOff {
+		if err := s.store.DeleteAnonymousPairedPush(r.Context()); err != nil {
+			s.log.Warn("stop alerts of devices paired before approval", "err", err)
+		}
+	}
 	send(w, http.StatusOK, map[string]any{"mode": body.Mode})
 }
 

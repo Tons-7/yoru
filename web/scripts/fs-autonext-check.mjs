@@ -1,4 +1,3 @@
-// Fullscreen with auto play and auto next: the episode advances once, stays fullscreen, and plays on.
 import { copyFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { chromium } from 'playwright'
@@ -6,7 +5,6 @@ import { chromium } from 'playwright'
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const LIB = process.env.YORU_LIB
 const ANIME = Number(process.env.YORU_ANIME ?? 127230)
-// SHOTS is the harness's scratch folder; '.' would drop images in the repo.
 const SHOTS = process.env.MANUAL_SHOTS ?? process.env.SHOTS ?? '.'
 
 const api = async (p, init) => {
@@ -54,7 +52,6 @@ check(!!file, 'test file listed')
 if (!file) process.exit(1)
 await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: 1 })
 
-// Episode 2 is where auto-next lands and it has to be playable.
 copyFileSync(join(LIB, 'Yoru Test Show - 01.mkv'), join(LIB, 'second.mkv'))
 await post('/api/local/scan', {})
 let second
@@ -66,12 +63,10 @@ check(!!second, 'second episode scanned')
 if (!second) process.exit(1)
 await post('/api/local/assign', { id: second.id, animeId: ANIME, episode: 2 })
 
-// The combination under test.
 await post('/api/prefs', { key: 'playback.autoplay', value: 'true' })
 await post('/api/prefs', { key: 'playback.autonext', value: 'true' })
 await post('/api/prefs', { key: 'playback.skip_filler', value: 'false' })
 
-// STRICT=1 keeps the browser's real autoplay policy, which is what a viewer has.
 const browser = await chromium.launch({
   args: process.env.STRICT ? [] : ['--autoplay-policy=no-user-gesture-required'],
 })
@@ -86,7 +81,6 @@ await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 check(await until(() => video.evaluate((v) => v.readyState >= 1), 60_000), 'episode 1 loads')
 check(await until(() => video.evaluate((v) => !v.paused), 20_000), 'auto play started episode 1 by itself')
 
-// A real key press, so the browser sees a genuine user gesture.
 await page.mouse.move(640, 400)
 await page.keyboard.press('f')
 check(await until(fullscreen, 10_000), 'f entered fullscreen')
@@ -95,20 +89,18 @@ await page.evaluate(() => {
   document.querySelector('.group\\/player').dataset.mark = 'kept'
 })
 
-// Run the episode out.
 await video.evaluate((v) => {
   v.currentTime = v.duration - 0.6
   void v.play()
 })
 
-const card = page.getByRole('dialog', { name: 'Up next' })
+const card = page.getByRole('region', { name: 'Up next' })
 check(await until(() => card.isVisible(), 20_000), 'up-next card appears in fullscreen')
 check(await fullscreen(), 'still fullscreen while the card counts down')
 await page.screenshot({ path: `${SHOTS}/fs-countdown.png` })
 
 check(await until(() => page.url().endsWith(`/watch/${ANIME}/2`), 25_000), 'auto-next advanced to episode 2', page.url())
 
-// How long the switch leaves you looking at nothing, as the next episode once sat paused.
 const switched = Date.now()
 const started = await until(() => video.evaluate((v) => !v.paused), 20_000)
 const gap = Date.now() - switched
@@ -127,14 +119,11 @@ check(await video.evaluate((v) => v.currentTime < 30), 'episode 2 started near t
   await video.evaluate((v) => `t=${v.currentTime.toFixed(1)}`))
 await page.screenshot({ path: `${SHOTS}/fs-next-episode.png` })
 
-// It must advance exactly one episode, not skip ahead.
 await sleep(6000)
 check(page.url().endsWith(`/watch/${ANIME}/2`), 'it did not run on past episode 2', page.url())
 check(await fullscreen(), 'still fullscreen six seconds later')
 check(errors.length === 0, 'no page errors', errors.join(' | '))
 
-// An episode whose release cannot be resolved: the failure has to be shown
-// over the player, not in place of it, or it takes fullscreen with it.
 console.log('\n-- next episode with no resolvable release --')
 if (!(await fullscreen())) {
   await page.mouse.move(640, 400)
@@ -147,14 +136,12 @@ await page.evaluate(() => {
   if (el) el.dataset.mark = 'kept2'
 })
 
-// Client-side, as auto-next moves: a full page load drops fullscreen on its own and proves nothing.
 await page.evaluate((target) => {
   window.history.pushState({}, '', target)
   window.dispatchEvent(new PopStateEvent('popstate'))
 }, `/watch/${ANIME}/4242`)
 check(await until(() => page.url().endsWith('/4242'), 10_000), 'navigated client-side', page.url())
 
-// Wait for the search to give up: that is when the failure is shown.
 const gaveUp = await until(
   () => page.getByText(/Nothing found|No release|couldn't find|couldn't search|not found|no release/i).first().isVisible().catch(() => false),
   150_000,
@@ -171,7 +158,6 @@ check(
 )
 await page.screenshot({ path: `${SHOTS}/fs-no-release.png` })
 
-// Auto play off means the episode is loaded and waiting, not started for you.
 console.log('\n-- auto play off --')
 await post('/api/prefs', { key: 'playback.autoplay', value: 'false' })
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })

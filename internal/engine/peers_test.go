@@ -8,13 +8,11 @@ import (
 	pp "yoru/internal/bt/peer_protocol"
 )
 
-// fakeClock is a ledger's clock that moves only when told.
 type fakeClock struct{ at time.Time }
 
 func (c *fakeClock) now() time.Time       { return c.at }
 func (c *fakeClock) pass(d time.Duration) { c.at = c.at.Add(d) }
 
-// Dropped: holding requests with nothing useful for shedAfter. Kept: slow but still sending, or holding none.
 func TestSilentPeersAreThoseHoldingRequestsWithNothingBack(t *testing.T) {
 	clock := &fakeClock{at: time.Unix(1_000_000, 0)}
 	l := newLedger()
@@ -42,7 +40,6 @@ func TestSilentPeersAreThoseHoldingRequestsWithNothingBack(t *testing.T) {
 	}
 }
 
-// A delivered or cancelled request is no longer held, so its peer is not dropped for it.
 func TestAnsweredRequestsAreNotHeld(t *testing.T) {
 	clock := &fakeClock{at: time.Unix(1_000_000, 0)}
 	l := newLedger()

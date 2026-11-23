@@ -6,7 +6,7 @@ const ROOTS: Record<Exclude<Place, 'home'>, string[]> = {
   search: ['/browse', '/search'],
   schedule: ['/schedule', '/recent'],
   library: ['/library', '/history'],
-  you: ['/you', '/downloads', '/saved', '/notifications', '/settings', '/local'],
+  you: ['/you', '/downloads', '/saved', '/notifications', '/settings', '/local', '/stats'],
 }
 
 const under = (pathname: string, root: string) => pathname === root || pathname.startsWith(`${root}/`)

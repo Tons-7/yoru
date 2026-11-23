@@ -1,6 +1,5 @@
 package bt
 
-// Port reuse may need a JS way, or dialling TCP from any local address; that fallback would want an error here.
 func setReusePortSockOpts(fd uintptr) error {
 	return nil
 }

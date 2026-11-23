@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// AniList has no weekly leaderboard, but MediaTrend carries a daily cumulative
-// popularity per anime, so its delta over N days is the window's real gain.
 const (
 	trendPool     = 100
 	trendPageSize = 50
@@ -26,7 +24,6 @@ const trendQuery = `query Trends($ids: [Int], $since: Int, $page: Int!, $perPage
   }
 }`
 
-// Batched so a day of rows fits one page: across pages the order isn't stable.
 func (c *Client) popularityAt(ctx context.Context, ids []int, day time.Time) (map[int]int, error) {
 	since := day.UTC().Truncate(24*time.Hour).Unix() - 1
 	found := make(map[int]int, len(ids))
@@ -64,7 +61,6 @@ func (c *Client) readBatch(ctx context.Context, ids []int, since int64, found ma
 			return err
 		}
 
-		// Rows come oldest first; only the window's first day counts, so a page past it ends the read.
 		pastDay := false
 		for _, t := range out.Page.MediaTrends {
 			if t.Date > since+dayLength {
@@ -84,8 +80,6 @@ func (c *Client) readBatch(ctx context.Context, ids []int, since int64, found ma
 	return nil
 }
 
-// Rising ranks anime by popularity gained over the last N days. The pool is
-// drawn from what is trending, since nothing gains heavily without showing there.
 func (c *Client) Rising(ctx context.Context, days, perPage int) (DiscoverPage, error) {
 	if perPage <= 0 || perPage > trendPageSize {
 		perPage = 30
@@ -120,8 +114,6 @@ func (c *Client) Rising(ctx context.Context, days, perPage int) (DiscoverPage, e
 	return DiscoverPage{Media: ranked, Total: len(ranked)}, nil
 }
 
-// A show with no reading at the window's start is dropped, not credited with
-// its whole count: that is an unreleased title, and it would outrank everything.
 func rankByGain(pool []Media, baseline map[int]int) []Media {
 	gain := make(map[int]int, len(pool))
 	out := make([]Media, 0, len(pool))

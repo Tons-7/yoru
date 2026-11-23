@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 )
 
-// Site is one search site as configured: its feed format, address, and whether it is the adult one.
 type Site struct {
 	Type  string `json:"type"`
 	URL   string `json:"url"`
@@ -23,12 +22,10 @@ func (s Site) key() string {
 	return k
 }
 
-// ErrNoSites: nothing to search with. A Sites view stays non-nil, so callers check Configured instead.
 var ErrNoSites = errors.New("no release sites configured")
 
-// Sites holds the configured sites, swapped whole when they change; a search in flight finishes on the old set.
 type Sites struct {
-	mu  sync.Mutex // serialises Set, which reuses the previous set's caches
+	mu  sync.Mutex
 	cur atomic.Pointer[siteSet]
 }
 
@@ -43,8 +40,6 @@ func NewSites() *Sites {
 	return s
 }
 
-// Set builds the list in order, each site cached; one that won't build is skipped and its error returned.
-// A site kept from the previous list keeps its cache, so editing one doesn't empty the others'.
 func (s *Sites) Set(list []Site) []error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -52,6 +47,9 @@ func (s *Sites) Set(list []Site) []error {
 	next := &siteSet{cached: map[string]Source{}}
 	var errs []error
 	for _, site := range list {
+		if _, dup := next.cached[site.key()]; dup {
+			continue
+		}
 		src, ok := prev.cached[site.key()]
 		if !ok {
 			built, err := Build(site.Type, site.URL, site.Adult)
@@ -72,13 +70,11 @@ func (s *Sites) Set(list []Site) []error {
 	return errs
 }
 
-// Counts are the sites in use now, general and adult.
 func (s *Sites) Counts() (general, adult int) {
 	cur := s.cur.Load()
 	return len(cur.general), len(cur.adult)
 }
 
-// General searches the sites for every show; Adult those for titles the catalogue marks adult.
 func (s *Sites) General() Source { return view{s, false} }
 func (s *Sites) Adult() Source   { return view{s, true} }
 
@@ -107,7 +103,6 @@ func (v view) Search(ctx context.Context, q Query) ([]Torrent, error) {
 	return Multi{Sources: srcs}.Search(ctx, q)
 }
 
-// Configured reports a source with a site behind it: nil, or a Sites view with none, has nothing to search.
 func Configured(src Source) bool {
 	if src == nil {
 		return false

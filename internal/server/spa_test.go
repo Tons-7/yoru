@@ -38,7 +38,6 @@ func TestSPAServesIndexForClientRoutes(t *testing.T) {
 	}
 }
 
-// A missing asset 404s, not index.html, which a module worker fails to parse.
 func TestSPAMissingAssetIsNotFound(t *testing.T) {
 	h := spa(spaFS())
 
@@ -66,8 +65,6 @@ func TestSPAServesRealAssets(t *testing.T) {
 	}
 }
 
-// The app is served from a catch-all, so anything unrouted lands on index.html.
-// These go through the real mux, where a swallowed route would show.
 func TestAPIPathsNeverFallThroughToTheApp(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 
@@ -81,7 +78,6 @@ func TestAPIPathsNeverFallThroughToTheApp(t *testing.T) {
 	}
 }
 
-// Both providers' sign-in redirects reach the app, not the catch-all.
 func TestCallbackRoutesAreNotSwallowedByTheApp(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 

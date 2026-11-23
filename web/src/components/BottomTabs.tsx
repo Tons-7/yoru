@@ -25,7 +25,7 @@ export function BottomTabs() {
   return (
     <nav
       aria-label="Main"
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-base-950/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl backdrop-saturate-150"
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-base-950/90 pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] backdrop-blur-xl backdrop-saturate-150"
     >
       <div className="flex">
         {PLACES.map(({ place, to, label, icon: Icon }) => (

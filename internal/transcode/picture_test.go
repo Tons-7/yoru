@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// Each picture change in a real pass: HDR out SDR (as is for an HDR screen), interlaced progressive, capped.
 func TestPictureChangesRunInFFmpeg(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	dir := t.TempDir()
@@ -46,13 +45,11 @@ func TestPictureChangesRunInFFmpeg(t *testing.T) {
 	}{
 		{"HDR to an SDR screen", hdr, nil, Want{}, false, func(p string) bool { return !strings.Contains(p, "smpte2084") }},
 		{"HDR to an HDR screen", hdr, ParseCaps("hevc-10,hdr"), Want{}, true, func(p string) bool { return strings.Contains(p, "smpte2084") }},
-		// Converted for a cap all the same, the picture comes out SDR, so it is tone-mapped even there.
 		{"HDR capped for an HDR screen", hdr, ParseCaps("hevc-10, hdr"), Want{Height: 480, Rate: 1_200_000}, false,
 			func(p string) bool { return !strings.Contains(p, "smpte2084") && strings.Contains(p, ",480,") }},
 		{"interlaced", woven, nil, Want{}, false, func(p string) bool { return strings.Contains(p, "progressive") }},
 		{"capped", plain, nil, Want{Height: 480, Rate: 1_200_000}, false, func(p string) bool { return strings.Contains(p, ",480,") }},
 		{"softened", plain, nil, Want{Soften: true}, false, func(p string) bool { return strings.Contains(p, "h264") }},
-		// A PC without Vulkan tone-maps on the CPU.
 		{"HDR on the CPU", hdr, nil, Want{}, false, func(p string) bool { return !strings.Contains(p, "smpte2084") }},
 	} {
 		if tt.name == "HDR on the CPU" {

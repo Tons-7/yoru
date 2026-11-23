@@ -1,10 +1,8 @@
-// Player on a library episode: subtitles fill, far seeks play, scrubbing, played time, resume points.
 import { spawnSync } from 'node:child_process'
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
 const LIB = process.env.YORU_LIB
-// A real catalogue id, so the series page resolves; the file is its episode 1 for the run.
 const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const EP = 1
 const shots = process.env.SHOTS ?? '.'
@@ -32,7 +30,6 @@ const check = (ok, label, detail = '') => {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-// ---------------------------------------------------------------- setup
 for (let i = 0; i < 60; i++) {
   try {
     const r = await api('/api/setup')
@@ -45,7 +42,6 @@ let paths = await post('/api/local/paths', { paths: [LIB] })
 check(paths.ok, 'library path set', JSON.stringify(paths.body).slice(0, 120))
 let scan = await post('/api/local/scan', {})
 check(scan.ok, 'library scan started', JSON.stringify(scan.body).slice(0, 160))
-// The scan runs in the background; the file shows up when it has been walked.
 let file
 for (let i = 0; i < 30 && !file; i++) {
   await sleep(1000)
@@ -56,12 +52,9 @@ check(!!file, 'test file listed', JSON.stringify(file ?? {}).slice(0, 200))
 if (!file) process.exit(1)
 const assign = await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: EP })
 check(assign.ok, 'file assigned to episode', JSON.stringify(assign.body))
-// Nothing automatic is on by default; the check is about the pipeline.
 const autoplay = await post('/api/prefs', { key: 'playback.autoplay', value: 'true' })
 check(autoplay.ok, 'autoplay enabled for the run', JSON.stringify(autoplay.body))
 
-// ---------------------------------------------------------------- downloads
-// Seeded into the database and checked first: the sweep forgets rows the engine lacks two minutes in.
 if (process.env.YORU_DB && process.env.YORU_REPO) {
   const seed = spawnSync('go', ['run', './scripts/e2e-seed', '-db', process.env.YORU_DB, '-anime', String(ANIME)], {
     cwd: process.env.YORU_REPO,
@@ -82,7 +75,7 @@ const passingHeading = page.getByRole('heading', { name: 'Not kept', exact: true
 await keptHeading.waitFor({ timeout: 15_000 }).catch(() => {})
 check(await keptHeading.isVisible(), 'a kept download sits under Kept')
 check(await passingHeading.isVisible(), 'a watched episode sits under Not kept')
-const keepButtons = page.getByRole('button', { name: 'Keep', exact: true })
+const keepButtons = page.getByRole('button', { name: /^Keep / })
 check((await keepButtons.and(page.locator('[aria-pressed="true"]')).count()) === 1, 'only the kept one shows as kept')
 await page.screenshot({ path: `${shots}/downloads-tiers.png` })
 
@@ -105,11 +98,9 @@ check(
 )
 await page.screenshot({ path: `${shots}/downloads-kept.png` })
 
-// Settings offer the auto-delete rule, and the downloads toggle only once it is on.
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
-await page.getByRole('tab', { name: 'Storage' }).click()
+await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Storage' }).click()
 const autodelete = page.getByRole('combobox', { name: 'Auto-delete watched' })
-// The tab is in the URL now, so its panel renders a moment after the click.
 check(await autodelete.waitFor({ timeout: 5000 }).then(() => true, () => false), 'auto-delete watched setting is offered')
 check(!(await page.getByText('Also delete downloaded episodes').isVisible()), 'downloads toggle hidden while auto-delete is off')
 await autodelete.click()
@@ -126,8 +117,6 @@ await page.screenshot({ path: `${shots}/settings-cache.png` })
 await autodelete.click()
 await page.getByRole('option', { name: 'Off', exact: true }).click()
 
-// ---------------------------------------------------------------- playback
-// Progress goes by sendBeacon, whose body the request API can't read, so it is recorded at the source.
 await page.addInitScript(() => {
   window.__beacons = []
   const real = navigator.sendBeacon.bind(navigator)
@@ -181,7 +170,6 @@ const state = () =>
     }
   })
 
-// Wait for playback to start; press play if autoplay did not take.
 let s = null
 for (let i = 0; i < 45; i++) {
   await sleep(1000)
@@ -194,14 +182,12 @@ for (let i = 0; i < 45; i++) {
 check(!!s && s.t > 2 && !s.paused, 'playback started', JSON.stringify(s))
 check(!!s && s.error === null, 'no media error at start', s?.error ?? '')
 
-// Frames keep coming while playing.
 const f0 = s.frames
 await sleep(3000)
 s = await state()
 check(s.frames > f0, 'video frames advance while playing', `${f0} → ${s.frames}`)
 check(s.subCanvas >= 1, 'subtitle canvas attached', `canvases=${s.subCanvas}`)
 
-// The system's media controls (media keys, a headset, the lock screen) name the episode and know it plays.
 const session = await page.evaluate(() => ({
   title: navigator.mediaSession?.metadata?.title ?? null,
   artist: navigator.mediaSession?.metadata?.artist ?? null,
@@ -210,8 +196,6 @@ const session = await page.evaluate(() => ({
 check(/^Episode \d/.test(session.title ?? '') && !!session.artist, 'the media controls name the episode and the show', JSON.stringify(session))
 check(session.state === 'playing', 'and know it is playing', String(session.state))
 
-// Dual-audio: the file has a Japanese and an English track. The server opens
-// on Japanese for a sub viewer, and switching re-encodes onto the other one.
 check(
   streamOpen?.audio?.length === 2 && streamOpen.audioTrack === 0,
   'stream opens on the Japanese track of a dual-audio file',
@@ -229,7 +213,6 @@ check(
 )
 await avPanel.getByRole('button', { name: 'Done', exact: true }).click({ timeout: 5000 }).catch(() => {})
 
-// Subtitle track was fetched and the server labels it complete (a local file).
 await sleep(6000)
 check(subtitleResponses.length > 0, 'subtitle track fetched', JSON.stringify(subtitleResponses.slice(0, 3)))
 check(
@@ -238,7 +221,6 @@ check(
   JSON.stringify(subtitleResponses.slice(0, 3)),
 )
 
-// Seek well past anything produced: segment ~25 of 30.
 await page.evaluate(() => {
   const v = document.querySelector('video')
   v.currentTime = 150
@@ -257,7 +239,6 @@ check(after.frames > fSeek, 'video frames advance after the seek (no black pictu
 check(after.error === null, 'no media error after the seek', after.error ?? '')
 await page.screenshot({ path: `${shots}/after-seek.png` })
 
-// A non-black picture: sample the video element's pixels.
 const luminance = await page.evaluate(async () => {
   const v = document.querySelector('video')
   const c = document.createElement('canvas')
@@ -272,7 +253,6 @@ const luminance = await page.evaluate(async () => {
 })
 check(luminance > 20, 'picture is not black after the seek', `mean luminance ${luminance.toFixed(1)}`)
 
-// Back near the start, behind the encoder at 2:30: it must relaunch and deliver, not spin.
 await page.evaluate(() => {
   const v = document.querySelector('video')
   v.currentTime = 6
@@ -291,12 +271,10 @@ await sleep(3000)
 back = await state()
 check(back.frames > bFrames, 'frames advance after the backward seek', `${bFrames} → ${back.frames}`)
 
-// Drag the scrubber: pointer down at 20%, move to 40%, release.
 const bar = page.locator('.group\\/scrub')
 const box = await bar.boundingBox()
 check(!!box, 'scrubber present')
 
-// A library file is all on disk, so the bar's loaded part spans it all, not just the playhead's window.
 const loadedBar = bar.locator('[data-loaded]').first()
 let loadedWidth = 0
 for (let i = 0; i < 30 && loadedWidth < 99; i++) {
@@ -310,7 +288,6 @@ if (box) {
   await page.mouse.down()
   await page.mouse.move(box.x + box.width * 0.3, y, { steps: 5 })
   await page.mouse.move(box.x + box.width * 0.4, y, { steps: 5 })
-  // While dragging the fill follows the pointer, not the clock.
   const fillWidth = await page.evaluate(() => {
     const fill = document.querySelector('.group\\/scrub .bg-accent-500')
     return fill ? parseFloat(fill.style.width) : -1
@@ -326,7 +303,6 @@ if (box) {
   )
 }
 
-// Progress reports carry played time and exclude the seeks.
 await page.evaluate(() => document.querySelector('video').pause())
 await sleep(800)
 await collectReports()
@@ -341,7 +317,6 @@ check(
   JSON.stringify(progressReports.slice(-1)),
 )
 
-// The resume point is where we paused.
 const paused = await state()
 let detail = await api(`/api/anime/${ANIME}`)
 check(
@@ -353,7 +328,6 @@ let eps = await api(`/api/episodes?id=${ANIME}`)
 let row = (eps.body.items ?? []).find((e) => e.number === EP)
 check(row && row.resumable && !row.watched, 'episode row is resumable and not watched', JSON.stringify(row))
 
-// Peek at the ending: jump to 95% and let it run out.
 await page.evaluate(() => {
   const v = document.querySelector('video')
   v.currentTime = v.duration - 6
@@ -378,7 +352,6 @@ check(
   JSON.stringify(detail.body.resume),
 )
 
-// Switching audio drops the session's segments, so it goes last on this page.
 if (streamOpen?.id) {
   const sid = streamOpen.id
   const audio = (await api(`/api/stream/${sid}/audio?track=1`, { method: 'POST' })).body
@@ -389,33 +362,27 @@ if (streamOpen?.id) {
   check(bad.status === 400, 'an out-of-range track is rejected', String(bad.status))
 }
 
-// Reopening resumes there.
 await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
 await sleep(2500)
 const button = await page.locator('a', { hasText: /Resume Ep/ }).first().innerText().catch(() => '')
 check(/Resume Ep 1 · (\d+ min left|\d+:\d\d)/.test(button), 'series page button names the episode and time', button)
 
-// Opening the series page asks for that episode's release to be found now,
-// rather than when play is pressed — the "Searching for a release" wait.
 check(
   prepared.some((p) => p.animeId === ANIME && p.episode === EP),
   'series page asks for the continue episode to be made ready',
   JSON.stringify(prepared),
 )
 
-// Select mode queues a hand-picked set. Only the library episode is picked: it
-// needs no download, so nothing reaches the swarm and the queue drains at once.
 await page.getByRole('button', { name: 'Select episodes…' }).click()
-// The row itself is the button in select mode; the Up next toggle inside a row is pressed-or-not too.
 const firstRow = page.locator('li > button[aria-pressed]').first()
 await firstRow.click()
 check((await firstRow.getAttribute('aria-pressed')) === 'true', 'episode row toggles selected')
 check(
-  await page.getByText('1 selected').isVisible().catch(() => false),
+  await page.getByRole('toolbar', { name: 'Selected episodes' }).getByText(/1 of [\d,]+ selected/).isVisible().catch(() => false),
   'selection count follows the picks',
 )
 await page.screenshot({ path: `${shots}/select-episodes.png` })
-await page.getByRole('button', { name: 'Download selected' }).click()
+await page.getByRole('toolbar', { name: 'Selected episodes' }).getByRole('button', { name: 'Download 1', exact: true }).click()
 const queuedNote = await page
   .getByText(/Queued 1 of 1 episode/)
   .waitFor({ timeout: 10_000 })

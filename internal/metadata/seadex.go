@@ -9,7 +9,6 @@ import (
 	"strings"
 )
 
-// SeaDex curates each anime's best release, keyed by AniList id, so no title matching.
 const SeaDexURL = "https://seadex.moe/api/collections/entries/records"
 
 type SeaDexRelease struct {
@@ -23,9 +22,8 @@ type SeaDexRelease struct {
 	Incomplete   bool
 	Notes        string
 	Tags         []string
-	// Comparison pages (slow.pics and the like) for the entry, and the release's files.
-	Comparison []string
-	Files      []SeaDexFile
+	Comparison   []string
+	Files        []SeaDexFile
 }
 
 type SeaDexFile struct {
@@ -58,7 +56,6 @@ type seadexPage struct {
 	} `json:"items"`
 }
 
-// SeaDex mirrors the whole database: six pages of 500, then every lookup is local.
 func (c *Client) SeaDex(ctx context.Context) ([]SeaDexRelease, error) {
 	const perPage = 500
 
@@ -89,8 +86,6 @@ func (c *Client) SeaDex(ctx context.Context) ([]SeaDexRelease, error) {
 			}
 			for _, tr := range item.Expand.Torrents {
 				hash := usableHash(tr.InfoHash)
-				// Private trackers publish the literal "<redacted>" rather than
-				// omitting the field; stored as-is it collides across entries.
 				if hash == "" && tr.ReleaseGroup == "" {
 					continue
 				}
@@ -122,7 +117,6 @@ func (c *Client) SeaDex(ctx context.Context) ([]SeaDexRelease, error) {
 	return out, nil
 }
 
-// A v1 infohash is 40 hex characters; private trackers' placeholders are not hashes.
 func usableHash(raw string) string {
 	h := strings.ToLower(strings.TrimSpace(raw))
 	if len(h) != 40 {
@@ -136,7 +130,6 @@ func usableHash(raw string) string {
 	return h
 }
 
-// links splits the comma-separated comparison field, keeping web addresses only: the picker opens them.
 func links(field string) []string {
 	var out []string
 	for part := range strings.SplitSeq(field, ",") {
@@ -147,7 +140,6 @@ func links(field string) []string {
 	return out
 }
 
-// tags arrive as a list on some records and a string on others.
 func toTags(v any) []string {
 	switch t := v.(type) {
 	case []any:
@@ -159,10 +151,13 @@ func toTags(v any) []string {
 		}
 		return out
 	case string:
-		if t == "" {
-			return nil
+		var out []string
+		for _, s := range strings.Split(t, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				out = append(out, s)
+			}
 		}
-		return strings.Split(t, ",")
+		return out
 	}
 	return nil
 }

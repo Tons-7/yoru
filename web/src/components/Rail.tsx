@@ -1,14 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { cx } from '../lib/format'
+import { cx, motion } from '../lib/format'
 import { buttonClass } from '../lib/ui'
 import { Skeleton } from './ui'
+import { RailFold } from './homeLayout'
 
 const places = new Map<string, number>()
 
 function usePlace(track: React.RefObject<HTMLDivElement | null>, title: string) {
-  const { pathname, search } = useLocation()
-  const key = `${pathname}${search} ${title}`
+  const { pathname } = useLocation()
+  const key = `${pathname} ${title}`
   useLayoutEffect(() => {
     const el = track.current
     if (!el) return
@@ -20,7 +21,11 @@ function usePlace(track: React.RefObject<HTMLDivElement | null>, title: string) 
       const [box, at] = [el.getBoundingClientRect(), here.getBoundingClientRect()]
       el.scrollTo({ left: el.scrollLeft + at.left - box.left - (box.width - at.width) / 2, behavior: 'instant' })
     }
-    const keep = () => places.set(key, el.scrollLeft)
+    const keep = () => {
+      places.delete(key)
+      places.set(key, el.scrollLeft)
+      if (places.size > 100) places.delete(places.keys().next().value!)
+    }
     el.addEventListener('scroll', keep, { passive: true })
     return () => el.removeEventListener('scroll', keep)
   }, [track, key])
@@ -103,6 +108,7 @@ export function Rail({
   onUnfold?: () => void
   children: ReactNode
 }) {
+  const onFold = useContext(RailFold)
   const track = useRef<HTMLDivElement>(null)
   const { scrollable, atStart, atEnd, progress, visible } = useScrollState(track)
   usePlace(track, title)
@@ -110,7 +116,7 @@ export function Rail({
   const scrollBy = (direction: 1 | -1) => {
     const el = track.current
     if (!el) return
-    el.scrollBy({ left: direction * Math.round(el.clientWidth * 0.8), behavior: 'smooth' })
+    el.scrollBy({ left: direction * Math.round(el.clientWidth * 0.8), behavior: motion() })
   }
 
   return (
@@ -135,6 +141,17 @@ export function Rail({
         ) : (
           <div className="flex shrink-0 items-center gap-2">
             {action}
+            {onFold && (
+              <button
+                type="button"
+                onClick={onFold}
+                aria-expanded
+                aria-label={`Fold ${title}`}
+                className={buttonClass('ghost', 'sm')}
+              >
+                Fold
+              </button>
+            )}
             {scrollable && (
               <div className="hidden gap-1.5 md:flex">
                 <ArrowButton direction={-1} disabled={atStart} onClick={() => scrollBy(-1)} />
@@ -205,7 +222,7 @@ export function RailSkeleton({ title, to, size = 'poster' }: { title: string; to
       <div className="flex gap-3 overflow-hidden">
         {Array.from({ length: size === 'poster' ? 16 : 10 }, (_, i) => (
           <div key={i} className={cx('shrink-0', WIDTHS[size])}>
-            <Skeleton className={cx('w-full', size === 'poster' ? 'aspect-[2/3]' : 'aspect-video rounded-card')} />
+            <Skeleton className={cx('w-full', size === 'poster' ? 'aspect-2/3' : 'aspect-video rounded-card')} />
             <Skeleton className="mt-2 h-4 w-3/4" />
           </div>
         ))}

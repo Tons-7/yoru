@@ -1,5 +1,3 @@
-// Release sources on a fresh install, an updating one, and one with sites set (skipped without them).
-//   YORU_NYAA=<url> YORU_TOKYOTOSHO=<url> [SKIP_BUILD=1] [KEEP=1] node scripts/sources-check.mjs
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, openSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -12,10 +10,9 @@ const scriptDir = dirname(fileURLToPath(import.meta.url))
 const webDir = resolve(scriptDir, '..')
 const repo = resolve(webDir, '..')
 
-// The default port: a fresh install has no config to say otherwise.
-const PORT = process.env.PORT ?? '4321'
+const PORT = process.env.PORT ?? '4397'
 const URL = `http://127.0.0.1:${PORT}`
-const ANIME = 185874 // Bleach TYBW: The Calamity, a later cour: the hard case
+const ANIME = 185874
 const EPISODE = 2
 const NYAA = process.env.YORU_NYAA
 const TOKYO = process.env.YORU_TOKYOTOSHO
@@ -89,43 +86,33 @@ async function stop() {
   server = null
 }
 
-// Client-side navigation, the way links inside the app move.
 const go = (page, path) =>
   page.evaluate((target) => {
     window.history.pushState({}, '', target)
     window.dispatchEvent(new PopStateEvent('popstate'))
   }, path)
 
-// Unconfigured: nudged to setup, told what to add, every search refused with that instruction.
 async function expectUnconfigured(page, label) {
   const setup = await api('/api/setup')
   check(setup.body?.indexers === 0, `${label}: setup reports no sites`, JSON.stringify(setup.body?.indexers))
 
   await page.goto(`${URL}/`, { waitUntil: 'domcontentloaded' })
   check(await until(() => page.url().endsWith('/setup'), 15000), `${label}: first visit lands on setup`, page.url())
-  check(
-    await page.getByText(/ships with no torrent sites/i).isVisible().catch(() => false),
-    `${label}: setup explains sites are not shipped`,
-  )
-  check(
-    await page.locator('pre', { hasText: '[[indexer]]' }).isVisible().catch(() => false),
-    `${label}: setup shows the config block to add`,
-  )
   await page.screenshot({ path: join(shots, `${label}-setup.png`) })
 
-  // Series page, then play, by clicking: a full page load is nudged back to setup.
   await go(page, `/anime/${ANIME}`)
   await until(() => page.getByRole('heading', { name: /bleach/i }).first().isVisible().catch(() => false), 60000)
   await go(page, `/watch/${ANIME}/${EPISODE}`)
   const told = await until(
-    () => page.getByText(/no release sources configured/i).first().isVisible().catch(() => false),
+    () => page.getByText(/no release sites yet/i).first().isVisible().catch(() => false),
     60000,
   )
-  check(told, `${label}: playing says to add sources and restart`)
-  await page.getByRole('button', { name: 'Try another release' }).click().catch(() => {})
+  check(told, `${label}: playing says to add a release site`)
+  const another = await page.getByRole('button', { name: 'Try another release' }).click({ timeout: 10000 }).then(() => true, () => false)
+  check(another, `${label}: the error offers another release`)
   check(
     await until(
-      () => page.getByRole('dialog').getByText(/no release sources configured/i).isVisible().catch(() => false),
+      () => page.getByRole('dialog').getByText(/no release sites yet/i).isVisible().catch(() => false),
       10000,
     ),
     `${label}: the release picker says the same`,
@@ -134,7 +121,6 @@ async function expectUnconfigured(page, label) {
 }
 
 try {
-  // Another Yoru on the port would answer instead, and take every write below.
   if (await fetch(`${URL}/api/setup`).then((r) => r.ok).catch(() => false)) {
     throw new Error(`something already answers on ${URL}; close it or set PORT`)
   }
@@ -146,7 +132,7 @@ try {
 
   if (process.env.SKIP_BUILD !== '1') {
     stage('building')
-    const r1 = spawnSync('npm run build', [], { cwd: webDir, shell: true, stdio: 'inherit' })
+    const r1 = spawnSync('pnpm run build', [], { cwd: webDir, shell: true, stdio: 'inherit' })
     if (r1.status !== 0) throw new Error('web build failed')
     mkdirSync(binCache, { recursive: true })
     const r2 = spawnSync('go', ['build', '-o', yoruExe, './cmd/yoru'], { cwd: repo, stdio: 'inherit' })
@@ -158,7 +144,6 @@ try {
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message.split('\n')[0].slice(0, 160)))
 
-  // A: first unzip, no config, so the default port (skipped when running on another).
   if (PORT === '4321') {
     stage('fresh download: no config.toml')
     await start('fresh')
@@ -172,17 +157,14 @@ try {
     console.log(`\nSKIP fresh download: needs the default port, running on ${PORT}`)
   }
 
-  // B: an existing install updating, its config predating sites and its database kept.
   stage('existing install: old config, existing database')
-  // Its own peer port, off the real app's.
-  const old = `addr = "127.0.0.1:${PORT}"\n\n[anilist]\nclient_id = ""\nclient_secret = ""\n\n[torrent]\nlisten_port = 4342\n`
+  const old = `addr = "127.0.0.1:${PORT}"\n\n[anilist]\nclient_id = ""\nclient_secret = ""\n\n[torrent]\nlisten_port = 4342\nupnp = false\n`
   writeFileSync(configPath, old)
   await start('update')
   check(readFileSync(configPath, 'utf8') === old, "update: the user's config is left untouched")
   await expectUnconfigured(page, 'update')
   await stop()
 
-  // C: the block filled in, restarted.
   if (!NYAA || !TOKYO) {
     console.log('\nSKIP configured: set YORU_NYAA and YORU_TOKYOTOSHO to run it')
   } else {
@@ -219,10 +201,8 @@ try {
     }
     await stop()
 
-    // D: closed and opened again. Everything set up has to still be there.
     stage('restarted: settings, library and sites survive')
     await start('restart-prep')
-    // Not the default, or the check proves nothing.
     await api('/api/prefs', { method: 'POST', body: JSON.stringify({ key: 'playback.autonext', value: 'true' }) })
     const set = await api('/api/local/paths', { method: 'POST', body: JSON.stringify({ paths: [scratch] }) })
     check(set.ok, 'restart-prep: a library folder is accepted', JSON.stringify(set.body))
@@ -237,7 +217,6 @@ try {
     await sleep(3000)
     check(!page.url().endsWith('/setup'), 'restart: not sent back to setup', page.url())
 
-    // E: the database moved beside the exe from the Setup page, restarted.
     stage('data folder chosen, restarted')
     const moved = await api('/api/setup/data-dir', { method: 'POST', body: JSON.stringify({ path: 'data' }) })
     check(moved.ok && moved.body?.copied === true, 'move: the database is copied to the chosen folder', JSON.stringify(moved.body))

@@ -19,7 +19,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// countingIndexer records every query, locked as the finder fans out across goroutines.
 type countingIndexer struct {
 	mu      sync.Mutex
 	queries []string
@@ -50,7 +49,6 @@ func (c *countingIndexer) count() int {
 	return len(c.queries)
 }
 
-// Under the filler rule, preparing the next episode resolves the next worth watching, not episode+1.
 func TestPrepareFollowsTheFillerRule(t *testing.T) {
 	eng := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"torrents":[]}`)
@@ -76,7 +74,6 @@ func TestPrepareFollowsTheFillerRule(t *testing.T) {
 	p := NewPrefetcher(st, finder, torrent.NewClient(eng.URL), discard())
 
 	p.Prepare(1, 1, 0, score.DefaultPreferences())
-	// The resolve runs in the background; wait for it to finish.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		p.mu.Lock()
@@ -94,7 +91,6 @@ func TestPrepareFollowsTheFillerRule(t *testing.T) {
 		t.Fatalf("searched for the filler episode: %v", idx.queries)
 	}
 
-	// The last episode has nothing after it, so nothing is searched at all.
 	before := idx.count()
 	p.Prepare(1, 4, 0, score.DefaultPreferences())
 	p.mu.Lock()

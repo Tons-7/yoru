@@ -36,7 +36,7 @@ func crownHandlerStore(t *testing.T) *store.Store {
 	if err := st.SaveRelations(ctx, nil, rels); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.RebuildFranchises(ctx); err != nil {
+	if _, err := st.RebuildFranchisesFor(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	return st

@@ -1,5 +1,3 @@
-// A subtitle file from this device: ASS as it is, SRT and WebVTT made ASS, which the renderer draws.
-
 const HEAD = `[Script Info]
 ScriptType: v4.00+
 PlayResX: 1920
@@ -14,7 +12,6 @@ Style: Default,Arial,64,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `
 
-// 00:01:02,345 (SRT) or 01:02.345 (WebVTT, hours optional).
 const STAMP = /(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})/
 
 function seconds(stamp: string): number | null {
@@ -32,23 +29,24 @@ function assTime(t: number): string {
   return `${h}:${pad(m)}:${pad(s)}.${pad(cs % 100)}`
 }
 
-// Italic and bold carried over; other markup (voices, colours, positions) dropped.
 function assText(lines: string[]): string {
   let text = lines
     .join('\\N')
-    // A brace in the text would read as an ASS tag.
     .replace(/[{}]/g, '')
     .replace(/<\/?i>/g, (t) => (t[1] === '/' ? '{\\i0}' : '{\\i1}'))
     .replace(/<\/?b>/g, (t) => (t[1] === '/' ? '{\\b0}' : '{\\b1}'))
-  // Until nothing changes, as code scanning asks of tag stripping; this text reaches the renderer, never HTML.
   for (let was = ''; was !== text; ) {
     was = text
     text = text.replace(/<[^>]*>/g, '')
   }
-  return text
+  return text.replace(/&(amp|lt|gt|quot|apos|nbsp|#\d+|#x[0-9a-f]+);/gi, (_, name: string) => {
+    const lower = name.toLowerCase()
+    if (lower.startsWith('#x')) return String.fromCodePoint(parseInt(lower.slice(2), 16))
+    if (lower.startsWith('#')) return String.fromCodePoint(parseInt(lower.slice(1), 10))
+    return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }[lower] ?? ''
+  })
 }
 
-/** SRT or WebVTT as ASS: each cue's times, then its lines. */
 export function textToASS(text: string): string {
   const events: string[] = []
   for (const block of text.replace(/\r/g, '').split(/\n{2,}/)) {
@@ -65,7 +63,6 @@ export function textToASS(text: string): string {
   return HEAD + events.join('\n') + '\n'
 }
 
-/** The file as ASS, or why it can't be used. */
 export async function readSubtitleFile(file: File): Promise<string> {
   const text = await file.text()
   if (/^\s*\[Script Info\]/i.test(text)) return text

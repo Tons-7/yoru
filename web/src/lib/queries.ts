@@ -21,16 +21,60 @@ import {
   type Tracker,
   type UpNextItem,
 } from './api'
-import type { SpeedUnit } from './format'
+import { dayAndTime, type SpeedUnit } from './format'
 import { toast } from './toast'
 
 export const tzOffset = () => -new Date().getTimezoneOffset()
+
+export const tzName = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone ?? ''
+  } catch {
+    return ''
+  }
+}
 
 export function useHome() {
   return useQuery({
     queryKey: ['continue'],
     queryFn: () => api.get<Page<LibraryItem>>('/api/continue?perPage=20'),
     refetchInterval: 2 * 60_000,
+  })
+}
+
+export function useNotInterested() {
+  const qc = useQueryClient()
+  const set = (animeId: number, hidden: boolean) => api.post('/api/bookmarks', { animeId, hidden })
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['home'] })
+    void qc.invalidateQueries({ queryKey: ['hidden'] })
+  }
+  return (animeId: number, title: string) => {
+    const before = qc.getQueriesData<{ items: DiscoverItem[] }>({ queryKey: ['home'] })
+    qc.setQueriesData<{ items: DiscoverItem[] }>({ queryKey: ['home'] }, (old) =>
+      old && Array.isArray(old.items) ? { ...old, items: old.items.filter((i) => i.id !== animeId) } : old,
+    )
+    set(animeId, true).then(
+      () => {
+        refresh()
+        toast(`${title} won't be suggested again`, 'info', {
+          label: 'Undo',
+          run: () => void set(animeId, false).then(refresh, () => toast(`Couldn't bring back ${title}`, 'error')),
+        })
+      },
+      (e: Error) => {
+        for (const [key, data] of before) qc.setQueryData(key, data)
+        toast(`Couldn't hide ${title}: ${e.message}`, 'error')
+      },
+    )
+  }
+}
+
+export function useHiddenShows(enabled = true) {
+  return useQuery({
+    queryKey: ['hidden'],
+    queryFn: () => api.get<{ items: { animeId: number; title: string; cover?: string }[] }>('/api/hidden'),
+    enabled,
   })
 }
 
@@ -49,8 +93,8 @@ export const discoverQuery = (sort: string, perPage = 24) => ({
   staleTime: 10 * 60_000,
 })
 
-export function useDiscover(sort: string, perPage = 24, keep = false) {
-  return useQuery({ ...discoverQuery(sort, perPage), placeholderData: keep ? keepPreviousData : undefined })
+export function useDiscover(sort: string, perPage = 24, keep = false, enabled = true) {
+  return useQuery({ ...discoverQuery(sort, perPage), enabled, placeholderData: keep ? keepPreviousData : undefined })
 }
 
 export function useSetNotify(animeId: number) {
@@ -71,7 +115,11 @@ export function useSetNotify(animeId: number) {
     onError: (_error, _on, context) => {
       for (const [key, data] of context?.before ?? []) qc.setQueryData(key, data)
     },
-    onSuccess: (state) => qc.setQueryData<{ notify?: FollowState }>(['anime', animeId], (old) => (old ? { ...old, notify: state } : old)),
+    onSuccess: (state) => {
+      qc.setQueryData<{ notify?: FollowState }>(['anime', animeId], (old) => (old ? { ...old, notify: state } : old))
+      qc.setQueryData(['alert', animeId], state.on)
+      void qc.invalidateQueries({ queryKey: ['alert-shows'], refetchType: 'none' })
+    },
     onSettled: () => void qc.invalidateQueries({ queryKey: ['schedule'] }),
   })
 }
@@ -79,11 +127,12 @@ export function useSetNotify(animeId: number) {
 export function useSchedule(days = 7, mine = false, back = 0, enabled = true) {
   return useQuery({
     enabled,
-    queryKey: ['schedule', days, mine, back],
+    queryKey: ['schedule', days, mine, back, tzName(), tzOffset()],
     queryFn: () =>
-      api.get<{ days: ScheduleDay[]; items: ScheduleItem[] }>(
+      api.get<{ days: ScheduleDay[]; items: ScheduleItem[]; partial?: boolean }>(
         `/api/schedule${query({
           tz: tzOffset(),
+          zone: tzName() || undefined,
           days: days + back,
           mine: mine || undefined,
           start: back ? Math.floor(Date.now() / 1000) - back * 86_400 : undefined,
@@ -91,6 +140,7 @@ export function useSchedule(days = 7, mine = false, back = 0, enabled = true) {
       ),
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
+    placeholderData: keepPreviousData,
   })
 }
 
@@ -159,19 +209,6 @@ export function useFranchise(animeId?: number) {
   })
 }
 
-export function useLibrary(
-  f: { status: string; q?: string; sort?: string },
-  page = 1,
-  enabled = true,
-) {
-  return useQuery({
-    enabled,
-    queryKey: ['library', f.status, f.q ?? '', f.sort ?? '', page],
-    queryFn: () =>
-      api.get<Page<LibraryItem>>(`/api/library${query({ status: f.status, q: f.q, sort: f.sort, page })}`),
-  })
-}
-
 export interface LibraryCounts {
   total: number
   statuses: Record<string, number>
@@ -191,14 +228,6 @@ export function useTrackers() {
     queryKey: ['trackers'],
     queryFn: () => api.get<{ trackers: Tracker[] }>('/api/trackers'),
     staleTime: 60_000,
-  })
-}
-
-export function useFavourites(page = 1, enabled = true) {
-  return useQuery({
-    enabled,
-    queryKey: ['bookmarks', page],
-    queryFn: () => api.get<Page<LibraryItem>>(`/api/bookmarks${query({ page })}`),
   })
 }
 
@@ -320,9 +349,12 @@ export function useDownloadQueue() {
   })
 }
 
-export function useDownloads() {
+export function useDownloads<T = { items: Download[]; count: number }>(
+  select?: (data: { items: Download[]; count: number }) => T,
+) {
   const qc = useQueryClient()
   const result = useQuery({
+    select,
     queryKey: ['downloads'],
     queryFn: async () => {
       const before = qc.getQueryData<{ items: Download[] }>(['downloads'])
@@ -351,7 +383,7 @@ const finishedHashes = (items: Download[]) =>
     .join()
 
 export function refreshDownloads(qc: QueryClient) {
-  for (const key of ['downloads', 'download-queue', 'cache', 'episodes']) {
+  for (const key of ['downloads', 'download-queue', 'cache', 'episodes', 'better-copies']) {
     void qc.invalidateQueries({ queryKey: [key] })
   }
 }
@@ -376,6 +408,12 @@ function untilNextAiring(items: Episode[] | undefined): number | false {
   }
   if (!Number.isFinite(soonest)) return false
   return Math.min(Math.max(soonest - now + 60_000, 60_000), 12 * 3_600_000)
+}
+
+export function newToYou(items: DiscoverItem[], atLeast = 6): DiscoverItem[] {
+  const fresh = items.filter((i) => !i.onList)
+  if (fresh.length >= atLeast) return fresh
+  return [...fresh, ...items.filter((i) => i.onList && i.listStatus !== 'COMPLETED' && i.listStatus !== 'DROPPED')]
 }
 
 export function useRecommendations(animeId: number | undefined) {
@@ -461,6 +499,29 @@ export function useSetPref() {
   return useMutation({
     mutationFn: (v: { key: string; value: string; animeId?: number }) =>
       api.post('/api/prefs', v),
+    onMutate: async (v) => {
+      const key = ['prefs', v.animeId ?? 0]
+      await qc.cancelQueries({ queryKey: key })
+      type Prefs = { effective: Record<string, string>; defaults: Record<string, string>; overrides?: Record<string, string> }
+      const before = qc.getQueryData<Prefs>(key)
+      if (before) {
+        const cleared = !!v.animeId && v.value === ''
+        const global = qc.getQueryData<Prefs>(['prefs', 0])?.effective[v.key] ?? before.defaults[v.key] ?? ''
+        const overrides = { ...before.overrides }
+        if (cleared) delete overrides[v.key]
+        else if (v.animeId) overrides[v.key] = v.value
+        qc.setQueryData<Prefs>(key, {
+          ...before,
+          effective: { ...before.effective, [v.key]: cleared ? global : v.value },
+          ...(v.animeId ? { overrides } : {}),
+        })
+      }
+      return { key, before }
+    },
+    onError: (_e, _v, context) => {
+      if (context?.before) qc.setQueryData(context.key, context.before)
+      void qc.invalidateQueries({ queryKey: ['prefs'] })
+    },
     onSuccess: (_res, v) => {
       if (v.key === 'display.titles') {
         void qc.invalidateQueries()
@@ -472,21 +533,32 @@ export function useSetPref() {
         void qc.invalidateQueries({ queryKey: ['schedule'] })
         void qc.invalidateQueries({ queryKey: ['aired'] })
       }
+      if (v.key === 'home.adult_picks') void qc.invalidateQueries({ queryKey: ['home'] })
+      if (v.key === 'display.spoilers') {
+        for (const key of ['episodes', 'upnext', 'upnext-after', 'continue']) void qc.invalidateQueries({ queryKey: [key] })
+      }
     },
   })
 }
 
-const LIST_STATE_KEYS = [
+export const LIST_STATE_KEYS = [
   'library', 'continue', 'discover', 'browse', 'schedule', 'anime', 'episodes', 'franchise',
   'recommend', 'aired', 'bookmarks', 'search', 'history', 'upnext', 'upnext-after', 'home',
+  'person', 'character',
 ]
+
+const fetchUpNext = () => api.get<{ items: UpNextItem[] }>('/api/upnext')
 
 export function useUpNext() {
   return useQuery({
     queryKey: ['upnext'],
-    queryFn: () => api.get<{ items: UpNextItem[] }>('/api/upnext'),
+    queryFn: fetchUpNext,
     refetchInterval: 2 * 60_000,
   })
+}
+
+export function useUpNextQuiet() {
+  return useQuery({ queryKey: ['upnext'], queryFn: fetchUpNext, staleTime: 60_000 })
 }
 
 function reorderShows(items: UpNextItem[], animeId: number, to: number): UpNextItem[] {
@@ -510,6 +582,10 @@ export function useUpNextEdit() {
     return { before }
   }
   const restore = (_e: unknown, _v: unknown, ctx?: { before?: { items: UpNextItem[] } }) => {
+    if (qc.isMutating({ mutationKey }) > 1) {
+      void qc.invalidateQueries({ queryKey: ['upnext'] })
+      return
+    }
     if (ctx?.before) qc.setQueryData(['upnext'], ctx.before)
   }
   return {
@@ -519,7 +595,8 @@ export function useUpNextEdit() {
       onMutate: (v) =>
         optimistic((items) => {
           const show = items.find((it) => it.animeId === v.animeId)
-          const added = [...items, { ...show, ...v, title: show?.title ?? '', episodeTitle: undefined, position: 0 }]
+          if (!show) return items
+          const added = [...items, { animeId: v.animeId, episode: v.episode, title: show.title, cover: show.cover, position: 0 }]
           const shows = [...new Set(added.map((it) => it.animeId))]
           return shows.flatMap((id) => added.filter((it) => it.animeId === id).sort((a, b) => a.episode - b.episode))
         }),
@@ -558,6 +635,7 @@ export function useUpNextEdit() {
 
 export function refreshListState(qc: QueryClient) {
   for (const key of LIST_STATE_KEYS) void qc.invalidateQueries({ queryKey: [key] })
+  void qc.invalidateQueries({ queryKey: ['alert-shows'] })
 }
 
 export function useRemoveStatus() {
@@ -588,14 +666,21 @@ export interface Notification {
   body: string
   createdAt: number
   read: boolean
+  payload?: { nowAt?: number; wasAt?: number }
 }
 
-export function useNotifications() {
+export function notificationBody(n: Notification): string {
+  if (n.kind === 'delay' && typeof n.payload?.nowAt === 'number') return `Now ${dayAndTime(n.payload.nowAt)}`
+  return n.body
+}
+
+export function useNotifications(limit = 30) {
   return useQuery({
-    queryKey: ['notifications'],
+    queryKey: ['notifications', limit],
     queryFn: () =>
-      api.get<{ items: Notification[]; unread: number }>('/api/notifications?perPage=30'),
+      api.get<{ items: Notification[]; unread: number }>(`/api/notifications${query({ limit })}`),
     refetchInterval: 5 * 60_000,
+    placeholderData: keepPreviousData,
   })
 }
 
@@ -636,6 +721,7 @@ export interface SetupState {
   dataDir: string
   vlc?: string
   strayConfig?: string
+  unknownConfig?: string[]
   temporary: boolean
   binDir: string
   cacheDir: string

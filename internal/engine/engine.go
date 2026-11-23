@@ -79,9 +79,11 @@ type Engine struct {
 	janitorOnce sync.Once
 
 	unclean     bool
+	marked      bool
 	uncleanOnce sync.Once
 
 	crashChecked map[metainfo.Hash]bool
+	crashPending map[metainfo.Hash]bool
 
 	configure func(*bt.ClientConfig)
 	onNew     func(*bt.Torrent)
@@ -183,6 +185,9 @@ func (e *Engine) start() error {
 	}
 	bind, err := e.binding()
 	if err != nil {
+		e.mu.Lock()
+		e.offline = true
+		e.mu.Unlock()
 		return err
 	}
 	for _, dir := range []string{e.opts.CacheDir, e.opts.SessionDir} {
@@ -198,6 +203,9 @@ func (e *Engine) start() error {
 			e.log.Warn("the last run did not stop cleanly; unfinished downloads are checked again")
 		}
 		os.WriteFile(marker, nil, 0o644)
+		e.mu.Lock()
+		e.marked = true
+		e.mu.Unlock()
 	})
 	pieces, reset, err := storage.NewBoltPieceCompletionRecovering(e.opts.SessionDir)
 	if err != nil {
@@ -250,7 +258,14 @@ func (e *Engine) start() error {
 	cl.SetUploads(limits.Upload != torrent.UploadNever, true)
 
 	if err := e.restore(); err != nil {
-		e.log.Warn("restore torrents", "err", err)
+		e.log.Warn("restore torrents; trying again on the next start", "err", err)
+		e.mu.Lock()
+		e.keepIDs = nil
+		e.cl, e.pieces = nil, nil
+		e.mu.Unlock()
+		cl.Close()
+		pieces.Close()
+		return fmt.Errorf("restore torrents: %w", err)
 	}
 	e.mu.Lock()
 	e.keepIDs = nil
@@ -289,6 +304,7 @@ func (e *Engine) clientConfig(pieces storage.PieceCompletion, port int) *bt.Clie
 		cfg.ListenHost = listenHost
 	}
 	cfg.DataDir = e.opts.CacheDir
+	cfg.DhtNodesFile = filepath.Join(e.opts.SessionDir, "dht-nodes")
 	cfg.DefaultStorage = files{base: e.opts.CacheDir, pieces: pieces, names: e.names, vanished: e.vanished}
 	cfg.ListenPort = port
 	if e.opts.PeerLimit > 0 {
@@ -353,20 +369,23 @@ func (e *Engine) Stop() {
 		return
 	}
 	e.closed = true
-	cl, pieces := e.cl, e.pieces
+	cl, pieces, marked := e.cl, e.pieces, e.marked
 	e.mu.Unlock()
 
 	shutdown, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	e.server.Shutdown(shutdown)
 	cancel()
+	saved := true
 	if cl != nil {
-		e.writeSession(true)
+		saved = e.writeSession(true)
 		cl.Close()
 	}
 	if pieces != nil {
 		pieces.Close()
 	}
-	os.Remove(filepath.Join(e.opts.SessionDir, runningMarker))
+	if marked && saved {
+		os.Remove(filepath.Join(e.opts.SessionDir, runningMarker))
+	}
 }
 
 const runningMarker = "engine.running"

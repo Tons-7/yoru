@@ -10,11 +10,6 @@ import (
 	"yoru/internal/transcode"
 )
 
-// AirPlay: Safari sends an Apple TV a <source> beside the page's own, fetched by a signed link as Cast does;
-// the master playlist adds the text subtitles as WebVTT, since the TV can't see the page's.
-
-// airplayMaster is the picture with each text subtitle track beside it. choice is the page's: a track's
-// index, "off", or "" for the file's own default, if it marks one.
 func airplayMaster(session *transcode.Session, choice string) string {
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n")
@@ -29,10 +24,8 @@ func airplayMaster(session *transcode.Session, choice string) string {
 		}
 		texts = append(texts, sub)
 	}
-	// A quoted-string may hold neither a double quote nor a line break.
 	clean := strings.NewReplacer(`"`, "'", "\n", " ", "\r", " ")
 	for i, sub := range texts {
-		// The page's pick is shown; with none, the file's default; with them off there, none at all.
 		def, auto := "NO", "YES"
 		if i == chosen {
 			def = "YES"
@@ -59,11 +52,8 @@ func airplayMaster(session *transcode.Session, choice string) string {
 	return b.String()
 }
 
-// airplayPiece: a minute of subtitles at a time, each asked as the TV nears it, so an episode still
-// downloading gets the lines written by then; one file for the whole would be asked once, near empty.
 const airplayPiece = 60.0
 
-// airplaySubtitles is one text track's playlist: its pieces, a minute each.
 func airplaySubtitles(session *transcode.Session, track int) string {
 	d := session.Info.Duration
 	var b strings.Builder
@@ -76,8 +66,6 @@ func airplaySubtitles(session *transcode.Session, track int) string {
 	return b.String()
 }
 
-// airplayCues is one piece of a WebVTT: the cues showing in it, those across its edges in both, as HLS asks,
-// with the cue times mapped as the video's own, from 0.
 func airplayCues(vtt []byte, piece int) []byte {
 	from, to := float64(piece)*airplayPiece, float64(piece+1)*airplayPiece
 	blocks := strings.Split(strings.ReplaceAll(string(vtt), "\r\n", "\n"), "\n\n")
@@ -96,7 +84,6 @@ func airplayCues(vtt []byte, piece int) []byte {
 	return []byte(b.String())
 }
 
-// cueTimes reads a cue's "00:01.000 --> 00:05.000" line.
 func cueTimes(block string) (start, end float64, ok bool) {
 	for line := range strings.SplitSeq(block, "\n") {
 		left, right, found := strings.Cut(line, "-->")
@@ -111,7 +98,6 @@ func cueTimes(block string) (start, end float64, ok bool) {
 	return 0, 0, false
 }
 
-// vttSeconds reads "hh:mm:ss.ttt" or "mm:ss.ttt".
 func vttSeconds(s string) (float64, bool) {
 	parts := strings.Split(s, ":")
 	if len(parts) < 2 || len(parts) > 3 {

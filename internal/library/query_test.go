@@ -2,8 +2,6 @@ package library
 
 import "testing"
 
-// Trackers match tokens against a filename, and no filename contains "?!" or a
-// trailing dot. Prowlarr's own Nyaa definition strips the same things.
 func TestCleanQueryStripsWhatNoFilenameContains(t *testing.T) {
 	cases := map[string]string{
 		"My Classmate's a Sexy Actress, and Now We Live Together?!": "My Classmate s a Sexy Actress and Now We Live Together",
@@ -19,7 +17,6 @@ func TestCleanQueryStripsWhatNoFilenameContains(t *testing.T) {
 	}
 }
 
-// Release names rarely label a first season, so keeping the marker narrows the search to nothing.
 func TestCleanQueryDropsSeasonOne(t *testing.T) {
 	for _, in := range []string{
 		"Some Show Season 1",
@@ -32,7 +29,6 @@ func TestCleanQueryDropsSeasonOne(t *testing.T) {
 		}
 	}
 
-	// Later seasons must survive: they are what separates them from season one.
 	if got := cleanQuery("Some Show Season 2"); got != "Some Show Season 2" {
 		t.Errorf("season two was stripped: %q", got)
 	}

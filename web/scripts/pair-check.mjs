@@ -1,5 +1,3 @@
-// Pairing a TV with a code, from Settings, Devices: the address it opens (no token), the code typed any way,
-// what a wrong one says, and the device a right one let in. The TV's own page is in Go's pairing_test.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -21,7 +19,6 @@ const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 
 try {
-  // Reachable from the home network, as the row needs.
   await page.route('**/api/access', (route) => route.fulfill({ json: {
     reachable: true, canSwitch: true, host: true, listening: '0.0.0.0:4410', urls: ['http://192.168.1.10:4410/?token=abc123'],
   } }))

@@ -72,7 +72,7 @@ export function aboutLeft(seconds: number): string {
   const minutes = Math.round(seconds / 60)
   if (minutes < 60) return `about ${minutes} min left`
   const hours = Math.floor(minutes / 60)
-  return `about ${hours} h ${minutes % 60} min left`
+  return minutes % 60 ? `about ${hours} h ${minutes % 60} min left` : `about ${hours} h left`
 }
 
 export const LOW_SHARE = 0.1

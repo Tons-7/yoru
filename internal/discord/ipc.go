@@ -1,5 +1,3 @@
-// Package discord shows what Yoru plays as Discord Rich Presence, through the Discord app's local IPC pipe.
-// Nothing goes to Discord's servers from here; the app on this machine does that.
 package discord
 
 import (
@@ -11,28 +9,26 @@ import (
 	"os"
 	"strconv"
 	"sync/atomic"
+	"time"
 )
 
-// ClientID is Yoru's Discord application, which names the card and holds its images. Public by design.
 const ClientID = "1561032495498268775"
 
-// The IPC frame opcodes.
+const ipcWait = 5 * time.Second
+
 const (
 	opHandshake = 0
 	opFrame     = 1
 	opClose     = 2
 )
 
-// maxPayload is the largest frame body sent; Discord's own limit is far above a presence.
 const maxPayload = 64 << 10
 
-// conn is one connection to the Discord app.
 type conn struct {
 	rw    io.ReadWriteCloser
 	nonce atomic.Int64
 }
 
-// dial reaches the Discord app on this machine, trying each pipe it may listen on, and says hello.
 func dial() (*conn, error) {
 	var last error
 	for i := range 10 {
@@ -47,14 +43,18 @@ func dial() (*conn, error) {
 			last = err
 			continue
 		}
-		// Discord answers every command; read on, so its replies never fill the pipe.
 		go c.drain()
 		return c, nil
 	}
 	return nil, fmt.Errorf("discord isn't running: %w", last)
 }
 
+func (c *conn) closeAfterWait() *time.Timer {
+	return time.AfterFunc(ipcWait, func() { c.rw.Close() })
+}
+
 func (c *conn) handshake() error {
+	defer c.closeAfterWait().Stop()
 	if err := c.write(opHandshake, map[string]any{"v": 1, "client_id": ClientID}); err != nil {
 		return err
 	}
@@ -74,7 +74,6 @@ func (c *conn) handshake() error {
 	return nil
 }
 
-// setActivity shows a, or clears the card when a is nil.
 func (c *conn) setActivity(a any) error {
 	return c.write(opFrame, map[string]any{
 		"cmd":   "SET_ACTIVITY",
@@ -88,13 +87,13 @@ func (c *conn) write(op uint32, payload any) error {
 	if err != nil {
 		return err
 	}
-	// A presence is a few hundred bytes; the bound keeps the frame's 32-bit length and its allocation honest.
 	if len(body) > maxPayload {
 		return fmt.Errorf("discord: payload of %d bytes is too large", len(body))
 	}
 	frame := make([]byte, 8, 8+len(body))
 	binary.LittleEndian.PutUint32(frame[0:], op)
 	binary.LittleEndian.PutUint32(frame[4:], uint32(len(body)))
+	defer c.closeAfterWait().Stop()
 	_, err = c.rw.Write(append(frame, body...))
 	return err
 }

@@ -54,7 +54,7 @@ func (s *Store) moveInLine(ctx context.Context, animeID int, epKey string, place
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT anime_id, ep_key, queued_at FROM download_queue
-		WHERE state IN ('pending', 'paused') ORDER BY queued_at, episode`)
+		WHERE state IN ('pending', 'paused') ORDER BY queued_at, anime_id, episode`)
 	if err != nil {
 		return false, err
 	}
@@ -95,6 +95,12 @@ func (s *Store) moveInLine(ctx context.Context, animeID int, epKey string, place
 			return false, err
 		}
 	}
+	if at == 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE download_queue SET retry_at = NULL WHERE anime_id = ? AND ep_key = ?`,
+			animeID, epKey); err != nil {
+			return false, err
+		}
+	}
 	return true, tx.Commit()
 }
 
@@ -132,7 +138,7 @@ func (s *Store) NextFromTorrents(ctx context.Context, hashes []string) (QueuedDo
 		WHERE q.state = 'pending' AND (q.retry_at IS NULL OR q.retry_at <= ?)
 		  AND lower(f.info_hash) IN (`+strings.TrimSuffix(strings.Repeat("?,", len(hashes)), ",")+`)
 		  AND (q.info_hash IS NULL OR lower(q.info_hash) = lower(f.info_hash))
-		ORDER BY q.queued_at, q.episode
+		ORDER BY q.queued_at, q.anime_id, q.episode
 		LIMIT 1`, args...).Scan(&animeID, &epKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return QueuedDownload{}, false, nil
@@ -240,22 +246,31 @@ func (s *Store) SetReleaseQueuedPaused(ctx context.Context, infoHash string, fil
 		if !e.kept {
 			continue
 		}
-		var exists int
-		if err := s.r.QueryRowContext(ctx, `SELECT count(*) FROM download_queue WHERE anime_id = ? AND ep_key = ?`,
-			e.animeID, e.epKey).Scan(&exists); err != nil {
-			return n, err
-		}
-		if exists > 0 {
-			continue
-		}
 		episode, _ := strconv.Atoi(e.epKey)
-		if _, err := s.w.ExecContext(ctx, `
+		added, err := s.w.ExecContext(ctx, `
 			INSERT INTO download_queue (anime_id, ep_key, episode, season, state, queued_at, info_hash, release_name)
-			VALUES (?, ?, ?, 0, ?, coalesce((SELECT max(queued_at) FROM download_queue), ?) + 1, ?, ?)`,
-			e.animeID, e.epKey, episode, state, time.Now().Unix(), strings.ToLower(infoHash), e.name); err != nil {
+			VALUES (?, ?, ?, 0, ?, coalesce((SELECT max(queued_at) FROM download_queue), ?) + 1, ?, ?)
+			ON CONFLICT DO NOTHING`,
+			e.animeID, e.epKey, episode, state, time.Now().Unix(), strings.ToLower(infoHash), e.name)
+		if err != nil {
 			return n, err
 		}
-		n++
+		if inserted, _ := added.RowsAffected(); inserted > 0 {
+			n++
+		}
+	}
+	if fileIndex < 0 {
+		from, to := "paused", "pending"
+		if paused {
+			from, to = "pending", "paused"
+		}
+		res, err := s.w.ExecContext(ctx, `UPDATE download_queue SET state = ? WHERE state = ? AND lower(info_hash) = lower(?)`,
+			to, from, infoHash)
+		if err != nil {
+			return n, err
+		}
+		more, _ := res.RowsAffected()
+		n += int(more)
 	}
 	return n, nil
 }

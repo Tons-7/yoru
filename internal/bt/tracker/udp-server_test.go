@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"sync"
 
 	"github.com/anacrolix/missinggo/v2"
 	"yoru/internal/bt/dht/krpc"
@@ -22,8 +23,15 @@ type torrent struct {
 
 type server struct {
 	pc    net.PacketConn
+	mu    sync.Mutex
 	conns map[udp.ConnectionId]struct{}
 	t     map[[20]byte]torrent
+}
+
+func (s *server) forget() {
+	s.mu.Lock()
+	clear(s.conns)
+	s.mu.Unlock()
 }
 
 func marshal(parts ...any) (ret []byte, err error) {
@@ -49,6 +57,8 @@ func (s *server) respond(addr net.Addr, rh udp.ResponseHeader, parts ...any) (er
 
 func (s *server) newConn() (ret udp.ConnectionId) {
 	ret = rand.Uint64()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.conns == nil {
 		s.conns = make(map[udp.ConnectionId]struct{})
 	}
@@ -82,7 +92,10 @@ func (s *server) serveOne() (err error) {
 		})
 		return
 	case udp.ActionAnnounce:
-		if _, ok := s.conns[h.ConnectionId]; !ok {
+		s.mu.Lock()
+		_, ok := s.conns[h.ConnectionId]
+		s.mu.Unlock()
+		if !ok {
 			s.respond(addr, udp.ResponseHeader{
 				TransactionId: h.TransactionId,
 				Action:        udp.ActionError,

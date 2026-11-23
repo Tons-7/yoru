@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"yoru/internal/library"
@@ -39,17 +41,20 @@ func (s *Server) localFiles(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	animeID, _ := strconv.Atoi(q.Get("anime"))
 
-	page, err := s.store.LocalFiles(r.Context(), animeID,
-		q.Get("unmatched") == "true", store.ParsePaging(q, 60, 200))
+	page, err := s.store.LocalFilesView(r.Context(), animeID,
+		q.Get("unmatched") == "true", q.Get("missing") == "true", store.ParsePaging(q, 60, 200))
 	if err != nil {
 		s.fail(w, "local files", err)
 		return
 	}
+	if !fromHost(r) {
+		for i := range page.Items {
+			page.Items[i].Path = filepath.Base(page.Items[i].Path)
+		}
+	}
 	send(w, http.StatusOK, page)
 }
 
-// localScan walks the configured directories. It runs in the background: a
-// large library takes minutes and an HTTP request must not hold that open.
 func (s *Server) localScan(w http.ResponseWriter, r *http.Request) {
 	roots, err := s.scanner.Roots(r.Context())
 	if err != nil {
@@ -60,6 +65,10 @@ func (s *Server) localScan(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusPreconditionFailed, map[string]any{
 			"error": "no directories configured; set library.paths first",
 		})
+		return
+	}
+	if s.index.get() == nil {
+		send(w, http.StatusServiceUnavailable, map[string]any{"error": "Still building the title index; try again in a moment."})
 		return
 	}
 	status := "started"
@@ -77,8 +86,6 @@ func (s *Server) localScan(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusAccepted, map[string]any{"status": status, "roots": roots})
 }
 
-// ScanLibrary scans the library folders once the match index is built: run on a timer, files another program
-// adds are found without anyone pressing Scan, not downloaded again.
 func (s *Server) ScanLibrary(ctx context.Context) error {
 	ix := s.index.get()
 	if ix == nil {
@@ -87,12 +94,9 @@ func (s *Server) ScanLibrary(ctx context.Context) error {
 	return s.scan(ctx, ix)
 }
 
-// scan reads the library folders, or, with a scan under way (it may have listed them before this change),
-// has that one go round once more.
 func (s *Server) scan(ctx context.Context, ix *match.Index) error {
 	for !s.scanning.CompareAndSwap(false, true) {
 		s.rescan.Store(true)
-		// Still running, it will see the flag; finished meanwhile, this takes the next turn itself.
 		if s.scanning.Load() {
 			return nil
 		}
@@ -114,7 +118,6 @@ func (s *Server) lastScan() *library.ScanReport {
 	return s.scanner.LastReport()
 }
 
-// setLibraryPaths checks the folders before storing them, so a typo shows now, not as an empty scan.
 func (s *Server) setLibraryPaths(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Paths []string `json:"paths"`
@@ -124,7 +127,6 @@ func (s *Server) setLibraryPaths(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only a new folder has to be there: an unplugged drive must not block every other edit.
 	var current []string
 	if s.scanner != nil {
 		current, _ = s.scanner.Roots(r.Context())
@@ -138,6 +140,9 @@ func (s *Server) setLibraryPaths(w http.ResponseWriter, r *http.Request) {
 		abs, err := filepath.Abs(p)
 		if err != nil {
 			problems[p] = err.Error()
+			continue
+		}
+		if slices.ContainsFunc(clean, func(c string) bool { return sameFolder(c, abs) }) {
 			continue
 		}
 		if slices.Contains(current, abs) {
@@ -170,11 +175,16 @@ func (s *Server) setLibraryPaths(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "library paths", err)
 		return
 	}
-	// A folder taken out takes its files with it: they must not keep playing or standing in for downloads.
-	if _, err := s.store.SweepOutside(r.Context(), clean); err != nil {
+	roots := make([]string, 0, len(clean))
+	for _, root := range clean {
+		if real, err := filepath.EvalSymlinks(root); err == nil {
+			root = real
+		}
+		roots = append(roots, root)
+	}
+	if _, err := s.store.SweepOutside(r.Context(), roots); err != nil {
 		s.log.Warn("retire files outside the library", "err", err)
 	}
-	// A folder just added is read now, not at the next timed scan.
 	if len(clean) > 0 {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
@@ -187,7 +197,6 @@ func (s *Server) setLibraryPaths(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"paths": clean})
 }
 
-// forgetMissing clears files gone for good; a scan only flags them.
 func (s *Server) forgetMissing(w http.ResponseWriter, r *http.Request) {
 	n, err := s.store.ForgetMissing(r.Context())
 	if err != nil {
@@ -225,7 +234,6 @@ func (s *Server) assignLocalFile(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"id": body.ID, "animeId": body.AnimeID, "episode": body.Episode})
 }
 
-// localStream serves a scanned file; ServeContent's range requests make seeking work.
 func (s *Server) localStream(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.PathValue("id"))
 	if id <= 0 {
@@ -244,7 +252,6 @@ func (s *Server) localStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Only paths this server recorded are servable, so the id cannot be used to read arbitrary files.
 	file, err := os.Open(f.Path)
 	if err != nil {
 		http.Error(w, "file unavailable", http.StatusNotFound)
@@ -260,4 +267,11 @@ func (s *Server) localStream(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Accept-Ranges", "bytes")
 	http.ServeContent(w, r, filepath.Base(f.Path), info.ModTime(), file)
+}
+
+func sameFolder(a, b string) bool {
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }

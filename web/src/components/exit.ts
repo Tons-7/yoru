@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAccess, useDownloads, type Download } from '../lib/queries'
@@ -62,13 +62,21 @@ export function useExitCheck(onAsk: (stops: ExitStops) => void) {
   })
   const { exit, exiting, failed } = useExitYoru()
   const [checking, setChecking] = useState(false)
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
   const summary = host ? stopsSummary(stopsOf(downloads.data?.items, activity.data?.watching)) : ''
 
   const choose = async () => {
     setChecking(true)
     const [d, a] = await Promise.all([downloads.refetch(), activity.refetch()])
+    if (!alive.current) return
     setChecking(false)
-    const stops = stopsOf(d.data?.items, a.data?.watching)
+    const stops = stopsOf(d.isError ? undefined : d.data?.items, a.isError ? undefined : a.data?.watching)
     if (stops.unknown || stopsSummary(stops)) return onAsk(stops)
     exit()
   }

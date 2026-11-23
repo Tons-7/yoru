@@ -36,6 +36,9 @@ export function You() {
       <ul className="surface divide-y divide-white/5 overflow-hidden">
         <TitlesRow />
         <li>
+          <Row to="/stats" title="Statistics" sub="Hours, genres, studios and seasons" />
+        </li>
+        <li>
           <Row to="/local" title="Local files" sub="Episodes from your own folders" />
         </li>
         <InstallRow />
@@ -177,7 +180,17 @@ function TitlesRow() {
         </span>
         <span className="block text-sm text-base-400">How show names are written</span>
       </span>
-      <span role="radiogroup" aria-labelledby="you-titles" className="grid w-32 shrink-0 grid-cols-2 gap-0.5 rounded-xl bg-base-800 p-1">
+      <span
+        role="radiogroup"
+        aria-labelledby="you-titles"
+        className="grid w-32 shrink-0 grid-cols-2 gap-0.5 rounded-xl bg-base-800 p-1"
+        onKeyDown={(e) => {
+          if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key) || settling) return
+          e.preventDefault()
+          choose(!japanese)
+          e.currentTarget.querySelector<HTMLElement>(`[aria-checked="false"]`)?.focus()
+        }}
+      >
         {(['EN', 'JP'] as const).map((label) => {
           const on = (label === 'JP') === japanese
           return (
@@ -186,6 +199,7 @@ function TitlesRow() {
               type="button"
               role="radio"
               aria-checked={on}
+              tabIndex={on ? 0 : -1}
               aria-label={label === 'EN' ? 'English' : 'Japanese (romaji)'}
               disabled={settling}
               onClick={() => !on && choose(label === 'JP')}
@@ -245,7 +259,7 @@ function ExitRow({ onAsk }: { onAsk: (stops: ExitStops) => void }) {
         <RowBody
           title={exiting ? 'Yoru is exiting…' : 'Exit Yoru'}
           sub={failed || (!exiting && summary) || undefined}
-          subTone={failed ? 'text-recap' : undefined}
+          subTone={failed ? 'text-red-300' : undefined}
         />
       </button>
     </li>

@@ -1,5 +1,3 @@
-// signsums signs a release's SHA256SUMS.txt with the offline ed25519 key, so an install can tell a release
-// Yoru's author published from one a stolen token did: go run ./scripts/signsums -key K -sums S -out S.sig
 package main
 
 import (
@@ -38,7 +36,6 @@ func main() {
 	}
 	priv := ed25519.NewKeyFromSeed(seed)
 	sig := ed25519.Sign(priv, body)
-	// Signed with any other key, the release is refused by every installed copy.
 	if *trust != "" {
 		pub, err := hex.DecodeString(*trust)
 		if err != nil || len(pub) != ed25519.PublicKeySize || !ed25519.Verify(pub, body, sig) {

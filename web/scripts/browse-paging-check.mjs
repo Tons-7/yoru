@@ -1,5 +1,3 @@
-// AniList's total is a placeholder for paged answers, so Yoru measures it: the
-// pager says "Page 1 of N" from the first page and agrees with the server's count.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -20,15 +18,23 @@ for (const [label, filters] of [
   ['a search', 'q=gundam'],
   ['filters only', 'genres=Romance&formats=TV&year=2024'],
 ]) {
-  // A busy AniList budget answers 503; up to three minutes, as the check before can drain it.
   let count, answer
   for (let i = 0; i < 36 && count === undefined; i++) {
     const r = await fetch(`${BASE}/api/browse/count?${filters}&perPage=${PER_PAGE}`)
     answer = `${r.status} ${await r.text()}`
     if (r.status === 503) await new Promise((done) => setTimeout(done, 5000))
-    else count = JSON.parse(answer.slice(4)).count
+    else {
+      try {
+        count = JSON.parse(answer.slice(4)).count
+      } catch {
+        break
+      }
+    }
   }
-  if (count === undefined) console.log(`  count answered ${answer}`)
+  if (count === undefined) {
+    check(false, `${label}: the server counts the real results`, answer.slice(0, 200))
+    continue
+  }
   const pages = Math.ceil(count / PER_PAGE)
   check(count > PER_PAGE && count < 5000, `${label}: the server counts the real results`, String(count))
 

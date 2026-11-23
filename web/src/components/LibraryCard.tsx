@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { LibraryItem } from '../lib/api'
 import { toCard } from '../lib/cards'
-import { cx, posterSet, tint } from '../lib/format'
+import { cx, playLabel, posterSet, tint } from '../lib/format'
 import { statusWord, usePlusOne, useProgress } from '../lib/library'
 import { seasonOf, type LibraryProgress } from '../lib/libraryText'
 import { HoverInfo } from './HoverInfo'
@@ -25,7 +25,7 @@ export function LibraryCard({ item, showStatus = false }: { item: LibraryItem; s
           status: item.airing,
           listStatus: item.status,
           play: p.next
-            ? { to: `/watch/${item.id}/${p.next}`, label: p.watched > 0 ? `Continue ep ${p.next}` : 'Watch ep 1' }
+            ? { to: `/watch/${item.id}/${p.next}`, label: playLabel(p.next, p.watched > 0) }
             : undefined,
         }}
       >
@@ -33,6 +33,8 @@ export function LibraryCard({ item, showStatus = false }: { item: LibraryItem; s
           to={href}
           viewTransition
           onClick={(e) => {
+            if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+            for (const el of document.querySelectorAll<HTMLElement>('[style*="show-art"]')) el.style.viewTransitionName = ''
             const img = e.currentTarget.querySelector('img')
             if (img) img.style.viewTransitionName = 'show-art'
           }}
@@ -40,7 +42,7 @@ export function LibraryCard({ item, showStatus = false }: { item: LibraryItem; s
           className="press block rounded-poster focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
         >
           <div
-            className="relative aspect-[2/3] overflow-hidden rounded-poster bg-base-850"
+            className="relative aspect-2/3 overflow-hidden rounded-poster bg-base-850"
             style={
               item.color
                 ? { backgroundImage: `linear-gradient(to bottom, ${tint(item.color, 0.32)}, ${tint(item.color, 0.12)})` }
@@ -69,7 +71,7 @@ export function LibraryCard({ item, showStatus = false }: { item: LibraryItem; s
                 <span className="line-clamp-3 text-xs font-medium text-white/80">{item.title}</span>
               </div>
             )}
-            <span aria-hidden className="pointer-events-none absolute inset-0 rounded-poster ring-1 ring-white/[0.08] ring-inset" />
+            <span aria-hidden className="pointer-events-none absolute inset-0 rounded-poster ring-1 ring-white/8 ring-inset" />
             <PosterBar p={p} />
           </div>
         </Link>

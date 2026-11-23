@@ -1,5 +1,3 @@
-// Skipping the ending by hand (a drag to 10 s from the end) still brings the countdown, sound options or not.
-//   REAL_EPS="a.mkv;b.mkv" plays two real episodes instead of the generated clips.
 import { execFileSync } from 'node:child_process'
 import { copyFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -21,7 +19,7 @@ const api = async (p, init) => {
 const post = (p, b) => api(p, { method: 'POST', body: JSON.stringify(b) })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const until = async (fn, ms = 10000) => {
-  for (const end = Date.now() + ms; Date.now() < end; await sleep(150)) if (await fn()) return true
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(150)) if (await Promise.resolve().then(fn).catch(() => false)) return true
   return false
 }
 
@@ -42,13 +40,11 @@ if (real) {
   copyFileSync(real[0], join(LIB, 'real-first.mkv'))
   copyFileSync(real[1], join(LIB, 'second.mkv'))
 } else {
-  // Keyframes every 3.5 s, none past the last 6 s mark: evenly spaced copy segments replayed this end, stuck.
   const exe = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
   const bundled = process.env.YORU_REPO && join(process.env.YORU_REPO, 'bin', exe)
   const ffmpeg = bundled && existsSync(bundled) ? bundled : 'ffmpeg'
   for (const [name, tone] of [['real-first.mkv', 440], ['second.mkv', 880]]) {
     execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y',
-      // 720p, or the library scan passes it over as too small to be an episode.
       '-f', 'lavfi', '-i', 'testsrc2=size=1280x720:rate=24000/1001:duration=181',
       '-f', 'lavfi', '-i', `sine=frequency=${tone}:sample_rate=48000:duration=181.5`,
       '-c:v', 'libx264', '-preset', 'veryfast', '-bf', '2', '-pix_fmt', 'yuv420p',
@@ -84,7 +80,7 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.split('\n')[0].slice(0, 160)))
 const video = page.locator('video')
-const card = page.getByRole('dialog', { name: 'Up next' })
+const card = page.getByRole('region', { name: 'Up next' })
 const state = () =>
   video.evaluate((v) => `t=${v.currentTime.toFixed(1)}/${v.duration.toFixed(1)} paused=${v.paused} ended=${v.ended} ready=${v.readyState}`)
 
@@ -93,7 +89,6 @@ let lines = 0
 const cases = [
   ['plain', 'false', false],
   ['with headphones on', 'true', false],
-  // Watched through first, so the end's report comes back watched, as a viewer's does.
   ['after watching it through', 'true', true],
 ]
 for (const [label, headphones, through] of cases) {
@@ -102,15 +97,12 @@ for (const [label, headphones, through] of cases) {
   check(await until(() => video.evaluate((v) => v.readyState >= 2 && !v.paused), 60_000), `${label}: episode 1 plays`)
   await sleep(3000)
   if (through) {
-    // A long episode from 4 minutes before its end: the pass from there still reads to the end before the drag.
     await video.evaluate((v) => v.duration > 300 && (v.currentTime = v.duration - 240))
-    // 6x keeps each step under the 2 s that counts as played time.
     await video.evaluate((v) => (v.playbackRate = 6))
     const watched = await until(() => video.evaluate((v) => v.currentTime > v.duration * 0.92), 20 * 60_000)
     check(watched, `${label}: played to 92%`, await state())
     await video.evaluate((v) => (v.playbackRate = 1))
   }
-  // A click on the bar near the end, as the viewer did to skip the ending.
   await video.evaluate((v) => (v.currentTime = v.duration - 10))
   const shown = await until(() => card.isVisible(), 40_000)
   check(shown, `${label}: the Up next countdown appears after the drag`, await state())
@@ -118,7 +110,6 @@ for (const [label, headphones, through] of cases) {
     await page.screenshot({ path: `${SHOTS}/autonext-seek-${headphones}.png` })
     await card.getByRole('button', { name: 'Cancel' }).click()
   }
-  // What the page saw, in the server's log: all a log sent from another machine can show.
   if (LOG) {
     const logged = (re) => until(() => re.test(readFileSync(LOG, 'utf8').split('\n').slice(lines).join('\n')), 5000)
     check(await logged(/msg=player anime=\d+ episode=1 event=ended autoNext=true card="up next" episodes=\d+ list=none next=2/),
@@ -129,7 +120,6 @@ for (const [label, headphones, through] of cases) {
 }
 await post('/api/prefs', { key: 'playback.headphones', value: 'false' })
 
-// The last segment never comes: playback stalls short of the end, no countdown, and the log says so.
 if (LOG) {
   let last
   await page.route('**/api/stream/*/playlist.m3u8', async (route) => {
@@ -146,7 +136,6 @@ if (LOG) {
   const tail = () => readFileSync(LOG, 'utf8').split('\n').slice(lines).join('\n')
   const stuck = await until(() => /event=end-stuck .*ready=\d/.test(tail()), 40_000)
   check(stuck, 'a playback stalled short of the end is logged as stuck', await state())
-  // Under 2 s from the end with nothing more to play, the player ends it; further off, it waits.
   const assumed = /event=end-stuck .*assumed=true/.test(tail())
   check(await until(async () => (await card.isVisible()) === assumed, 5000),
     assumed ? 'stuck at the very end, the countdown comes anyway' : 'stuck further off, no countdown', await state())

@@ -1,5 +1,3 @@
-// A file with lossless surround sound plays in the browser as FLAC: converted, but not to a lossy format,
-// and actually heard. Built here, since the harness's own episode carries ordinary audio.
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { chromium } from 'playwright'
@@ -20,7 +18,6 @@ const post = (path, body) =>
 
 check(await prepareLocalEpisode({ base: BASE, lib: LIB, anime: ANIME }), 'test episode ready')
 
-// Episode 2: 24-bit PCM in 5.1, the shape of a Blu-ray's lossless track.
 const ffmpeg = join(process.env.YORU_REPO, 'bin', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
 const made = spawnSync(ffmpeg, [
   '-hide_banner', '-loglevel', 'error', '-y',
@@ -67,7 +64,6 @@ const state = await video.evaluate((v) => ({
 check(state.t >= 4 && !state.error, 'the episode plays', JSON.stringify(state))
 check(state.audioBytes > 0, 'its sound is decoded, not only its picture', JSON.stringify(state))
 
-// A seek restarts the conversion mid-file; the sound must come back with the picture.
 await video.evaluate((v) => (v.currentTime = 40))
 await page.waitForFunction(() => (document.querySelector('video')?.currentTime ?? 0) > 43, null, { timeout: 40_000 }).catch(() => {})
 const after = await video.evaluate((v) => ({ t: +v.currentTime.toFixed(1), error: v.error ? v.error.message : null, audioBytes: v.webkitAudioDecodedByteCount ?? -1 }))

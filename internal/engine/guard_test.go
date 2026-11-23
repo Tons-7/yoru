@@ -7,8 +7,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// Only Yoru's own client, with the per-run secret, reaches the engine's API; a browser's request, which
-// carries Origin or Sec-Fetch headers, is refused; a stream read by ffmpeg or mpv needs no secret.
 func TestEngineAPIRefusesBrowsersAndStrangers(t *testing.T) {
 	f := newFixture(t)
 	base := "http://" + f.engine.Addr()
@@ -36,7 +34,6 @@ func TestEngineAPIRefusesBrowsersAndStrangers(t *testing.T) {
 	if code := ask("/torrents", map[string]string{torrent.SecretHeader: f.engine.secret}); code != http.StatusOK {
 		t.Errorf("Yoru's own client: %d, want 200", code)
 	}
-	// A stream path with no secret gets past the guard; only the torrent is missing.
 	if code := ask("/torrents/99/stream/0", nil); code != http.StatusNotFound {
 		t.Errorf("a player's stream read: %d, want 404", code)
 	}

@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// Off Windows nothing fills the lists; sent, they are still lists, or Settings can't read them.
 func TestListsGoOutAsLists(t *testing.T) {
 	b, err := json.Marshal(Status{}.Lists())
 	if err != nil || !strings.Contains(string(b), `"networks":[]`) || !strings.Contains(string(b), `"program":[]`) {
@@ -18,7 +17,6 @@ func TestListsGoOutAsLists(t *testing.T) {
 	}
 }
 
-// A phone gets in only when every network's profile is allowed and nothing blocks yoru.exe.
 func TestReachable(t *testing.T) {
 	home := []Network{{Name: "Home", Category: "Private"}}
 	cafe := []Network{{Name: "Cafe", Category: "Public"}}
@@ -50,12 +48,10 @@ func TestReachable(t *testing.T) {
 	}
 }
 
-// Reads the real firewall; changes nothing.
 func TestCheckReadsThisMachine(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("windows only")
 	}
-	// Point it at an installed yoru.exe to see the rules Windows made for it.
 	exe := os.Getenv("YORU_FIREWALL_EXE")
 	if exe == "" {
 		exe, _ = os.Executable()
@@ -84,7 +80,6 @@ func TestCheckReadsThisMachine(t *testing.T) {
 	}
 }
 
-// Rules count only for the port asked about, and a Public-profile block doesn't block a Private network.
 func TestRulesAreJudgedForTheirPortAndProfile(t *testing.T) {
 	home := []Network{{Name: "Home", Category: "Private"}}
 	peers := Rule{Name: "Yoru peers 4240", Action: "Allow", Profiles: "Any", Enabled: true, LocalPort: "4240", Protocol: "TCP"}

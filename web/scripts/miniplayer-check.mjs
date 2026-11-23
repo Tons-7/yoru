@@ -1,5 +1,3 @@
-// The miniplayer: leaving the watch page while playing docks the same video, keys left to the page; Play,
-// Expand and Close work; leaving while paused ends it, as before.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -31,7 +29,6 @@ try {
   await page.locator('video').first().waitFor({ timeout: 30_000 })
   await page.evaluate(() => { const v = document.querySelector('video'); v.muted = true; v.play().catch(() => {}) })
   check(await until(async () => (await playing()) && (await time()) > 1, 30_000), 'the episode plays')
-  // A mark on the element: the same video after docking, not a new one.
   await page.evaluate(() => (document.querySelector('video').dataset.mark = 'same'))
 
   await page.getByRole('link', { name: 'Home', exact: true }).first().click()
@@ -51,14 +48,12 @@ try {
   await page.getByRole('button', { name: 'Play', exact: true }).click()
   check(await until(() => playing()), 'and Play plays it')
 
-  // Held and moved: let go past the middle, it settles in the top-right corner, and a press still presses.
   const box = () => page.locator('video').first().evaluate((v) => v.closest('.fixed').getBoundingClientRect().toJSON())
   const start = await box()
   await page.mouse.move(start.x + 40, start.y + 40)
   await page.mouse.down()
   await page.mouse.move(start.x - 260, 300, { steps: 8 })
   const held = await box()
-  // Every frame after letting go: it glides on from there, never back to where it started first.
   const frames = page.evaluate(() => new Promise((done) => {
     const el = document.querySelector('video').closest('.fixed')
     const seen = []
@@ -100,7 +95,6 @@ try {
   await dock.click()
   check(await until(async () => (await page.locator('video').count()) === 0), 'Close ends it')
 
-  // Paused when you leave: nothing docks.
   await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
   await page.locator('video').first().waitFor({ timeout: 30_000 })
   await page.evaluate(() => document.querySelector('video').pause())
@@ -108,7 +102,6 @@ try {
   await sleep(800)
   check((await page.locator('video').count()) === 0 && !(await dock.isVisible()), 'left paused, it ends as before')
 
-  // A phone: a bar above the tabs, clear of the page's width.
   await page.evaluate(() => localStorage.removeItem('yoru.mini.corner'))
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
@@ -119,7 +112,7 @@ try {
   await page.getByRole('button', { name: 'Minimize', exact: true }).click()
   check(await until(() => dock.isVisible()), 'on a phone Minimize docks it')
   const bar = await page.locator('video').first().evaluate((v) => v.closest('.fixed')?.getBoundingClientRect().toJSON())
-  const tabs = await page.locator('nav').last().boundingBox()
+  const tabs = await page.getByRole('navigation', { name: 'Main' }).last().boundingBox()
   check(bar && tabs && bar.bottom <= tabs.y + 1 && bar.right <= 390, 'as a bar above the tabs', JSON.stringify({ bar, tabs }))
   check(errors.length === 0, 'no page errors', errors.join(' | '))
 } finally {

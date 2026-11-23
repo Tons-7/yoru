@@ -12,13 +12,11 @@ func TestDropMirror(t *testing.T) {
 		t.Errorf("mirror kept: %+v", got)
 	}
 
-	// Two tracks that only look alike in part are both real.
 	real := []Stream{sub(2, "eng"), sub(3, "eng")}
 	real[1].Title = "Signs"
 	if got := dropMirror(real); len(got) != 2 {
 		t.Errorf("real track dropped: %+v", got)
 	}
-	// A copy sits at a later index; the same index twice is not one.
 	same := []Stream{{Index: 1, Kind: "audio", Codec: "aac", Language: "jpn"}, {Index: 1, Kind: "audio", Codec: "aac", Language: "jpn"}}
 	if got := dropMirror(same); len(got) != 2 {
 		t.Errorf("same index is not a mirror: %+v", got)

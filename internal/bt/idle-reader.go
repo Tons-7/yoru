@@ -3,6 +3,7 @@ package bt
 import (
 	"fmt"
 	"io"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,23 +23,21 @@ type idleTimeoutReader struct {
 	interrupt func()
 	timer     *time.Timer
 	timeout   time.Duration
-	fired     bool
+	fired     atomic.Bool
 }
 
 func (me *idleTimeoutReader) Read(p []byte) (n int, err error) {
-	// Allow resuming reading even after a previous idle timeout.
-	me.fired = false
+	me.fired.Store(false)
 	me.timer.Reset(me.timeout)
 	n, err = me.r.Read(p)
 	me.timer.Stop()
-	if me.fired {
-		// Wrap the error, we don't know if the interrupt caused the inner reader to return early.
+	if err != nil && me.fired.Load() {
 		err = fmt.Errorf("idle timeout, original error: %w", err)
 	}
 	return
 }
 
 func (me *idleTimeoutReader) timerFunc() {
-	me.fired = true
+	me.fired.Store(true)
 	me.interrupt()
 }

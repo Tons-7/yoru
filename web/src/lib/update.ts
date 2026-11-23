@@ -39,7 +39,7 @@ export function useUpdateStatus(enabled = true) {
     retry: false,
     enabled,
     refetchInterval: (q) => {
-      if (q.state.data?.fixed || q.state.error instanceof ApiError) return false
+      if (q.state.data?.fixed || (q.state.error instanceof ApiError && q.state.error.status < 500)) return false
       return updateMoving(q.state.data?.stage) ? MOVING_MS : IDLE_MS
     },
   })
@@ -53,11 +53,13 @@ export function useUpdateActions() {
     meta: { inline: true },
     mutationFn: () => api.post<UpdateStatus>('/api/update/download'),
     onSuccess: keep,
+    onError: () => void qc.invalidateQueries({ queryKey: KEY }),
   })
   const restart = useMutation({
     meta: { inline: true },
     mutationFn: () => api.post<UpdateStatus>('/api/update/restart'),
     onSuccess: keep,
+    onError: () => void qc.invalidateQueries({ queryKey: KEY }),
   })
   return { check, download, restart }
 }

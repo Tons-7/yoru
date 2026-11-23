@@ -20,7 +20,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// An engine holding one torrent in the cache folder, recording what it is told to do with it.
 type recordingEngine struct {
 	mu      sync.Mutex
 	actions []string
@@ -34,7 +33,6 @@ func (e *recordingEngine) did(action string) bool {
 
 const heldHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-// downloadsHarness is a server with a queue of three episodes and one finished download on record.
 func downloadsHarness(t *testing.T) (*harness, *recordingEngine) {
 	t.Helper()
 	dir := t.TempDir()
@@ -140,7 +138,6 @@ func TestPauseAllAndResumeOverTheAPI(t *testing.T) {
 	}
 }
 
-// "Download now" puts the episode first, and asking for a download un-pauses the queue.
 func TestDownloadNowMovesAnEpisodeFirstAndResumes(t *testing.T) {
 	h, _ := downloadsHarness(t)
 	h.call(t, "POST", "/api/download/queue/pause", "")
@@ -165,13 +162,11 @@ func TestDownloadNowMovesAnEpisodeFirstAndResumes(t *testing.T) {
 	}
 }
 
-// Changing an episode's release queues it at the front with that choice; a queued one just gets it.
 func TestChangeReleaseQueuesTheChoiceAtTheFront(t *testing.T) {
 	h, _ := downloadsHarness(t)
 	h.server.prefetch = library.NewPrefetcher(h.store, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	const hash = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
 
-	// Episode 7 is not queued: it is added, first in line, with the release.
 	code, body := h.call(t, "POST", "/api/download/release",
 		`{"animeId":1,"episode":7,"infoHash":"ABCDEFabcdefabcdefabcdefabcdefabcdefabcd","title":"[Group] Show - 07"}`)
 	if code != http.StatusAccepted || body["infoHash"] != hash {
@@ -186,7 +181,6 @@ func TestChangeReleaseQueuesTheChoiceAtTheFront(t *testing.T) {
 		t.Errorf("queued = %+v, want the release on episode 7", items[0])
 	}
 
-	// Episode 3 is already waiting: it keeps one row, now with the release, and moves first.
 	if code, _ := h.call(t, "POST", "/api/download/release", `{"animeId":1,"episode":3,"infoHash":"`+hash+`"}`); code != http.StatusAccepted {
 		t.Fatalf("answered %d", code)
 	}
@@ -269,7 +263,6 @@ func TestKeepAndUnkeepADownload(t *testing.T) {
 	}
 }
 
-// What is playing is never pulled out from under the viewer.
 func TestRemoveRefusesWhatIsPlayingThenDeletes(t *testing.T) {
 	h, eng := downloadsHarness(t)
 	ctx := context.Background()
@@ -309,7 +302,6 @@ func TestClearSparesKeptDownloads(t *testing.T) {
 	}
 }
 
-// Without an engine the page gets a clear refusal, not a crash.
 func TestDownloadActionsWithoutAnEngine(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 
@@ -324,7 +316,6 @@ func TestDownloadActionsWithoutAnEngine(t *testing.T) {
 	}
 }
 
-// The queue says it waits for the episode on screen, and "Download anyway" lets it carry on.
 func TestQueueSaysItWaitsForTheEpisodeOnScreen(t *testing.T) {
 	h, _ := downloadsHarness(t)
 	if _, body := h.call(t, "GET", "/api/download/queue", ""); body["watching"] != false {
@@ -339,5 +330,71 @@ func TestQueueSaysItWaitsForTheEpisodeOnScreen(t *testing.T) {
 	}
 	if h.server.downloader.Held() {
 		t.Error("the queue still stands down after Download anyway")
+	}
+}
+
+func TestArrangeQueueMovesAndPauses(t *testing.T) {
+	h, _ := downloadsHarness(t)
+	arrange := func(body string) int {
+		t.Helper()
+		code, _ := h.call(t, "POST", "/api/download/queue/arrange", body)
+		return code
+	}
+	order := func() string {
+		t.Helper()
+		keys, _ := queuedKeys(t, h)
+		return strings.Join(keys, ",")
+	}
+	if arrange(`{"animeId":1,"epKey":"4","action":"before","target":{"animeId":1,"epKey":"2"}}`) != 200 || order() != "4,2,3" {
+		t.Fatalf("before: %s, want 4,2,3", order())
+	}
+	if arrange(`{"animeId":1,"epKey":"4","action":"after","target":{"animeId":1,"epKey":"3"}}`) != 200 || order() != "2,3,4" {
+		t.Fatalf("after: %s, want 2,3,4", order())
+	}
+	if arrange(`{"animeId":1,"epKey":"3","action":"top"}`) != 200 || order() != "3,2,4" {
+		t.Fatalf("top: %s, want 3,2,4", order())
+	}
+	if arrange(`{"animeId":1,"epKey":"3","action":"bottom"}`) != 200 || order() != "2,4,3" {
+		t.Fatalf("bottom: %s, want 2,4,3", order())
+	}
+	if arrange(`{"animeId":1,"epKey":"3","action":"pause"}`) != 200 {
+		t.Fatal("pause refused")
+	}
+	_, body := h.call(t, "GET", "/api/download/queue", "")
+	for _, item := range body["items"].([]any) {
+		if q := item.(map[string]any); q["epKey"] == "3" && q["state"] != "paused" {
+			t.Errorf("episode 3 is %v after pause", q["state"])
+		}
+	}
+	if arrange(`{"animeId":1,"epKey":"3","action":"before"}`) != http.StatusBadRequest {
+		t.Error("before without a target was accepted")
+	}
+	if arrange(`{"animeId":1,"epKey":"3","action":"sideways"}`) != http.StatusBadRequest {
+		t.Error("an unknown action was accepted")
+	}
+	if arrange(`{"action":"top"}`) != http.StatusBadRequest {
+		t.Error("no episode was accepted")
+	}
+}
+
+func TestClearFinishedSparesUnfinished(t *testing.T) {
+	h, _ := downloadsHarness(t)
+	ctx := context.Background()
+	if err := h.store.TrackTorrent(ctx, "half", 2, "Show - 02.mkv"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.SetCacheBytes(ctx, "half", store.WholeTorrent, 100<<20, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, body := h.call(t, "POST", "/api/downloads/clear?scope=completed", ""); body["removed"] != float64(1) {
+		t.Fatalf("clear finished removed %v, want the one finished download", body["removed"])
+	}
+	entries, _ := h.store.CacheEntries(ctx)
+	if len(entries) != 1 || entries[0].InfoHash != "half" {
+		t.Fatalf("left %+v, want the unfinished download", entries)
+	}
+	h.call(t, "POST", "/api/downloads/clear?scope=all", "")
+	if entries, _ := h.store.CacheEntries(ctx); len(entries) != 0 {
+		t.Fatalf("clear all left %+v", entries)
 	}
 }

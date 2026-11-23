@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// Opt-in: YORU_LIVE=1 [YORU_LIVE_DEPS=ffmpeg] go test ./internal/deps -run LiveInstall -timeout 60m
 func TestLiveInstallUnpacksRealSevenZips(t *testing.T) {
 	if os.Getenv("YORU_LIVE") == "" {
 		t.Skip("set YORU_LIVE=1 to download mpv and ffmpeg")

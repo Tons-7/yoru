@@ -13,8 +13,6 @@ type requiredLength struct {
 	Length    int64
 }
 
-// The required file indices and file lengths for the given extent to be "complete". This is the
-// outdated interface used by some tests.
 func extentCompleteRequiredLengths(info *metainfo.Info, off, n int64) (ret []requiredLength) {
 	index := info.FileSegmentsIndex()
 	minFileLengthsForTorrentExtent(index, off, n, func(fileIndex int, length int64) bool {
@@ -38,7 +36,6 @@ func TestExtentCompleteRequiredLengthsV2InfoWithGaps(t *testing.T) {
 				"b": {
 					File: metainfo.FileTreeFile{Length: 3},
 				},
-				// v2 piece-aligns files, so a gap: this one starts at 6.
 				"c": {
 					File: metainfo.FileTreeFile{Length: 4},
 				},

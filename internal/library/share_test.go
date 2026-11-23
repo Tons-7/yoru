@@ -13,7 +13,6 @@ import (
 	"yoru/internal/player"
 )
 
-// Off, nothing goes to AniSkip; on, a time it lacks goes once with an anonymous id, and a vote once per time.
 func TestSkipTimesAreSharedOnceAndOnlyWhenOn(t *testing.T) {
 	var mu sync.Mutex
 	var got []map[string]any
@@ -59,7 +58,6 @@ func TestSkipTimesAreSharedOnceAndOnlyWhenOn(t *testing.T) {
 	if paths[1] != "/v2/skip-times/vote/a1b2" || got[1]["voteType"] != "downvote" {
 		t.Errorf("vote %s %v", paths[1], got[1])
 	}
-	// The same anonymous id each time.
 	if id, _ := st.Setting(ctx, "skips.submitter"); id != sub["submitterId"] {
 		t.Errorf("submitter %q, sent %v", id, sub["submitterId"])
 	}

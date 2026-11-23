@@ -72,8 +72,6 @@ func TestInspectDoesNotDownload(t *testing.T) {
 	}
 }
 
-// A magnet that failed to resolve is not inspected again for a while, so play
-// does not spend the timeout on the same dead release while the user retries.
 func TestInspectSkipsARecentlyFailedMagnet(t *testing.T) {
 	var calls int
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +90,6 @@ func TestInspectSkipsARecentlyFailedMagnet(t *testing.T) {
 		t.Errorf("the engine was hit %d times; a failed magnet should be cached", calls)
 	}
 
-	// A different magnet is unaffected.
 	if _, err := c.Inspect(context.Background(), "magnet:?xt=urn:btih:other"); err == nil {
 		t.Fatal("expected the other magnet to be tried")
 	}
@@ -100,7 +97,6 @@ func TestInspectSkipsARecentlyFailedMagnet(t *testing.T) {
 		t.Errorf("a different magnet should reach the engine, calls=%d", calls)
 	}
 
-	// The mark expires.
 	c.mu.Lock()
 	c.badMagnets[magnet] = time.Now().Add(-time.Second)
 	c.mu.Unlock()
@@ -112,7 +108,6 @@ func TestInspectSkipsARecentlyFailedMagnet(t *testing.T) {
 	}
 }
 
-// Picking a failed release again retries it, rather than refusing at once.
 func TestInspectPickedTriesAMagnetThatFailedRecently(t *testing.T) {
 	var calls int
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +159,6 @@ func TestInspectCancelledByTheCallerIsNotHeldAgainstTheMagnet(t *testing.T) {
 	}
 }
 
-// Only the requested episode of a batch is written, or the cache budget means nothing.
 func TestAddRestrictsToOneFile(t *testing.T) {
 	var added url.Values
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -183,7 +177,6 @@ func TestAddRestrictsToOneFile(t *testing.T) {
 	if re == "" {
 		t.Fatal("no file restriction sent")
 	}
-	// Brackets, in nearly every name, are regex metacharacters, so the filter is escaped.
 	if strings.Contains(re, "[1080p]") {
 		t.Errorf("regex not escaped: %q", re)
 	}
@@ -192,7 +185,6 @@ func TestAddRestrictsToOneFile(t *testing.T) {
 	}
 }
 
-// Matroska's seek index is at the end, so the tail is fetched before playback.
 func TestPrewarmFetchesHeadAndTail(t *testing.T) {
 	c, rec := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/stats/") {
@@ -216,7 +208,6 @@ func TestPrewarmFetchesHeadAndTail(t *testing.T) {
 	if len(ranges) != 2 {
 		t.Fatalf("made %d ranged requests, want a head and a tail: %v", len(ranges), ranges)
 	}
-	// The head goes last, as the last request leaves the priority window there.
 	if ranges[0] != "bytes=-1048576" {
 		t.Errorf("first range = %q; the tail holds the seek index and must come first", ranges[0])
 	}
@@ -225,7 +216,6 @@ func TestPrewarmFetchesHeadAndTail(t *testing.T) {
 	}
 }
 
-// Streaming before "live" fails, so callers wait instead of finding out at playback.
 func TestWaitLive(t *testing.T) {
 	t.Run("returns once live", func(t *testing.T) {
 		var calls int
@@ -338,7 +328,6 @@ func TestPickVideo(t *testing.T) {
 	if !ok {
 		t.Fatal("no video found")
 	}
-	// The sample is also an mkv; size is what distinguishes it.
 	if idx != 1 || got.Name != "Show - 01 [1080p].mkv" {
 		t.Fatalf("picked index %d (%q)", idx, got.Name)
 	}
@@ -376,8 +365,6 @@ func TestLifecycleEndpoints(t *testing.T) {
 	}
 }
 
-// Startup quiets whatever the engine resumed, except what the caller asks to keep:
-// an episode somebody started stays downloading when the setting says so.
 func TestPauseUnfinishedKeepsWhatIsAskedFor(t *testing.T) {
 	var paused []string
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -416,7 +403,6 @@ func TestPauseUnfinishedKeepsWhatIsAskedFor(t *testing.T) {
 	}
 }
 
-// A torrent still being hashed reads as unfinished; pausing it froze a downloaded episode at "12%".
 func TestPauseUnfinishedLeavesCheckingTorrentsAlone(t *testing.T) {
 	var paused []string
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -458,8 +444,6 @@ func fastPoll(t *testing.T) {
 	t.Cleanup(func() { AwaitPoll = was })
 }
 
-// Await is what makes the download queue serial: without it the queue only
-// serialises the search and every episode ends up downloading at once.
 func TestAwaitWaitsForTheWholeFile(t *testing.T) {
 	fastPoll(t)
 	var calls int
@@ -480,7 +464,6 @@ func TestAwaitWaitsForTheWholeFile(t *testing.T) {
 	}
 }
 
-// A swarm without seeders never finishes or errors, so waiting is bounded.
 func TestAwaitGivesUpOnAStalledSwarm(t *testing.T) {
 	fastPoll(t)
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -497,8 +480,6 @@ func TestAwaitGivesUpOnAStalledSwarm(t *testing.T) {
 	}
 }
 
-// Pausing from the downloads list is a decision, not a failure, so the queue can tell the two apart.
-// A failed disk write is retried by the engine, so Await waits on through it; a stall then says why.
 func TestAwaitWaitsThroughAWriteWarning(t *testing.T) {
 	fastPoll(t)
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -522,8 +503,6 @@ func TestAwaitReportsAPause(t *testing.T) {
 	}
 }
 
-// The queue standing down and the startup sweep both pause torrents, so
-// anything waiting for one to go live waits for a timeout it will never beat.
 func TestWaitLiveResumesAPausedTorrent(t *testing.T) {
 	var started int
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -547,8 +526,6 @@ func TestWaitLiveResumesAPausedTorrent(t *testing.T) {
 	}
 }
 
-// Only the head, so playback starts on bytes that are already there. The tail
-// carries the seek index and is worth having, but not worth a spinner.
 func TestPrewarmHeadReadsOnlyTheStart(t *testing.T) {
 	c, rec := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/stats/") {
@@ -572,12 +549,10 @@ func TestPrewarmHeadReadsOnlyTheStart(t *testing.T) {
 	}
 }
 
-// The engine serves nothing while hashing, so a swarm deadline must not expire on it.
 func TestWaitLiveWaitsOutAFileCheck(t *testing.T) {
 	var polls int
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		polls++
-		// Checking, reporting progress, for longer than the deadline allows.
 		if polls < 8 {
 			fmt.Fprintf(w, `{"state":"initializing","progress_bytes":%d}`, polls*1000)
 			return
@@ -590,7 +565,6 @@ func TestWaitLiveWaitsOutAFileCheck(t *testing.T) {
 	}
 }
 
-// A check that has genuinely stopped getting anywhere still has to give up.
 func TestWaitLiveGivesUpOnAStalledCheck(t *testing.T) {
 	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"state":"initializing","progress_bytes":1000}`)
@@ -601,7 +575,6 @@ func TestWaitLiveGivesUpOnAStalledCheck(t *testing.T) {
 	}
 }
 
-// Seeder counts are often wrong, so connected peers decide whether to wait.
 func TestStatsPeers(t *testing.T) {
 	var dead Stats
 	if dead.Peers() != 0 {

@@ -14,8 +14,6 @@ func hasFollow(list []Follow, animeID int) bool {
 	return false
 }
 
-// Picking a show for auto-download is a separate choice from following it, so
-// the watcher has to look at it even when it was never followed.
 func TestAutoDownloadShowsAreWatched(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -65,7 +63,6 @@ func TestAutoDownloadIsNotDuplicatedForAFollowedShow(t *testing.T) {
 	}
 }
 
-// The per-anime value overlays the global one, so one show can opt in alone.
 func TestPerAnimeAutoDownloadOverridesTheGlobal(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

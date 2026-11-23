@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-// spanOf: one track's first and last time in segment n, as a browser reads them, and whether a keyframe leads.
 func spanOf(t *testing.T, ffprobe string, s *Session, n int, track string) (first, last float64, key, ok bool) {
 	t.Helper()
 	init, err := os.ReadFile(s.InitPath())
@@ -46,15 +45,12 @@ func spanOf(t *testing.T, ffprobe string, s *Session, n int, track string) (firs
 	return first, last, key, ok
 }
 
-// Segments start on the source's keyframes and hold the same picture whichever pass made them: in order to the
-// end, after seeks, and the last made again by a pass of its own (where evenly spaced cuts repeated the end).
 func TestKeyframeSegmentsAgreeAcrossPasses(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	cases := []struct {
 		name, keys string
 		duration   float64
 	}{
-		// No keyframe past the last 6 s mark: the shape that left the end replaying and stuck.
 		{"keyframes every 3.5 s", "expr:gte(t,n_forced*3.5)", 181.5},
 		{"keyframes 4 to 9 s apart", "0,4,11,19,26,30,35,39,46,50,57,61,70,78,87,93,98,102,109,117,126,132,137,143,152,158,167,173", 181.5},
 		{"keyframes every 2.002 s", "expr:gte(t,n_forced*2.002)", 181.5},
@@ -116,15 +112,12 @@ func TestKeyframeSegmentsAgreeAcrossPasses(t *testing.T) {
 				seen[n] = [2]float64{vf, vl}
 			}
 
-			// In order to the end, as a viewer watching through: one pass reaches the end first.
 			for n := 0; n <= last; n++ {
 				check(n, "in order")
 			}
-			// Served from the parts as ffmpeg wrote them: no segment is ever copied into a file of its own.
 			if copies, _ := filepath.Glob(filepath.Join(s.dir, "[0-9]*.mp4")); len(copies) > 0 {
 				t.Errorf("segments were copied into files of their own: %v", copies)
 			}
-			// The end made again by passes of its own: a drag near the end, then the last alone.
 			for _, n := range []int{last - 2, last - 1, last} {
 				forgetSegment(s, n)
 			}
@@ -133,7 +126,6 @@ func TestKeyframeSegmentsAgreeAcrossPasses(t *testing.T) {
 			}
 			forgetSegment(s, last)
 			check(last, "the last alone")
-			// A seek mid-file and back.
 			for _, n := range []int{last / 2, last/2 + 1, 3, 4} {
 				forgetSegment(s, n)
 			}

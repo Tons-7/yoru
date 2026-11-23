@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// The PGS overlay runs in ffmpeg as written, over a picture smaller than the track's canvas, delayed.
 func TestPictureOverlayRunsInFFmpeg(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	dir := t.TempDir()
@@ -22,7 +21,6 @@ func TestPictureOverlayRunsInFFmpeg(t *testing.T) {
 		"-map", "0:v", "-map", "1:s", "-c:v", "libx264", "-preset", "ultrafast", "-c:s", "copy", clip).CombinedOutput(); err != nil {
 		t.Fatalf("clip: %v: %s", err, b)
 	}
-	// Alone, and after the picture's own changes (here a cap and softened flashing).
 	for _, chain := range []string{"", "scale=-2:240,format=rgb24,photosensitivity,format=yuv420p"} {
 		filter := pictureOverlay(1, 0.5, chain)
 		if !strings.Contains(filter, "setpts=PTS+0.500/TB") || !strings.Contains(filter, "scale2ref") {
@@ -36,7 +34,6 @@ func TestPictureOverlayRunsInFFmpeg(t *testing.T) {
 	}
 }
 
-// boxSup is a PGS file of one white box shown from 1 s, then cleared at 3.9 s.
 func boxSup() []byte {
 	seg := func(typ byte, seconds float64, data []byte) []byte {
 		pts := uint32(seconds * 90000)

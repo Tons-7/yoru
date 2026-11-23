@@ -1,5 +1,3 @@
-// Subtitle sync after leaving the tab and coming back, measured from which position-coded cue is
-// painted (cue i at x = 40 + 12i, from 2i s) against the video's clock.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -24,7 +22,6 @@ const api = async (path, init) => {
 }
 const post = (path, body) => api(path, { method: 'POST', body: JSON.stringify(body) })
 
-// ---------------------------------------------------------------- setup
 await post('/api/local/paths', { paths: [LIB] })
 await post('/api/local/scan', {})
 let file
@@ -38,7 +35,6 @@ if (!file) process.exit(1)
 check((await post('/api/local/assign', { id: file.id, animeId: ANIME, episode: EP })).ok, 'assigned as episode 3')
 await post('/api/prefs', { key: 'playback.autoplay', value: 'true' })
 
-// Headed by default: headless Chromium keeps drawing background tabs, so the scenario never happens.
 const browser = await chromium.launch({
   headless: process.env.HEADLESS === '1',
   args: ['--autoplay-policy=no-user-gesture-required'],
@@ -49,7 +45,6 @@ const errors = []
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text().slice(0, 200)))
 page.on('pageerror', (e) => errors.push(`uncaught: ${e.message.slice(0, 200)}`))
 
-// Every seek the page performs, so a watchdog firing unwatched can't go unnoticed.
 await page.addInitScript(() => {
   window.__seeks = []
   document.addEventListener(
@@ -66,7 +61,6 @@ await page.addInitScript(() => {
 
 await page.goto(`${BASE}/watch/${ANIME}/${EP}`, { waitUntil: 'domcontentloaded' })
 
-// Reads the subtitle canvas and reports which cue is painted on it.
 const readSubtitle = () =>
   page.evaluate(() => {
     const v = document.querySelector('video')
@@ -97,18 +91,15 @@ const readSubtitle = () =>
     }
     const time = v.currentTime
     if (sum === 0) return { ok: true, time, blank: true }
-    // Normalised centroid → the cue's x in the 1280-wide script, → its index.
     const cx = (weighted / sum / probe.width) * 1280
     return { ok: true, time, blank: false, cue: Math.round((cx - 45) / 12), cx }
   })
 
-// Which cue should be on screen at this instant, or null inside a gap.
 const expectedCue = (t) => {
   const i = Math.floor(t / 2)
-  return t - i * 2 < 1.9 ? i : null
+  return t - i * 2 < 1.09 ? i : null
 }
 
-// ---------------------------------------------------------------- baseline
 let s = null
 for (let i = 0; i < 45; i++) {
   await sleep(1000)
@@ -123,8 +114,6 @@ for (let i = 0; i < 45; i++) {
 }
 check(!!s && s.t > 2, 'marker episode plays', JSON.stringify(s))
 
-// Presented frames, which is what drives subtitle drawing. Counting them is
-// how this proves it really reproduced "the tab stopped rendering".
 await page.evaluate(() => {
   const v = document.querySelector('video')
   window.__frames = 0
@@ -142,7 +131,6 @@ if (!probe.ok) {
   process.exit(1)
 }
 
-// Sync while simply playing: sample a few times and take the worst drift.
 const drift = (r) => (r.blank || r.cue === null ? null : r.cue * 2 + 0.95 - r.time)
 let worst = 0
 let samples = 0
@@ -157,7 +145,6 @@ for (let i = 0; i < 6; i++) {
 check(samples >= 3, 'sampled the canvas while playing', `${samples} samples`)
 check(worst < 1.6, 'subtitles track the clock during normal playback', `worst offset ${worst.toFixed(2)}s (a cue spans 1.9s)`)
 
-// ---------------------------------------------------------------- hidden tab
 const other = await context.newPage()
 await other.goto('about:blank')
 
@@ -171,7 +158,6 @@ const hideFor = async (seconds, { paused = false } = {}) => {
   const visibility = await page.evaluate(() => document.visibilityState)
   await sleep(seconds * 1000)
   await page.bringToFront()
-  // The moment of return, before any new frame can have been presented.
   const immediate = await readSubtitle()
   const frames = await page.evaluate(() => window.__frames)
   await sleep(1200)
@@ -179,12 +165,9 @@ const hideFor = async (seconds, { paused = false } = {}) => {
   return { before, visibility, immediate, settled, frames }
 }
 
-// Playing while the tab is in the background: the clock runs on, and no video
-// frame is presented, so nothing redraws the subtitles until we come back.
 let away = await hideFor(20)
 const ran = away.immediate.time - away.before.t
 const drawn = away.frames - away.before.frames
-// Subtitles depend on frames being presented, not visibilityState, so frames must have stopped.
 console.log(`     backgrounded: visibilityState=${away.visibility}, ${drawn} frames presented over ${ran.toFixed(1)}s of media`)
 check(ran > 10, 'playback carried on while the tab was in the background', `${ran.toFixed(1)}s of media`)
 check(
@@ -212,7 +195,6 @@ check(
   immediateDrift === null ? 'blank' : `${immediateDrift.toFixed(2)}s off`,
 )
 
-// Paused in the background, which is what most people do.
 await page.evaluate(() => document.querySelector('video').play().catch(() => {}))
 await sleep(1500)
 away = await hideFor(8, { paused: true })
@@ -223,8 +205,6 @@ check(
   pausedDrift === null ? 'blank' : `${pausedDrift.toFixed(2)}s`,
 )
 
-// ---------------------------------------------------------------- watchdog
-// A seek right before hiding: no frames while hidden must not read as a stuck decoder.
 await page.evaluate(() => {
   window.__seeks.length = 0
   const v = document.querySelector('video')
@@ -238,8 +218,6 @@ await page.bringToFront()
 await sleep(1500)
 
 const seeks = await page.evaluate(() => window.__seeks)
-// The deliberate seek to 60 is the only one anybody asked for. Anything else is
-// the recovery watchdog firing at a decoder that was never stuck.
 const uninvited = seeks.filter((s) => Math.abs(s.t - 60) > 0.005)
 check(
   uninvited.length === 0,

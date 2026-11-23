@@ -9,7 +9,6 @@ import (
 	"yoru/internal/config"
 )
 
-// A start that fails before the data folder is claimed still leaves why in yoru.log, added to what is there.
 func TestEarlyLinesKeptOnAFailedStart(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, config.Name+".log")

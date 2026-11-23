@@ -12,8 +12,6 @@ import (
 	"yoru/internal/mal"
 )
 
-// The state is all that stands between any web page and a stranger's MAL account linked here: a wrong or
-// missing one is refused before the code is exchanged, and a used one can't be replayed.
 func TestMALCallbackChecksTheStateOnce(t *testing.T) {
 	var exchanges atomic.Int32
 	malSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +33,6 @@ func TestMALCallbackChecksTheStateOnce(t *testing.T) {
 		return res.StatusCode
 	}
 
-	// No login was started here, so there is no state to match.
 	if code := callback(""); code != http.StatusBadRequest {
 		t.Fatalf("no stored state: HTTP %d, want 400", code)
 	}
@@ -53,7 +50,6 @@ func TestMALCallbackChecksTheStateOnce(t *testing.T) {
 	if tok, _ := h.store.Setting(ctx, "mal.token"); tok != "acc" {
 		t.Fatalf("stored token = %q", tok)
 	}
-	// The same callback again, replayed: the state went with its first use.
 	if code := callback("s"); code != http.StatusBadRequest {
 		t.Fatalf("replayed callback: HTTP %d, want 400", code)
 	}

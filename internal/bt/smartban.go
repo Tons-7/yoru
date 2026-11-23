@@ -11,16 +11,14 @@ import (
 
 type bannableAddr = netip.Addr
 
-// TODO: Should be keyed on weak[Peer].
 type smartBanCache = smartban.Cache[bannableAddr, RequestIndex, uint64]
 
 type blockCheckingWriter struct {
 	cache        *smartBanCache
 	requestIndex RequestIndex
-	// Peers that didn't match blocks written now.
-	badPeers    map[bannableAddr]struct{}
-	chunkBuffer []byte
-	bufferUsed  int
+	badPeers     map[bannableAddr]struct{}
+	chunkBuffer  []byte
+	bufferUsed   int
 }
 
 func (me *blockCheckingWriter) chunkSize() int {
@@ -72,8 +70,6 @@ func (me *blockCheckingWriter) Write(b []byte) (n int, err error) {
 	return n, err
 }
 
-// Check any remaining block data. Terminal pieces or piece sizes that don't divide into the chunk
-// size cleanly may leave fragments that should be checked.
 func (me *blockCheckingWriter) Flush() {
 	if me.bufferUsed != 0 {
 		me.checkBufferedBlock()

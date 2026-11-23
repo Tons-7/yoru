@@ -25,7 +25,7 @@ export function Avatar({ name, className, letter = 'text-sm' }: { name?: string;
       className={cx(
         'grid shrink-0 place-items-center rounded-full',
         initial
-          ? cx('bg-gradient-to-br from-accent-400 to-accent-600 font-display font-semibold text-white', letter)
+          ? cx('bg-linear-to-br from-accent-400 to-accent-600 font-display font-semibold text-white', letter)
           : 'bg-base-800 text-base-200',
         className,
       )}

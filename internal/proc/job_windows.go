@@ -1,4 +1,3 @@
-// Package proc ties helpers' lifetime to Yoru's: on Windows, killing a parent leaves its children running.
 package proc
 
 import (
@@ -7,16 +6,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// KillChildrenOnExit puts this process in a job object Windows tears down when
-// the last handle closes (however it ends); children inherit the job.
 func KillChildrenOnExit() error {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		return err
 	}
 
-	// BREAKAWAY_OK lets a child opt out: helpers die with Yoru, but the user's own browser must not get
-	// adopted into the job and closed on exit.
 	limits := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
 		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
 			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
@@ -33,7 +28,6 @@ func KillChildrenOnExit() error {
 		return err
 	}
 
-	// Never closed: it must outlive everything, and the kernel drops it with the process.
 	if err := windows.AssignProcessToJobObject(job, windows.CurrentProcess()); err != nil {
 		windows.CloseHandle(job)
 		return err

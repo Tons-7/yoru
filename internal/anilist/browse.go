@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 
 	"golang.org/x/time/rate"
 )
 
-// Browse is AniList's media filter set; zero values are omitted, so empty is "all, most popular first".
 type Browse struct {
 	Search        string
 	Genres        []string
@@ -32,7 +32,6 @@ type Browse struct {
 	PerPage int
 }
 
-// browseSorts are the API's orderings here; a typed query with none chosen sorts by match.
 var browseSorts = map[string]string{
 	"popular":    "POPULARITY_DESC",
 	"trending":   "TRENDING_DESC",
@@ -44,13 +43,9 @@ var browseSorts = map[string]string{
 	"episodes":   "EPISODES_DESC",
 }
 
-func BrowseSorts() []string {
-	out := make([]string, 0, len(browseSorts))
-	for k := range browseSorts {
-		out = append(out, k)
-	}
-	return out
-}
+var sortOrder = []string{"popular", "trending", "score", "newest", "oldest", "favourites", "episodes", "title"}
+
+func BrowseSorts() []string { return slices.Clone(sortOrder) }
 
 var (
 	Formats  = []string{"TV", "TV_SHORT", "MOVIE", "SPECIAL", "OVA", "ONA", "MUSIC"}
@@ -61,7 +56,6 @@ var (
 		"COMIC", "MULTIMEDIA_PROJECT", "PICTURE_BOOK", "OTHER"}
 )
 
-// Shared by the page query and the count probes, so both see the same filters.
 const browseVarDecls = `$search: String, $genres: [String], $excludeGenres: [String], $tags: [String],
   $year: Int, $season: MediaSeason, $formats: [MediaFormat], $statuses: [MediaStatus],
   $minScore: Int, $minEpisodes: Int, $maxEpisodes: Int, $country: CountryCode,
@@ -115,26 +109,19 @@ func (c *Client) BrowseMedia(ctx context.Context, b Browse) (DiscoverPage, error
 	}, nil
 }
 
-// BrowseCap is as deep as AniList pages a query; past it pages come back empty.
 const BrowseCap = 5000
 
-// probesPerRound keeps one request well inside AniList's complexity limit.
 const probesPerRound = 24
 
-// ErrBusy: counting is a nicety, so it waits while the shared budget is needed elsewhere.
 var ErrBusy = errors.New("anilist: request budget busy")
 
-// countReserve is how much of the burst a count leaves for searches and playback.
 const countReserve = 3
 
-// BrowseCount is how many results b matches, up to BrowseCap. Paged answers report a fixed
-// total of 5000, so it probes one-result pages; known is a position known to exist.
 func (c *Client) BrowseCount(ctx context.Context, b Browse, known int) (int, error) {
-	// Checked once: a count started is finished, or the requests already spent are wasted.
 	if c.limiter.Limit() != rate.Inf && c.limiter.Tokens() < countReserve {
 		return 0, ErrBusy
 	}
-	lo, hi := max(known, 1), BrowseCap+1 // lo exists, hi does not
+	lo, hi := max(known, 1), BrowseCap+1
 	for range 6 {
 		if hi-lo <= 1 {
 			break
@@ -175,7 +162,7 @@ func (c *Client) probe(ctx context.Context, b Browse, positions []int) (map[int]
 		} `json:"pageInfo"`
 		Media []struct{ ID int } `json:"media"`
 	}
-	if err := c.Query(ctx, q.String(), browseVars(b), &out); err != nil {
+	if err := c.Query(ownAnswer(ctx), q.String(), browseVars(b), &out); err != nil {
 		return nil, err
 	}
 	found := make(map[int]probeResult, len(positions))
@@ -186,7 +173,6 @@ func (c *Client) probe(ctx context.Context, b Browse, positions []int) (map[int]
 	return found, nil
 }
 
-// spread picks up to n positions in [from, to], geometric over a wide range so small sets bracket early.
 func spread(from, to, n int) []int {
 	if to < from {
 		return nil
@@ -214,11 +200,9 @@ func spread(from, to, n int) []int {
 	return out
 }
 
-// browseVars are the filter variables; page and perPage are the caller's.
 func browseVars(b Browse) map[string]any {
 	vars := map[string]any{"isAdult": nil}
 
-	// A null variable removes the filter; an empty list matches nothing.
 	setString(vars, "search", b.Search)
 	setList(vars, "genres", b.Genres)
 	setList(vars, "excludeGenres", b.ExcludeGenres)
@@ -235,14 +219,12 @@ func browseVars(b Browse) map[string]any {
 	if b.MinScore > 0 {
 		vars["minScore"] = b.MinScore
 	}
-	// episodes_greater is exclusive, so subtract one to make the bound inclusive.
 	if b.MinEpisodes > 0 {
 		vars["minEpisodes"] = b.MinEpisodes - 1
 	}
 	if b.MaxEpisodes > 0 {
 		vars["maxEpisodes"] = b.MaxEpisodes + 1
 	}
-	// Every hentai title is adult; excluding adult alongside the genre matched nothing.
 	switch {
 	case b.OnlyAdult || hasGenre(b.Genres, "Hentai"):
 		vars["isAdult"] = true
@@ -250,8 +232,6 @@ func browseVars(b Browse) map[string]any {
 		vars["isAdult"] = false
 	}
 
-	// Nothing chosen: relevance for a typed query, popularity otherwise. A sort
-	// the user picked is a request to reorder those matches, so it wins.
 	sort := browseSorts[strings.ToLower(b.Sort)]
 	if sort == "" {
 		sort = "POPULARITY_DESC"
@@ -265,15 +245,12 @@ func browseVars(b Browse) map[string]any {
 
 const genreQuery = `query { GenreCollection MediaTagCollection { name category isAdult } }`
 
-// TagOption is a filter-vocabulary tag, with a category for grouping instead of Tag's rank.
 type TagOption struct {
 	Name     string `json:"name"`
 	Category string `json:"category"`
 	IsAdult  bool   `json:"isAdult"`
 }
 
-// Genres and tags are a fixed vocabulary AniList publishes, so the UI can offer
-// them as checkboxes rather than free text that silently matches nothing.
 func (c *Client) Vocabulary(ctx context.Context) ([]string, []TagOption, error) {
 	var out struct {
 		Genres []string    `json:"GenreCollection"`

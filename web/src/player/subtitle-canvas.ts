@@ -1,4 +1,3 @@
-// JASSUB's desynchronized canvas becomes an opaque overlay on Android: solid black over the video.
 const getContext = OffscreenCanvas.prototype.getContext as (
   this: OffscreenCanvas,
   type: string,

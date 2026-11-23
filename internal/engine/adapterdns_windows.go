@@ -10,7 +10,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// adapterDNS is the named adapter's DNS servers, a VPN's own; Windows' fec0:: placeholders are skipped.
 func adapterDNS(name string) []net.IP {
 	iface, err := net.InterfaceByName(name)
 	if err != nil {

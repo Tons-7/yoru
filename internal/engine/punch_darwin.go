@@ -16,6 +16,18 @@ func punchHole(path string, offset, length int64) error {
 		return err
 	}
 	defer f.Close()
+	var fs unix.Statfs_t
+	if err := unix.Fstatfs(int(f.Fd()), &fs); err != nil {
+		return err
+	}
+	if bs := int64(fs.Bsize); bs > 0 {
+		end := (offset + length) / bs * bs
+		offset = (offset + bs - 1) / bs * bs
+		if end <= offset {
+			return nil
+		}
+		length = end - offset
+	}
 	hole := struct {
 		flags, reserved uint32
 		offset, length  int64

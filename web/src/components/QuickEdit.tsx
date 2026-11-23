@@ -13,7 +13,7 @@ import {
 } from '../lib/library'
 import { airedOf } from '../lib/libraryText'
 import { PopSheet } from './PopSheet'
-import { ConfirmInline, Switch } from './ui'
+import { ConfirmInline, ScorePicker, Switch } from './ui'
 
 export function QuickEdit({
   item,
@@ -94,7 +94,8 @@ function EditBody({ item, onClose }: { item: LibraryItem; onClose: () => void })
     if (from === to) return inFlight.current
     sent.current = to
     onChanged()
-    patchItem(qc, item.id, progressPatch({ ...item, progress: from, status: status.current }, to))
+    const was = status.current
+    patchItem(qc, item.id, progressPatch({ ...item, progress: from, status: was }, to))
     const queuedAt = failures.current
     inFlight.current = inFlight.current
       .then(() => (failures.current === queuedAt ? track(sendProgress(item.id, from, to)) : undefined))
@@ -105,7 +106,8 @@ function EditBody({ item, onClose }: { item: LibraryItem; onClose: () => void })
           sent.current = from
           shown.current = from
           setCount(from)
-          patchItem(qc, item.id, { progress: from, status: status.current })
+          status.current = was
+          patchItem(qc, item.id, { progress: from, status: was })
           setError(`Couldn't save episodes watched: ${e.message}`)
         },
       )
@@ -135,27 +137,31 @@ function EditBody({ item, onClose }: { item: LibraryItem; onClose: () => void })
       setError(null)
       onChanged()
       const before = { status: item.status, progress: shown.current }
+      const sentBefore = sent.current
       const restart = next === 'REPEATING' && item.status !== 'REPEATING'
       patchItem(qc, item.id, restart ? { status: next, progress: 0 } : { status: next })
       if (restart) {
         shown.current = sent.current = 0
         setCount(0)
       }
-      return { before, restart }
+      return { before, restart, sentBefore }
     },
     onSuccess: () => refreshElsewhere(qc),
     onError: (e, _next, ctx) => {
       if (ctx) {
         patchItem(qc, item.id, ctx.before)
         if (ctx.restart) {
-          shown.current = sent.current = ctx.before.progress
+          shown.current = ctx.before.progress
+          sent.current = ctx.sentBefore
           setCount(ctx.before.progress)
+          if (shown.current !== sent.current) void flush()
         }
       }
       setError(`Couldn't change the status: ${e.message}`)
     },
   })
 
+  const scoreTap = useRef(0)
   const setScore = useMutation({
     meta: { inline: true },
     mutationFn: (n: number) => track(api.post('/api/score', { animeId: item.id, score: n * 10 })),
@@ -163,11 +169,11 @@ function EditBody({ item, onClose }: { item: LibraryItem; onClose: () => void })
       setError(null)
       onChanged()
       patchItem(qc, item.id, { score: n * 10 })
-      return { before: item.score }
+      return { before: item.score, tap: ++scoreTap.current }
     },
     onSuccess: () => refreshElsewhere(qc),
     onError: (e, _n, ctx) => {
-      if (ctx) patchItem(qc, item.id, { score: ctx.before })
+      if (ctx && ctx.tap === scoreTap.current) patchItem(qc, item.id, { score: ctx.before })
       setError(`Couldn't save your score: ${e.message}`)
     },
   })
@@ -210,9 +216,9 @@ function EditBody({ item, onClose }: { item: LibraryItem; onClose: () => void })
     <div className="space-y-4 pb-1 sm:p-2">
       <div className="flex items-center gap-3">
         {item.cover ? (
-          <img src={item.cover} alt="" className="aspect-[2/3] w-12 shrink-0 rounded-md object-cover" />
+          <img src={item.cover} alt="" className="aspect-2/3 w-12 shrink-0 rounded-md object-cover" />
         ) : (
-          <div className="aspect-[2/3] w-12 shrink-0 rounded-md bg-base-850" />
+          <div className="aspect-2/3 w-12 shrink-0 rounded-md bg-base-850" />
         )}
         <div className="min-w-0">
           {wide && <p className="line-clamp-2 text-[15px] font-semibold text-base-100">{item.title}</p>}
@@ -289,35 +295,8 @@ function EditBody({ item, onClose }: { item: LibraryItem; onClose: () => void })
       </section>
 
       <section aria-label="Your score">
-        <div className="mb-1.5 flex items-center justify-between">
-          <p className="text-[13px] font-medium text-base-400">Your score</p>
-          {tens > 0 && (
-            <button
-              type="button"
-              onClick={() => setScore.mutate(0)}
-              className="tap relative text-[13px] font-medium text-accent-300 hover:underline"
-            >
-              Clear score
-            </button>
-          )}
-        </div>
-        <div className="grid grid-cols-5 gap-1.5">
-          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-            <button
-              key={n}
-              type="button"
-              aria-pressed={n === tens}
-              aria-label={`Score ${n}`}
-              onClick={() => setScore.mutate(n === tens ? 0 : n)}
-              className={cx(
-                'h-10 rounded-lg text-sm font-semibold tabular-nums transition-colors pointer-coarse:h-11',
-                n === tens ? 'bg-accent-500 text-white' : 'bg-base-800 text-base-100 hover:bg-base-700',
-              )}
-            >
-              {n}
-            </button>
-          ))}
-        </div>
+        <p className="mb-1.5 text-[13px] font-medium text-base-400">Your score</p>
+        <ScorePicker value={tens} onChange={(n) => setScore.mutate(n)} />
       </section>
 
       <label className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-[15px] text-base-100">
@@ -339,9 +318,10 @@ function EditBody({ item, onClose }: { item: LibraryItem; onClose: () => void })
           onClose()
           remove(item)
         }}
-        className="press flex min-h-11 w-full items-center rounded-lg text-left text-[15px] font-medium text-red-300 transition-colors hover:text-red-200"
+        className="press flex min-h-11 w-full flex-col items-start justify-center rounded-lg text-left text-[15px] font-medium text-red-300 transition-colors hover:text-red-200"
       >
         {item.status ? 'Remove from library' : 'Remove from favourites'}
+        {item.status && <span className="text-xs font-normal text-base-400">Also removes it from AniList and MyAnimeList</span>}
       </button>
     </div>
   )

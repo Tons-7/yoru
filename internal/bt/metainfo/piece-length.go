@@ -1,5 +1,3 @@
-// From https://github.com/jackpal/Taipei-Torrent
-
 // Copyright (c) 2010 Jack Palevich. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without

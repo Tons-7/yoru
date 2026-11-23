@@ -4,9 +4,9 @@ import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { cx, whenLabel } from '../lib/format'
-import { useNotifications, type Notification } from '../lib/queries'
+import { notificationBody, useNotifications, type Notification } from '../lib/queries'
 import { feedTitle, type FeedItem } from '../lib/alerts'
-import { ConfirmInline } from './ui'
+import { Badge, Button, ConfirmInline } from './ui'
 import { useAnchorBox, useDismiss, useModalFocus } from '../lib/hooks'
 import { desktopNotifyWanted, notificationTarget } from '../lib/notifications'
 
@@ -15,12 +15,15 @@ export function NotificationPanel() {
   const [confirmClear, setConfirmClear] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
   useModalFocus(panelRef, open)
-  const close = useCallback(() => setOpen(false), [])
+  const close = useCallback(() => {
+    setOpen(false)
+    setConfirmClear(false)
+  }, [])
   const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
 
   const qc = useQueryClient()
-  const { data } = useNotifications()
+  const { data, isError, refetch } = useNotifications()
   const unread = data?.unread ?? 0
   const items = (data?.items ?? []).slice(0, 8)
   useDesktopNotifications(data?.items)
@@ -46,11 +49,11 @@ export function NotificationPanel() {
       <button
         ref={trigger}
         type="button"
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={unread ? `${unread} unread notifications` : 'Notifications'}
-        onClick={() => setOpen((v) => !v)}
-        className="tap relative grid size-9 place-items-center rounded-md text-base-300 transition-colors hover:bg-base-800 hover:text-white"
+        onClick={() => (open ? close() : setOpen(true))}
+        className="tap relative grid size-9 place-items-center rounded-full text-base-300 transition-colors hover:bg-base-800 hover:text-white"
       >
         <BellIcon />
         {unread > 0 && (
@@ -80,12 +83,12 @@ export function NotificationPanel() {
             }}
             className="fixed z-50 animate-rise overflow-hidden rounded-sheet bg-base-750 shadow-panel"
           >
-            <div className="flex items-center justify-between gap-2 border-b border-base-750 px-3 py-2">
+            <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
               <p className="text-sm font-medium text-base-100">
                 Notifications
                 {unread > 0 && (
-                  <span className="ml-1.5 rounded bg-sky-400/20 px-1.5 text-xs text-sky-200">
-                    {unread}
+                  <span className="ml-1.5">
+                    <Badge tone="sky">{unread}</Badge>
                   </span>
                 )}
               </p>
@@ -112,7 +115,7 @@ export function NotificationPanel() {
                   ) : (
                     <button
                       onClick={() => setConfirmClear(true)}
-                      className="rounded px-1.5 py-0.5 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-recap pointer-coarse:min-h-11 pointer-coarse:px-3"
+                      className="rounded px-1.5 py-0.5 text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-red-300 pointer-coarse:min-h-11 pointer-coarse:px-3"
                     >
                       Clear
                     </button>
@@ -120,7 +123,14 @@ export function NotificationPanel() {
               </div>
             </div>
 
-            {items.length === 0 ? (
+            {isError && items.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 px-3 py-6 text-center text-xs text-red-300">
+                Couldn't load notifications.
+                <Button size="sm" onClick={() => void refetch()}>
+                  Retry
+                </Button>
+              </div>
+            ) : items.length === 0 ? (
               <p className="px-3 py-6 text-center text-xs text-base-500">
                 Nothing new yet. Tap Alert on a show to hear when new episodes are out.
               </p>
@@ -131,8 +141,8 @@ export function NotificationPanel() {
                     key={item.id}
                     item={item}
                     onOpen={() => {
-                      markRead.mutate(item.id)
-                      setOpen(false)
+                      if (!item.read) markRead.mutate(item.id)
+                      close()
                     }}
                     onRemove={() => remove.mutate(item.id)}
                   />
@@ -143,7 +153,7 @@ export function NotificationPanel() {
             <Link
               to="/notifications"
               onClick={close}
-              className="block border-t border-base-750 px-3 py-2 text-center text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white pointer-coarse:py-3"
+              className="block border-t border-line px-3 py-2 text-center text-xs text-base-400 transition-colors hover:bg-base-800 hover:text-white pointer-coarse:py-3"
             >
               See all
             </Link>
@@ -170,15 +180,19 @@ function Row({
         onClick={onOpen}
         className={cx(
           'block px-3 py-2 pr-8 transition-colors hover:bg-base-800',
-          !item.read && 'bg-sky-400/[0.05]',
+          !item.read && 'bg-sky-400/5',
         )}
       >
         <div className="flex items-start gap-2">
-          {!item.read && <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-sky-400" />}
+          {!item.read && (
+            <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-sky-400">
+              <span className="sr-only">Unread</span>
+            </span>
+          )}
           <div className="min-w-0">
             <p className="line-clamp-2 text-xs font-medium text-base-100">{feedTitle(item)}</p>
             <p className="mt-0.5 line-clamp-1 text-xs text-base-500">
-              {item.kind === 'release' || !item.body ? whenLabel(item.createdAt) : `${item.body} · ${whenLabel(item.createdAt)}`}
+              {item.kind === 'release' || !item.body ? whenLabel(item.createdAt) : `${notificationBody(item)} · ${whenLabel(item.createdAt)}`}
             </p>
           </div>
         </div>
@@ -187,7 +201,7 @@ function Row({
       <button
         onClick={onRemove}
         aria-label="Remove notification"
-        className="tap absolute top-2 right-2 rounded p-1 text-base-600 transition-colors hover:text-recap"
+        className="tap absolute top-2 right-2 rounded p-1 text-base-400 transition-colors hover:text-red-300"
       >
         <svg viewBox="0 0 24 24" className="size-3" aria-hidden>
           <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
@@ -214,14 +228,20 @@ function useDesktopNotifications(items?: Notification[]) {
     } catch {
       first = true
     }
-    if (!first && desktopNotifyWanted() && Notification.permission === 'granted') {
-      for (const n of items.filter((n) => n.id > seen && !n.read).reverse()) {
-        const target = new URL(notificationTarget(n), window.location.href).href
-        const options = { body: n.body, tag: `yoru-${n.id}`, data: { url: target } }
-        void (navigator.serviceWorker?.getRegistration() ?? Promise.resolve(undefined))
-          .catch(() => undefined)
-          .then((reg) => {
-            if (reg) return reg.showNotification(n.title, options)
+    const fresh = items.filter((n) => n.id > seen && !n.read).reverse()
+    if (!first && fresh.length > 0 && desktopNotifyWanted() && Notification.permission === 'granted') {
+      void (navigator.serviceWorker?.getRegistration() ?? Promise.resolve(undefined))
+        .catch(() => undefined)
+        .then(async (reg) => {
+          const pushed = await (reg?.pushManager?.getSubscription() ?? Promise.resolve(null)).catch(() => null)
+          if (pushed) return
+          for (const n of fresh) {
+            const target = new URL(notificationTarget(n), window.location.href).href
+            const options = { body: notificationBody(n), tag: `yoru-${n.id}`, data: { url: target } }
+            if (reg) {
+              await reg.showNotification(n.title, options).catch(() => {})
+              continue
+            }
             try {
               const note = new Notification(n.title, options)
               note.onclick = () => {
@@ -231,9 +251,9 @@ function useDesktopNotifications(items?: Notification[]) {
             } catch {
               return
             }
-          })
-          .catch(() => {})
-      }
+          }
+        })
+        .catch(() => {})
     }
     if (newest > seen || first) {
       try {

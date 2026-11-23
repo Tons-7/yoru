@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"regexp"
 	"slices"
@@ -71,6 +72,7 @@ func (f *Finder) Ask(animeID, episode int, words string, pasted *indexer.Torrent
 	if time.Now().After(a.until) {
 		a = asked{}
 	}
+	maps.DeleteFunc(f.asked, func(_ [2]int, old asked) bool { return time.Now().After(old.until) })
 	if words = strings.TrimSpace(words); words != "" {
 		a.words = words
 	}
@@ -168,8 +170,37 @@ func (f *Finder) learnRelations(ctx context.Context, animeID int) {
 	}
 }
 
+type findMemo struct {
+	mu        sync.Mutex
+	franchise map[int]store.Franchise
+}
+
+type findMemoKey struct{}
+
+func (f *Finder) franchiseOf(ctx context.Context, animeID int) (store.Franchise, error) {
+	m, _ := ctx.Value(findMemoKey{}).(*findMemo)
+	if m != nil {
+		m.mu.Lock()
+		got, ok := m.franchise[animeID]
+		m.mu.Unlock()
+		if ok {
+			return got, nil
+		}
+	}
+	got, err := f.store.Franchise(ctx, animeID)
+	if err == nil && m != nil {
+		m.mu.Lock()
+		m.franchise[animeID] = got
+		m.mu.Unlock()
+	}
+	return got, err
+}
+
 func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 	f.learnRelations(ctx, req.AnimeID)
+	if _, ok := ctx.Value(findMemoKey{}).(*findMemo); !ok {
+		ctx = context.WithValue(ctx, findMemoKey{}, &findMemo{franchise: map[int]store.Franchise{}})
+	}
 
 	titles, err := f.store.SearchTitles(ctx, req.AnimeID)
 	if err != nil {
@@ -286,7 +317,8 @@ func (f *Finder) Find(ctx context.Context, req Request) (Candidates, error) {
 					c.Confirmed = wholeSeries.MatchString(t.Title)
 				}
 			} else {
-				if !pasted && !verifies(rel, req) {
+				_, listed := bestByHash[strings.ToLower(t.InfoHash)]
+				if !pasted && !listed && !verifies(rel, req) {
 					continue
 				}
 				c.Confirmed, c.Numbers, c.Episode = confirms(rel, req), numbersFor(rel, req), req.Episode
@@ -373,6 +405,13 @@ func siteProblem(err error) string {
 	if _, ok := errors.AsType[*net.OpError](err); ok {
 		return site + " is unreachable"
 	}
+	rest = strings.TrimPrefix(rest, site+": ")
+	switch {
+	case strings.HasPrefix(rest, "HTTP 429"):
+		return site + " is busy; try again in a minute"
+	case strings.HasPrefix(rest, "HTTP 5"):
+		return site + " is having trouble right now"
+	}
 	if len(rest) > 80 {
 		rest = rest[:80] + "…"
 	}
@@ -444,7 +483,7 @@ func ownNumber(n, limit, slack int, offsets []int) int {
 }
 
 func (f *Finder) earlierCounts(ctx context.Context, animeID int) []int {
-	franchise, err := f.store.Franchise(ctx, animeID)
+	franchise, err := f.franchiseOf(ctx, animeID)
 	if err != nil {
 		return nil
 	}
@@ -604,7 +643,7 @@ func (f *Finder) defaultSeason(ctx context.Context, animeID int, titles []string
 }
 
 func (f *Finder) franchiseSeason(ctx context.Context, animeID int) int {
-	franchise, err := f.store.Franchise(ctx, animeID)
+	franchise, err := f.franchiseOf(ctx, animeID)
 	if err != nil {
 		return 0
 	}
@@ -631,7 +670,7 @@ func (f *Finder) franchiseSeason(ctx context.Context, animeID int) int {
 }
 
 func (f *Finder) laterSeason(ctx context.Context, animeID int) bool {
-	franchise, err := f.store.Franchise(ctx, animeID)
+	franchise, err := f.franchiseOf(ctx, animeID)
 	if err != nil {
 		return false
 	}
@@ -647,7 +686,7 @@ func (f *Finder) derivedAlias(ctx context.Context, req Request, titles []string,
 	if req.Episode <= 0 {
 		return store.EpisodeAlias{}
 	}
-	franchise, err := f.store.Franchise(ctx, req.AnimeID)
+	franchise, err := f.franchiseOf(ctx, req.AnimeID)
 	if err != nil || len(franchise.Seasons) < 2 {
 		return store.EpisodeAlias{}
 	}
@@ -725,7 +764,7 @@ func (f *Finder) cour(ctx context.Context, req Request, titles []string, english
 		}
 	}
 
-	franchise, err := f.store.Franchise(ctx, req.AnimeID)
+	franchise, err := f.franchiseOf(ctx, req.AnimeID)
 	if err != nil {
 		return c
 	}
@@ -1072,6 +1111,9 @@ func verifies(rel parse.Release, req Request) bool {
 		(rel.Season > 0 || slices.Contains(req.Shows, releaseName(rel.Title))) {
 		return false
 	}
+	if rel.Special && req.Episode > 0 && !req.Apart {
+		return false
+	}
 
 	if req.Episode > 0 {
 		stated, inBatch := numbered(rel, req)
@@ -1086,16 +1128,20 @@ func verifies(rel parse.Release, req Request) bool {
 	if req.Alias.Tvdb > req.Episode && rel.Episode == req.Alias.Tvdb && broadcast(rel, req) {
 		return true
 	}
-	if req.Season > 1 && rel.Season > 0 && rel.Season != req.Season {
+	if req.Season > 1 && rel.Season > 0 && rel.Season != req.Season && !spans(rel, req.Season) {
 		return false
 	}
 	if n := numeralSeason(rel, req); n > 0 && n != max(req.Season, 1) {
 		return false
 	}
-	if req.Season == 1 && rel.Season > 1 && rel.Season != req.Counted {
+	if req.Season == 1 && rel.Season > 1 && rel.Season != req.Counted && !spans(rel, req.Counted) {
 		return false
 	}
 	return true
+}
+
+func spans(rel parse.Release, season int) bool {
+	return rel.SeasonEnd > 0 && season >= rel.Season && season <= rel.SeasonEnd
 }
 
 const maxSearchTerms = 8
@@ -1198,7 +1244,7 @@ func searchTerms(
 }
 
 var courSuffix = regexp.MustCompile(
-	`(?i)\s+(part|season|cour|final season)\s*\d*$|(?i)\s+\d(nd|rd|th|st)\s+season$`)
+	`(?i)[:\s]+(?:the\s+)?final\s+season\s*\d*$|(?i)\s+(part|season|cour)\s*\d*$|(?i)\s+\d(nd|rd|th|st)\s+season$`)
 
 func baseTitle(title string) string {
 	if trimmed := courSuffix.ReplaceAllString(title, ""); trimmed != title {

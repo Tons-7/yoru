@@ -270,3 +270,48 @@ func TestHistoryCarriesTheShowsListProgress(t *testing.T) {
 		t.Fatalf("entry = %+v", e)
 	}
 }
+
+func TestLibraryFiltersByFormatAiringSeasonGenreAndDisk(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	all := Paging{Page: 1, PerPage: 50}
+	if _, err := s.ImportList(ctx, []Anime{{ID: 1, Romaji: "A"}, {ID: 2, Romaji: "B"}, {ID: 3, Romaji: "C"}}, []Entry{
+		{ID: 11, AnimeID: 1, Status: new("CURRENT")},
+		{ID: 12, AnimeID: 2, Status: new("PLANNING")},
+		{ID: 13, AnimeID: 3, Status: new("CURRENT")},
+	}, ImportMerge); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`UPDATE anime SET format = 'TV_SHORT', status = 'RELEASING', season = 'FALL', season_year = 2025, genres = '["Action"]' WHERE id = 1`,
+		`UPDATE anime SET format = 'MOVIE', status = 'FINISHED', season = 'SPRING', season_year = 2024, genres = '["Drama"]' WHERE id = 2`,
+		`UPDATE anime SET format = 'OVA', status = 'FINISHED', season = 'FALL', season_year = 2025, genres = '["Action","Drama"]' WHERE id = 3`,
+		`INSERT INTO local_file (path, size, modified, anime_id, episode, scanned_at) VALUES ('x.mkv', 1, 0, 3, 1, 0)`,
+	} {
+		if _, err := s.w.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		f    LibraryFilter
+		want []int
+	}{
+		{"TV takes short TV too", LibraryFilter{Format: "TV"}, []int{1}},
+		{"films", LibraryFilter{Format: "MOVIE"}, []int{2}},
+		{"airing now", LibraryFilter{Airing: true}, []int{1}},
+		{"a season", LibraryFilter{Year: 2025, Season: "FALL"}, []int{1, 3}},
+		{"a genre", LibraryFilter{Genre: "Drama"}, []int{2, 3}},
+		{"on disk", LibraryFilter{Downloaded: true}, []int{3}},
+		{"with a status", LibraryFilter{Genre: "Action", Status: "CURRENT"}, []int{1, 3}},
+	} {
+		tc.f.Sort = "title"
+		page, err := s.Library(ctx, tc.f, all)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := libraryIDs(page); !slices.Equal(got, tc.want) || page.Total != len(tc.want) {
+			t.Errorf("%s: got %v total %d, want %v", tc.name, got, page.Total, tc.want)
+		}
+	}
+}

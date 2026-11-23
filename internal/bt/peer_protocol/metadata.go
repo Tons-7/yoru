@@ -5,8 +5,6 @@ import (
 )
 
 const (
-	// http://bittorrent.org/beps/bep_0009.html. Note that there's an
-	// LT_metadata, but I've never implemented it.
 	ExtensionNameMetadata = "ut_metadata"
 )
 
@@ -31,8 +29,6 @@ func MetadataExtensionRequestMsg(peerMetadataExtensionId ExtensionNumber, piece 
 	}
 }
 
-// Returns the expected piece size for this request message. This is needed to determine the offset
-// into an extension message payload that the request metadata piece data starts.
 func (me ExtendedMetadataRequestMsg) PieceSize() int {
 	ret := min(me.TotalSize-me.Piece*(1<<14), 1<<14)
 	return ret

@@ -97,9 +97,12 @@ export function Browse() {
   const { results, page, count: resultCount, capped, lastPage } = useBrowse(gridParams, !searching)
 
   const navigate = useNavigate()
+  const narrowed = !!(active.tags || active.statuses || active.studio || active.season)
   const random = useMutation({
     meta: { inline: true },
-    mutationFn: () => {
+    mutationFn: async () => {
+      const shown = results.data?.items ?? []
+      if (narrowed && shown.length > 0) return { id: shown[Math.floor(Math.random() * shown.length)].id }
       const formats = csv(active.formats)
       return api.get<{ id: number }>(
         `/api/random${query({
@@ -182,7 +185,7 @@ export function Browse() {
   const chips: Array<{ key: string; value: string; label: string; remove: () => void }> = [
     ...csv(active.genres).map((g) => ({ key: 'genres', value: g, label: g, remove: without('genres', g) })),
     ...csv(active.tags).map((t) => ({ key: 'tags', value: t, label: t, remove: without('tags', t) })),
-    ...csv(active.formats).map((f) => ({ key: 'formats', value: f, label: f.replace('_', ' '), remove: without('formats', f) })),
+    ...csv(active.formats).map((f) => ({ key: 'formats', value: f, label: f.replaceAll('_', ' '), remove: without('formats', f) })),
     ...csv(active.statuses).map((s) => ({ key: 'statuses', value: s, label: pretty(s), remove: without('statuses', s) })),
     ...(active.studio
       ? [{ key: 'studio', value: active.studio, label: `Studio: ${active.studioName ?? active.studio}`, remove: () => setStudio() }]
@@ -418,7 +421,13 @@ export function Browse() {
         </div>
       ) : (
         <>
-          <div data-stuck="always" className="sticky top-[calc(var(--bar,4rem)+4rem)] z-20 -mx-4 flex gap-2 bg-base-950 px-4 py-2 transition-[top] duration-200">
+          <div
+            data-stuck="always"
+            className={cx(
+              'sticky z-20 -mx-4 flex gap-2 bg-base-950 px-4 py-2 transition-[top] duration-200',
+              link ? 'top-[calc(var(--bar,4rem)+7.25rem)]' : 'top-[calc(var(--bar,4rem)+4rem)]',
+            )}
+          >
             <Button className="min-w-0 flex-1" onClick={() => setSheet('filters')} aria-haspopup="dialog">
               <FilterGlyph />
               <span className="tabular-nums">{chips.length > 0 ? `Filters · ${chips.length}` : 'Filters'}</span>
@@ -449,7 +458,7 @@ export function Browse() {
               <PosterGrid>
                 {Array.from({ length: 40 }, (_, i) => (
                   <div key={i}>
-                    <Skeleton className="aspect-[2/3] w-full" />
+                    <Skeleton className="aspect-2/3 w-full" />
                     <Skeleton className="mt-2 h-4 w-3/4" />
                   </div>
                 ))}
@@ -480,7 +489,13 @@ export function Browse() {
       )}
 
       {sheet === 'filters' && (
-        <FilterSheet params={gridParams} vocab={vocab} onApply={applySheet} onClose={() => setSheet(null)} />
+        <FilterSheet
+          params={gridParams}
+          q={searching ? active.q : undefined}
+          vocab={vocab}
+          onApply={applySheet}
+          onClose={() => setSheet(null)}
+        />
       )}
       {sheet === 'sort' && (
         <SortSheet

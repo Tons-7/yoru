@@ -11,7 +11,6 @@ import (
 )
 
 type bucket struct {
-	// Per the "Routing Table" section of BEP 5.
 	changed     chansync.BroadcastCond
 	lastChanged time.Time
 	nodes       map[*node]struct{}
@@ -25,7 +24,6 @@ func (b *bucket) NodeIter() iter.Seq[*node] {
 	return maps.Keys(b.nodes)
 }
 
-// Returns true if f returns true for all nodes. Iteration stops if f returns false.
 func (b *bucket) EachNode(f func(*node) bool) bool {
 	for n := range b.NodeIter() {
 		if !f(n) {

@@ -7,19 +7,17 @@ import (
 	"yoru/internal/bt"
 )
 
-// readWait is a stream read in progress: the piece it needs, since when, and whether a no-holder line went out.
 type readWait struct {
 	piece    int
 	since    time.Time
 	reported bool
 }
 
-// watched tells the janitor which piece each read waits on, so a read stuck behind a silent peer is rescued.
 type watched struct {
 	bt.Reader
 	e        *Engine
 	en       *entry
-	offset   int64 // the file's place in the torrent
+	offset   int64
 	pieceLen int64
 	pos      int64
 }

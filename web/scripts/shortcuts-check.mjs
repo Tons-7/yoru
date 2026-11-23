@@ -1,5 +1,3 @@
-// Keys while watching: D shows the downloads over the player without stopping it, S skips the opening,
-// ? lists every shortcut. The downloads list and skip range are fed to the page.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -29,7 +27,6 @@ const cover = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www
 const items = [
   download('a3', '[Group] Show One - 03 [1080p].mkv', { animeId: 1, title: 'Show One', episode: '3', episodes: ['3'], pinned: true, cover }),
   download('a4', '[Group] Show One - 04 [1080p].mkv', { animeId: 1, title: 'Show One', episode: '4', episodes: ['4'], percent: 20, bytesOnDisk: GB * 0.2, cover }),
-  // The queue gave up on this one: its entry below has failed, and this is what it got.
   download('a9', '[Group] Show One - 09 [1080p].mkv', { animeId: 1, title: 'Show One', episode: '9', episodes: ['9'], percent: 87, bytesOnDisk: GB * 0.87, paused: true, cover }),
   download('x1', '[Stray] Other Show - 01 [1080p].mkv', { percent: 5, bytesOnDisk: GB * 0.05, mbps: 0 }),
   download('b1', '[Group] Show Two - 01 [1080p].mkv', { animeId: 2, title: 'Show Two', episode: '1', episodes: ['1'], percent: 100, bytesOnDisk: GB }),
@@ -38,7 +35,6 @@ const queued = [
   { animeId: 3, epKey: '7', episode: 7, state: 'failed', error: 'no release found', title: 'Show Three' },
   { animeId: 1, epKey: '5', episode: 5, state: 'pending', title: 'Show One', cover },
   { animeId: 1, epKey: '9', episode: 9, state: 'failed', title: 'Show One', cover, error: 'no peers sent anything for 10 minutes; 87% is on disk' },
-  // A whole season queued while an episode plays.
   ...Array.from({ length: 22 }, (_, i) => ({ animeId: 4, epKey: String(i + 1), episode: i + 1, state: 'pending', title: 'Show Four' })),
 ]
 
@@ -59,7 +55,6 @@ await page.route('**/api/download/queue/proceed', (route) => {
   return route.fulfill({ json: { watching: false } })
 })
 await page.route('**/api/downloads', (route) => route.fulfill({ json: { items, count: items.length } }))
-// An opening over the first minute and a half, so the skip button shows from the start.
 await page.route('**/api/episode/skips**', (route) => route.fulfill({ json: { ranges: [{ kind: 'op', start: 0, end: 90 }] } }))
 
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
@@ -67,7 +62,6 @@ const video = page.locator('video').first()
 await video.waitFor({ timeout: 30_000 })
 await page.waitForFunction(() => (document.querySelector('video')?.readyState ?? 0) >= 2, null, { timeout: 30_000 }).catch(() => {})
 const state = () => video.evaluate((v) => ({ paused: v.paused, time: v.currentTime, duration: v.duration }))
-// Keys go to the page, not to a control that happens to hold focus.
 await page.locator('body').click({ position: { x: 5, y: 400 } })
 
 const panel = page.getByRole('dialog', { name: 'Downloads' })
@@ -75,7 +69,6 @@ check((await panel.count()) === 0, 'the downloads panel starts closed')
 const before = await state()
 await page.keyboard.press('d')
 check(await panel.waitFor({ timeout: 3000 }).then(() => true, () => false), 'D opens the downloads over the player')
-// A glance keeps the keys with the player: Space pauses the video, never presses the panel's Pause all.
 await page.keyboard.press(' ')
 await sleep(400)
 check((await state()).paused !== before.paused && pausedAll === 0, 'Space still plays or pauses the video with the panel up',
@@ -83,7 +76,6 @@ check((await state()).paused !== before.paused && pausedAll === 0, 'Space still 
 await page.keyboard.press(' ')
 await sleep(300)
 const text = (await panel.innerText().catch(() => '')).replace(/\n/g, ' | ')
-// The show is the card, its episodes the lines under it: the name is said once.
 check(/Show One[ |]+Episode 3[ |]+playing[ |]+40%/.test(text) && /1\.2 Mbps/.test(text) && /2 peers/.test(text), 'a download shows its show, episode, progress, speed and peers', text)
 check((text.match(/Show One/g) ?? []).length === 1 && /Episode 4[ |]+20%/.test(text), 'two episodes of one show share its card')
 check(/Episode 4[ |]+20%[^|]*\|[ |]*Episode 5[ |]+waiting/.test(text), 'the one waiting its turn is a line of the same card, marked waiting', text)
@@ -105,7 +97,6 @@ check((await state()).paused === before.paused, 'opening it does not pause or st
 await sleep(600)
 await page.screenshot({ path: `${SHOTS}/shortcuts-downloads.png` })
 
-// The player keeps its keys while the panel is up.
 await page.keyboard.press('k')
 await sleep(400)
 check((await state()).paused !== before.paused, 'K still plays or pauses with the panel open')
@@ -114,19 +105,18 @@ await page.keyboard.press('k')
 await panel.getByRole('button', { name: 'Copy details' }).click()
 await sleep(300)
 const copied = await page.evaluate(() => navigator.clipboard.readText()).catch((e) => `unreadable: ${e}`)
-check(/Downloading \(3\)/.test(copied) && /Show One episode 3 — 40%/.test(copied) && /\[Stray\] Other Show/.test(copied) && /Failed \(2\)/.test(copied) && /episode 9 — 87% on disk — no peers/.test(copied) && /On disk \(1\)/.test(copied),
+check(/Downloading \(3\)/.test(copied) && /Show One episode 3 · 40%/.test(copied) && /\[Stray\] Other Show/.test(copied) && /Failed \(2\)/.test(copied) && /episode 9 · 87% on disk · no peers/.test(copied) && /On disk \(1\)/.test(copied),
   'copy details puts the whole list on the clipboard as text', copied.replace(/\n/g, ' | ').slice(0, 300))
 
 await page.keyboard.press('d')
 await sleep(300)
 check((await panel.count()) === 0, 'D closes it again')
 await page.keyboard.press('d')
-await panel.waitFor({ timeout: 3000 }).catch(() => {})
+check(await panel.waitFor({ timeout: 3000 }).then(() => true, () => false), 'D opens it again')
 await page.keyboard.press('Escape')
 await sleep(300)
 check((await panel.count()) === 0, 'Escape closes it too')
 
-// Typing a "d" is not a shortcut.
 await page.locator('#yoru-search').fill('d')
 await page.locator('#yoru-search').press('d')
 await sleep(300)
@@ -134,7 +124,6 @@ check((await panel.count()) === 0, 'typing in search does not open it')
 await page.locator('#yoru-search').fill('')
 await page.locator('body').click({ position: { x: 5, y: 400 } })
 
-// S is the skip button, pressed.
 const skip = page.getByRole('button', { name: /^Skip opening/ })
 check(await skip.waitFor({ timeout: 8000 }).then(() => true, () => false), 'the skip button shows during the opening')
 await video.evaluate((v) => (v.currentTime = 1))
@@ -143,7 +132,6 @@ await sleep(800)
 const after = await state()
 check(after.time >= Math.min(90, after.duration - 1) - 1, 'S jumps to the end of the opening', JSON.stringify(after))
 
-// ? lists the keys, the new ones included.
 await page.keyboard.press('?')
 const help = page.getByRole('dialog', { name: 'Keyboard shortcuts' })
 check(await help.waitFor({ timeout: 3000 }).then(() => true, () => false), '? opens the list of shortcuts')
@@ -153,7 +141,6 @@ check(/Next episode/.test(listed) && /Playback info/.test(listed) && /Mark where
 await sleep(600)
 await page.screenshot({ path: `${SHOTS}/shortcuts-list.png` })
 
-// A key changed in the list: the next press is its new key, a taken one swaps, page keys are refused.
 const status = help.getByRole('status')
 const keyButton = (name) => help.getByRole('button', { name: new RegExp(`^${name}: `) })
 await keyButton('Mute').click()
@@ -180,7 +167,6 @@ await sleep(300)
 check((await video.evaluate((v) => v.muted)) !== mutedBefore && !(await page.evaluate(() => !!document.fullscreenElement)), 'the swapped key mutes, and no longer goes fullscreen')
 await page.keyboard.press('f')
 
-// Kept to the player: keys elsewhere on the page do nothing until the player is chosen.
 await page.keyboard.press('?')
 await help.getByRole('radio', { name: 'In the player only' }).click()
 await page.keyboard.press('Escape')
@@ -189,7 +175,6 @@ const pausedOutside = (await state()).paused
 await page.keyboard.press('k')
 await sleep(300)
 check((await state()).paused === pausedOutside, 'kept to the player, K outside it does nothing')
-// A click on the picture plays or pauses too, once it is sure no second click follows.
 await video.click()
 await sleep(800)
 const pausedInside = (await state()).paused
@@ -204,7 +189,6 @@ check(/back to how it came/.test(await status.innerText()) && (await help.getByR
 await page.keyboard.press('Escape')
 await page.locator('body').click({ position: { x: 5, y: 400 } })
 
-// The player teaches its own keys: each button's tooltip names one, and one button opens the list.
 const tip = (name) => page.getByRole('button', { name, exact: true }).first().getAttribute('title').catch(() => null)
 const tips = [await tip(/^(Play|Pause)$/), await tip('Back 10 seconds'), await tip('Forward 10 seconds'), await tip(/^(Mute|Unmute)$/), await tip('Full screen')]
 check(tips.join(' | ') && /\(K\)/.test(tips[0]) && /\(J\)/.test(tips[1]) && /\(L\)/.test(tips[2]) && /\(M\)/.test(tips[3]) && /\(F\)/.test(tips[4]),
@@ -217,13 +201,11 @@ check(await help.waitFor({ timeout: 3000 }).then(() => true, () => false), "the 
 await page.keyboard.press('Escape')
 await sleep(300)
 
-// From the profile menu, for whoever does not know the key.
 await page.getByRole('button', { name: 'Profile and settings' }).click()
 await page.getByRole('menuitem', { name: /Keyboard shortcuts/ }).click()
 check(await help.waitFor({ timeout: 3000 }).then(() => true, () => false), 'the profile menu opens the list as well')
 await page.keyboard.press('Escape')
 
-// Fullscreen shows only what is inside the fullscreen element, so the panel has to be drawn there.
 await page.locator('body').click({ position: { x: 5, y: 400 } })
 await page.keyboard.press('f')
 const full = await page.waitForFunction(() => !!document.fullscreenElement, null, { timeout: 4000 }).then(() => true, () => false)
@@ -239,7 +221,6 @@ if (!full) {
   await page.keyboard.press('d')
 }
 
-// Speeds in megabytes once Settings says so: 1.2 Mbps is 146 KB/s, counted as file sizes are.
 const setSpeed = (value) => fetch(`${BASE}/api/prefs`, {
   method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'display.speed', value }),
 })
@@ -255,7 +236,6 @@ await setSpeed('mbps')
 await page.keyboard.press('d')
 await sleep(300)
 
-// N presses the Next episode button: not while typing in a box, then on the player it goes to episode 2.
 const searchBox = page.getByRole('combobox', { name: 'Search anime' })
 await searchBox.click()
 await page.keyboard.press('n')

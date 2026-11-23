@@ -7,20 +7,19 @@ import (
 	"github.com/google/btree"
 )
 
-// Peers are stored with their priority at insertion. Their priority may
-// change if our apparent IP changes, we don't currently handle that.
 type prioritizedPeersItem struct {
 	prio peerPriority
 	p    PeerInfo
+	hash int64
 }
 
 var hashSeed = maphash.MakeSeed()
 
-func (me prioritizedPeersItem) addrHash() int64 {
+func newPrioritizedItem(prio peerPriority, p PeerInfo) prioritizedPeersItem {
 	var h maphash.Hash
 	h.SetSeed(hashSeed)
-	h.WriteString(me.p.Addr.String())
-	return int64(h.Sum64())
+	h.WriteString(p.Addr.String())
+	return prioritizedPeersItem{prio: prio, p: p, hash: int64(h.Sum64())}
 }
 
 func (me prioritizedPeersItem) Less(than btree.Item) bool {
@@ -28,7 +27,7 @@ func (me prioritizedPeersItem) Less(than btree.Item) bool {
 	return multiless.New().Bool(
 		me.p.Trusted, other.p.Trusted).Uint32(
 		me.prio, other.prio).Int64(
-		me.addrHash(), other.addrHash(),
+		me.hash, other.hash,
 	).Less()
 }
 
@@ -51,14 +50,12 @@ func (me *prioritizedPeers) Len() int {
 	return me.om.Len()
 }
 
-// Returns true if a peer is replaced.
 func (me *prioritizedPeers) Add(p PeerInfo) bool {
-	return me.om.ReplaceOrInsert(prioritizedPeersItem{me.getPrio(p), p}) != nil
+	return me.om.ReplaceOrInsert(newPrioritizedItem(me.getPrio(p), p)) != nil
 }
 
-// Returns true if a peer is replaced.
 func (me *prioritizedPeers) AddReturningReplacedPeer(p PeerInfo) (ret PeerInfo, ok bool) {
-	item := me.om.ReplaceOrInsert(prioritizedPeersItem{me.getPrio(p), p})
+	item := me.om.ReplaceOrInsert(newPrioritizedItem(me.getPrio(p), p))
 	if item == nil {
 		return
 	}

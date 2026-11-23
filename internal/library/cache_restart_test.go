@@ -71,7 +71,6 @@ func remaining(t *testing.T, st *store.Store) int {
 	return len(entries)
 }
 
-// An engine listing nothing is still reloading; forgetting then would unlink every episode's file.
 func TestEmptyListingNeverForgets(t *testing.T) {
 	c, st, _ := restartFixture(t, 0)
 	record(t, st, "abc", "Frieren - 05", 0)
@@ -97,7 +96,6 @@ func TestADownloadTheEngineKeepsNotListingIsForgotten(t *testing.T) {
 	}
 }
 
-// The count is consecutive: a download that comes back is not half-forgotten.
 func TestAbsenceCountResetsWhenTheEngineListsItAgain(t *testing.T) {
 	c, st, engine := restartFixture(t, 0)
 	engine.ids[9] = "other"
@@ -118,7 +116,6 @@ func TestAbsenceCountResetsWhenTheEngineListsItAgain(t *testing.T) {
 	}
 }
 
-// A pack has a row per episode; one pass used to count its absence once per row.
 func TestAPackCountsOneAbsencePerPass(t *testing.T) {
 	c, st, engine := restartFixture(t, 0)
 	engine.ids[9] = "other"
@@ -142,7 +139,6 @@ func TestForgettingWaitsOutTheAge(t *testing.T) {
 	}
 }
 
-// The engine losing a kept download says nothing about the file: while it is on disk, it stays listed.
 func TestAKeptDownloadStillOnDiskStays(t *testing.T) {
 	c, st, engine := restartFixture(t, 0)
 	engine.ids[9] = "other"

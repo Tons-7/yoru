@@ -42,7 +42,7 @@ func (s *Store) EnqueueRelease(ctx context.Context, animeID, season, episode int
 	}
 	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO download_queue (anime_id, ep_key, episode, season, state, queued_at, info_hash, release_name)
-		VALUES (?,?,?,?,'pending',?,?,?)
+		VALUES (?1,?2,?3,?4,'pending',max(?5, coalesce((SELECT max(queued_at) FROM download_queue), 0) + 1),?6,?7)
 		ON CONFLICT(anime_id, ep_key) DO UPDATE SET
 		    state = CASE WHEN download_queue.state IN ('failed','done') THEN 'pending' ELSE download_queue.state END,
 		    info_hash = excluded.info_hash, release_name = excluded.release_name,
@@ -78,6 +78,11 @@ func (s *Store) Enqueue(ctx context.Context, animeID, season int, episodes []int
 	defer stmt.Close()
 
 	now := time.Now().Unix()
+	var last sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT max(queued_at) FROM download_queue`).Scan(&last); err != nil {
+		return 0, err
+	}
+	now = max(now, last.Int64+1)
 	var added int
 	for _, episode := range episodes {
 		if episode <= 0 {
@@ -100,7 +105,7 @@ func (s *Store) NextQueued(ctx context.Context) (QueuedDownload, bool, error) {
 		WHERE state = 'pending' AND (anime_id, ep_key) = (
 		    SELECT anime_id, ep_key FROM download_queue
 		    WHERE state = 'pending' AND (retry_at IS NULL OR retry_at <= ?)
-		    ORDER BY queued_at, episode
+		    ORDER BY queued_at, anime_id, episode
 		    LIMIT 1)
 		RETURNING anime_id, ep_key, episode, season, info_hash, release_name, attempts`,
 		now.Unix(), now.UnixMilli()).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season, &hash, &name, &q.Attempts)
@@ -120,7 +125,7 @@ func (s *Store) PeekQueued(ctx context.Context) (QueuedDownload, bool, error) {
 	err := s.r.QueryRowContext(ctx, `
 		SELECT anime_id, ep_key, episode, season, coalesce(info_hash, '') FROM download_queue
 		WHERE state = 'pending' AND (retry_at IS NULL OR retry_at <= ?)
-		ORDER BY queued_at, episode
+		ORDER BY queued_at, anime_id, episode
 		LIMIT 1`, time.Now().UnixMilli()).Scan(&q.AnimeID, &q.EpKey, &q.Episode, &q.Season, &q.InfoHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return QueuedDownload{}, false, nil
@@ -131,8 +136,10 @@ func (s *Store) PeekQueued(ctx context.Context) (QueuedDownload, bool, error) {
 func (s *Store) Defer(ctx context.Context, animeID int, epKey string, cause error, at time.Time) error {
 	_, err := s.w.ExecContext(ctx, `
 		UPDATE download_queue
-		SET state = 'pending', started_at = NULL, attempts = attempts + 1, retry_at = ?, error = ?, queued_at = ?
-		WHERE state = 'active' AND anime_id = ? AND ep_key = ?`,
+		SET state = 'pending', started_at = NULL, attempts = attempts + 1, retry_at = ?1, error = ?2,
+		    queued_at = max(?3, coalesce((SELECT max(queued_at) FROM download_queue
+		                                  WHERE NOT (anime_id = ?4 AND ep_key = ?5)), 0) + 1)
+		WHERE state = 'active' AND anime_id = ?4 AND ep_key = ?5`,
 		at.UnixMilli(), cause.Error(), time.Now().Unix(), animeID, epKey)
 	return err
 }
@@ -148,16 +155,31 @@ func (s *Store) NextRetry(ctx context.Context) (time.Time, bool, error) {
 	return time.UnixMilli(*at), true, nil
 }
 
-func (s *Store) FinishQueued(ctx context.Context, animeID int, epKey string, cause error) error {
-	if cause == nil {
-		_, err := s.w.ExecContext(ctx,
-			`DELETE FROM download_queue WHERE anime_id = ? AND ep_key = ?`, animeID, epKey)
+func (s *Store) FinishQueued(ctx context.Context, animeID int, epKey, claimed string, cause error) error {
+	tx, err := s.w.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	_, err := s.w.ExecContext(ctx, `
-		UPDATE download_queue SET state = 'failed', error = ?
-		WHERE anime_id = ? AND ep_key = ?`, cause.Error(), animeID, epKey)
-	return err
+	defer tx.Rollback()
+	if cause == nil {
+		_, err = tx.ExecContext(ctx, `
+			DELETE FROM download_queue WHERE anime_id = ? AND ep_key = ? AND coalesce(info_hash, '') = ?`,
+			animeID, epKey, claimed)
+	} else {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE download_queue SET state = 'failed', error = ?
+			WHERE anime_id = ? AND ep_key = ? AND state = 'active' AND coalesce(info_hash, '') = ?`,
+			cause.Error(), animeID, epKey, claimed)
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE download_queue SET state = 'pending', started_at = NULL
+		WHERE anime_id = ? AND ep_key = ? AND state = 'active'`, animeID, epKey); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) RequeueActive(ctx context.Context, animeID int, epKey string) (bool, error) {
@@ -178,10 +200,6 @@ func (s *Store) ResetActive(ctx context.Context) error {
 		    queued_at = coalesce((SELECT min(queued_at) FROM download_queue), queued_at) - 1
 		WHERE state = 'active'`)
 	return err
-}
-
-func (s *Store) Prioritise(ctx context.Context, animeID int, epKey string) (bool, error) {
-	return s.promote(ctx, animeID, epKey, "pending")
 }
 
 func (s *Store) Promote(ctx context.Context, animeID int, epKey string) (bool, error) {
@@ -213,8 +231,8 @@ func (s *Store) QueuedDownloads(ctx context.Context) ([]QueuedDownload, error) {
 		       a.title_romaji, a.title_english, a.cover_url, q.info_hash, q.release_name, q.attempts, q.retry_at
 		FROM download_queue q
 		LEFT JOIN anime a ON a.id = q.anime_id
-		ORDER BY q.state = 'active' DESC, q.queued_at, q.episode
-		LIMIT 500`)
+		ORDER BY q.state = 'active' DESC, q.queued_at, q.anime_id, q.episode
+		LIMIT 5000`)
 	if err != nil {
 		return nil, err
 	}
@@ -250,15 +268,6 @@ func (s *Store) Dequeue(ctx context.Context, animeID int, epKey string) (int, er
 	}
 
 	res, err := s.w.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
-}
-
-func (s *Store) ClearQueue(ctx context.Context) (int, error) {
-	res, err := s.w.ExecContext(ctx, `DELETE FROM download_queue WHERE state != 'active'`)
 	if err != nil {
 		return 0, err
 	}

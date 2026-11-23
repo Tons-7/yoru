@@ -6,11 +6,8 @@ import (
 	"time"
 )
 
-// readyLead is how near the end the next episode is readied: room for a slow swarm, short enough to be wanted.
 const readyLead = 3 * time.Minute
 
-// maybeReadyNext readies the next episode once, in this one's last minutes, and only once this one's file is
-// whole: readying must never take speed from what is on screen.
 func (s *Server) maybeReadyNext(ctx context.Context, animeID, episode int, position, duration float64) {
 	if s.playback == nil || s.streams == nil || duration <= 0 || duration-position > readyLead.Seconds() {
 		return

@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// readSegment is segment n as the server sends it, whichever way the session stores it.
 func readSegment(s *Session, n int) ([]byte, error) {
 	r, err := s.OpenSegment(n)
 	if err != nil {
@@ -16,7 +15,6 @@ func readSegment(s *Session, n int) ([]byte, error) {
 	return io.ReadAll(r)
 }
 
-// segmentBytes is readSegment failing the test on an error.
 func segmentBytes(t *testing.T, s *Session, n int) []byte {
 	t.Helper()
 	b, err := readSegment(s, n)
@@ -26,7 +24,6 @@ func segmentBytes(t *testing.T, s *Session, n int) []byte {
 	return b
 }
 
-// forgetSegment drops segment n alone, as if no pass had made it yet.
 func forgetSegment(s *Session, n int) {
 	if !s.sliced() {
 		os.Remove(s.SegmentPath(n))

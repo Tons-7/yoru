@@ -1,7 +1,6 @@
 package metainfo
 
 import (
-	"fmt"
 	"net"
 	"strconv"
 
@@ -22,17 +21,13 @@ func (n *Node) UnmarshalBencode(b []byte) (err error) {
 	case string:
 		*n = Node(v)
 	case []any:
-		func() {
-			defer func() {
-				r := recover()
-				if r != nil {
-					err = r.(error)
-				}
-			}()
-			*n = Node(net.JoinHostPort(v[0].(string), strconv.FormatInt(v[1].(int64), 10)))
-		}()
-	default:
-		err = fmt.Errorf("unsupported type: %T", iface)
+		if len(v) == 2 {
+			host, hostOk := v[0].(string)
+			port, portOk := v[1].(int64)
+			if hostOk && portOk {
+				*n = Node(net.JoinHostPort(host, strconv.FormatInt(port, 10)))
+			}
+		}
 	}
 	return
 }

@@ -9,7 +9,7 @@ export function ExitDialog({ stops, onClose }: { stops: ExitStops; onClose: () =
   useModalFocus(panel)
   const { exit, exiting, failed } = useExitYoru()
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-60 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
       <div
         ref={panel}
@@ -44,7 +44,7 @@ export function ExitDialog({ stops, onClose }: { stops: ExitStops; onClose: () =
             ))}
           </ul>
         </div>
-        {failed && <p className="mt-3 text-xs text-recap">{failed}</p>}
+        {failed && <p className="mt-3 text-xs text-red-300">{failed}</p>}
         <div className="mt-5 flex justify-end gap-2">
           <button type="button" onClick={onClose} className={buttonClass('secondary')}>
             Cancel

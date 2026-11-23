@@ -1,12 +1,11 @@
-// Package store owns every SQL statement; others use its types, never database/sql.
 package store
 
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"yoru/internal/db"
@@ -16,24 +15,63 @@ type Store struct {
 	r *sql.DB
 	w *sql.DB
 
-	answers atomic.Int64 // saved since start, to prune now and then
+	answers atomic.Int64
 
-	// onNotify hears each notification added, wherever it came from; set once at startup.
+	settingsMu  sync.RWMutex
+	settingsGen uint64
+	settings    map[string]string
+
 	onNotify func(Notification)
 }
 
-// OnNotification has f hear every notification added from now on, in its own goroutine.
 func (s *Store) OnNotification(f func(Notification)) { s.onNotify = f }
 
 func New(d *db.DB) *Store { return &Store{r: d.R, w: d.W} }
 
-func (s *Store) Setting(ctx context.Context, key string) (string, error) {
-	var v string
-	err := s.r.QueryRowContext(ctx, `SELECT value FROM setting WHERE key = ?`, key).Scan(&v)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+func (s *Store) allSettings(ctx context.Context) (map[string]string, error) {
+	s.settingsMu.RLock()
+	all, gen := s.settings, s.settingsGen
+	s.settingsMu.RUnlock()
+	if all != nil {
+		return all, nil
 	}
-	return v, err
+	rows, err := s.r.QueryContext(ctx, `SELECT key, value FROM setting`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	all = map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		all[k] = v
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.settingsMu.Lock()
+	if s.settingsGen == gen {
+		s.settings = all
+	}
+	s.settingsMu.Unlock()
+	return all, nil
+}
+
+func (s *Store) settingsChanged() {
+	s.settingsMu.Lock()
+	s.settingsGen++
+	s.settings = nil
+	s.settingsMu.Unlock()
+}
+
+func (s *Store) Setting(ctx context.Context, key string) (string, error) {
+	all, err := s.allSettings(ctx)
+	if err != nil {
+		return "", err
+	}
+	return all[key], nil
 }
 
 func (s *Store) SettingInt(ctx context.Context, key string) (int, error) {
@@ -63,50 +101,45 @@ func (s *Store) SetSettings(ctx context.Context, kv map[string]string) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	err = tx.Commit()
+	s.settingsChanged()
+	return err
 }
 
-// EnsureSetting writes value only when the key is unset, returning whatever
-// ends up stored. Two callers racing on first run agree on one result.
 func (s *Store) EnsureSetting(ctx context.Context, key, value string) (string, error) {
-	if _, err := s.w.ExecContext(ctx,
+	_, err := s.w.ExecContext(ctx,
 		`INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING`,
-		key, value); err != nil {
+		key, value)
+	s.settingsChanged()
+	if err != nil {
 		return "", err
 	}
 	return s.Setting(ctx, key)
 }
 
-// Secret reports a credential setting: writable, never read back. The bare suffix covers "client_secret".
 func Secret(key string) bool {
 	switch {
 	case strings.HasSuffix(key, ".token"),
 		strings.HasSuffix(key, "secret"),
-		key == "anilist.state":
+		strings.HasSuffix(key, ".state"),
+		key == "push.vapid_key", key == "skips.submitter":
 		return true
 	}
 	return false
 }
 
-// Settings omits credentials. Use Setting for those, by key.
 func (s *Store) Settings(ctx context.Context) (map[string]string, error) {
-	rows, err := s.r.QueryContext(ctx, `SELECT key, value FROM setting ORDER BY key`)
+	all, err := s.allSettings(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	out := map[string]string{}
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return nil, err
-		}
+	out := make(map[string]string, len(all))
+	for k, v := range all {
 		if !Secret(k) {
 			out[k] = v
 		}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) CountSettings(ctx context.Context) (int, error) {

@@ -15,7 +15,6 @@ import (
 	"yoru/internal/store"
 )
 
-// trackers is one fake for both: AniList's GraphQL and MAL's REST, recording what each was asked.
 type trackers struct {
 	mu        sync.Mutex
 	asked     []string
@@ -84,7 +83,6 @@ func onList(t *testing.T, st *store.Store) bool {
 	return e.AnimeID != 0
 }
 
-// Removing a show deletes its AniList entry by MediaList id, then MAL's by MAL id, then the row here.
 func TestRemoveTakesTheShowOffEveryList(t *testing.T) {
 	f := &trackers{}
 	s, st := removeSetup(t, f)
@@ -101,7 +99,6 @@ func TestRemoveTakesTheShowOffEveryList(t *testing.T) {
 	}
 }
 
-// A tracker failing leaves the show listed everywhere, so the next sync can't bring it back half-removed.
 func TestRemoveKeepsTheShowWhenAniListFails(t *testing.T) {
 	f := &trackers{alFails: true}
 	s, st := removeSetup(t, f)
@@ -119,7 +116,6 @@ func TestRemoveKeepsTheShowWhenAniListFails(t *testing.T) {
 	}
 }
 
-// An entry a tracker no longer has is already where removal wants it.
 func TestRemoveTreatsAMissingMALEntryAsDone(t *testing.T) {
 	f := &trackers{malStatus: http.StatusNotFound}
 	s, st := removeSetup(t, f)

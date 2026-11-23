@@ -12,8 +12,6 @@ import (
 	"yoru/internal/store"
 )
 
-// Titles most exposed to the one-word and sequel problems, against the live
-// indexers. Opt-in: YORU_LIVE=1 go test ./internal/library -run Live.
 func TestLiveMatchingOnExposedTitles(t *testing.T) {
 	if os.Getenv("YORU_LIVE") == "" {
 		t.Skip("set YORU_LIVE=1 to search the live indexers")
@@ -78,6 +76,3 @@ func TestLiveMatchingOnExposedTitles(t *testing.T) {
 		})
 	}
 }
-
-//go:fix inline
-func str(s string) *string { return new(s) }

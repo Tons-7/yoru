@@ -22,13 +22,10 @@ import (
 	"yoru/internal/bt/storage"
 )
 
-// Ensure that no race exists between sending a bitfield, and a subsequent
-// Have that would potentially alter it.
 func TestSendBitfieldThenHave(t *testing.T) {
 	cl := newTestingClient(t)
 	c := cl.newConnection(nil, newConnectionOpts{network: "io.Pipe"})
 	c.setTorrent(cl.newTorrentForTesting())
-	// I think code to handle zero size, no-name torrents is missing. It should be fine to a point.
 	err := c.t.setInfoUnlocked(&metainfo.Info{
 		Pieces:      make([]byte, metainfo.HashSize*3),
 		Name:        "dummy",
@@ -37,12 +34,11 @@ func TestSendBitfieldThenHave(t *testing.T) {
 	})
 	qt.Assert(t, qt.IsNil(err))
 	r, w := io.Pipe()
-	// c.r = r
 	c.w = w
 	c.startMessageWriter()
 	c.locker().Lock()
 	c.t._completedPieces.Add(1)
-	c.postBitfield( /*[]bool{false, true, false}*/ )
+	c.postBitfield()
 	c.locker().Unlock()
 	c.locker().Lock()
 	c.have(2)
@@ -50,13 +46,10 @@ func TestSendBitfieldThenHave(t *testing.T) {
 	b := make([]byte, 15)
 	n, err := io.ReadFull(r, b)
 	c.locker().Lock()
-	// This will cause connection.writer to terminate.
 	c.closed.Set()
 	c.locker().Unlock()
 	require.NoError(t, err)
 	require.EqualValues(t, 15, n)
-	// Here we see that the bitfield doesn't have piece 2 set, as that should
-	// arrive in the following Have message.
 	require.EqualValues(t, "\x00\x00\x00\x02\x05@\x00\x00\x00\x05\x04\x00\x00\x00\x02", string(b))
 }
 
@@ -119,14 +112,11 @@ func BenchmarkConnectionMainReadLoop(b *testing.B) {
 		Length:      1 << 20,
 		PieceLength: 1 << 20,
 	}))
-	//t.storage = &storage.Torrent{TorrentImpl: storage.TorrentImpl{Piece: ts.Piece, Close: ts.Close}}
-	//t.onSetInfo()
 	t._pendingPieces.Add(0)
 	r, w := net.Pipe()
 	b.Logf("pipe reader remote addr: %v", r.RemoteAddr())
 	cn := cl.newConnection(r, newConnectionOpts{
-		outgoing: true,
-		// TODO: This is a hack to give the pipe a bannable remote address.
+		outgoing:   true,
 		remoteAddr: netip.AddrPortFrom(netip.AddrFrom4([4]byte{1, 2, 3, 4}), 1234),
 		network:    r.RemoteAddr().Network(),
 		connString: regularNetConnPeerConnConnString(r),
@@ -150,7 +140,6 @@ func BenchmarkConnectionMainReadLoop(b *testing.B) {
 			Begin: pp.Integer(chunkSize) * pp.Integer(ri),
 		}.MustMarshalBinary())
 	})
-	// errgroup can't handle this pattern...
 	allErrors := make(chan error, 2)
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -165,7 +154,6 @@ func BenchmarkConnectionMainReadLoop(b *testing.B) {
 	wg.Go(func() {
 		for i := 0; i < b.N; i += 1 {
 			cl.lock()
-			// Written to storage every time, so writeSem is released.
 			t.pendAllChunkSpecs(0)
 			g.MakeMapIfNil(&cn.validReceiveChunks)
 			eachRequestIndex(func(ri RequestIndex) {
@@ -178,7 +166,6 @@ func BenchmarkConnectionMainReadLoop(b *testing.B) {
 				require.NoError(b, err)
 				require.EqualValues(b, len(wb), n)
 			}
-			// Released by a successful write to storage.
 			ts.allChunksWritten.Wait()
 		}
 		if err := w.Close(); err != nil {
@@ -278,7 +265,6 @@ func TestConnPexEvent(t *testing.T) {
 func TestHaveAllThenBitfield(t *testing.T) {
 	cl := newTestingClient(t)
 	tt := cl.newTorrentForTesting()
-	//pc := cl.newConnection(nil, newConnectionOpts{})
 	pc := PeerConn{
 		Peer: Peer{t: tt},
 	}
@@ -299,7 +285,6 @@ func TestHaveAllThenBitfield(t *testing.T) {
 	})))
 	qt.Check(t, qt.Equals(tt.numPieces(), 7))
 	qt.Check(t, qt.DeepEquals(tt.pieceAvailabilityRuns(), []pieceAvailabilityRun{
-		// The bitfield's last element doesn't count: the Torrent has 7 pieces.
 		{2, 0}, {1, 1}, {1, 0}, {2, 1}, {1, 0},
 	}))
 }
@@ -335,8 +320,6 @@ func peerConnForPreferredNetworkDirection(
 func TestPreferredNetworkDirection(t *testing.T) {
 	pc := peerConnForPreferredNetworkDirection
 
-	// Prefer outgoing to lower peer ID
-
 	qt.Check(t,
 		qt.IsFalse(pc(1, 2, true, false, false).hasPreferredNetworkOver(pc(1, 2, false, false, false))),
 	)
@@ -347,15 +330,12 @@ func TestPreferredNetworkDirection(t *testing.T) {
 		qt.IsFalse(pc(2, 1, false, false, false).hasPreferredNetworkOver(pc(2, 1, true, false, false))),
 	)
 
-	// Don't prefer uTP
 	qt.Check(t,
 		qt.IsFalse(pc(1, 2, false, true, false).hasPreferredNetworkOver(pc(1, 2, false, false, false))),
 	)
-	// Prefer IPv6
 	qt.Check(t,
 		qt.IsFalse(pc(1, 2, false, false, false).hasPreferredNetworkOver(pc(1, 2, false, false, true))),
 	)
-	// No difference
 	qt.Check(t,
 		qt.IsFalse(pc(1, 2, false, false, false).hasPreferredNetworkOver(pc(1, 2, false, false, false))),
 	)
@@ -389,7 +369,6 @@ func TestReceiveLargeRequest(t *testing.T) {
 	qt.Check(t, qt.Equals(pc.messageWriter.writeBuffer.Len(), 17))
 }
 
-// A streaming peer asks in reading order, so its requests are read and sent in the order they came.
 func TestPeerRequestsServedInArrivalOrder(t *testing.T) {
 	cl := newTestingClient(t)
 	pc := cl.newConnection(nil, newConnectionOpts{network: "test"})
@@ -408,7 +387,6 @@ func TestPeerRequestsServedInArrivalOrder(t *testing.T) {
 	pc.deletePeerRequest(asked[2])
 	want := append(slices.Clone(asked[:2]), asked[3:]...)
 
-	// Half are read before the rest, as the server keeps ahead of the writer.
 	var read []Request
 	for range 4 {
 		r, _ := pc.oldestUnreadPeerRequest()

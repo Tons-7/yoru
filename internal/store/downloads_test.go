@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// An adopted download and a later play write two rows for one torrent, listed once.
 func TestDownloadStatusListsEachTorrentOnce(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -16,13 +15,11 @@ func TestDownloadStatusListsEachTorrentOnce(t *testing.T) {
 		VALUES ('abc', 1, '[Erai-raws] Sousou no Frieren - 12.mkv', 100, 'live', 1)`); err != nil {
 		t.Fatal(err)
 	}
-	// What adoption writes: a file with no anime.
 	if _, err := s.w.ExecContext(ctx, `
 		INSERT INTO torrent_file (info_hash, file_index, path, size_bytes, selected)
 		VALUES ('abc', 1, 'other.mkv', 100, 1)`); err != nil {
 		t.Fatal(err)
 	}
-	// What playback writes: the same torrent, linked to its episode.
 	if _, err := s.w.ExecContext(ctx, `
 		INSERT INTO torrent_file (info_hash, file_index, path, size_bytes, anime_id, ep_key, selected)
 		VALUES ('abc', 0, 'frieren12.mkv', 100, 154587, '12', 1)`); err != nil {
@@ -36,7 +33,6 @@ func TestDownloadStatusListsEachTorrentOnce(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("got %d rows, want 1 per torrent", len(items))
 	}
-	// The row that knows the show is the one worth showing.
 	if items[0].AnimeID != 154587 || items[0].Episode != "12" {
 		t.Errorf("got anime %d episode %q, want the linked file",
 			items[0].AnimeID, items[0].Episode)
@@ -46,14 +42,11 @@ func TestDownloadStatusListsEachTorrentOnce(t *testing.T) {
 	}
 }
 
-// A release superseded by another for the same episode keeps its torrent row but
-// has its file deselected; it must not linger as an empty duplicate.
 func TestDownloadStatusHidesSupersededRelease(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedCatalogue(t, s, 154587, "FINISHED", 28)
 
-	// The chosen release for episode 12.
 	if _, err := s.w.ExecContext(ctx, `
 		INSERT INTO torrent (info_hash, engine_id, name, total_bytes, state, added_at)
 		VALUES ('chosen', 1, 'Frieren - 12 [good].mkv', 100, 'live', 2)`); err != nil {
@@ -64,7 +57,6 @@ func TestDownloadStatusHidesSupersededRelease(t *testing.T) {
 		VALUES ('chosen', 0, 'good.mkv', 100, 154587, '12', 1)`); err != nil {
 		t.Fatal(err)
 	}
-	// A second release for the same episode, deselected in favour of the chosen one.
 	if _, err := s.w.ExecContext(ctx, `
 		INSERT INTO torrent (info_hash, engine_id, name, total_bytes, state, added_at)
 		VALUES ('superseded', 2, 'Frieren - 12 [other].mkv', 100, 'live', 1)`); err != nil {
@@ -88,8 +80,6 @@ func TestDownloadStatusHidesSupersededRelease(t *testing.T) {
 	}
 }
 
-// A season pack serves several episodes from one torrent. The row must name
-// all of them, in order, and count as playing while any of them is pinned.
 func TestDownloadStatusFoldsASeasonPack(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -125,7 +115,6 @@ func TestDownloadStatusFoldsASeasonPack(t *testing.T) {
 	if !d.Pinned || !d.Kept {
 		t.Errorf("pinned=%v kept=%v, want both from the pack's files", d.Pinned, d.Kept)
 	}
-	// Three 100-byte files: the pack's total is their sum, not one file's size.
 	if d.TotalSize != 300 || d.OnDisk != 120 || d.Percent != 40 {
 		t.Errorf("total=%d onDisk=%d percent=%v", d.TotalSize, d.OnDisk, d.Percent)
 	}

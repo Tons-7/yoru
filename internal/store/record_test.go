@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// torrent_file.anime_id is a foreign key; playing a show the catalogue never
-// imported must still link the download, not fail silently and leave it orphaned.
 func TestRecordTorrentForAnUnknownAnime(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

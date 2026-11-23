@@ -1,5 +1,3 @@
-//go:build !wasm
-
 package bt
 
 import "syscall"

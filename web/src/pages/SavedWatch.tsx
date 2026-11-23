@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Button, Centered, Empty, LinkButton, Spinner } from '../components/ui'
-import { bytes } from '../lib/format'
+import { bytes, cx } from '../lib/format'
 import { asSubLook } from '../player/subLook'
 import { skipMode } from '../player/skipMode'
 import { noteWatched, resumeAt, saveNextAfter, useSaved, useWatched, type SavedEpisode } from '../lib/offline'
@@ -46,7 +46,7 @@ export function SavedWatch({ offline = false }: { offline?: boolean }) {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] px-0 sm:px-6 sm:py-4">
+    <div className="mx-auto w-full max-w-[1600px] px-0 max-sm:pt-[env(safe-area-inset-top)] sm:px-6 sm:py-4">
       <div className="relative bg-black sm:rounded-xl">
         <Player
           key={e.key}
@@ -65,11 +65,11 @@ export function SavedWatch({ offline = false }: { offline?: boolean }) {
           artwork={e.cover}
           onProgress={(position, duration, played, final) => {
             noteWatched(e, position, duration, played, final)
-            if (final && duration > 0 && position / duration >= 0.9) saveNextAfter(e.animeId, e.episode)
+            if (!offline && final && duration > 0 && position / duration >= 0.9) saveNextAfter(e.animeId, e.episode)
           }}
           onEnded={() => {
             setEnded(e.key)
-            saveNextAfter(e.animeId, e.episode)
+            if (!offline) saveNextAfter(e.animeId, e.episode)
           }}
           onResume={() => setEnded(null)}
           onNext={next ? () => go(next) : undefined}
@@ -82,7 +82,13 @@ export function SavedWatch({ offline = false }: { offline?: boolean }) {
         />
       </div>
       <div className="space-y-1 px-3 py-3 sm:px-0">
-        <Link to={`/saved${suffix}`} className="tap relative text-sm text-accent-300 underline-offset-2 hover:underline max-sm:hidden">
+        <Link
+          to={`/saved${suffix}`}
+          className={cx(
+            'tap relative text-sm text-accent-300 underline-offset-2 hover:underline',
+            offline ? 'inline-flex min-h-11 items-center' : 'max-sm:hidden',
+          )}
+        >
           ‹ Downloads
         </Link>
         <h1 className="text-lg font-semibold text-white">{e.title}</h1>
@@ -95,7 +101,6 @@ export function SavedWatch({ offline = false }: { offline?: boolean }) {
   )
 }
 
-// As the watch page reads them.
 function lookFrom(e: SavedEpisode) {
   const p = e.prefs
   const flag = (k: string) => p[k] === 'true'
@@ -104,7 +109,6 @@ function lookFrom(e: SavedEpisode) {
     const parsed = JSON.parse(p['subtitle.languages'] || '["en"]') as unknown
     if (Array.isArray(parsed) && parsed.length > 0) subLanguages = parsed as string[]
   } catch {
-    // English.
   }
   return {
     subLanguages,
@@ -125,14 +129,24 @@ function lookFrom(e: SavedEpisode) {
 
 function NextUp({ next, onGo, onCancel }: { next: SavedEpisode; onGo: () => void; onCancel: () => void }) {
   const [left, setLeft] = useState(5)
+  const goRef = useRef(onGo)
+  useLayoutEffect(() => {
+    goRef.current = onGo
+  })
   useEffect(() => {
-    if (left <= 0) {
-      onGo()
-      return
-    }
-    const t = window.setTimeout(() => setLeft((n) => n - 1), 1000)
-    return () => window.clearTimeout(t)
-  }, [left, onGo])
+    const deadline = Date.now() + 5000
+    let fired = false
+    const id = window.setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+      setLeft(remaining)
+      if (remaining === 0 && !fired) {
+        fired = true
+        window.clearInterval(id)
+        goRef.current()
+      }
+    }, 250)
+    return () => window.clearInterval(id)
+  }, [])
   return (
     <div className="absolute right-4 bottom-20 z-20 flex flex-wrap items-center gap-2 rounded-xl bg-base-900/90 p-3 ring-1 ring-white/10">
       <p className="text-sm text-base-100">

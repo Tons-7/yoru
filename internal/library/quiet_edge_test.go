@@ -20,8 +20,6 @@ type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// checkingEngine answers in memory, a torrent whose check never ends; synctest's clock moves only while
-// every goroutine waits on it, which a real socket never counts as.
 func checkingEngine(polls *atomic.Int32) http.RoundTripper {
 	return roundTrip(func(r *http.Request) (*http.Response, error) {
 		body := "{}"
@@ -54,8 +52,6 @@ func quietDownloader(t *testing.T, engine http.RoundTripper) *Downloader {
 	return NewDownloader(st, NewPrefetcher(st, nil, tc, discard()), nil, discard())
 }
 
-// A torrent whose check never ends must not keep the startup pass polling for good: the first pass, then one
-// a recheck apart until the deadline, then none.
 func TestQuietGivesUpAfterTheDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var polls atomic.Int32

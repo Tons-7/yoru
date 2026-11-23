@@ -26,7 +26,6 @@ func TestRunsOnStartAndRecordsSuccess(t *testing.T) {
 	ctx := t.Context()
 	s.Start(ctx)
 
-	// The run is recorded after the job returns, so wait on the status itself.
 	waitFor(t, func() bool { return runs.Load() == 1 && s.Status()[0].Runs == 1 })
 
 	st := s.Status()[0]
@@ -59,7 +58,6 @@ func TestFailureIsRecordedNotFatal(t *testing.T) {
 	}
 }
 
-// One job panicking must not take the process down with it.
 func TestPanicIsContained(t *testing.T) {
 	s := newScheduler()
 	s.Add(Job{
@@ -76,7 +74,6 @@ func TestPanicIsContained(t *testing.T) {
 	}
 }
 
-// A slow job must not be started again while it is still running.
 func TestNoOverlappingRuns(t *testing.T) {
 	s := newScheduler()
 	var concurrent, peak atomic.Int32
@@ -131,7 +128,6 @@ func TestTriggerRunsImmediately(t *testing.T) {
 	}
 }
 
-// Run now must say so when nothing ran, and must not be cancelled with the request that asked.
 func TestTriggerWhileRunningSaysSo(t *testing.T) {
 	s := newScheduler()
 	release := make(chan struct{})
@@ -157,7 +153,6 @@ func TestTriggerWhileRunningSaysSo(t *testing.T) {
 	}
 }
 
-// A manual success clears the failure count, or a recovered job stays backed off for hours.
 func TestAManualSuccessResetsBackoff(t *testing.T) {
 	s := newScheduler()
 	var fail atomic.Bool
@@ -197,7 +192,6 @@ func TestAManualSuccessResetsBackoff(t *testing.T) {
 	t.Fatal("the manual run never finished")
 }
 
-// A persistently broken job should stop hammering whatever it depends on.
 func TestBackoffGrowsAndIsCapped(t *testing.T) {
 	base := time.Minute
 
@@ -235,7 +229,6 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 }
 
-// A failing daily job waits at least its own day: the cap must not make it run four times as often.
 func TestBackoffNeverGoesUnderTheInterval(t *testing.T) {
 	if got := backoff(24*time.Hour, 1); got != 24*time.Hour {
 		t.Fatalf("backoff = %s, want the job's own interval", got)

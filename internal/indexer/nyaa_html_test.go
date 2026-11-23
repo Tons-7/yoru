@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-// A trimmed copy of Nyaa's listing markup: two anchors in the title cell for a
-// torrent with comments, a colour-coded row class, and a data-timestamp date.
 const listingHTML = `<!DOCTYPE html><html><body>
 <table class="table table-bordered table-hover table-striped torrent-list">
 <thead><tr><th>Category</th><th>Name</th><th>Link</th><th>Size</th><th>Date</th><th>S</th><th>L</th><th>C</th></tr></thead>
@@ -66,7 +64,6 @@ func TestSearchUsesSortedListing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Sorting by seeders is the point: the RSS feed can't, so old shows got only recent batches.
 	if got.Get("s") != "seeders" || got.Get("o") != "desc" {
 		t.Errorf("sort = %q/%q, want seeders/desc", got.Get("s"), got.Get("o"))
 	}
@@ -77,7 +74,6 @@ func TestSearchUsesSortedListing(t *testing.T) {
 		t.Errorf("query = %q filter = %q", got.Get("q"), got.Get("f"))
 	}
 
-	// The third row has no magnet and cannot be downloaded.
 	if len(results) != 2 {
 		t.Fatalf("got %d results, want 2", len(results))
 	}
@@ -113,22 +109,6 @@ func TestSearchUsesSortedListing(t *testing.T) {
 	}
 	if results[1].Trusted {
 		t.Error("a remake is not trusted")
-	}
-}
-
-func TestSearchWithoutQueryUsesFeed(t *testing.T) {
-	var page string
-	n := testNyaa(t, func(w http.ResponseWriter, r *http.Request) {
-		page = r.URL.Query().Get("page")
-		io.WriteString(w, feedXML)
-	})
-
-	// No search term means "what is new", which is what the feed is for.
-	if _, err := n.Search(context.Background(), Query{}); err != nil {
-		t.Fatal(err)
-	}
-	if page != "rss" {
-		t.Errorf("page = %q, want the rss feed for an empty query", page)
 	}
 }
 
@@ -169,7 +149,6 @@ func TestSearchHTMLHandlesEmptyAndBrokenPages(t *testing.T) {
 		}
 	})
 
-	// Rows but none readable is a changed layout, surfaced, not "no release" for every show.
 	t.Run("unrecognised rows", func(t *testing.T) {
 		n := testNyaa(t, func(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, `<table class="torrent-list"><tbody><tr class="x"><td>`)
@@ -189,7 +168,6 @@ func TestInfoHashFromMagnet(t *testing.T) {
 		"magnet:?xt=urn:btih:" + strings.Repeat("g", 40):            "",
 		"magnet:?dn=nothing":                                        "",
 		"":                                                          "",
-		// TokyoTosho writes base32, which has to come back as hex.
 		"magnet:?xt=urn:btih:OALRUVZ3XR6CGN6JHMX3A7RWFQPA4T35&tr=x": "70171a573bbc7c2337c93b2fb07e362c1e0e4f7d",
 		"magnet:?xt=urn:btih:oalruvz3xr6cgn6jhmx3a7rwfqpa4t35":      "70171a573bbc7c2337c93b2fb07e362c1e0e4f7d",
 		"magnet:?xt=urn:btih:11111111111111111111111111111111":      "",

@@ -6,7 +6,7 @@ import { personName } from '../lib/format'
 import { realImage } from '../lib/people'
 import { usePrefs } from '../lib/queries'
 import { Rail } from './Rail'
-import { Skeleton } from './ui'
+import { Badge, Button, Skeleton } from './ui'
 
 export interface Voice {
   id?: number
@@ -42,7 +42,7 @@ export function CharacterRail({
   limit?: number
   title?: string
 }) {
-  const { data, isPending } = useCharacters(animeId)
+  const { data, isPending, isError, refetch, isFetching } = useCharacters(animeId)
   const prefs = usePrefs(animeId)
   const [expanded, setExpanded] = useState(false)
 
@@ -62,6 +62,18 @@ export function CharacterRail({
         {Array.from({ length: 16 }, (_, i) => (
           <Skeleton key={i} className="h-[174px] w-[116px] shrink-0 rounded-card" />
         ))}
+      </Rail>
+    )
+  }
+  if (isError && cast.length === 0) {
+    return (
+      <Rail title={title}>
+        <p className="flex items-center gap-3 text-sm text-red-300">
+          Couldn't load the cast.
+          <Button size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            {isFetching ? 'Trying…' : 'Retry'}
+          </Button>
+        </p>
       </Rail>
     )
   }
@@ -102,8 +114,8 @@ export function CharacterRail({
                 )}
               </Link>
               {c.role?.toUpperCase() === 'MAIN' && (
-                <span className="pointer-events-none absolute top-1.5 left-1.5 rounded-full bg-base-950/85 px-1.5 py-0.5 text-xs font-semibold text-base-100 backdrop-blur-sm">
-                  Main
+                <span className="pointer-events-none absolute top-1.5 left-1.5">
+                  <Badge tone="overlay">Main</Badge>
                 </span>
               )}
               {realImage(voice?.image) && voice?.id && (

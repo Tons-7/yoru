@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"yoru/internal/config"
 	"yoru/internal/disk"
 	"yoru/internal/library"
 	"yoru/internal/parse"
@@ -81,9 +82,16 @@ func (s *Server) downloadRelease(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "queue download", err)
 		return
 	}
-	if _, err := s.downloader.Restart(ctx, body.AnimeID, epKey); err != nil {
+	moved, err := s.downloader.Restart(ctx, body.AnimeID, epKey)
+	if err != nil {
 		s.fail(w, "restart download", err)
 		return
+	}
+	if !moved {
+		if err := s.store.EnqueueRelease(ctx, body.AnimeID, body.Season, body.Episode, hash, strings.TrimSpace(body.Title)); err != nil {
+			s.fail(w, "queue download", err)
+			return
+		}
 	}
 	s.downloader.Wake()
 	send(w, http.StatusAccepted, map[string]any{"queued": true, "animeId": body.AnimeID, "episode": body.Episode, "infoHash": hash})
@@ -373,6 +381,9 @@ func (s *Server) setFilePaused(w http.ResponseWriter, r *http.Request, paused bo
 			s.fail(w, "resume episode", err)
 			return
 		}
+		if err := s.store.SetHandResumed(ctx, hash, true); err != nil {
+			s.log.Debug("remember a hand resume", "err", err)
+		}
 		if err := s.cache.Resume(ctx, hash); err != nil {
 			s.log.Warn("resume the pack", "err", err)
 		}
@@ -392,13 +403,17 @@ func (s *Server) removeFile(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "torrent engine unavailable"})
 		return
 	}
+	if s.cache.FilePlaying(r.Context(), hash, index) {
+		send(w, http.StatusConflict, map[string]any{"error": "That episode is playing right now."})
+		return
+	}
 	episodes, _ := s.store.ReleaseEpisodes(r.Context(), hash, index)
+	s.downloader.Forget(r.Context(), hash, index, episodes)
 	freed, err := s.cache.RemoveFile(r.Context(), hash, index)
 	if err != nil {
 		s.fail(w, "remove episode", err)
 		return
 	}
-	s.downloader.Forget(r.Context(), hash, index, episodes)
 	s.downloader.PruneHandPaused(r.Context())
 	send(w, http.StatusOK, map[string]any{"removed": hash, "fileIndex": index, "freedBytes": freed})
 }
@@ -491,6 +506,7 @@ func (s *Server) removeDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	episodes, _ := s.store.ReleaseEpisodes(r.Context(), hash, -1)
+	_ = s.store.SetHandResumed(r.Context(), hash, false)
 	freed, err := s.cache.Remove(r.Context(), hash)
 	if err != nil {
 		s.fail(w, "remove download", err)
@@ -522,11 +538,12 @@ func (s *Server) setDownloadRunning(w http.ResponseWriter, r *http.Request, run 
 	ctx := r.Context()
 	if !run {
 		s.log.Info("download paused from the downloads list", "hash", hash)
+		s.downloader.SetUserPaused(hash, true)
 		if err := s.cache.Pause(ctx, hash); err != nil {
+			s.downloader.SetUserPaused(hash, false)
 			s.fail(w, "pause download", err)
 			return
 		}
-		s.downloader.SetUserPaused(hash, true)
 		if _, err := s.store.SetReleaseQueuedPaused(ctx, hash, -1, true); err != nil {
 			s.log.Warn("keep paused episodes in line", "err", err)
 		}
@@ -540,6 +557,9 @@ func (s *Server) setDownloadRunning(w http.ResponseWriter, r *http.Request, run 
 		return
 	}
 	if inLine == 0 {
+		if err := s.store.SetHandResumed(ctx, hash, true); err != nil {
+			s.log.Debug("remember a hand resume", "err", err)
+		}
 		if err := s.cache.Resume(ctx, hash); err != nil {
 			s.fail(w, "resume download", err)
 			return
@@ -661,4 +681,25 @@ func (s *Server) clearDownloads(w http.ResponseWriter, r *http.Request) {
 	}
 	s.downloader.PruneHandPaused(r.Context())
 	send(w, http.StatusOK, map[string]any{"removed": removed, "freedBytes": freed})
+}
+
+func (s *Server) revealDownload(w http.ResponseWriter, r *http.Request) {
+	if s.cache == nil {
+		send(w, http.StatusServiceUnavailable, map[string]any{"error": "downloads aren't available"})
+		return
+	}
+	path, ok, err := s.cache.Locate(r.Context(), strings.ToLower(r.PathValue("hash")))
+	if err != nil {
+		s.fail(w, "find download", err)
+		return
+	}
+	if !ok {
+		send(w, http.StatusNotFound, map[string]any{"error": "The files aren't on this computer any more."})
+		return
+	}
+	if err := config.Reveal(path); err != nil {
+		s.fail(w, "show in folder", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

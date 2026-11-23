@@ -29,10 +29,18 @@ func (s *Server) random(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, id := range ids {
-			if body, ok, _ := s.animeCard(r, id); ok {
-				send(w, http.StatusOK, body)
-				return
+			if id <= 0 {
+				continue
 			}
+			body, ok, _ := s.animeCard(r, id)
+			if !ok {
+				continue
+			}
+			if adult, err := s.store.IsAdult(r.Context(), id); err != nil || adult {
+				continue
+			}
+			send(w, http.StatusOK, body)
+			return
 		}
 	}
 

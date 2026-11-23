@@ -159,7 +159,7 @@ func TestCatchUpIsSpreadOverPolls(t *testing.T) {
 	var releases []indexer.Torrent
 	for ep := 4; ep <= 11; ep++ {
 		if ep == 6 {
-			continue // no site has episode 6
+			continue
 		}
 		releases = append(releases, release(fmt.Sprintf("%040d", ep), fmt.Sprintf("[Best] Show - %02d [1080p].mkv", ep), 500))
 	}
@@ -317,7 +317,7 @@ func TestADelayedEpisodeIsAnnounced(t *testing.T) {
 			delays = append(delays, n)
 		}
 	}
-	if len(delays) != 1 || delays[0].Title != "Show · Episode 5 delayed" || !strings.HasPrefix(delays[0].Body, "Now ") {
+	if len(delays) != 1 || delays[0].Title != "Show · Episode 5 delayed" || delays[0].Body != "A new date is set" || delays[0].Payload["nowAt"] == nil {
 		t.Fatalf("delay notifications = %+v, want one naming the new date", delays)
 	}
 	if d, ok := st.ShowDelay(ctx, 1); !ok || d.Episode != 5 || d.WasAt != soon.Unix() {

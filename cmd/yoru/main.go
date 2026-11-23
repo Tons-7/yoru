@@ -1,6 +1,6 @@
 package main
 
-//go:generate go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64,arm64 --manifest none --icon ../../web/public/icon-512.png --out rsrc
+//go:generate go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64,arm64 --manifest gui --icon ../../web/public/icon-512.png --out rsrc
 
 import (
 	"bytes"
@@ -17,12 +17,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"yoru/internal/anilist"
 	"yoru/internal/certs"
@@ -44,6 +47,7 @@ import (
 	"yoru/internal/server"
 	"yoru/internal/shortcut"
 	"yoru/internal/store"
+	"yoru/internal/torrent"
 	"yoru/internal/transcode"
 	"yoru/internal/tray"
 	"yoru/internal/tunnel"
@@ -54,21 +58,13 @@ func windowWanted() bool {
 	if v := strings.ToLower(config.Env("NO_WINDOW")); v == "1" || v == "true" {
 		return false
 	}
-	for _, arg := range os.Args[1:] {
-		if arg == "--no-window" || arg == "-no-window" {
-			return false
-		}
-	}
-	return true
+	return !slices.ContainsFunc(os.Args[1:], func(arg string) bool {
+		return arg == "--no-window" || arg == "-no-window"
+	})
 }
 
 func startedInTray() bool {
-	for _, arg := range os.Args[1:] {
-		if arg == shortcut.TrayArg {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(os.Args[1:], shortcut.TrayArg)
 }
 
 func interval(st *store.Store, key string, fallback time.Duration) time.Duration {
@@ -140,15 +136,23 @@ func newMAL(ctx context.Context, cfg config.Config, st *store.Store, log *slog.L
 	if id == "" {
 		id, secret = cfg.MAL.ClientID, cfg.MAL.ClientSecret
 	}
+	if id == "" && mal.YoruClientID != "" && cfg.MALRedirectURI() == mal.YoruRedirectURI {
+		id, secret = mal.YoruClientID, ""
+	}
 
 	client := mal.New(log,
 		mal.WithCredentials(id, secret),
 		mal.OnToken(func(t mal.Token) {
-			err := st.SetSettings(context.Background(), map[string]string{
+			values := map[string]string{
 				"mal.token":         t.Access,
 				"mal.refresh.token": t.Refresh,
 				"mal.expires_at":    strconv.FormatInt(t.Expires.Unix(), 10),
-			})
+			}
+			err := st.SetSettings(context.Background(), values)
+			for try := 1; err != nil && try < 4; try++ {
+				time.Sleep(time.Duration(try) * 250 * time.Millisecond)
+				err = st.SetSettings(context.Background(), values)
+			}
 			if err != nil {
 				log.Warn("persist mal token", "err", err)
 			}
@@ -176,9 +180,10 @@ func newMAL(ctx context.Context, cfg config.Config, st *store.Store, log *slog.L
 }
 
 func main() {
-	update.WaitFor(os.Args[1:], 30*time.Second)
+	update.WaitFor(os.Args[1:], time.Minute)
 	out := &logSink{}
 	log := slog.New(slog.NewTextHandler(out, nil))
+	slog.SetDefault(log)
 	if err := run(log, out); err != nil {
 		log.Error("fatal", "err", err)
 		out.keepEarly(config.DefaultDataDir())
@@ -192,13 +197,33 @@ type logSink struct {
 	file   *os.File
 	early  bytes.Buffer
 	closed bool
+	wrote  int64
+}
+
+const logFileLimit = 32 << 20
+
+func (s *logSink) rotate() {
+	path := s.file.Name()
+	s.file.Close()
+	s.file, s.wrote = nil, 0
+	os.Rename(path, path+".1")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		s.closed = true
+		return
+	}
+	s.file = f
+	debug.SetCrashOutput(f, debug.CrashOptions{})
 }
 
 func (s *logSink) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	switch {
 	case s.file != nil:
-		s.file.Write(p)
+		n, _ := s.file.Write(p)
+		if s.wrote += int64(n); s.wrote >= logFileLimit {
+			s.rotate()
+		}
 	case !s.closed:
 		s.early.Write(p)
 	}
@@ -225,6 +250,7 @@ func (s *logSink) open(dir string) {
 	f.Write(s.early.Bytes())
 	s.early = bytes.Buffer{}
 	s.file = f
+	debug.SetCrashOutput(f, debug.CrashOptions{})
 }
 
 func (s *logSink) keepEarly(dir string) {
@@ -251,16 +277,17 @@ func run(log *slog.Logger, out *logSink) error {
 	defer close(stopped)
 
 	exe, _ := os.Executable()
-	serving := false
+	serving, locked := false, false
 	if exe != "" && update.Handover(os.Args[1:]) {
 		defer func() {
-			if serving {
+			if serving || !locked {
 				return
 			}
 			if err := update.Rollback(exe); err != nil {
 				log.Error("restore the previous version", "err", err)
 				return
 			}
+			update.RememberFailed(exe)
 			log.Warn("this version failed to start; the previous one is back")
 			if err := update.Relaunch(exe); err != nil {
 				log.Error("start the previous version", "err", err)
@@ -275,8 +302,18 @@ func run(log *slog.Logger, out *logSink) error {
 		return err
 	}
 
-	showRunning := func() error {
-		if !yoruAnswers(cfg.LocalURL()) {
+	showRunning := func(wait time.Duration) error {
+		deadline := time.Now().Add(wait)
+		answers := yoruAnswers(cfg.LocalURL())
+		for !answers && time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+			}
+			answers = yoruAnswers(cfg.LocalURL())
+		}
+		if !answers {
 			return fmt.Errorf("Yoru is already running on this data folder, or another program holds %s", cfg.Addr)
 		}
 		log.Info("Yoru is already running; showing it", "url", cfg.LocalURL())
@@ -287,13 +324,19 @@ func run(log *slog.Logger, out *logSink) error {
 	}
 	unlock, err := proc.Lock(cfg.LockPath())
 	if err != nil {
-		return showRunning()
+		return showRunning(time.Minute)
 	}
+	locked = true
 	defer unlock()
 	out.open(cfg.DataDir())
+	unlockCache, err := lockCache(cfg.CacheDir)
+	if err != nil {
+		return err
+	}
+	defer unlockCache()
 	claim, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
-		return showRunning()
+		return showRunning(0)
 	}
 	defer func() {
 		if !serving {
@@ -304,8 +347,19 @@ func run(log *slog.Logger, out *logSink) error {
 	if err := proc.KillChildrenOnExit(); err != nil {
 		log.Warn("helpers may outlive an abrupt exit", "err", err)
 	}
-	warnSlowDisk(log, cfg.BinDir, cfg.CacheDir)
+	if keys := cfg.UnknownKeys(); len(keys) > 0 {
+		log.Warn("config.toml lines ignored", "keys", keys)
+	}
+	if err := cfg.UnwrittenConfig(); err != nil {
+		log.Warn("config.toml could not be written; using defaults, with downloads and tools in the data folder", "err", err)
+	}
+	warnSlowDisk(log, cfg.BinDir, cfg.CacheDir, cfg.DataDir())
 
+	if restored, err := db.ApplyPendingRestore(cfg.DatabasePath()); err != nil {
+		log.Error("restore the backup", "err", err)
+	} else if restored {
+		log.Info("restored a backup; the previous database is kept beside it", "path", cfg.DatabasePath()+".before-restore")
+	}
 	conn, err := db.Open(cfg.DatabasePath())
 	if err != nil {
 		return err
@@ -318,6 +372,7 @@ func run(log *slog.Logger, out *logSink) error {
 	log.Info("database ready", "path", cfg.DatabasePath())
 
 	st := store.New(conn)
+	go st.PruneOldAnswers(ctx)
 	var alOpts []anilist.Option
 	if override := config.Env("ANILIST_API"); override != "" {
 		alOpts = append(alOpts, anilist.WithEndpoint(override))
@@ -404,7 +459,7 @@ func run(log *slog.Logger, out *logSink) error {
 	}
 	defer torrentEngine.Stop()
 
-	torrents := torrentEngine.Client()
+	torrents := torrentEngine.Client().WithCacheDir(cfg.CacheDir)
 	presence := library.NewPresence(st, log)
 	applyPrefs := func() bool {
 		prefs, err := st.Prefs(ctx, 0)
@@ -433,7 +488,7 @@ func run(log *slog.Logger, out *logSink) error {
 		}()
 	}
 
-	mpv := player.New(cfg.Tool("mpv"), "", log)
+	mpv := player.New(cfg.Tool("mpv"), "", log).WithShaders(filepath.Join(cfg.BinDir, "shaders"))
 	mpv.Warm()
 	vlcBinary := player.ResolveVLC(cfg.VLCPath())
 	if want := cfg.VLCPath(); want != "" && vlcBinary == "" {
@@ -464,7 +519,6 @@ func run(log *slog.Logger, out *logSink) error {
 		log.Warn("clear stale cache pins", "err", err)
 	}
 	downloader.Quiet(ctx)
-	go downloader.Run(ctx)
 
 	watcher.WithDownloader(downloader)
 
@@ -479,18 +533,21 @@ func run(log *slog.Logger, out *logSink) error {
 		WithProtected(filepath.Dir(cfg.ConfigPath()), cfg.DataDir(), cfg.BinDir)
 	playback.WithCache(cache)
 	prefetcher.WithRoom(cache.MakeRoom)
+	go downloader.Run(ctx)
 	scheduler.Add(jobs.Job{
 		Name: "cache-sweep", Every: 2 * time.Minute,
 		Run: func(ctx context.Context) error { _, err := cache.Sweep(ctx); return err },
 	})
 
 	scheduler.Add(jobs.Job{
-		Name: "anilist-sync", Every: interval(st, "sync.poll_seconds", 15*time.Minute),
-		Run: func(ctx context.Context) error { _, err := sync.Run(ctx); return err },
+		Name: "anilist-sync", Every: 15 * time.Minute,
+		Interval: func() time.Duration { return interval(st, "sync.poll_seconds", 15*time.Minute) },
+		Run:      func(ctx context.Context) error { _, err := sync.Run(ctx); return err },
 	})
 	scheduler.Add(jobs.Job{
-		Name: "release-watch", Every: interval(st, "notify.poll_seconds", 30*time.Minute), OnStart: true,
-		Run: func(ctx context.Context) error { _, err := watcher.Poll(ctx); return err },
+		Name: "release-watch", Every: 30 * time.Minute, OnStart: true,
+		Interval: func() time.Duration { return interval(st, "notify.poll_seconds", 30*time.Minute) },
+		Run:      func(ctx context.Context) error { _, err := watcher.Poll(ctx); return err },
 	})
 	scheduler.Add(jobs.Job{
 		Name: "filler-data", Every: 24 * time.Hour, OnStart: true,
@@ -505,13 +562,12 @@ func run(log *slog.Logger, out *logSink) error {
 		Run: func(ctx context.Context) error { _, err := enricher.GroupTiers(ctx, false); return err },
 	})
 	scheduler.Add(jobs.Job{
-		Name: "mal-sync", Every: interval(st, "sync.poll_seconds", 15*time.Minute),
+		Name: "mal-sync", Every: 15 * time.Minute,
+		Interval: func() time.Duration { return interval(st, "sync.poll_seconds", 15*time.Minute) },
 		Run: func(ctx context.Context) error {
-			if _, err := malSync.Run(ctx); err != nil {
-				return err
-			}
-			_, err := malSync.Pull(ctx)
-			return err
+			_, pullErr := malSync.Pull(ctx)
+			_, runErr := malSync.Run(ctx)
+			return errors.Join(pullErr, runErr)
 		},
 	})
 
@@ -610,7 +666,7 @@ func run(log *slog.Logger, out *logSink) error {
 			return mode == "maximized"
 		},
 		Closed: func() {
-			if mode, _ := st.Setting(context.Background(), "window.on_close"); mode == "tray" {
+			if mode, _ := st.Setting(context.Background(), "window.on_close"); mode == "tray" && (!tray.Available || tray.Shown()) {
 				log.Info("window closed; Yoru keeps running in the tray")
 				return
 			}
@@ -648,7 +704,7 @@ func run(log *slog.Logger, out *logSink) error {
 		Updater:    updater,
 		Engine:     torrents,
 		Presence:   presence,
-		Relaunch:   relaunchSelf(exe, cancel),
+		Relaunch:   relaunchSelf(exe, cancel, log),
 		Exit: func() {
 			log.Info("exit chosen in the app")
 			cancel()
@@ -718,17 +774,24 @@ func run(log *slog.Logger, out *logSink) error {
 	api.SetCerts(secure)
 	api.StartDuckDNS(ctx)
 	rooms := tunnel.New(func() string { return cfg.Tool("cloudflared") }, log)
-	defer rooms.Close()
+	defer rooms.Stop()
 	api.SetTunnel(rooms)
 	api.OnRebind(binder.bind)
 
+	var ending atomic.Bool
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
 		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		wait := 5 * time.Second
+		if ending.Load() {
+			wait = time.Second
+		}
+		shutdown, cancel := context.WithTimeout(context.Background(), wait)
 		defer cancel()
-		srv.Shutdown(shutdown)
+		if srv.Shutdown(shutdown) != nil {
+			srv.Close()
+		}
 	}()
 
 	addr := cfg.Addr
@@ -736,9 +799,18 @@ func run(log *slog.Logger, out *logSink) error {
 		addr = server.LANAddr(cfg.Addr)
 	}
 	if err := binder.bind(addr); err != nil {
-		return err
+		if addr == cfg.Addr {
+			return err
+		}
+		log.Warn("network access could not start; this computer only for now", "addr", addr, "err", err)
+		if err := binder.bind(cfg.Addr); err != nil {
+			return err
+		}
 	}
 	serving = true
+	if updater != nil {
+		updater.Serving(ctx)
+	}
 	if exe != "" {
 		update.Cleanup(exe)
 	}
@@ -762,10 +834,20 @@ func run(log *slog.Logger, out *logSink) error {
 			},
 			Ending: func() {
 				log.Info("Windows is ending the session; stopping")
+				ending.Store(true)
 				cancel()
+				saved := make(chan struct{})
+				go func() {
+					torrentEngine.Stop()
+					close(saved)
+				}()
+				select {
+				case <-saved:
+				case <-time.After(3 * time.Second):
+				}
 				select {
 				case <-stopped:
-				case <-time.After(4 * time.Second):
+				case <-time.After(time.Second):
 				}
 			},
 		})
@@ -780,7 +862,12 @@ func run(log *slog.Logger, out *logSink) error {
 
 	<-ctx.Done()
 	<-drained
-	window.Close()
+	if !ending.Load() {
+		if !scheduler.Wait(5 * time.Second) {
+			log.Warn("background jobs still running at exit")
+		}
+		window.Close()
+	}
 	return nil
 }
 
@@ -858,14 +945,16 @@ func (b *binder) takeClaim(addr string) net.Listener {
 	return nil
 }
 
-func relaunchSelf(exe string, cancel context.CancelFunc) func() {
+func relaunchSelf(exe string, cancel context.CancelFunc, log *slog.Logger) func() {
 	if exe == "" {
 		return nil
 	}
 	return func() {
-		if err := update.RelaunchSelf(exe); err == nil {
-			cancel()
+		if err := update.RelaunchSelf(exe); err != nil {
+			log.Error("restart Yoru", "err", err)
+			return
 		}
+		cancel()
 	}
 }
 
@@ -891,6 +980,20 @@ func yoruAnswers(base string) bool {
 		Version string `json:"version"`
 	}
 	return res.StatusCode == http.StatusOK && json.NewDecoder(res.Body).Decode(&body) == nil && body.Version != ""
+}
+
+func lockCache(dir string) (func(), error) {
+	path := filepath.Join(dir, torrent.CacheLockName)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return func() {}, nil
+	}
+	f.Close()
+	unlock, err := proc.Lock(path)
+	if err != nil {
+		return nil, fmt.Errorf("another Yoru is using the cache folder %s", dir)
+	}
+	return unlock, nil
 }
 
 func warnSlowDisk(log *slog.Logger, dirs ...string) {

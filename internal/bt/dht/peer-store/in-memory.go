@@ -15,13 +15,11 @@ import (
 )
 
 type InMemory struct {
-	// This is used for sorting infohashes by distance in WriteDebug.
 	RootId int160.T
 	mu     sync.RWMutex
 	index  map[InfoHash]indexValue
 }
 
-// A uniqueness key for entries to the entry details
 type indexValue = map[string]NodeAndTime
 
 type debugWriterInterface interface {

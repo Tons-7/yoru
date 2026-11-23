@@ -57,3 +57,12 @@ func (s *Server) forgetHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	send(w, http.StatusOK, map[string]any{"removed": removed})
 }
+
+func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
+	stats, err := s.store.Stats(r.Context(), time.Now())
+	if err != nil {
+		s.fail(w, "stats", err)
+		return
+	}
+	send(w, http.StatusOK, stats)
+}

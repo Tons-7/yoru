@@ -9,10 +9,10 @@ import (
 )
 
 const (
-	None      AnnounceEvent = iota
-	Completed               // The local peer just completed the torrent.
-	Started                 // The local peer has just resumed this torrent.
-	Stopped                 // The local peer is leaving the swarm.
+	None AnnounceEvent = iota
+	Completed
+	Started
+	Stopped
 )
 
 type AnnounceEvent int32
@@ -33,7 +33,6 @@ func (me AnnounceEvent) MarshalText() ([]byte, error) {
 var announceEventStrings = []string{"", "completed", "started", "stopped"}
 
 func (e AnnounceEvent) String() string {
-	// See BEP 3, "event". Return a safe default in case event values are not sanitized.
 	if e < 0 || int(e) >= len(announceEventStrings) {
 		return fmt.Sprintf("<unknown announce event %d>", e)
 	}
@@ -44,7 +43,6 @@ func (e AnnounceEvent) String() string {
 	return s
 }
 
-// I think this is necessary for when we convert a type to JSON for logging.
 var _ interface {
 	slog.LogValuer
 	encoding.TextMarshaler
@@ -54,12 +52,10 @@ func (me AnnounceEvent) LogValue() slog.Value {
 	return slog.StringValue(me.String())
 }
 
-// MarshalJSON implements json.Marshaler to ensure AnnounceEvent is serialized as a string in JSON
 func (me AnnounceEvent) MarshalJSON() ([]byte, error) {
 	return json.Marshal(me.String())
 }
 
-// UnmarshalJSON implements json.Unmarshaler to deserialize AnnounceEvent from a string in JSON
 func (me *AnnounceEvent) UnmarshalJSON(data []byte) error {
 	var str string
 	if err := json.Unmarshal(data, &str); err != nil {

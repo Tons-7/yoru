@@ -9,11 +9,9 @@ import (
 	"yoru/internal/torrent"
 )
 
-// Every wait shrunk to milliseconds, so a dead swarm is found and tried again within the test.
 func quickQueue(t *testing.T, retries int) {
 	t.Helper()
 	idle, stall, tries, delay, warm, poll := queueIdle, queueStall, queueRetries, queueRetryDelay, prefetchWarmCap, torrent.AwaitPoll
-	// The wait between tries is long enough for a poll every 20 ms to see the row waiting.
 	queueIdle, queueStall, queueRetries, queueRetryDelay, prefetchWarmCap, torrent.AwaitPoll =
 		20*time.Millisecond, 10*time.Millisecond, retries, 200*time.Millisecond, 60*time.Millisecond, 2*time.Millisecond
 	t.Cleanup(func() {
@@ -21,8 +19,6 @@ func quickQueue(t *testing.T, retries int) {
 	})
 }
 
-// Seeders that answer the handshake and send nothing: the episode is put back in line for a later try,
-// its torrent recorded under the show so the try resumes it, and only the last failure is for good.
 func TestWorkerTriesADeadSwarmAgainBeforeGivingUp(t *testing.T) {
 	quickQueue(t, 2)
 	d, st, engine := workerQueueWith(t, release(otherHash, "[Group] Show - 02 [1080p].mkv", 500))
@@ -49,7 +45,6 @@ func TestWorkerTriesADeadSwarmAgainBeforeGivingUp(t *testing.T) {
 		return q.State == "failed"
 	})
 
-	// The later tries resume the recorded torrent and wait on it, so the last word is a stall.
 	last := seen[len(seen)-1]
 	if !strings.HasPrefix(last, "failed gave up after 3 tries: no peers sent anything") {
 		t.Errorf("final row %q, want it to say it gave up after three tries and why", last)
@@ -84,7 +79,6 @@ func (f *fakeEngine) isPausedHash(hash string) bool {
 	return false
 }
 
-// A stall is said in words: how long nothing came, and how much is on disk.
 func TestWorkerSaysAStallInWords(t *testing.T) {
 	quickQueue(t, 0)
 	d, st, _ := workerQueueWith(t, release(otherHash, "[Group] Show - 02 [1080p].mkv", 500))

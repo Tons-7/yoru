@@ -18,13 +18,11 @@ func listEntryRow(t *testing.T, s *Store, animeID int) (id, progress int, status
 
 func current() *string { s := "CURRENT"; return &s }
 
-// A local row (negative id) for an anime later imported takes AniList's id instead of aborting the sync.
 func TestImportReconcilesALocalEntryOntoItsRealID(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedAnime(t, s, 42)
 
-	// Watched locally, unsynced: negative id, dirty.
 	if _, err := s.MarkWatched(ctx, 42, 3); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +30,6 @@ func TestImportReconcilesALocalEntryOntoItsRealID(t *testing.T) {
 		t.Fatalf("local entry id=%d dirty=%d, want negative and dirty", id, dirty)
 	}
 
-	// A merge import must not lose the unpushed edit, and must not fail.
 	remote := []Entry{{ID: 9001, AnimeID: 42, Status: current(), Progress: 1}}
 	if _, err := s.ImportList(ctx, []Anime{{ID: 42, Romaji: "Show", Synonyms: "[]", Genres: "[]"}}, remote, ImportMerge); err != nil {
 		t.Fatalf("merge import: %v", err)
@@ -41,7 +38,6 @@ func TestImportReconcilesALocalEntryOntoItsRealID(t *testing.T) {
 		t.Errorf("after merge: progress=%d dirty=%d, want the local 3 kept dirty", progress, dirty)
 	}
 
-	// A replace import overwrites the local edit and adopts the real id.
 	if _, err := s.ImportList(ctx, []Anime{{ID: 42, Romaji: "Show", Synonyms: "[]", Genres: "[]"}}, remote, ImportReplace); err != nil {
 		t.Fatalf("replace import: %v", err)
 	}
@@ -50,7 +46,6 @@ func TestImportReconcilesALocalEntryOntoItsRealID(t *testing.T) {
 	}
 }
 
-// AniList returns an entry per custom list, all one MediaList id, which still dedupes.
 func TestImportDedupesRepeatedListEntries(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -72,7 +67,6 @@ func TestImportDedupesRepeatedListEntries(t *testing.T) {
 	}
 }
 
-// A replace import mirrors the AniList list, which can never hold a MAL-only show: those entries stay.
 func TestReplaceImportKeepsMALOnlyEntries(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

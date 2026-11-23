@@ -17,7 +17,6 @@ func TestPrefsFallBackToDefaults(t *testing.T) {
 	if got := p.String("playback.anime4k_mode"); got != "A" {
 		t.Errorf("anime4k mode = %q, want the default", got)
 	}
-	// Everything automatic is opt-in.
 	for _, key := range []string{
 		"playback.autoplay", "playback.autonext",
 		"playback.autoskip_op", "playback.autoskip_ed", "playback.anime4k",
@@ -33,7 +32,6 @@ func TestPrefsFallBackToDefaults(t *testing.T) {
 		t.Errorf("progress threshold = %v", got)
 	}
 
-	// A key the database has never seen must still resolve.
 	if got := p.String("audio.prefer"); got != "sub" {
 		t.Errorf("audio preference = %q", got)
 	}
@@ -56,7 +54,6 @@ func TestSkipModeReadsOldSwitches(t *testing.T) {
 	}
 }
 
-// A per-show override beats the global value, and removing it falls back.
 func TestAnimePrefOverridesGlobal(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -79,7 +76,6 @@ func TestAnimePrefOverridesGlobal(t *testing.T) {
 		t.Errorf("per-show = %q, want C+A", got)
 	}
 
-	// An override on one show must not leak to another.
 	other, _ := s.Prefs(ctx, 999)
 	if got := other.String("playback.anime4k_mode"); got != "B" {
 		t.Errorf("other show = %q, want the global value", got)
@@ -132,7 +128,6 @@ func TestBookmarks(t *testing.T) {
 		t.Errorf("total = %d, want 1", got.Total)
 	}
 
-	// Unfavouriting removes it from the list without deleting the row.
 	if err := s.SetBookmark(ctx, 1, Bookmark{Favourite: false}); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +136,6 @@ func TestBookmarks(t *testing.T) {
 	}
 }
 
-// A note saved on blur and a Favourite click landing together must both stick.
 func TestPatchBookmarkKeepsUntouchedFields(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -190,7 +184,6 @@ func TestRecentlyWatchedOrdersByLastPlayed(t *testing.T) {
 	}
 }
 
-// A page must report whether more rows exist without the caller fetching them.
 func TestPaginationReportsMore(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -227,14 +220,12 @@ func TestPaginationReportsMore(t *testing.T) {
 		t.Error("the final page should not report more")
 	}
 
-	// Past the end is empty, not an error.
 	beyond, err := s.Bookmarks(ctx, Paging{Page: 99, PerPage: 2})
 	if err != nil || len(beyond.Items) != 0 {
 		t.Fatalf("beyond the end: %d items, err %v", len(beyond.Items), err)
 	}
 }
 
-// Local state references anime(id), yet following a corpus-only show works.
 func TestLocalStateWorksForCorpusOnlyAnime(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -260,7 +251,6 @@ func TestLocalStateWorksForCorpusOnlyAnime(t *testing.T) {
 		t.Fatalf("override = %q, want C+A", got)
 	}
 
-	// The materialised row should carry the real title, not a placeholder.
 	var title string
 	if err := s.r.QueryRowContext(ctx,
 		`SELECT title_romaji FROM anime WHERE id = 154587`).Scan(&title); err != nil {
@@ -275,7 +265,6 @@ func TestLocalStateWorksForCorpusOnlyAnime(t *testing.T) {
 	}
 }
 
-// A row already imported from AniList must not be overwritten by the sparse corpus version.
 func TestEnsureAnimeDoesNotClobberImportedRow(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

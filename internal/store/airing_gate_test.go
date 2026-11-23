@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-// Only the next episode's air time is known: once it passes, before the row is refreshed, the one
-// after must still count as unaired, or a stray "07" gets announced days early.
 func TestAiredKnowsOnlyTheNextEpisode(t *testing.T) {
 	const next, at = 7, int64(1_000_000)
 	for _, tt := range []struct {
@@ -14,11 +12,11 @@ func TestAiredKnowsOnlyTheNextEpisode(t *testing.T) {
 		now     int64
 		want    bool
 	}{
-		{6, at - 1, true},  // already broadcast
-		{7, at - 1, false}, // not yet
-		{7, at, true},      // just now
+		{6, at - 1, true},
+		{7, at - 1, false},
+		{7, at, true},
 		{8, at + 3600, false},
-		{8, at + 7*86400, false}, // however stale the row
+		{8, at + 7*86400, false},
 	} {
 		if got := aired(tt.episode, next, at, tt.now); got != tt.want {
 			t.Errorf("aired(%d) at %+d = %v, want %v", tt.episode, tt.now-at, got, tt.want)
@@ -29,7 +27,6 @@ func TestAiredKnowsOnlyTheNextEpisode(t *testing.T) {
 	}
 }
 
-// The one episode that is news: the last to air, or the finale of a show that ended this week.
 func TestLatestIsTheEpisodeThatAiredLast(t *testing.T) {
 	now := time.Now()
 	day := func(d int) string { return now.AddDate(0, 0, d).Format("2006-01-02") }
@@ -45,6 +42,8 @@ func TestLatestIsTheEpisodeThatAiredLast(t *testing.T) {
 		{"ended yesterday", Follow{Episodes: 12, EndDate: day(-1)}, 12},
 		{"ended today", Follow{Episodes: 12, EndDate: day(0)}, 12},
 		{"ended last month", Follow{Episodes: 12, EndDate: day(-30)}, 0},
+		{"planned end next month, no schedule", Follow{Episodes: 12, EndDate: day(30)}, 0},
+		{"planned end in two days", Follow{Episodes: 12, EndDate: day(2)}, 0},
 		{"no airing data", Follow{Episodes: 12}, 0},
 		{"end date unreadable", Follow{Episodes: 12, EndDate: "2024"}, 0},
 	} {

@@ -62,7 +62,7 @@ export function RoomBubble({ hidden = false }: { hidden?: boolean }) {
     const t = text.trim()
     if (!t) return
     setText('')
-    void room.act('chat', { text: t }).catch(() => {})
+    void room.act('chat', { text: t }).catch(() => setText((now) => now || t))
   }
   const openRoom = () => {
     setOpen(false)
@@ -143,7 +143,7 @@ export function RoomBubble({ hidden = false }: { hidden?: boolean }) {
                 className="max-h-48 space-y-1.5 overflow-y-auto overscroll-contain border-b border-line px-4 py-3 text-sm scrollbar-thin"
               >
                 {room.lines.slice(-30).map((l) => (
-                  <Line key={l.id} line={l} mine={l.from === room.me?.name} src={room.avatarOf(l.member)} />
+                  <Line key={l.id} line={l} mine={own(l)} src={room.avatarOf(l.member)} />
                 ))}
               </ol>
             )}

@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// The films, OVAs and spin-offs a franchise links to are kept, not only prequel/sequel edges.
 func TestRelatedListsEverythingThatIsNotASeason(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -14,7 +13,6 @@ func TestRelatedListsEverythingThatIsNotASeason(t *testing.T) {
 		seedCatalogue(t, s, id, "FINISHED", 12)
 	}
 
-	// 1 → 2 → 3 are seasons; the rest hang off season 1.
 	if err := s.SaveRelations(ctx, nil, []Relation{
 		{AnimeID: 1, RelatedID: 2, Kind: "SEQUEL"},
 		{AnimeID: 2, RelatedID: 1, Kind: "PREQUEL"},
@@ -26,7 +24,7 @@ func TestRelatedListsEverythingThatIsNotASeason(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RebuildFranchises(ctx); err != nil {
+	if _, err := s.RebuildFranchisesFor(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -47,7 +45,6 @@ func TestRelatedListsEverythingThatIsNotASeason(t *testing.T) {
 		}
 	}
 
-	// Asking from any season gives the same list, and never the seasons.
 	fromLast, err := s.Related(ctx, 3)
 	if err != nil {
 		t.Fatal(err)
@@ -62,8 +59,6 @@ func TestRelatedListsEverythingThatIsNotASeason(t *testing.T) {
 	}
 }
 
-// Relations were fetched once and never again, so a film announced later never
-// showed up. Freshness decides when the graph is walked a second time.
 func TestRelationFreshness(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -85,8 +80,6 @@ func TestRelationFreshness(t *testing.T) {
 	}
 }
 
-// Edges are stored from whichever entry the walk started at, and a film reached
-// from a show is marked as fetched, so opening it listed nothing at all.
 func TestRelatedWorksFromTheFilmSide(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

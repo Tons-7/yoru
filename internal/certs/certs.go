@@ -1,4 +1,3 @@
-// Package certs gets Yoru an HTTPS certificate: the owner's files, or Let's Encrypt's for a DuckDNS name.
 package certs
 
 import (
@@ -13,17 +12,15 @@ import (
 	"time"
 )
 
-// Source answers TLS handshakes from whichever certificate covers the name asked for.
 type Source struct {
-	log *slog.Logger
-	// dir keeps the Let's Encrypt account and certificates across restarts.
-	dir string
-	// lanIP is the address a DuckDNS name should point at.
+	log   *slog.Logger
+	dir   string
 	lanIP func() string
 
 	mu        sync.RWMutex
 	files     *certFiles
 	fileNames []string
+	fileIPs   []net.IP
 	duck      *duck
 }
 
@@ -31,7 +28,6 @@ func New(dir string, lanIP func() string, log *slog.Logger) *Source {
 	return &Source{log: log, dir: dir, lanIP: lanIP}
 }
 
-// TLSConfig serves the certificates this source holds, as they come and go.
 func (s *Source) TLSConfig() *tls.Config {
 	return &tls.Config{GetCertificate: s.certificate, MinVersion: tls.VersionTLS12}
 }
@@ -43,7 +39,10 @@ func (s *Source) certificate(hello *tls.ClientHelloInfo) (*tls.Certificate, erro
 	files, d := s.files, s.duck
 	s.mu.RUnlock()
 	if d != nil && strings.EqualFold(hello.ServerName, d.domain) {
-		return d.config.GetCertificate(hello)
+		cert, err := d.config.GetCertificate(hello)
+		if err == nil || files == nil {
+			return cert, err
+		}
 	}
 	if files != nil {
 		return files.get()
@@ -51,7 +50,6 @@ func (s *Source) certificate(hello *tls.ClientHelloInfo) (*tls.Certificate, erro
 	return nil, errNoCertificate
 }
 
-// Names are the hosts a phone can open over HTTPS right now, for the pairing links.
 func (s *Source) Names() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -59,10 +57,15 @@ func (s *Source) Names() []string {
 	if s.duck != nil && s.duck.ready() {
 		out = append(out, s.duck.domain)
 	}
-	return append(out, s.fileNames...)
+	out = append(out, s.fileNames...)
+	for _, ip := range s.fileIPs {
+		if hasAddr(ip) {
+			out = append(out, ip.String())
+		}
+	}
+	return out
 }
 
-// UseFiles serves the owner's own certificate (tls_cert, tls_key).
 func (s *Source) UseFiles(cert, key string) error {
 	files := &certFiles{cert: cert, key: key}
 	pair, err := files.get()
@@ -75,23 +78,24 @@ func (s *Source) UseFiles(cert, key string) error {
 	}
 	var names []string
 	for _, n := range leaf.DNSNames {
-		if !strings.Contains(n, "*") {
-			names = append(names, n)
+		lower := strings.ToLower(n)
+		if strings.Contains(n, "*") || lower == "localhost" || strings.HasSuffix(lower, ".localhost") || net.ParseIP(n) != nil {
+			continue
 		}
+		names = append(names, n)
 	}
-	// A certificate for this machine's own address (mkcert's usual kind) pairs over https too.
+	var ips []net.IP
 	for _, ip := range leaf.IPAddresses {
-		if ip.IsPrivate() && hasAddr(ip) {
-			names = append(names, ip.String())
+		if ip.To4() != nil && ip.IsPrivate() {
+			ips = append(ips, ip)
 		}
 	}
 	s.mu.Lock()
-	s.files, s.fileNames = files, names
+	s.files, s.fileNames, s.fileIPs = files, names, ips
 	s.mu.Unlock()
 	return nil
 }
 
-// hasAddr reports an address of this machine.
 func hasAddr(ip net.IP) bool {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -105,13 +109,14 @@ func hasAddr(ip net.IP) bool {
 	return false
 }
 
-// certFiles serves a certificate from disk, reread when the file changes so a renewal needs no restart.
 type certFiles struct {
 	cert, key string
 
 	mu     sync.Mutex
 	loaded *tls.Certificate
 	stamp  time.Time
+	badAt  time.Time
+	badErr error
 }
 
 func (c *certFiles) get() (*tls.Certificate, error) {
@@ -121,14 +126,23 @@ func (c *certFiles) get() (*tls.Certificate, error) {
 	if err == nil && c.loaded != nil && info.ModTime().Equal(c.stamp) {
 		return c.loaded, nil
 	}
+	if err == nil && c.badErr != nil && info.ModTime().Equal(c.badAt) {
+		if c.loaded != nil {
+			return c.loaded, nil
+		}
+		return nil, c.badErr
+	}
 	pair, err := tls.LoadX509KeyPair(c.cert, c.key)
 	if err != nil {
-		// A renewal half written: keep serving the one that worked.
+		if info != nil {
+			c.badAt, c.badErr = info.ModTime(), err
+		}
 		if c.loaded != nil {
 			return c.loaded, nil
 		}
 		return nil, err
 	}
+	c.badErr = nil
 	c.loaded = &pair
 	if info != nil {
 		c.stamp = info.ModTime()

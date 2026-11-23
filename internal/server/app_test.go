@@ -13,7 +13,6 @@ import (
 	"yoru/internal/config"
 )
 
-// Exit Yoru and a second launch's show reach main's callbacks.
 func TestAppExitAndShow(t *testing.T) {
 	exited, shown := make(chan struct{}), make(chan struct{})
 	h := newHarness(t, config.Config{}, nil, func(d *Deps) {
@@ -35,8 +34,6 @@ func TestAppExitAndShow(t *testing.T) {
 	}
 }
 
-// Another device playing shows in what exiting would stop, by name and show, until it pauses; the host's
-// own playing isn't another device.
 func TestActivityListsOtherDevicesPlaying(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.token = "s3cret"
@@ -79,7 +76,6 @@ func TestActivityListsOtherDevicesPlaying(t *testing.T) {
 		t.Errorf("a paused phone still counts: %v", got)
 	}
 
-	// Two devices behind one router share its address: each is its own, and one pausing leaves the other.
 	tablet := newDevice(t, h)
 	tablet.ua = "Mozilla/5.0 (Linux; Android 14; SM-X710) AppleWebKit/537.36 Firefox/128.0"
 	tablet.get("/?token=s3cret", false)
@@ -94,7 +90,6 @@ func TestActivityListsOtherDevicesPlaying(t *testing.T) {
 	}
 }
 
-// The log to copy or send is the last run's then this one's, named, and saved as a file when asked.
 func TestLogIsTheLastRunAndThisOne(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "yoru.log.1"), []byte("msg=before\n"), 0o644)

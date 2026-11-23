@@ -1,5 +1,3 @@
-// Alerts with Yoru closed: on subscribes, the worker shows a pushed alert for the episode, off unsubscribes.
-// Only the browser's subscribe is faked (a test browser has no push service).
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -20,11 +18,9 @@ const sw = await fetch(`${BASE}/sw.js`)
 check(sw.ok && /javascript/.test(sw.headers.get('content-type') ?? '') && sw.headers.get('cache-control') === 'no-cache',
   'the alerts worker is served as script, never cached long', `${sw.status} ${sw.headers.get('content-type')} ${sw.headers.get('cache-control')}`)
 
-// Full Chromium, not the headless shell, which reports notifications as blocked whatever is granted.
 const browser = await chromium.launch({ channel: 'chromium' })
 const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
 await context.grantPermissions(['notifications'], { origin: BASE })
-// A subscription as Chrome's would look, kept per page load in sessionStorage so "on" survives a reload.
 await context.addInitScript(() => {
   const key = 'fake-push'
   const make = (raw) => ({
@@ -75,14 +71,13 @@ try {
   check(worker.endsWith('/sw.js'), 'the alerts worker is running', worker)
   await page.screenshot({ path: `${SHOTS}/alerts-settings.png` })
 
-  // A push as Yoru sends it, delivered to the real worker: it shows the alert with the episode to open.
   const cdp = await context.newCDPSession(page)
   let registrationId
   cdp.on('ServiceWorker.workerRegistrationUpdated', (e) => {
     for (const reg of e.registrations) if (!reg.isDeleted) registrationId = reg.registrationId
   })
   await cdp.send('ServiceWorker.enable')
-  await until(async () => !!registrationId)
+  check(await until(async () => !!registrationId), 'the worker is registered for pushes')
   await cdp.send('ServiceWorker.deliverPushMessage', {
     origin: new URL(BASE).origin,
     registrationId,

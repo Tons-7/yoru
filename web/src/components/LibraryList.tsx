@@ -9,9 +9,9 @@ import { QuickEdit } from './QuickEdit'
 
 function Thumb({ item, className }: { item: LibraryItem; className: string }) {
   return item.cover ? (
-    <img src={item.cover} alt="" loading="lazy" decoding="async" className={cx('aspect-[2/3] shrink-0 rounded-md object-cover', className)} />
+    <img src={item.cover} alt="" loading="lazy" decoding="async" className={cx('aspect-2/3 shrink-0 rounded-md object-cover', className)} />
   ) : (
-    <span aria-hidden className={cx('aspect-[2/3] shrink-0 rounded-md bg-base-850', className)} />
+    <span aria-hidden className={cx('aspect-2/3 shrink-0 rounded-md bg-base-850', className)} />
   )
 }
 
@@ -47,10 +47,10 @@ function Row({ item, showStatus }: { item: LibraryItem; showStatus: boolean }) {
 
 const COLUMNS = [
   { sort: 'title', label: 'Title', className: 'w-auto' },
-  { sort: 'progress', label: 'Progress', className: 'w-64' },
+  { sort: 'progress', label: 'Progress', className: 'w-48 lg:w-64' },
   { sort: 'score', label: 'Score', className: 'w-20' },
-  { sort: 'status', label: 'Status', className: 'w-36' },
-  { sort: 'watched', label: 'Last watched', className: 'w-36' },
+  { sort: 'status', label: 'Status', className: 'w-36 max-lg:hidden' },
+  { sort: 'watched', label: 'Last watched', className: 'w-36 max-lg:hidden' },
 ] as const
 
 export function LibraryTable({
@@ -131,11 +131,11 @@ function TableRow({ item, now }: { item: LibraryItem; now: number }) {
           <PlusOne item={item} p={p} />
         </span>
       </td>
-      <td className={cx('py-1.5 pr-3 tabular-nums', tens ? 'text-base-100' : 'text-base-600')}>{tens || '·'}</td>
-      <td className={cx('truncate py-1.5 pr-3', item.status ? 'text-base-200' : 'text-base-500')}>
+      <td className={cx('py-1.5 pr-3 tabular-nums', tens ? 'text-base-100' : 'text-base-500')}>{tens || '·'}</td>
+      <td className={cx('truncate py-1.5 pr-3 max-lg:hidden', item.status ? 'text-base-200' : 'text-base-500')}>
         {statusLabel(item.status) || 'Not in a list'}
       </td>
-      <td className={cx('py-1.5 pr-3', when ? 'text-base-300' : 'text-base-600')}>{when ?? 'Never'}</td>
+      <td className={cx('py-1.5 pr-3 max-lg:hidden', when ? 'text-base-300' : 'text-base-500')}>{when ?? 'Never'}</td>
       <td className="py-1.5">
         <QuickEdit item={item} />
       </td>

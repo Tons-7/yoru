@@ -9,8 +9,6 @@ import (
 	"yoru/internal/store"
 )
 
-// A fresh install has no titles until its first corpus build; a download
-// queued then must fetch the show rather than fail with "no release found".
 func TestFindFetchesAShowItDoesNotKnow(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()

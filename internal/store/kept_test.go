@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// A requested download costs the budget nothing, and the list says each row's tier.
 func TestCacheUsageLeavesKeptDownloadsOutOfTheBudget(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -55,7 +54,6 @@ func TestCacheUsageLeavesKeptDownloadsOutOfTheBudget(t *testing.T) {
 		t.Errorf("download rows report kept = %v", kept)
 	}
 
-	// Handing it back to the cache counts it again.
 	if _, err := s.KeepDownload(ctx, "kept", false); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +62,6 @@ func TestCacheUsageLeavesKeptDownloadsOutOfTheBudget(t *testing.T) {
 	}
 }
 
-// A kept episode refetched from another release stays kept; the old one is reported for dropping.
 func TestRecordTorrentCarriesKeepToTheReplacement(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -97,7 +94,6 @@ func TestRecordTorrentCarriesKeepToTheReplacement(t *testing.T) {
 		t.Errorf("superseded = %v, want [old]", gone)
 	}
 
-	// A batch still holding another episode is not superseded by losing one.
 	record("batch", 0, "2")
 	record("batch", 1, "3")
 	record("solo", 0, "2")
@@ -106,7 +102,6 @@ func TestRecordTorrentCarriesKeepToTheReplacement(t *testing.T) {
 	}
 }
 
-// Seen means finished in the player or covered by the list's progress.
 func TestWatchedEpisodesCombinePlayerAndList(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -114,7 +109,6 @@ func TestWatchedEpisodesCombinePlayerAndList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Reported the way a player does, since played time is capped per report.
 	var done bool
 	for i := 1; i <= 40 && !done; i++ {
 		var err error
@@ -147,7 +141,6 @@ func TestWatchedEpisodesCombinePlayerAndList(t *testing.T) {
 		}
 	}
 
-	// Gone back to and left early: not seen, whatever the list says.
 	if _, err := s.SavePlayback(ctx, PlaybackState{
 		AnimeID: 7, EpKey: "1", Position: 40, Duration: 1400, Played: 40,
 	}); err != nil {

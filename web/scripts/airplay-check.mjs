@@ -1,5 +1,3 @@
-// AirPlay, Safari's API stood in for: an Apple TV about shows the button, the signed playlist sits beside
-// the page's own source, the button opens Safari's list, and unreachable it says why.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -23,7 +21,6 @@ const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gestur
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
-// Safari's two pieces: the event that says an Apple TV is about, and the picker.
 await page.addInitScript(() => {
   window.WebKitPlaybackTargetAvailabilityEvent = class extends Event {}
   HTMLMediaElement.prototype.webkitShowPlaybackTargetPicker = function () {
@@ -38,7 +35,6 @@ const appleTV = () =>
   })
 
 try {
-  // Reachable: the opened stream names its AirPlay playlist, as with access from other devices on.
   const airplay = `${BASE}/c/signed/master.m3u8`
   await page.route('**/api/stream/open*', async (route) => {
     const res = await route.fetch()
@@ -63,7 +59,6 @@ try {
   await button.click()
   check(await page.evaluate(() => window.__airplayPicked === 1), "it opens Safari's list of them")
 
-  // Unreachable: no playlist to give, so the button says what's missing rather than doing nothing.
   await page.unroute('**/api/stream/open*')
   await page.reload({ waitUntil: 'domcontentloaded' })
   await video.waitFor({ timeout: 30_000 })
@@ -71,13 +66,11 @@ try {
   check(await video.evaluate((v) => !v.querySelector('source[type="application/x-mpegURL"]')), 'without a playlist, no source beside')
   await appleTV()
   await video.hover()
-  await until(() => button.isVisible())
-  await button.click()
+  check(await until(() => button.isVisible()), 'the AirPlay button shows')
+  await button.click({ timeout: 5000 }).catch(() => {})
   check(await until(() => page.getByText(/AirPlay needs access from other devices/).first().isVisible()),
     'with Yoru out of the TV’s reach, the button says so')
 
-  // Safari's managed media source stood in: hls.js's own source is a <source> too, emptied on every attach. A
-  // recovery (the stall watchdog's: a clock stopped with data ahead) must leave the TV's beside it again.
   const safari = await browser.newPage({ viewport: { width: 1280, height: 800 } })
   safari.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
   await safari.addInitScript(() => {
@@ -100,7 +93,6 @@ try {
   await safari.evaluate(() => {
     const v = document.querySelector('video')
     window.__attaches = 0
-    // Every attach sets the blob source again: counted to know a recovery ran.
     new MutationObserver((list) => {
       for (const m of list) for (const n of m.addedNodes) if (n.nodeName === 'SOURCE' && n.type !== 'application/x-mpegURL') window.__attaches++
     }).observe(v, { childList: true })

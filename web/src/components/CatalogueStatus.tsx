@@ -22,15 +22,17 @@ export function CatalogueStatus({ label = true, quiet = false }: { label?: boole
       ) : (
         <span className={cx('m-0.5 size-2 rounded-full', state === 'fresh' ? 'bg-emerald-400' : 'bg-amber-400')} />
       )}
-      {label && (
+      {label ? (
         <span
           className={cx(
-            'hidden overflow-hidden transition-[max-width,opacity] duration-[400ms] xl:inline-block motion-reduce:transition-none',
+            'hidden overflow-hidden transition-[max-width,opacity] duration-400 xl:inline-block motion-reduce:transition-none',
             quiet ? 'max-w-0 opacity-0' : 'max-w-24 opacity-100',
           )}
         >
           {LABEL[state]}
         </span>
+      ) : (
+        state !== 'fresh' && <span aria-hidden>{LABEL[state]}</span>
       )}
     </span>
   )

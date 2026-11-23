@@ -1,4 +1,3 @@
-// Diagnosis, not a release check: plays a real episode (STALL_FILE), noting where it stops and what's buffered.
 import { copyFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { chromium } from 'playwright'
@@ -50,7 +49,6 @@ const state = () =>
     return { t: +v.currentTime.toFixed(3), paused: v.paused, ready: v.readyState, duration: v.duration, ranges }
   })
 
-// Playing means the clock moves within `ms`; otherwise the state it stopped in.
 const playsOn = async (ms) => {
   const a = await state()
   for (let waited = 0; waited < ms; waited += 500) {
@@ -65,7 +63,6 @@ for (let i = 0; i < 120 && !(await state())?.t; i++) await sleep(500)
 const started = await playsOn(60_000)
 console.log('start', JSON.stringify(started))
 
-// STALL_WATCH=minutes: no seeks, just watching straight through, noting every stretch the clock stood still.
 const watch = Number(process.env.STALL_WATCH ?? 0)
 if (watch > 0) {
   let last = await state()
@@ -95,7 +92,6 @@ if (watch > 0) {
   process.exit(0)
 }
 
-// Let the first pass run ahead, then seek to just after where the playlist says each segment starts.
 await sleep(Number(process.env.STALL_WARM ?? 90) * 1000)
 const targets = (process.env.STALL_TARGETS ?? '30,60,90,120,150,200,40,80,170').split(',').map(Number)
 let stalls = 0

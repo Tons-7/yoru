@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// Sukebei's XML namespace still yields hashes. Opt-in: YORU_LIVE=1 YORU_SUKEBEI=<url> go test -run Sukebei
 func TestSukebeiReturnsUsableTorrents(t *testing.T) {
 	base := os.Getenv("YORU_SUKEBEI")
 	if os.Getenv("YORU_LIVE") == "" || base == "" {

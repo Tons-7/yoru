@@ -13,7 +13,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// aheadPrefetcher holds one show whose indexer remembers every search.
 func aheadPrefetcher(t *testing.T, engine *fakeEngine, results ...indexer.Torrent) (*Prefetcher, *askedIndexer, *store.Store) {
 	t.Helper()
 	srv := httptest.NewServer(engine.handler())
@@ -37,7 +36,6 @@ func (a *askedIndexer) searches() int {
 	return len(a.asked)
 }
 
-// A queued episode resolved while the one before it downloaded starts without searching again.
 func TestDownloadUsesTheReleaseResolvedAhead(t *testing.T) {
 	engine := newFakeEngine()
 	p, idx, _ := aheadPrefetcher(t, engine, release(goodHash, "[Best] Sousou no Frieren - 01 [1080p BluRay].mkv", 900))
@@ -67,7 +65,6 @@ func TestDownloadUsesTheReleaseResolvedAhead(t *testing.T) {
 	}
 }
 
-// What was resolved ahead may be gone by its turn; the download then searches as it always did.
 func TestDownloadSearchesWhenTheResolvedReleaseIsDead(t *testing.T) {
 	engine := newFakeEngine(deadHash)
 	p, idx, st := aheadPrefetcher(t, engine, release(goodHash, "[Live] Sousou no Frieren - 01 [1080p].mkv", 50))
@@ -89,7 +86,6 @@ func TestDownloadSearchesWhenTheResolvedReleaseIsDead(t *testing.T) {
 	}
 }
 
-// A prefetch refused for space must not cost play the release it had ready for that episode.
 func TestPrefetchRefusedForSpaceKeepsTheResolvedRelease(t *testing.T) {
 	engine := newFakeEngine()
 	p, _, st := aheadPrefetcher(t, engine, release(goodHash, "[Best] Sousou no Frieren - 01 [1080p BluRay].mkv", 900))
@@ -98,7 +94,6 @@ func TestPrefetchRefusedForSpaceKeepsTheResolvedRelease(t *testing.T) {
 	if err := p.prepare(ctx, 1, 1, 1, prefs); err != nil {
 		t.Fatal(err)
 	}
-	// Under the budget now, over it with the episode.
 	if err := st.SetSetting(ctx, "cache.budget_bytes", "1024"); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +106,6 @@ func TestPrefetchRefusedForSpaceKeepsTheResolvedRelease(t *testing.T) {
 	}
 }
 
-// With a cache to ask, a prefetch that does not fit asks for room for that show and goes ahead.
 func TestPrefetchAsksTheCacheForRoom(t *testing.T) {
 	engine := newFakeEngine()
 	p, _, st := aheadPrefetcher(t, engine, release(goodHash, "[Best] Sousou no Frieren - 01 [1080p BluRay].mkv", 900))
@@ -133,7 +127,6 @@ func TestPrefetchAsksTheCacheForRoom(t *testing.T) {
 	}
 }
 
-// Ahead resolves in the background whatever the playback switch says, and never touches the engine.
 func TestAheadResolvesWithoutDownloading(t *testing.T) {
 	engine := newFakeEngine()
 	p, _, st := aheadPrefetcher(t, engine, release(goodHash, "[Best] Sousou no Frieren - 01 [1080p BluRay].mkv", 900))

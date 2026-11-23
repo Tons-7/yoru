@@ -30,10 +30,8 @@ func liveSession(on bool) *Session {
 func TestSubtitleProcessWritesEveryTextTrack(t *testing.T) {
 	args := strings.Join(liveSession(true).subtitleArgs(60, 10), " ")
 	for _, want := range []string{
-		// ASS is copied; other text is converted; both named after the segment the pass starts at.
 		"-map 0:2? -c:s copy -f ass -ignore_readorder 1 -flush_packets 1 -y live-2-10.ass",
 		"-map 0:3? -c:s ass -f ass -ignore_readorder 1 -flush_packets 1 -y live-3-10.ass",
-		// From where the pass starts, at the pass's pace, in the episode's own times.
 		"-ss 60.000", "-readrate 2.0", "-i http://x/1", "-copyts",
 	} {
 		if !strings.Contains(args, want) {
@@ -48,8 +46,6 @@ func TestSubtitleProcessWritesEveryTextTrack(t *testing.T) {
 	}
 }
 
-// Subtitle outputs on the pass itself left re-encoded audio tens of seconds behind the copied picture,
-// and the browser never started. The pass writes the picture and the sound, nothing else.
 func TestPassCarriesNoSubtitleOutputs(t *testing.T) {
 	for _, plan := range []Plan{{VideoCopy: true, AudioCopy: true}, {VideoCopy: true}} {
 		s := liveSession(true)
@@ -71,12 +67,9 @@ func TestNoSubtitleProcessWithoutTextTracksOrWhenOff(t *testing.T) {
 	}
 }
 
-// The first request for a track often beats its first line. It must get the empty track at once: the
-// renderer waits on that answer, and a 45-second read left the opening lines of an episode undrawn.
 func TestAwaitLiveServesTheTrackBeforeItsFirstLine(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSubtitles("ffmpeg")
-	// The header arrives a moment after the request, as when the subtitle process is still opening the file.
 	go func() {
 		time.Sleep(300 * time.Millisecond)
 		os.WriteFile(filepath.Join(dir, "live-2-0.ass"), []byte(assHead), 0o644)
@@ -92,7 +85,6 @@ func TestAwaitLiveServesTheTrackBeforeItsFirstLine(t *testing.T) {
 	}
 }
 
-// With nothing written at all the wait ends, and the slower reads take over as before.
 func TestAwaitLiveGivesUpWhenNothingIsWritten(t *testing.T) {
 	old := liveHeaderWait
 	liveHeaderWait = 400 * time.Millisecond
@@ -107,7 +99,6 @@ func TestAwaitLiveGivesUpWhenNothingIsWritten(t *testing.T) {
 	}
 }
 
-// A pass whose subtitle process is not running writes no lines, so it must not be reported as writing them.
 func TestLiveSubtitlesNeedsTheSubtitleProcess(t *testing.T) {
 	s := liveSession(true)
 	s.run = &run{}
@@ -131,9 +122,7 @@ func TestMergeLiveUnionsEveryPassIntoTheTrack(t *testing.T) {
 	track := filepath.Join(dir, "sub-2.ass")
 	os.WriteFile(track, []byte(assHead+cue("0:00:01.00", "one")+cue("0:00:05.00", "five")), 0o644)
 	os.WriteFile(filepath.Join(dir, "live-2-0.ass"), []byte(assHead+cue("0:00:05.00", "five")+cue("0:00:09.00", "nine")), 0o644)
-	// A pass mid-write: its last line has no newline yet and is not a line.
 	os.WriteFile(filepath.Join(dir, "live-2-50.ass"), []byte(assHead+cue("0:05:02.00", "later")+"Dialogue: 0,0:05:09.00,0:05:1"), 0o644)
-	// Another track's lines stay out.
 	os.WriteFile(filepath.Join(dir, "live-3-0.ass"), []byte(assHead+cue("0:00:02.00", "other track")), 0o644)
 
 	subs := NewSubtitles("ffmpeg")
@@ -194,8 +183,8 @@ func TestLiveCoversOnlyPastWhereThePassBegan(t *testing.T) {
 		start, at float64
 		want      bool
 	}{
-		{0, 5, true},      // from the top: everything on screen was read
-		{300, 305, false}, // just after a seek: the line on screen began before the pass
+		{0, 5, true},
+		{300, 305, false},
 		{300, 340, true},
 	} {
 		if got := LiveCovers(c.start, c.at); got != c.want {
@@ -204,7 +193,6 @@ func TestLiveCoversOnlyPastWhereThePassBegan(t *testing.T) {
 	}
 }
 
-// lastPacket is the latest presentation time of one stream in a segment, read with its init segment.
 func lastPacket(t *testing.T, ffprobe string, session *Session, segment int, stream string) float64 {
 	t.Helper()
 	init, err := os.ReadFile(session.InitPath())
@@ -230,8 +218,6 @@ func lastPacket(t *testing.T, ffprobe string, session *Session, segment int, str
 	return last
 }
 
-// The real encoder on a file whose audio has to be re-encoded, with subtitles being written beside it:
-// every segment must carry the sound for its own picture, or the browser waits at 0:00 for ever.
 func TestReEncodedAudioKeepsUpWithThePictureWhileSubtitlesAreWritten(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	dir := t.TempDir()
@@ -239,7 +225,6 @@ func TestReEncodedAudioKeepsUpWithThePictureWhileSubtitlesAreWritten(t *testing.
 	if err := os.WriteFile(subs, []byte(testASS+"Dialogue: 0,0:00:50.00,0:00:55.00,Default,tail\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Copyable picture, E-AC-3 sound: the plan that copies one and re-encodes the other.
 	clip := filepath.Join(dir, "clip.mkv")
 	if o, err := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
 		"-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=60",
@@ -262,12 +247,10 @@ func TestReEncodedAudioKeepsUpWithThePictureWhileSubtitlesAreWritten(t *testing.
 	if plan := session.CurrentPlan(); !plan.VideoCopy || plan.AudioCopy {
 		t.Fatalf("plan = %+v, want the picture copied and the sound re-encoded", plan)
 	}
-	// The clip is a whole file; a torrent still arriving is what gets the writer beside the pass.
 	session.mu.Lock()
 	session.liveSubs = true
 	session.mu.Unlock()
 
-	// In order, as a player asks: jumping ahead would restart the pass there. Segment 3 means 0 to 2 are whole.
 	for n := range 4 {
 		if err := session.WaitSegment(ctx, n, 90*time.Second); err != nil {
 			t.Fatalf("segment %d: %v", n, err)
@@ -280,7 +263,6 @@ func TestReEncodedAudioKeepsUpWithThePictureWhileSubtitlesAreWritten(t *testing.
 		}
 	}
 
-	// And the lines are still written as the file is read, by the process beside the pass.
 	live := filepath.Join(filepath.Dir(session.InitPath()), liveName(session.Info.Subtitles[0].Index, 0))
 	deadline := time.Now().Add(20 * time.Second)
 	for {
@@ -294,8 +276,6 @@ func TestReEncodedAudioKeepsUpWithThePictureWhileSubtitlesAreWritten(t *testing.
 	}
 }
 
-// A lossless track stays lossless: it becomes FLAC, which a browser plays, not lossy AAC. A lossy one
-// gains nothing from FLAC but size, so it still goes to AAC.
 func TestLosslessAudioIsConvertedToFLACAndLossyToAAC(t *testing.T) {
 	for _, tt := range []struct {
 		audio Stream
@@ -314,13 +294,11 @@ func TestLosslessAudioIsConvertedToFLACAndLossyToAAC(t *testing.T) {
 			t.Errorf("%s %s: copy %v, codec %q, want %q", tt.audio.Codec, tt.audio.Profile, plan.AudioCopy, plan.AudioCodec, tt.want)
 		}
 	}
-	// FLAC itself was never converted.
 	if plan := PlanFor(&MediaInfo{Video: &Stream{Codec: "h264", BitDepth: 8}, Audio: []Stream{{Codec: "flac"}}}, ""); !plan.AudioCopy {
 		t.Error("a FLAC track is re-encoded")
 	}
 }
 
-// Surround is kept as it is up to 5.1; a 7.1 track is folded to 5.1, never to stereo.
 func TestFLACConversionKeepsSurround(t *testing.T) {
 	args := func(channels int) string {
 		s := liveSession(false)
@@ -336,14 +314,12 @@ func TestFLACConversionKeepsSurround(t *testing.T) {
 	}
 }
 
-// Lossless surround with sound options on: FLAC after the limiter still encodes.
 func TestLosslessSurroundPlaysWithSoundOptions(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := filepath.Join(t.TempDir(), "clip.mkv")
 	if o, err := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
 		"-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=30",
 		"-f", "lavfi", "-i", "sine=frequency=440:duration=30:sample_rate=48000",
-		// 40-sample frames, as TrueHD decodes: only small frames left the limiter's first one a single sample.
 		"-filter_complex", "[1]asplit=6[a][b][c][d][e][f];[a][b][c][d][e][f]amerge=inputs=6,aformat=channel_layouts=5.1,asetnsamples=n=40[s]",
 		"-map", "0:v", "-map", "[s]",
 		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "48",
@@ -379,7 +355,6 @@ func TestLosslessSurroundPlaysWithSoundOptions(t *testing.T) {
 	}
 }
 
-// The real encoder on a file with lossless sound: the segments carry FLAC, in step with the picture.
 func TestLosslessSourcePlaysAsFLAC(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clip := filepath.Join(t.TempDir(), "clip.mkv")

@@ -26,7 +26,6 @@ func TestWriteChaptersFillsGaps(t *testing.T) {
 	if !strings.HasPrefix(got, ";FFMETADATA1") {
 		t.Fatalf("missing ffmetadata header:\n%s", got)
 	}
-	// uosc tints the seekbar by matching these titles.
 	for _, want := range []string{"title=Opening", "title=Ending", "title=Episode"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q", want)
@@ -40,7 +39,6 @@ func TestWriteChaptersFillsGaps(t *testing.T) {
 	}
 }
 
-// The file's ending precedes AniSkip's opening in the list; written so, the body read as the opening.
 func TestWriteChaptersInTimeOrder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "chapters.ini")
 	if err := WriteChapters(path, []SkipRange{
@@ -121,7 +119,6 @@ func TestSkipRangeContains(t *testing.T) {
 	}
 }
 
-// A trusted source's part wins, and one source keeps every range of a part: an A and a B eyecatch.
 func TestMergeKeepsEveryRangeOfTheSourceItTakes(t *testing.T) {
 	marked := []SkipRange{{Kind: "op", Start: 80, End: 170, Source: "marked"}}
 	chapters := []SkipRange{
@@ -131,12 +128,50 @@ func TestMergeKeepsEveryRangeOfTheSourceItTakes(t *testing.T) {
 	}
 	aniskip := []SkipRange{
 		{Kind: "eyecatch", Start: 700, End: 705, Source: "aniskip"},
-		// One ending given twice: kept once.
 		{Kind: "ed", Start: 1300, End: 1390, Source: "aniskip"},
 		{Kind: "mixed-ed", Start: 1302, End: 1392, Source: "aniskip"},
 	}
 	got := Merge(marked, chapters, aniskip)
 	if len(got) != 4 || got[0].Source != "marked" || got[1].Start != 600 || got[2].Start != 610 || got[3].Start != 1300 {
 		t.Errorf("merged %+v, want the marked opening, both chapter eyecatches and one ending", got)
+	}
+}
+
+func TestEndingStart(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		ranges []SkipRange
+		want   float64
+	}{
+		{"none", nil, 0},
+		{"opening only", []SkipRange{{Kind: "op", Start: 60, End: 150}}, 0},
+		{"ending", []SkipRange{{Kind: "op", Start: 60, End: 150}, {Kind: "ED", Start: 1300, End: 1390}}, 1300},
+		{"the earliest ending", []SkipRange{{Kind: "ed", Start: 1350, End: 1400}, {Kind: "mixed-ed", Start: 1290, End: 1340}}, 1290},
+		{"an ending at zero is ignored", []SkipRange{{Kind: "ed", Start: 0, End: 90}, {Kind: "ed", Start: 1300, End: 1390}}, 1300},
+		{"preview after the ending", []SkipRange{{Kind: "ed", Start: 1300, End: 1390}, {Kind: "preview", Start: 1390, End: 1420}}, 1300},
+	} {
+		if got := EndingStart(c.ranges); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestSkipNamesAndChapterKind(t *testing.T) {
+	names := SkipNames(`[" Opening ", "", "ED"]`)
+	if len(names) != 2 || names[0] != "opening" || names[1] != "ed" {
+		t.Fatalf("names = %q, want lowercased and trimmed, empty dropped", names)
+	}
+	if got := SkipNames("not json"); len(got) != 0 {
+		t.Errorf("a broken pref gave %q", got)
+	}
+	for _, c := range []struct{ kind, title, want string }{
+		{"op", "Anything", "op"},
+		{"", "Opening Theme", "skip"},
+		{"", "PART B", ""},
+		{"", "The ED", "skip"},
+	} {
+		if got := ChapterKind(c.kind, c.title, names); got != c.want {
+			t.Errorf("ChapterKind(%q, %q) = %q, want %q", c.kind, c.title, got, c.want)
+		}
 	}
 }

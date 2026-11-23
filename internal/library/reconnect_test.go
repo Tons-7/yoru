@@ -15,8 +15,6 @@ import (
 	"yoru/internal/store"
 )
 
-// An expired token used to read as a successful sync with the tracker still
-// "Connected"; it has to fail and say reconnect, then clear once it works.
 func TestRejectedTokenAsksToReconnect(t *testing.T) {
 	var expired atomic.Bool
 	expired.Store(true)

@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-// The real Discord app takes the handshake and, with YORU_LIVE_CARD=1, the card as Yoru sends it (shown 15 s,
-// then cleared). Opt-in: YORU_LIVE=1 go test ./internal/discord -run LiveDiscord -v
 func TestLiveDiscord(t *testing.T) {
 	if os.Getenv("YORU_LIVE") == "" {
 		t.Skip("set YORU_LIVE=1 with the Discord app running")
@@ -53,7 +51,6 @@ func TestLiveDiscord(t *testing.T) {
 	}
 }
 
-// aniListCover is the show's cover as the app has it, from AniList.
 func aniListCover(t *testing.T, id int) string {
 	t.Helper()
 	body := fmt.Sprintf(`{"query":"{Media(id:%d){coverImage{large}}}"}`, id)
@@ -75,7 +72,6 @@ func aniListCover(t *testing.T, id int) string {
 	return out.Data.Media.CoverImage.Large
 }
 
-// dialRaw is dial without the reader, so the test reads Discord's replies itself.
 func dialRaw() (*conn, error) {
 	var last error
 	for i := range 10 {

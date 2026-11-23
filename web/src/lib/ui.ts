@@ -17,13 +17,18 @@ const SIZES: Record<ButtonSize, string> = {
   lg: 'h-11 rounded-xl px-5 text-[15px] pointer-coarse:min-h-12',
 }
 
+export const overlayButton = 'rounded-md px-3 py-1.5 text-sm pointer-coarse:min-h-11'
+
+export const focusRing =
+  'focus:outline-hidden focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-base-950'
+
 export function buttonClass(variant: ButtonVariant = 'secondary', size: ButtonSize = 'md') {
   return cx(
-    'press inline-flex shrink-0 items-center justify-center gap-1.5 font-medium whitespace-nowrap transition-[background-color,color,transform] focus:outline-hidden focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-base-950 disabled:pointer-events-none disabled:opacity-50 pointer-coarse:min-h-11',
+    'press inline-flex shrink-0 items-center justify-center gap-1.5 font-medium whitespace-nowrap transition-[background-color,color,transform] disabled:pointer-events-none disabled:opacity-50 pointer-coarse:min-h-11',
+    focusRing,
     VARIANTS[variant],
     SIZES[size],
   )
 }
 
-/** Names an unlabelled control after the settings row holding it. */
 export const ControlLabel = createContext<string | undefined>(undefined)

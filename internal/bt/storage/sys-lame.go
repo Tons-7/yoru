@@ -1,4 +1,4 @@
-//go:build wasm || windows
+//go:build windows
 
 package storage
 

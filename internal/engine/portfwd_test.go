@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// Port forwarding is said either way, from the mapping's own result: a router answering is not one forwarding.
 func TestPortForwardingIsSaid(t *testing.T) {
 	lines := &lineLog{}
 	e, err := New(Options{CacheDir: t.TempDir(), SessionDir: t.TempDir()}, slog.New(lines))

@@ -8,7 +8,7 @@ import { useDismiss, useModalFocus } from '../lib/hooks'
 import { refreshListState, useUpNext, useUpNextEdit } from '../lib/queries'
 import { toast } from '../lib/toast'
 import { buttonClass } from '../lib/ui'
-import { upNextSummary, useInUpNext } from '../lib/upnext'
+import { upNextSummary } from '../lib/upnext'
 import { MoreMenu } from './MoreMenu'
 import { Rail, RailItem } from './Rail'
 import { ResumeCard } from './ResumeCard'
@@ -29,28 +29,6 @@ function groupByShow(items: UpNextItem[]): ShowGroup[] {
     else groups.push({ animeId: it.animeId, title: it.title, cover: it.cover, items: [it] })
   }
   return groups
-}
-
-export function UpNextToggle({ animeId, episode, title }: { animeId: number; episode: number; title: string }) {
-  const listed = useInUpNext(animeId).has(episode)
-  const { add, remove } = useUpNextEdit()
-  return (
-    <button
-      type="button"
-      onClick={() => (listed ? remove.mutate({ animeId, episode }) : add.mutate({ animeId, episode }))}
-      aria-pressed={listed}
-      aria-label={listed ? `Remove ${title} episode ${episode} from Up next` : `Add ${title} episode ${episode} to Up next`}
-      title={listed ? 'In Up next' : 'Add to Up next'}
-      className={cx(
-        'tap absolute top-1.5 left-1.5 z-10 grid size-7 place-items-center rounded-md ring-1 backdrop-blur-sm transition-colors',
-        listed
-          ? 'bg-accent-500/90 text-white ring-accent-300/40 hover:bg-accent-500'
-          : 'bg-base-950/80 text-base-200 ring-white/10 hover:bg-base-800 hover:text-white',
-      )}
-    >
-      {listed ? <ListCheckGlyph className="size-3.5" /> : <ListPlusGlyph className="size-3.5" />}
-    </button>
-  )
 }
 
 function queuedShows(items: UpNextItem[]) {
@@ -140,7 +118,11 @@ function UpNextCard({ item, more }: { item: UpNextItem; more: number }) {
       position={item.position}
       duration={item.duration}
       minutes={item.minutes}
-      extra={more > 0 ? `${more} more queued` : item.episodeTitle && !item.spoiler ? item.episodeTitle : null}
+      extra={
+        [item.downloaded && 'Downloaded', more > 0 ? `${more} more queued` : item.episodeTitle && !item.spoiler ? item.episodeTitle : null]
+          .filter(Boolean)
+          .join(' · ') || null
+      }
       menu={
         <MoreMenu
           label={`More for ${item.title} episode ${item.episode}`}
@@ -291,7 +273,7 @@ export function UpNextSheet({ open, onClose }: { open: boolean; onClose: () => v
           ))}
           {list.isSuccess && items.length === 0 && (
             <li className="rounded-xl bg-base-800 p-4 text-sm text-base-400">
-              Nothing up next. Add an episode with + on its row, or the next episodes of what you're watching.
+              Nothing up next. Add an episode from its ⋯ menu, or the next episodes of what you're watching.
             </li>
           )}
           {list.isError && (
@@ -354,9 +336,37 @@ function ShowRow({
   onGripDown: (e: React.PointerEvent) => void
   onMove: (to: number, control: 'grip' | 'menu') => void
 }) {
-  const { remove } = useUpNextEdit()
+  const { remove, add } = useUpNextEdit()
+  const removeEpisode = (episode: number) =>
+    remove.mutate(
+      { animeId: group.animeId, episode },
+      {
+        onSuccess: () =>
+          toast(`Removed episode ${episode} of ${group.title} from Up next`, 'info', {
+            label: 'Undo',
+            run: () => add.mutate({ animeId: group.animeId, episode }),
+          }),
+      },
+    )
+  const removeShow = () => {
+    const gone = group.items.map((it) => it.episode)
+    remove.mutate(
+      { animeId: group.animeId },
+      {
+        onSuccess: () =>
+          toast(`Removed ${group.title} from Up next`, 'info', {
+            label: 'Undo',
+            run: () => {
+              for (const episode of gone) add.mutate({ animeId: group.animeId, episode })
+            },
+          }),
+      },
+    )
+  }
   const minutes = group.items.reduce((sum, it) => sum + (it.minutes ?? 0), 0)
   const episodes = group.items.map((it) => it.episode)
+  const ready = group.items.filter((it) => it.downloaded).length
+  const readyText = ready === 0 ? '' : ready === group.items.length ? ' · downloaded' : ` · ${ready} downloaded`
   const label =
     episodes.length === 1 ? `Ep ${episodes[0]}` : `Episodes ${episodes.join(', ')}`
 
@@ -393,6 +403,7 @@ function ShowRow({
         <p className="truncate text-[13px] text-base-500 tabular-nums">
           {label}
           {minutes > 0 ? ` · ${minutes} min` : ''}
+          {readyText}
         </p>
         {group.items.length > 1 && (
           <div className="mt-1.5 flex flex-wrap gap-1">
@@ -400,7 +411,7 @@ function ShowRow({
               <button
                 type="button"
                 key={it.episode}
-                onClick={() => remove.mutate({ animeId: it.animeId, episode: it.episode })}
+                onClick={() => removeEpisode(it.episode)}
                 aria-label={`Remove episode ${it.episode} of ${group.title}`}
                 className="tap relative flex h-7 items-center gap-1 rounded-md bg-base-750 px-2 text-xs text-base-300 transition-colors hover:bg-base-700 hover:text-white"
               >
@@ -419,7 +430,7 @@ function ShowRow({
         onTop={() => onMove(0, 'menu')}
         onUp={() => onMove(place - 1, 'menu')}
         onDown={() => onMove(place + 1, 'menu')}
-        onRemove={() => remove.mutate({ animeId: group.animeId })}
+        onRemove={removeShow}
       />
     </li>
   )
@@ -471,20 +482,6 @@ export function ListPlusGlyph({ className = 'size-4' }: { className?: string }) 
   )
 }
 
-function ListCheckGlyph({ className = 'size-4' }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} aria-hidden>
-      <path
-        d="M4 7h11M4 12h11M4 17h6m4 0 2.5 2.5L21 15"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
 
 function CrossGlyph({ className = 'size-3.5' }: { className?: string }) {
   return (

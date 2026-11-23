@@ -102,13 +102,47 @@ func (s *Store) DropTorrentCache(ctx context.Context, infoHash string) error {
 	}
 	defer tx.Rollback()
 
+	var held []EpisodeRef
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT anime_id, ep_key FROM torrent_file
+		WHERE lower(info_hash) = lower(?) AND selected = 1 AND anime_id IS NOT NULL AND ep_key IS NOT NULL`, infoHash)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var r EpisodeRef
+		if err := rows.Scan(&r.AnimeID, &r.EpKey); err != nil {
+			rows.Close()
+			return err
+		}
+		held = append(held, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM cache_entry WHERE info_hash = ?`, infoHash); err != nil {
+		`DELETE FROM cache_entry WHERE lower(info_hash) = lower(?)`, infoHash); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM torrent WHERE info_hash = ?`, infoHash); err != nil {
+		`DELETE FROM torrent WHERE lower(info_hash) = lower(?)`, infoHash); err != nil {
 		return err
+	}
+	for _, ep := range held {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE torrent_file SET selected = 1
+			WHERE rowid = (
+			    SELECT f.rowid FROM torrent_file f
+			    JOIN torrent t ON t.info_hash = f.info_hash
+			    JOIN cache_entry c ON c.info_hash = f.info_hash AND c.file_index = f.file_index AND c.complete = 1
+			    WHERE f.anime_id = ?1 AND f.ep_key = ?2
+			    ORDER BY t.added_at DESC LIMIT 1)
+			  AND NOT EXISTS (SELECT 1 FROM torrent_file s WHERE s.anime_id = ?1 AND s.ep_key = ?2 AND s.selected = 1)`,
+			ep.AnimeID, ep.EpKey); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -327,19 +361,28 @@ func (s *Store) SupersededFileReady(ctx context.Context, animeID int, epKey stri
 }
 
 func (s *Store) SupersededReady(ctx context.Context, animeID int, epKey, infoHash string) (bool, error) {
-	var pinned, held, replaced int
+	var pinned, held, replaced, stranded int
 	err := s.r.QueryRowContext(ctx, `
 		SELECT
-		  EXISTS (SELECT 1 FROM cache_entry WHERE info_hash = ? AND pinned = 1),
-		  EXISTS (SELECT 1 FROM cache_entry WHERE info_hash = ? AND (complete = 1 OR (kept = 1 AND bytes_on_disk > 0))),
+		  EXISTS (SELECT 1 FROM cache_entry WHERE info_hash = ?1 AND pinned = 1),
+		  EXISTS (SELECT 1 FROM cache_entry WHERE info_hash = ?1 AND (complete = 1 OR (kept = 1 AND bytes_on_disk > 0))),
 		  EXISTS (SELECT 1 FROM torrent_file n
-		          JOIN cache_entry c ON c.info_hash = n.info_hash AND (c.file_index = n.file_index OR c.file_index = ?)
-		          WHERE n.anime_id = ? AND n.ep_key = ? AND n.selected = 1 AND n.info_hash <> ? AND c.complete = 1)`,
-		infoHash, infoHash, WholeTorrent, animeID, epKey, infoHash).Scan(&pinned, &held, &replaced)
+		          JOIN cache_entry c ON c.info_hash = n.info_hash AND (c.file_index = n.file_index OR c.file_index = ?2)
+		          WHERE n.anime_id = ?3 AND n.ep_key = ?4 AND n.selected = 1 AND n.info_hash <> ?1 AND c.complete = 1),
+		  EXISTS (SELECT 1 FROM torrent_file o
+		          JOIN cache_entry oc ON oc.info_hash = o.info_hash AND oc.file_index = o.file_index AND oc.complete = 1
+		          WHERE o.info_hash = ?1 AND o.selected = 0 AND o.file_index >= 0
+		            AND o.anime_id IS NOT NULL AND o.ep_key IS NOT NULL
+		            AND NOT (o.anime_id = ?3 AND o.ep_key = ?4)
+		            AND NOT EXISTS (SELECT 1 FROM torrent_file n
+		                            JOIN cache_entry c ON c.info_hash = n.info_hash AND (c.file_index = n.file_index OR c.file_index = ?2)
+		                            WHERE n.anime_id = o.anime_id AND n.ep_key = o.ep_key AND n.selected = 1
+		                              AND n.info_hash <> ?1 AND c.complete = 1))`,
+		infoHash, WholeTorrent, animeID, epKey).Scan(&pinned, &held, &replaced, &stranded)
 	if err != nil {
 		return false, err
 	}
-	return pinned == 0 && (held == 0 || replaced == 1), nil
+	return pinned == 0 && (held == 0 || (replaced == 1 && stranded == 0)), nil
 }
 
 type EpisodeRef struct {

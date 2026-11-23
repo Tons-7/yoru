@@ -13,7 +13,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// limitsEngine records what the engine is handed.
 type limitsEngine struct{ got []torrent.Limits }
 
 func (e *limitsEngine) Ensure(context.Context) error { return nil }
@@ -22,7 +21,6 @@ func (e *limitsEngine) Network() torrent.Network {
 	return torrent.Network{Adapter: "ProtonVPN", Address: "10.2.0.2"}
 }
 
-// The network torrents keep to is the host's to choose, and to see: a paired phone gets neither.
 func TestTorrentNetworkIsTheHosts(t *testing.T) {
 	eng := &limitsEngine{}
 	h := newHarness(t, config.Config{}, nil, func(d *Deps) {
@@ -59,7 +57,6 @@ func TestTorrentNetworkIsTheHosts(t *testing.T) {
 	}
 }
 
-// Saving the download cap or the upload choice reaches the engine at once; a bad value is refused.
 func TestLimitsReachTheEngine(t *testing.T) {
 	eng := &limitsEngine{}
 	h := newHarness(t, config.Config{}, nil, func(d *Deps) {

@@ -22,6 +22,8 @@ import { airTime, bytes, cx, languageName, relativeTime } from '../lib/format'
 import { setFocus } from '../lib/focus'
 import {
   refreshDownloads,
+  newToYou,
+  refreshListState,
   useAccess,
   useDownloads,
   useEpisodes,
@@ -32,6 +34,7 @@ import {
   useSetNotify,
   useAlertsOff,
   useSetPref,
+  useSetup,
   useTrackers,
   type Season,
 } from '../lib/queries'
@@ -69,11 +72,11 @@ import { ReleasePicker } from '../components/ReleasePicker'
 import { OpenInApp } from '../components/OpenInApp'
 import { historyIndex } from '../components/places'
 import { StatusMenu } from '../components/StatusMenu'
-import { Button, ErrorState, LinkButton } from '../components/ui'
+import { Button, ErrorState, LinkButton, ScorePicker } from '../components/ui'
 import { PopSheet } from '../components/PopSheet'
 import { Sheet } from '../components/Sheet'
 import { useDocumentTitle, useMediaQuery } from '../lib/hooks'
-import { buttonClass } from '../lib/ui'
+import { buttonClass, overlayButton as button } from '../lib/ui'
 import { getSleep, noteAutoStart, noteInput, setSleep, unattendedRun, useSleep, type Unattended } from '../lib/watching'
 
 type AudioChoice = 'sub' | 'dub' | 'either'
@@ -191,7 +194,10 @@ export function Watch({
       return ['en']
     }
   }, [subLanguagesRaw])
-  const external = effective['playback.player'] !== 'browser' && !!effective['playback.player']
+  const accessKnown = useAccess()
+  const onHost = accessKnown.data?.host === true
+  const [browserHere, setBrowserHere] = useState(false)
+  const external = onHost && !browserHere && effective['playback.player'] !== 'browser' && !!effective['playback.player']
 
   const overrides = prefs.data?.overrides ?? {}
   const setFlag = (key: string) => (v: boolean) =>
@@ -224,6 +230,11 @@ export function Watch({
   const infoHash = hashPick?.key === epKey ? hashPick.hash : undefined
   const setInfoHash = (hash?: string) => setHashPick(hash ? { key: epKey, hash } : null)
   const [picking, setPicking] = useState(false)
+  const [pickingFor, setPickingFor] = useState(epKey)
+  if (pickingFor !== epKey) {
+    setPickingFor(epKey)
+    setPicking(false)
+  }
   const [inApp, setInApp] = useState(false)
 
   const session = useRoomSession()
@@ -232,8 +243,8 @@ export function Watch({
   const hashParam = params.get('hash')
   useEffect(() => {
     const next = parseTogether(linkParam)
-    if (!next || next.code === together?.code) return
-    session.open(next)
+    if (!next) return
+    if (next.code !== together?.code) session.open(next)
     if (hashParam) setHashPick({ key: epKey, hash: hashParam })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkParam])
@@ -256,7 +267,10 @@ export function Watch({
 
   const roomAudio = inRoom ? roomState?.audio : undefined
   useEffect(() => {
-    if (roomAudio && roomAudio !== (wantAudio === 'dub' ? 'dub' : 'sub')) setAudioPick({ key: id, audio: roomAudio })
+    if (roomAudio && roomAudio !== wantAudio) {
+      setAudioPick({ key: id, audio: roomAudio })
+      if (!canPick) setHashPick(null)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomAudio, id])
   const pickAudio = (a: AudioChoice) => {
@@ -269,7 +283,7 @@ export function Watch({
   }
 
   const play = useQuery({
-    enabled: id !== 0 && ep > 0 && prefs.isSuccess && !strayed,
+    enabled: id !== 0 && ep > 0 && prefs.isSuccess && (accessKnown.isSuccess || accessKnown.isError) && !strayed,
     queryKey: ['play', id, ep, external, allowRaw, wantAudio, infoHash],
     queryFn: ({ signal }) =>
       api.post<PlaySession>('/api/play', {
@@ -299,6 +313,9 @@ export function Watch({
     setAckKey(roomKey)
     if (pageKey === roomKey) {
       withRoom.current = true
+      if (arrived && !canPick && roomState.infoHash && hashPick?.key !== roomKey) {
+        setHashPick({ key: roomKey, hash: roomState.infoHash })
+      }
       return
     }
     if (!arrived && !(withRoom.current && moved)) {
@@ -341,10 +358,6 @@ export function Watch({
   })
 
   const [naming, setNaming] = useState(false)
-  const getTunnel = useMutation({
-    mutationFn: () => api.post('/api/setup/install/cloudflared'),
-    onSuccess: () => toast('Downloading. Open the room again once it finishes.', 'info'),
-  })
   const startTogether = useMutation({
     mutationFn: async (name: string) =>
       api.post<{ link: string; member: string; token: string; homeOnly?: boolean }>('/api/together', {
@@ -443,17 +456,21 @@ export function Watch({
     if (lastStep.current !== choice.step && here.source === source && here.at > 0) setResumeAt({ source, at: here.at })
     lastStep.current = choice.step
   }, [choice.step, source])
+  const reopening = useRef<string | undefined>(undefined)
   const stream = useQuery({
     enabled: !!source && !choice.card && !access.isPending,
     queryKey: ['stream', id, ep, source, wantAudio, strict, choice.step],
-    queryFn: async ({ signal }) =>
-      api.post<StreamInfo>(
+    queryFn: async ({ signal }) => {
+      const again = reopening.current
+      reopening.current = undefined
+      return api.post<StreamInfo>(
         `/api/stream/open${query({
-          id, episode: ep, source, audio: wantAudio, caps: await deviceCaps(strict), quality: choice.step, ...soundAtOpen.current,
+          id, episode: ep, source, audio: wantAudio, caps: await deviceCaps(strict), quality: choice.step, again, ...soundAtOpen.current,
         })}`,
         undefined,
         signal,
-      ),
+      )
+    },
     retry: 1,
     staleTime: 'static',
     gcTime: 0,
@@ -463,7 +480,7 @@ export function Watch({
     id,
     ep,
     episodes.data?.items.find((e) => e.number === ep)?.display ?? ep,
-    play.isPending || (!!source && stream.isPending),
+    play.isLoading || (!!source && stream.isLoading),
     !!play.data,
   )
 
@@ -511,23 +528,28 @@ export function Watch({
   const resetDownload = download.reset
   useEffect(() => resetDownload(), [id, ep, resetDownload])
 
-  const downloads = useDownloads()
+  const hash = play.data?.infoHash
+  const downloads = useDownloads((d) => {
+    const own = d.items.find((it) => !!hash && it.infoHash === hash)
+    return {
+      playing: own && { infoHash: own.infoHash, kept: own.kept, totalBytes: own.totalBytes },
+      held: d.items.some((it) => it.animeId === id && it.episodes.includes(String(ep)) && it.percent >= 100),
+    }
+  })
   const cache = useQuery({
     enabled: play.data?.source === 'torrent',
     queryKey: ['cache'],
     queryFn: () => api.get<{ budget: number }>('/api/cache'),
     staleTime: 60_000,
   })
-  const playing = (downloads.data?.items ?? []).find((d) => !!play.data?.infoHash && d.infoHash === play.data.infoHash)
+  const playing = downloads.data?.playing
   const overBudget = !!playing && !playing.kept && !!cache.data?.budget && playing.totalBytes > cache.data.budget
   const keep = useMutation({
     meta: { inline: true },
     mutationFn: () => api.post(`/api/downloads/${playing!.infoHash}/keep`),
     onSuccess: () => refreshDownloads(qc),
   })
-  const held = (downloads.data?.items ?? []).some(
-    (d) => d.animeId === id && d.episodes.includes(String(ep)) && d.percent >= 100,
-  )
+  const held = !!downloads.data?.held
 
   const detail = useQuery({
     enabled: id !== 0,
@@ -591,10 +613,7 @@ export function Watch({
       void api
         .post<{ watched: boolean }>('/api/progress', body)
         .then((r) => {
-          if (!r.watched) return
-          void qc.invalidateQueries({ queryKey: ['episodes', id] })
-          void qc.invalidateQueries({ queryKey: ['anime', id] })
-          void qc.invalidateQueries({ queryKey: ['upnext'] })
+          if (r.watched) refreshListState(qc)
         })
         .catch(() => {})
     },
@@ -720,6 +739,7 @@ export function Watch({
     (by: string) => {
       if (endedNow.current) note('countdown-cleared', { by, afterMs: Date.now() - endedAt.current })
       setEndedKey(null)
+      if (by !== 'still-watching') setAsked(null)
     },
     [note],
   )
@@ -729,8 +749,9 @@ export function Watch({
   const recoverSession = useCallback(async () => {
     const revived = await refetchPlay({ throwOnError: true })
     if (revived.data?.streamUrl !== source) return
+    reopening.current = stream.data?.id
     await refetchStream({ throwOnError: true })
-  }, [refetchPlay, refetchStream, source])
+  }, [refetchPlay, refetchStream, source, stream.data?.id])
 
   const opened = stream.data
   const sent = opened?.audio?.[opened.audioTrack ?? 0]
@@ -810,6 +831,14 @@ export function Watch({
   const [upscale, setUpscale] = useState<{ enabled: boolean; mode: string } | null>(null)
   const [tuning, setTuning] = useState(false)
   useEffect(() => setUpscale(null), [id, ep])
+  const resetSuggest = suggest.reset
+  const resetTogether = startTogether.reset
+  const resetKeep = keep.reset
+  useEffect(() => {
+    resetSuggest()
+    resetTogether()
+    resetKeep()
+  }, [id, ep, resetSuggest, resetTogether, resetKeep])
 
   const [smoothDevice, setSmoothDevice] = useState(deviceSmooth)
   const [smoothEpisode, setSmoothEpisode] = useState<{ enabled?: boolean; rate?: SmoothRate; held?: boolean }>({})
@@ -828,7 +857,10 @@ export function Watch({
     enabled: smoothOn && !smoothStopped,
     held: smoothEpisode.held ?? flag('playback.smooth_held'),
     rate: smoothEpisode.rate ?? asSmoothRate(effective['playback.smooth_rate']),
-    onSlow: () => setSmoothStopped(true),
+    onSlow: () => {
+      setSmoothStopped(true)
+      toast('Smooth motion turned itself off: this device was falling behind.', 'info')
+    },
     onState: setSmoothRunning,
   }
 
@@ -841,6 +873,12 @@ export function Watch({
     setAutoTier(next)
     setSettled(next)
     setSteppedTo(next)
+    toast(
+      next === 'off'
+        ? 'Anime4K turned itself off: this device was falling behind.'
+        : `Anime4K dropped to ${next}: this device was falling behind.`,
+      'info',
+    )
   }
   const upscaling = {
     enabled: upscale?.enabled ?? here.enabled,
@@ -861,15 +899,16 @@ export function Watch({
   const cancelStart = () => routerNavigate(`/anime/${id}`)
   const minutes = episodeLength ? Math.round(episodeLength / 60) : current?.runtime
   const height = opened?.plan?.maxRate ? opened.plan.height : opened?.video?.height
+  const shownFacts = playerShown ? facts : {}
   const factLine = [
     minutes ? `${minutes} min` : '',
-    facts.audio ? `${facts.audio} audio` : '',
-    facts.subtitles === 'off'
+    shownFacts.audio ? `${shownFacts.audio} audio` : '',
+    shownFacts.subtitles === 'off'
       ? 'Subtitles off'
-      : facts.subtitles === 'none'
+      : shownFacts.subtitles === 'none'
         ? 'No subtitles'
-        : facts.subtitles
-          ? `${facts.subtitles} subtitles`
+        : shownFacts.subtitles
+          ? `${shownFacts.subtitles} subtitles`
           : '',
     height ? `${height}p` : '',
     play.data?.source === 'local' ? 'Local file' : '',
@@ -1142,7 +1181,13 @@ export function Watch({
                   />
                 </div>
               ) : playingInMpv ? (
-                <MpvPanel title={play.data?.title ?? showTitle} animeId={id} episode={ep} player={play.data?.player ?? 'mpv'} />
+                <MpvPanel
+                  title={play.data?.title ?? showTitle}
+                  animeId={id}
+                  episode={ep}
+                  player={play.data?.player ?? 'mpv'}
+                  onBrowser={() => setBrowserHere(true)}
+                />
               ) : (
                 <Player
                   stream={stream.data}
@@ -1162,7 +1207,7 @@ export function Watch({
                   nextLabel={nextText}
                   onSkipVote={skips.data?.share ? voteSkip : undefined}
                   skipMarks={skipMarks}
-                  autoPlay={flag('playback.autoplay')}
+                  autoPlay={flag('playback.autoplay') && (!together || isHost) && !(atRoom && !roomState?.playing && room.position() > 1)}
                   subLanguages={subLanguages}
                   withDub={(['signs', 'off', 'same'] as const).find((v) => v === effective['subtitle.with_dub']) ?? 'signs'}
                   keptDelay={keptDelay}
@@ -1243,6 +1288,7 @@ export function Watch({
                       />
                     ) : ended && fromList ? (
                       <UpNext
+                        key={`list-${fromList.animeId}-${fromList.episode}`}
                         label={nextText ?? `Up next: ${fromList.title}`}
                         line={
                           fromList.episodeTitle && !endHides(fromList.animeId, fromList.episode, fromList.spoiler)
@@ -1264,6 +1310,7 @@ export function Watch({
                       />
                     ) : ended && next ? (
                       <UpNext
+                        key={`next-${next.number}`}
                         label={`Next: Episode ${next.display || next.number}`}
                         line={next.titleEn && !endHides(id, next.number, next.spoiler) ? next.titleEn : undefined}
                         thumb={next.still && !endHides(id, next.number, next.spoiler) ? next.still : undefined}
@@ -1274,6 +1321,7 @@ export function Watch({
                       />
                     ) : ended && sequelPath && sequel ? (
                       <UpNext
+                        key={`sequel-${sequel.id}`}
                         label="Next season"
                         line={`${sequelTitle} · Episode 1`}
                         thumb={sequel.cover ?? undefined}
@@ -1375,9 +1423,9 @@ export function Watch({
                       <ActionLabel icon={<DoneGlyph />} long="Downloaded" />
                     </span>
                   ) : download.isSuccess ? (
-                    <span className={cx(ACTION, 'pointer-events-none text-amber-300')}>
+                    <Link to="/downloads" className={cx(ACTION, 'text-amber-300')}>
                       <ActionLabel icon={<DownloadGlyph />} long="Queued" />
-                    </span>
+                    </Link>
                   ) : (
                     <button type="button" className={ACTION} onClick={() => download.mutate()} disabled={download.isPending}>
                       <ActionLabel icon={<DownloadGlyph />} long="Download" />
@@ -1389,7 +1437,7 @@ export function Watch({
                     </button>
                   )}
                   {!playingInMpv && <SaveToDevice animeId={id} episode={ep} className={ACTION} icon={<PhoneGlyph />} />}
-                  {!together && !naming && !playingInMpv && (
+                  {!together && !naming && !playingInMpv && play.data?.source !== 'local' && (
                     <button
                       type="button"
                       className={ACTION}
@@ -1445,16 +1493,15 @@ export function Watch({
               )}
 
               {startTogether.isError && (
-                <p className="flex flex-wrap items-center gap-2 text-sm text-recap">
+                <p className="flex flex-wrap items-center gap-2 text-sm text-red-300">
                   {(startTogether.error as Error).message}
                   {startTogether.error instanceof ApiError && (startTogether.error.body as { needs?: string })?.needs === 'cloudflared' && (
-                    <Button
-                      size="sm"
-                      disabled={getTunnel.isPending || getTunnel.isSuccess}
-                      onClick={() => getTunnel.mutate()}
-                    >
-                      {getTunnel.isSuccess ? 'Downloading' : 'Download (52 MB)'}
-                    </Button>
+                    <TunnelDownload
+                      onReady={() => {
+                        startTogether.reset()
+                        setNaming(true)
+                      }}
+                    />
                   )}
                 </p>
               )}
@@ -1506,7 +1553,7 @@ export function Watch({
                   <Button variant="primary" onClick={() => keep.mutate()} disabled={keep.isPending}>
                     Keep this episode
                   </Button>
-                  {keep.isError && <p className="w-full text-xs text-recap">{(keep.error as Error).message}</p>}
+                  {keep.isError && <p className="w-full text-xs text-red-300">{(keep.error as Error).message}</p>}
                 </div>
               )}
 
@@ -1522,7 +1569,7 @@ export function Watch({
               )}
 
               {download.isError && (
-                <p className="text-xs text-recap">{(download.error as Error).message}</p>
+                <p className="text-xs text-red-300">{(download.error as Error).message}</p>
               )}
 
               {!focus && !side && episodesSection}
@@ -1572,6 +1619,14 @@ export function Watch({
             setPicking(false)
             setInfoHash(hash)
           }}
+          onAuto={
+            infoHash
+              ? () => {
+                  setPicking(false)
+                  setInfoHash(undefined)
+                }
+              : undefined
+          }
         />
       )}
       {source && <OpenInApp source={source} open={inApp} onClose={() => setInApp(false)} />}
@@ -1656,7 +1711,7 @@ function SequelLater({ sequel }: { sequel: Season }) {
         )}
         <LinkButton to={`/anime/${sequel.id}`}>Open {name}</LinkButton>
       </div>
-      {alert.isError && <p className="mt-2 text-xs text-recap">{(alert.error as Error).message}</p>}
+      {alert.isError && <p className="mt-2 text-xs text-red-300">{(alert.error as Error).message}</p>}
     </>
   )
 }
@@ -1670,8 +1725,8 @@ interface PlayStage {
 
 function useStartingNote(animeId: number, episode: number, display: number, waiting: boolean, found: boolean): Starting {
   const wait = waiting ? `${animeId}:${episode}` : ''
-  const [count, setCount] = useState({ wait, seconds: 0 })
-  if (count.wait !== wait) setCount({ wait, seconds: 0 })
+  const [count, setCount] = useState({ wait, seconds: 0, attempt: 0 })
+  if (count.wait !== wait) setCount({ wait, seconds: 0, attempt: count.attempt + 1 })
   const seconds = count.seconds
   useEffect(() => {
     if (!waiting) return
@@ -1681,7 +1736,7 @@ function useStartingNote(animeId: number, episode: number, display: number, wait
 
   const stage = useQuery({
     enabled: waiting,
-    queryKey: ['play-stage', animeId, episode],
+    queryKey: ['play-stage', animeId, episode, count.attempt],
     queryFn: () => api.get<PlayStage>(`/api/play/stage${query({ id: animeId, episode })}`),
     refetchInterval: 1000,
     gcTime: 0,
@@ -1830,7 +1885,7 @@ function WhenOut({
       <Button variant={alertsOff ? 'primary' : 'secondary'} onClick={() => want.mutate()} disabled={pending}>
         Download it when it's out
       </Button>
-      {failed && <p className="basis-full text-xs text-recap">{failed.message}</p>}
+      {failed && <p className="basis-full text-xs text-red-300">{failed.message}</p>}
     </div>
   )
 }
@@ -1863,7 +1918,7 @@ function NoRelease({
   return (
     <div
       className={cx(
-        'grid place-items-center p-6 text-center',
+        'grid place-items-center overflow-y-auto overscroll-contain p-6 text-center max-sm:p-3',
         inPlayer ? 'absolute inset-0 z-30 bg-black/90' : 'aspect-video',
       )}
     >
@@ -1909,16 +1964,36 @@ function NoRelease({
   )
 }
 
-function MpvPanel({ title, animeId, episode, player }: { title: string; animeId: number; episode: number; player: string }) {
+function MpvPanel({
+  title,
+  animeId,
+  episode,
+  player,
+  onBrowser,
+}: {
+  title: string
+  animeId: number
+  episode: number
+  player: string
+  onBrowser: () => void
+}) {
   const stop = useMutation({ mutationFn: () => api.post('/api/stop', { animeId, episode }) })
+  const toBrowser = useMutation({ mutationFn: () => api.post('/api/stop', { animeId, episode }), onSuccess: onBrowser })
+  const now = useQuery({
+    queryKey: ['player-external'],
+    queryFn: () => api.get<{ animeId?: number; episode?: number; title?: string; failed?: string }>('/api/player/external'),
+    refetchInterval: stop.isSuccess ? false : 5000,
+  })
+  const shown = now.data?.animeId ? now.data : undefined
 
   return (
     <div className="grid aspect-video place-items-center bg-base-900 p-6 text-center">
       <div>
         <p className="text-sm font-medium text-base-100">Playing in {player === 'vlc' ? 'VLC' : 'mpv'}</p>
         <p className="mt-1 max-w-md truncate text-xs text-base-500">
-          Episode {episode} · {title}
+          Episode {shown?.episode ?? episode} · {shown && shown.animeId !== animeId ? shown.title : title}
         </p>
+        {now.data?.failed && <p className="mt-1 max-w-md text-xs text-red-300">{now.data.failed}</p>}
         <div className="mt-4 flex items-center justify-center gap-2">
           <button
             onClick={() => stop.mutate()}
@@ -1927,11 +2002,16 @@ function MpvPanel({ title, animeId, episode, player }: { title: string; animeId:
           >
             {stop.isSuccess ? 'Stopped' : 'Stop'}
           </button>
+          {(!shown || (shown.animeId === animeId && shown.episode === episode)) && (
+            <button onClick={() => toBrowser.mutate()} disabled={toBrowser.isPending} className={buttonClass('ghost')}>
+              Play here instead
+            </button>
+          )}
           <Link
             to="/settings?tab=Playback"
             className="rounded-md px-3 py-1.5 text-sm text-base-400 hover:text-base-100"
           >
-            Use the browser instead
+            Change player
           </Link>
         </div>
       </div>
@@ -1961,6 +2041,11 @@ function UpNext({
   onCancel: () => void
 }) {
   const [left, setLeft] = useState(UP_NEXT_SECONDS)
+  const [wasAuto, setWasAuto] = useState(auto)
+  if (auto !== wasAuto) {
+    setWasAuto(auto)
+    if (auto) setLeft(UP_NEXT_SECONDS)
+  }
   useEffect(() => {
     if (!auto) return
     if (left <= 0) {
@@ -1973,7 +2058,7 @@ function UpNext({
 
   return (
     <div
-      role="dialog"
+      role="region"
       aria-label="Up next"
       className="absolute right-3 bottom-16 z-20 w-[23rem] max-w-[calc(100%-1.5rem)] animate-rise rounded-sheet bg-base-950/90 p-3 shadow-xl shadow-black/60 ring-1 ring-white/10 backdrop-blur-sm sm:right-4 sm:bottom-20"
     >
@@ -1982,7 +2067,7 @@ function UpNext({
           <img src={thumb} alt="" className="hidden h-[72px] w-32 shrink-0 rounded-md object-cover ring-1 ring-white/10 sm:block" />
         )}
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-white">{label}</p>
+          <p className="truncate text-sm font-semibold text-white" aria-live="polite">{label}</p>
           {line && <p className="mt-0.5 line-clamp-2 text-[13px] text-base-300">{line}</p>}
           {then && <p className="mt-0.5 truncate text-xs text-base-400">{then}</p>}
           {stopped && <p className="mt-1 text-xs text-base-400">The sleep timer stopped auto next.</p>}
@@ -2054,27 +2139,30 @@ function EndOfAired({
   const plan = useMutation({
     meta: { inline: true },
     mutationFn: () => api.post('/api/status', { animeId: sequel!.id, status: 'PLANNING' }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['franchise', animeId] }),
+    onSuccess: () => refreshListState(qc),
   })
   const rate = useMutation({
     meta: { inline: true },
     mutationFn: (tens: number) => api.post('/api/score', { animeId, score: tens * 10 }),
-    onSuccess: () => {
+    onSuccess: (_, tens) => {
       void qc.invalidateQueries({ queryKey: ['anime', animeId] })
       void qc.invalidateQueries({ queryKey: ['library'] })
+      const before = Math.round(score / 10)
+      if (before > 0 && before !== tens) {
+        toast(`Score changed from ${before} to ${tens}`, 'info', { label: 'Undo', run: () => rate.mutate(before) })
+      }
     },
   })
   const theEnd = !upcoming && !sequel
   const recs = useRecommendations(theEnd ? animeId : undefined)
-  const scored = rate.variables ?? Math.round(score / 10)
-  const button = 'rounded-md px-3 py-1.5 text-sm pointer-coarse:min-h-11'
+  const scored = rate.isError ? Math.round(score / 10) : (rate.variables ?? Math.round(score / 10))
   const failed = [alert, plan, rate].find((m) => m.isError)?.error as Error | undefined
 
   return (
     <div
       role="dialog"
       aria-label={upcoming ? 'Next episode' : 'Season finale'}
-      className="absolute right-4 bottom-20 z-20 w-[22rem] max-w-[calc(100%-2rem)] animate-rise rounded-sheet bg-base-950/90 p-3 shadow-xl shadow-black/60 ring-1 ring-white/10 backdrop-blur-sm"
+      className="absolute right-4 bottom-20 z-20 w-[22rem] max-w-[calc(100%-2rem)] max-h-[calc(100%-6rem)] overflow-y-auto overscroll-contain max-sm:inset-x-2 max-sm:bottom-2 max-sm:w-auto max-sm:max-w-none max-sm:max-h-[calc(100%-1rem)] animate-rise rounded-sheet bg-base-950/90 p-3 shadow-xl shadow-black/60 ring-1 ring-white/10 backdrop-blur-sm"
     >
       <p className="text-[13px] font-semibold text-base-400">
         {upcoming ? 'Up next' : sequel ? 'Season finale' : 'The end'}
@@ -2120,35 +2208,23 @@ function EndOfAired({
       {!upcoming && (
         <div className="mt-3 border-t border-base-800 pt-2">
           <p className="text-xs text-base-400">Your score</p>
-          <div className="mt-1 flex flex-wrap gap-1" role="group" aria-label="Your score">
-            {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-              <button
-                key={n}
-                onClick={() => rate.mutate(n)}
-                aria-pressed={scored === n}
-                className={cx(
-                  'grid size-7 place-items-center rounded-md text-xs tabular-nums transition-colors pointer-coarse:size-11',
-                  scored === n ? 'bg-accent-500 text-white' : 'bg-base-850 text-base-300 hover:bg-base-750',
-                )}
-              >
-                {n}
-              </button>
-            ))}
+          <div className="mt-1">
+            <ScorePicker value={scored ?? 0} onChange={(n) => rate.mutate(n)} pending={rate.isPending} small />
           </div>
         </div>
       )}
 
-      {theEnd && (recs.data?.items.length ?? 0) > 0 && (
+      {theEnd && newToYou(recs.data?.items ?? [], 3).length > 0 && (
         <div className="mt-3 border-t border-base-800 pt-2">
           <p className="text-xs text-base-400">More like this</p>
           <div className="mt-1.5 grid grid-cols-3 gap-2">
-            {recs.data!.items.slice(0, 3).map((r) => (
+            {newToYou(recs.data?.items ?? [], 3).slice(0, 3).map((r) => (
               <Link key={r.id} to={`/anime/${r.id}`} className="group min-w-0">
                 <img
                   src={r.cover ?? r.thumb}
                   alt=""
                   loading="lazy"
-                  className="aspect-[2/3] w-full rounded-md object-cover ring-1 ring-white/10 transition-transform group-hover:scale-[1.03]"
+                  className="aspect-2/3 w-full rounded-md object-cover ring-1 ring-white/10 transition-transform group-hover:scale-[1.03]"
                 />
                 <p className="mt-1 line-clamp-1 text-xs text-base-300 group-hover:text-white">{r.title}</p>
               </Link>
@@ -2156,7 +2232,7 @@ function EndOfAired({
           </div>
         </div>
       )}
-      {failed && <p className="mt-2 text-xs text-recap">{failed.message}</p>}
+      {failed && <p className="mt-2 text-xs text-red-300">{failed.message}</p>}
     </div>
   )
 }
@@ -2171,24 +2247,17 @@ function StillWatching({ run, onKeep, onStop }: { run: Unattended[]; onKeep: () 
     meta: { inline: true },
     mutationFn: () =>
       Promise.all(firsts.map((e) => api.post('/api/watched', { animeId: e.animeId, episode: e.episode, watched: false }))),
-    onSuccess: () => {
-      for (const e of firsts) {
-        void qc.invalidateQueries({ queryKey: ['episodes', e.animeId] })
-        void qc.invalidateQueries({ queryKey: ['anime', e.animeId] })
-      }
-      void qc.invalidateQueries({ queryKey: ['upnext'] })
-    },
+    onSuccess: () => refreshListState(qc),
   })
   const one = firsts.length === 1
   const span = one ? `${firsts[0].episode}${run.length > 1 ? `–${Math.max(...run.map((e) => e.episode))}` : ''}` : ''
   const unmarkLabel = one ? `Unmark episode${run.length > 1 ? 's' : ''} ${span}` : `Unmark these ${run.length}`
-  const button = 'rounded-md px-3 py-1.5 text-sm pointer-coarse:min-h-11'
 
   return (
     <div
       role="dialog"
       aria-label="Still watching?"
-      className="absolute right-4 bottom-20 z-20 w-80 max-w-[calc(100%-2rem)] animate-rise rounded-sheet bg-base-950/90 p-3 shadow-xl shadow-black/60 ring-1 ring-white/10 backdrop-blur-sm"
+      className="absolute right-4 bottom-20 z-20 w-80 max-w-[calc(100%-2rem)] max-h-[calc(100%-6rem)] overflow-y-auto overscroll-contain max-sm:inset-x-2 max-sm:bottom-2 max-sm:w-auto max-sm:max-w-none max-sm:max-h-[calc(100%-1rem)] animate-rise rounded-sheet bg-base-950/90 p-3 shadow-xl shadow-black/60 ring-1 ring-white/10 backdrop-blur-sm"
     >
       <p className="text-sm font-semibold text-base-100">Still watching?</p>
       <p className="mt-0.5 text-xs text-base-400">
@@ -2214,7 +2283,7 @@ function StillWatching({ run, onKeep, onStop }: { run: Unattended[]; onKeep: () 
             {unmark.isPending ? 'Unmarking…' : `Didn't see them? ${unmarkLabel}`}
           </button>
         )}
-        {unmark.isError && <p className="text-xs text-recap">{(unmark.error as Error).message}</p>}
+        {unmark.isError && <p className="text-xs text-red-300">{(unmark.error as Error).message}</p>}
       </div>
     </div>
   )
@@ -2250,3 +2319,49 @@ const PhoneGlyph = () => <Glyph d="M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0
 const TogetherGlyph = () => <Glyph d="M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 19c0-3 2.7-5 6-5s6 2 6 5M16 5.2a3 3 0 0 1 0 5.6M18 14.4c1.8.7 3 2.3 3 4.6" />
 const FocusGlyph = () => <Glyph d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
 const SubtitlesGlyph = () => <Glyph d="M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2ZM7 15h4M13 15h4M7 11h10" />
+
+function TunnelDownload({ onReady }: { onReady: () => void }) {
+  const qc = useQueryClient()
+  const [started, setStarted] = useState(false)
+  const setup = useSetup({
+    refetchInterval: (q) => {
+      const p = q.state.data?.progress?.find((x) => x.component === 'cloudflared')
+      return started && p?.stage !== 'done' && p?.stage !== 'failed' ? 1000 : false
+    },
+  })
+  const get = useMutation({
+    meta: { inline: true },
+    mutationFn: () => api.post('/api/setup/install/cloudflared'),
+    onSuccess: () => {
+      setStarted(true)
+      void qc.invalidateQueries({ queryKey: ['setup'] })
+    },
+  })
+  const p = started ? setup.data?.progress?.find((x) => x.component === 'cloudflared') : undefined
+  if (p?.stage === 'done') {
+    return (
+      <Button size="sm" variant="primary" onClick={onReady}>
+        Ready: start the room
+      </Button>
+    )
+  }
+  if (p?.stage === 'failed') {
+    return (
+      <Button size="sm" onClick={() => get.mutate()} disabled={get.isPending}>
+        Download failed. Retry
+      </Button>
+    )
+  }
+  if (started) {
+    return (
+      <span className="text-xs text-base-300 tabular-nums">
+        {p && p.total > 0 ? `Downloading ${Math.round((p.bytes / p.total) * 100)}%` : 'Downloading…'}
+      </span>
+    )
+  }
+  return (
+    <Button size="sm" onClick={() => get.mutate()} disabled={get.isPending}>
+      Download (52 MB)
+    </Button>
+  )
+}

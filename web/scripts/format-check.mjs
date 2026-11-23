@@ -1,4 +1,3 @@
-// The text helpers in src/lib/format.ts, run straight by Node: node scripts/format-check.mjs
 const { bytes, episodeSpan, relativeTime, speed, speedLimit } = await import(new URL('../src/lib/format.ts', import.meta.url))
 
 let failures = 0

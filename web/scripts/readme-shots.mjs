@@ -1,5 +1,3 @@
-// The README's screenshots from a scratch instance into SHOTS; SHOW, EPISODE and AT (seconds) pick the frame.
-//   ANILIST_LIVE=1 YORU_EXTRA_CONFIG=<a real indexer> CHECK=readme-shots.mjs node scripts/run-player-check.mjs
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -23,10 +21,8 @@ const until = async (fn, ms = 15_000) => {
   return false
 }
 
-// The player shot streams a real episode; nothing is shared back while it does.
 await post('/api/prefs', { key: 'downloads.upload', value: 'never' })
 
-// A few of what's trending on the Up next list, each at an episode already out; seen once so covers are stored.
 const trending = (await api('/api/discover?sort=trending&perPage=12'))?.items ?? []
 let listed = 0
 for (const show of trending) {
@@ -41,7 +37,6 @@ console.log(`${listed} shows on Up next`)
 
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1 })
-// Every image on screen drawn, so no shot catches a grey box.
 const settled = () =>
   until(() =>
     page.evaluate(() =>
@@ -56,7 +51,6 @@ const settled = () =>
 
 await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
 await until(() => page.getByRole('heading', { name: 'Up next', exact: true }).isVisible())
-// The banner, from AniList, is the slowest part of the page.
 await until(() => page.locator('h1').first().isVisible(), 60_000)
 await settled()
 await sleep(1500)
@@ -66,13 +60,11 @@ await page.setViewportSize({ width: 1280, height: 1048 })
 await page.goto(`${BASE}/anime/${SHOW}`, { waitUntil: 'domcontentloaded' })
 await until(() => page.getByRole('heading', { name: 'Episodes' }).isVisible(), 30_000)
 await until(() => page.locator('h1').first().isVisible(), 60_000)
-// Episode stills come from another source a moment after the list.
 await until(() => page.locator('li img').count().then((n) => n >= 3), 60_000)
 await settled()
 await sleep(1500)
 await page.screenshot({ path: `${shots}/series.jpg`, type: 'jpeg', quality: 85 })
 
-// A real episode from a real swarm: the frame at AT, paused with the controls up.
 await page.setViewportSize({ width: 1280, height: 800 })
 await page.goto(`${BASE}/watch/${SHOW}/${EPISODE}`, { waitUntil: 'domcontentloaded' })
 const video = page.locator('video')

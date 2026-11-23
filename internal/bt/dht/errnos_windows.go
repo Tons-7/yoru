@@ -7,10 +7,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Windows reports ICMP errors for earlier sends on a later UDP read; they say nothing about the socket.
 func ignoreReadFromError(err error) bool {
-	var errno syscall.Errno
-	if errors.As(err, &errno) {
+	if errno, ok := errors.AsType[syscall.Errno](err); ok {
 		switch errno {
 		case
 			windows.WSAENETRESET,
@@ -18,7 +16,7 @@ func ignoreReadFromError(err error) bool {
 			windows.WSAECONNABORTED,
 			windows.WSAECONNREFUSED,
 			windows.WSAENETUNREACH,
-			windows.WSAETIMEDOUT: // Why does Go have braindead syntax?
+			windows.WSAETIMEDOUT:
 			return true
 		}
 	}

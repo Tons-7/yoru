@@ -9,7 +9,6 @@ import (
 	"yoru/internal/score"
 )
 
-// Timings shrunk to milliseconds.
 func quickWarm(t *testing.T) {
 	t.Helper()
 	probe, poll, stall, stagger := peerProbeDeadline, headPoll, headStall, raceStagger
@@ -19,11 +18,10 @@ func quickWarm(t *testing.T) {
 	})
 }
 
-// A slow release plays as long as bytes keep arriving.
 func TestSlowButDeliveringReleasePlays(t *testing.T) {
 	quickWarm(t)
 	engine := newFakeEngine()
-	engine.trickle[goodHash] = 600 * time.Millisecond // four stall windows
+	engine.trickle[goodHash] = 600 * time.Millisecond
 
 	p := newPlayback(t, engine, []indexer.Torrent{
 		release(goodHash, "[Slow] Sousou no Frieren - 01 [1080p].mkv", 40),
@@ -39,7 +37,6 @@ func TestSlowButDeliveringReleasePlays(t *testing.T) {
 	}
 }
 
-// Peers that never send a byte: move on.
 func TestStalledReleaseGivesWay(t *testing.T) {
 	quickWarm(t)
 	engine := newFakeEngine()
@@ -74,7 +71,6 @@ func withPatience(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { racePatience = old })
 }
 
-// Past the patience window a ready release plays over a slow better one of the same resolution.
 func TestReadyReleasePlaysWhenTheBetterOneIsSlow(t *testing.T) {
 	quickWarm(t)
 	withPatience(t, 200*time.Millisecond)
@@ -107,7 +103,6 @@ func TestReadyReleasePlaysWhenTheBetterOneIsSlow(t *testing.T) {
 	}
 }
 
-// Past the patience, a release as sharp as the slow best one plays when ready, not when the slow one resolves.
 func TestSameResolutionReadyAfterThePatiencePlays(t *testing.T) {
 	quickWarm(t)
 	withPatience(t, 200*time.Millisecond)
@@ -136,7 +131,6 @@ func TestSameResolutionReadyAfterThePatiencePlays(t *testing.T) {
 	}
 }
 
-// With 720p preferred, a 1080p ranked below still loading doesn't hold back a ready 720p.
 func TestLowerRankedSharperOneDoesNotBlockTheReadyOne(t *testing.T) {
 	quickWarm(t)
 	withPatience(t, 200*time.Millisecond)
@@ -165,7 +159,6 @@ func TestLowerRankedSharperOneDoesNotBlockTheReadyOne(t *testing.T) {
 	}
 }
 
-// Resolution outranks speed: a slow 1080p still delivering is waited for, never passed over for a ready 720p.
 func TestSlowHigherResolutionStillWins(t *testing.T) {
 	quickWarm(t)
 	withPatience(t, 200*time.Millisecond)
@@ -187,7 +180,6 @@ func TestSlowHigherResolutionStillWins(t *testing.T) {
 	}
 }
 
-// Within the patience window, the better release still wins.
 func TestBetterReleaseWinsWithinPatience(t *testing.T) {
 	quickWarm(t)
 	withPatience(t, 2*time.Second)

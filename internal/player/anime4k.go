@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// Mode picks the passes, size their CNNs (each step ~doubles GPU cost); the second upscale is always M.
 const (
 	shaderClamp      = "Anime4K_Clamp_Highlights.glsl"
 	shaderDownscale2 = "Anime4K_AutoDownscalePre_x2.glsl"
@@ -19,7 +18,6 @@ const (
 
 var shaderSizes = map[string]bool{"S": true, "M": true, "L": true, "VL": true, "UL": true}
 
-// Anime4KChain returns a mode and size's shader files in order; unknown ones get upstream's defaults.
 func Anime4KChain(mode, size string) []string {
 	size = strings.ToUpper(strings.TrimSpace(size))
 	if !shaderSizes[size] {
@@ -47,8 +45,6 @@ func Anime4KChain(mode, size string) []string {
 	}
 }
 
-// anime4kArgs resolves the chain against the shader directory, returning nothing
-// if a shader is missing: upscaling is a nicety, not worth refusing to play over.
 func (m *MPV) anime4kArgs(mode, size string) []string {
 	if m.shaders == "" {
 		return nil
@@ -63,7 +59,6 @@ func (m *MPV) anime4kArgs(mode, size string) []string {
 				"missing", name, "dir", m.shaders)
 			return nil
 		}
-		// One append per shader: the list separator differs by platform and can't be escaped.
 		args = append(args, "--glsl-shaders-append="+path)
 	}
 	return args

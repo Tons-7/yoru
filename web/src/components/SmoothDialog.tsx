@@ -15,7 +15,7 @@ import {
   type SmoothState,
 } from '../player/smooth'
 import { formatFps, useScreenHz } from '../player/rates'
-import { Segmented } from './ui'
+import { Button, CloseButton, Segmented, SwitchTrack } from './ui'
 
 const DEVICE_CHOICES: ReadonlyArray<{ value: DeviceSmooth; label: string }> = [
   { value: 'auto', label: 'Auto' },
@@ -88,16 +88,13 @@ function FilesRow() {
             : outdated
               ? `The PC has FlyHigh ${s.version}; this Yoru needs ${s.wanted} (about 2 MB).`
               : 'Needs FlyHigh on the PC first, about 2 MB.'}
-        {!s.canInstall && !busy && ' Add it on the PC, from this menu or Settings › About › Programs Yoru uses.'}
+        {!s.canInstall && !busy && ' Add it on the PC, in Settings › About › Programs Yoru uses.'}
+        {install.isError && <span className="block text-red-300">{(install.error as Error).message}</span>}
       </p>
       {s.canInstall && (
-        <button
-          onClick={() => install.mutate()}
-          disabled={busy}
-          className="tap rounded-md bg-accent-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-accent-400 disabled:opacity-60"
-        >
-          {busy ? 'Downloading' : p?.stage === 'failed' ? 'Try again' : outdated ? 'Update' : 'Download'}
-        </button>
+        <Button size="sm" variant="primary" onClick={() => install.mutate()} disabled={busy}>
+          {busy ? 'Downloading' : p?.stage === 'failed' || install.isError ? 'Try again' : outdated ? 'Update' : 'Download'}
+        </Button>
       )}
     </div>
   )
@@ -105,12 +102,14 @@ function FilesRow() {
 
 function SwitchCard({
   label,
+  name,
   hint,
   on,
   onChange,
   dim = false,
 }: {
   label: string
+  name?: string
   hint: string
   on: boolean
   onChange: (on: boolean) => void
@@ -120,7 +119,7 @@ function SwitchCard({
     <button
       role="switch"
       aria-checked={on}
-      aria-label={label}
+      aria-label={name ?? label}
       onClick={() => onChange(!on)}
       className={cx(
         'flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors',
@@ -132,9 +131,7 @@ function SwitchCard({
         <span className="block font-medium">{label}</span>
         <span className="mt-0.5 block text-xs leading-snug text-base-500">{hint}</span>
       </span>
-      <span className={cx('relative h-5 w-9 shrink-0 rounded-full transition-colors', on ? 'bg-accent-500' : 'bg-base-700')}>
-        <span className={cx('absolute top-0.5 size-4 rounded-full bg-white transition-all', on ? 'left-[1.125rem]' : 'left-0.5')} />
-      </span>
+      <SwitchTrack on={on} />
     </button>
   )
 }
@@ -200,19 +197,14 @@ export function SmoothDialog({
               For this episode only. Your saved defaults in Settings › Sound and picture are not changed.
             </p>
           </div>
-          <button
-            onClick={close}
-            aria-label="Close"
-            className="tap relative grid size-9 shrink-0 place-items-center rounded-md text-base-400 hover:bg-base-800 hover:text-base-100"
-          >
-            ✕
-          </button>
+          <CloseButton onClick={close} />
         </div>
 
         <div className="space-y-2">
           <FilesRow />
           <SwitchCard
             label={on && !stopped ? 'On' : 'Off'}
+            name="Smooth motion"
             hint={
               stopped && on
                 ? 'Off for this episode: this device fell behind.'
@@ -270,8 +262,8 @@ export function SmoothDialog({
         <div className="mt-3 space-y-1.5 text-xs leading-snug text-base-500">
           {anime4k && <p>Anime4K ({anime4k}) runs too, before the frames are added.</p>}
           <p>Sound is delayed slightly to stay in sync.</p>
-          <p>Slow in another browser on a laptop? Set it to High performance in Windows' graphics settings.</p>
-          <p className="text-base-600">Frame generation by FlyHigh Engine (Apache 2.0); model under CC BY-NC 4.0.</p>
+          <p>Slow on a laptop? Give the browser High performance in Windows graphics settings.</p>
+          <p className="text-base-500">Frame generation by FlyHigh Engine (Apache 2.0); model under CC BY-NC 4.0.</p>
         </div>
       </div>
     </div>

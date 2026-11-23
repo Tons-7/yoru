@@ -74,7 +74,6 @@ func handshakeTest(t testing.TB, ia []byte, aData, bData string, cryptoProvides 
 		if n != len(bData) {
 			t.FailNow()
 		}
-		// t.Log(string(msg[:n]))
 	}()
 	go func() {
 		defer wg.Done()
@@ -89,13 +88,11 @@ func handshakeTest(t testing.TB, ia []byte, aData, bData string, cryptoProvides 
 		b := res.ReadWriter
 		assert.Equal(t, cryptoSelect(cryptoProvides), res.CryptoMethod)
 		go b.Write([]byte(bData))
-		// Need to be exact here, as there are several reads, and net.Pipe is most synchronous.
 		msg := make([]byte, len(ia)+len(aData))
 		n, _ := io.ReadFull(b, msg)
 		if n != len(msg) {
 			t.FailNow()
 		}
-		// t.Log(string(msg[:n]))
 	}()
 	wg.Wait()
 	a.Close()
@@ -137,9 +134,7 @@ func (tr *trackReader) Read(b []byte) (n int, err error) {
 func TestReceiveRandomData(t *testing.T) {
 	tr := trackReader{rand.Reader, 0}
 	_, _, err := ReceiveHandshake(context.Background(), readWriter{&tr, io.Discard}, nil, DefaultCryptoSelector)
-	// No skey matches
 	require.Error(t, err)
-	// S, then the most padding read before giving up on synchronising.
 	require.EqualValues(t, 96+532, tr.n)
 }
 
@@ -266,7 +261,6 @@ func BenchmarkSkeysReceive(b *testing.B) {
 	}
 	fillRand(b, skeys...)
 	initSkey := skeys[len(skeys)/2]
-	// c := qt.New(b)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i += 1 {

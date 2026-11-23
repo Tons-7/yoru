@@ -27,7 +27,7 @@ async function subscription(): Promise<PushSubscription | null> {
 }
 
 export function registerWorker(): Promise<ServiceWorkerRegistration> | undefined {
-  if (!window.isSecureContext || !supported()) return undefined
+  if (!window.isSecureContext || !('serviceWorker' in navigator)) return undefined
   return navigator.serviceWorker.register('/sw.js')
 }
 
@@ -40,7 +40,7 @@ const sameKey = (a: ArrayBuffer | null | undefined, b: Uint8Array) =>
   !!a && a.byteLength === b.byteLength && new Uint8Array(a).every((v, i) => v === b[i])
 
 export async function enablePush(): Promise<void> {
-  const reg = await registerWorker()
+  const reg = supported() ? await registerWorker() : undefined
   if (!reg) throw new Error('This browser cannot get alerts with Yoru closed')
   await navigator.serviceWorker.ready
   const { publicKey } = await api.get<{ publicKey: string }>('/api/push')
@@ -52,6 +52,12 @@ export async function enablePush(): Promise<void> {
   }
   sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key })
   await api.post('/api/push/subscribe', sub.toJSON())
+}
+
+export async function resyncPush(): Promise<void> {
+  if ((await pushState()) !== 'on') return
+  const sub = await subscription()
+  if (sub) await api.post('/api/push/subscribe', sub.toJSON())
 }
 
 export async function disablePush(): Promise<void> {

@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
-// "Download next" moves a waiting episode to the front, the rest in order, the running one untouched.
-func TestPrioritiseMovesAnEpisodeToTheFront(t *testing.T) {
+func TestPromoteMovesAnEpisodeToTheFront(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedCatalogue(t, s, 100, "FINISHED", 12)
@@ -15,12 +15,11 @@ func TestPrioritiseMovesAnEpisodeToTheFront(t *testing.T) {
 	if _, err := s.Enqueue(ctx, 100, 1, []int{1, 2, 3, 4}); err != nil {
 		t.Fatal(err)
 	}
-	// Episode 1 is downloading now.
 	if _, _, err := s.NextQueued(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	moved, err := s.Prioritise(ctx, 100, "4")
+	moved, err := s.Promote(ctx, 100, "4")
 	if err != nil || !moved {
 		t.Fatalf("moved=%v err=%v", moved, err)
 	}
@@ -47,14 +46,55 @@ func TestPrioritiseMovesAnEpisodeToTheFront(t *testing.T) {
 		t.Errorf("the rest lost their order: %v", pending)
 	}
 
-	// An episode that is not waiting cannot be jumped forward.
-	if moved, err := s.Prioritise(ctx, 100, "1"); err != nil || moved {
-		t.Errorf("an active episode was reordered: moved=%v err=%v", moved, err)
+	if moved, err := s.Promote(ctx, 100, "1"); err != nil || !moved {
+		t.Errorf("an active episode was not moved ahead: moved=%v err=%v", moved, err)
 	}
 }
 
-// Downloads run one at a time across every show, so the queue has to hand out
-// work in the order it was asked for and survive being asked twice.
+func TestANewPickWhileDownloadingIsNotDropped(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedCatalogue(t, s, 300, "FINISHED", 3)
+	if err := s.EnqueueRelease(ctx, 300, 0, 1, "aaaa", "A"); err != nil {
+		t.Fatal(err)
+	}
+	next, _, err := s.NextQueued(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnqueueRelease(ctx, 300, 0, 1, "bbbb", "B"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishQueued(ctx, next.AnimeID, next.EpKey, next.InfoHash, nil); err != nil {
+		t.Fatal(err)
+	}
+	again, ok, err := s.NextQueued(ctx)
+	if err != nil || !ok || again.InfoHash != "bbbb" {
+		t.Fatalf("after the old run: %+v %v %v, want the new pick in line", again, ok, err)
+	}
+}
+
+func TestEnqueueGoesAfterAReorderedLine(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedCatalogue(t, s, 301, "FINISHED", 3)
+	seedCatalogue(t, s, 302, "FINISHED", 3)
+	future := time.Now().Unix() + 60
+	if _, err := s.Enqueue(ctx, 301, 0, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.w.Exec(`UPDATE download_queue SET queued_at = ? WHERE anime_id = 301`, future); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Enqueue(ctx, 302, 0, []int{1}); err != nil {
+		t.Fatal(err)
+	}
+	next, _, _ := s.NextQueued(ctx)
+	if next.AnimeID != 301 {
+		t.Errorf("a later enqueue jumped the line: got %d first", next.AnimeID)
+	}
+}
+
 func TestQueueIsWorkedInOrder(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -68,7 +108,6 @@ func TestQueueIsWorkedInOrder(t *testing.T) {
 		t.Fatalf("queued %d, want 3", added)
 	}
 
-	// Asking again is harmless: nothing is duplicated.
 	if _, err := s.Enqueue(ctx, 100, 1, []int{1, 2, 3}); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +127,7 @@ func TestQueueIsWorkedInOrder(t *testing.T) {
 		if next.Episode != want {
 			t.Errorf("got episode %d, want %d", next.Episode, want)
 		}
-		if err := s.FinishQueued(ctx, next.AnimeID, next.EpKey, nil); err != nil {
+		if err := s.FinishQueued(ctx, next.AnimeID, next.EpKey, next.InfoHash, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -98,7 +137,6 @@ func TestQueueIsWorkedInOrder(t *testing.T) {
 	}
 }
 
-// A release chosen for a queued episode rides with it to the worker and goes with the row when done.
 func TestChosenReleaseIsKeptUntilTheEpisodeIsDone(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -114,7 +152,6 @@ func TestChosenReleaseIsKeptUntilTheEpisodeIsDone(t *testing.T) {
 	if set, _ := s.SetQueuedRelease(ctx, 100, "9", hash, "nothing queued"); set {
 		t.Error("a release was set on an episode not in the queue")
 	}
-	// Queued again (a second click): the choice stands.
 	if _, err := s.Enqueue(ctx, 100, 1, []int{2}); err != nil {
 		t.Fatal(err)
 	}
@@ -123,13 +160,13 @@ func TestChosenReleaseIsKeptUntilTheEpisodeIsDone(t *testing.T) {
 		t.Fatalf("queue = %+v, want the choice on episode 2 alone", items)
 	}
 
-	s.NextQueued(ctx) // episode 1
-	s.FinishQueued(ctx, 100, "1", nil)
+	s.NextQueued(ctx)
+	s.FinishQueued(ctx, 100, "1", "", nil)
 	next, ok, err := s.NextQueued(ctx)
 	if err != nil || !ok || next.Episode != 2 || next.InfoHash != hash {
 		t.Fatalf("next = %+v (ok %v, err %v), want episode 2 with its release", next, ok, err)
 	}
-	if err := s.FinishQueued(ctx, 100, "2", nil); err != nil {
+	if err := s.FinishQueued(ctx, 100, "2", hash, nil); err != nil {
 		t.Fatal(err)
 	}
 	if items, _ := s.QueuedDownloads(ctx); len(items) != 0 {
@@ -137,7 +174,6 @@ func TestChosenReleaseIsKeptUntilTheEpisodeIsDone(t *testing.T) {
 	}
 }
 
-// Changing the release of the episode downloading: it keeps the front of the line once interrupted.
 func TestPromoteReachesTheEpisodeDownloading(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -159,7 +195,6 @@ func TestPromoteReachesTheEpisodeDownloading(t *testing.T) {
 	}
 }
 
-// A failure is kept and reported, not vanished as if it worked.
 func TestFailedQueueEntryIsKept(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -172,7 +207,7 @@ func TestFailedQueueEntryIsKept(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.FinishQueued(ctx, next.AnimeID, next.EpKey, errors.New("no seeders")); err != nil {
+	if err := s.FinishQueued(ctx, next.AnimeID, next.EpKey, next.InfoHash, errors.New("no seeders")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -188,8 +223,6 @@ func TestFailedQueueEntryIsKept(t *testing.T) {
 	}
 }
 
-// Cancelling a show clears the whole show, including what is downloading:
-// a cancel that leaves an episode still downloading is not a cancel.
 func TestDequeueClearsTheShow(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -219,7 +252,6 @@ func TestDequeueClearsTheShow(t *testing.T) {
 	}
 }
 
-// A single episode can be cancelled without touching the rest of the show.
 func TestDequeueOneEpisode(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -247,7 +279,6 @@ func TestDequeueOneEpisode(t *testing.T) {
 	}
 }
 
-// Anything mid-flight when the app stopped has to be picked up again.
 func TestResetActiveRequeues(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -268,7 +299,6 @@ func TestResetActiveRequeues(t *testing.T) {
 	}
 }
 
-// Remove works on a failed entry directly, the one most often dismissed by hand.
 func TestDequeueRemovesAFailedEntry(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -281,7 +311,7 @@ func TestDequeueRemovesAFailedEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.FinishQueued(ctx, next.AnimeID, next.EpKey, errors.New("no seeders")); err != nil {
+	if err := s.FinishQueued(ctx, next.AnimeID, next.EpKey, next.InfoHash, errors.New("no seeders")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -302,7 +332,6 @@ func TestDequeueRemovesAFailedEntry(t *testing.T) {
 	}
 }
 
-// Looking at what is next must not claim it: the queue resolves one ahead while another downloads.
 func TestPeekQueuedLeavesTheEpisodeInLine(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

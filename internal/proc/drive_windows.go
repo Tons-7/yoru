@@ -11,10 +11,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Drive is where a directory really lives, which a path alone can't tell; slow drives make Yoru look slow.
 type Drive struct {
-	Kind string // fixed, network, removable, cdrom, ramdisk, unknown
-	Slow bool   // worth warning about before anyone blames Yoru
+	Kind string
+	Slow bool
 }
 
 func DriveOf(dir string) Drive {
@@ -23,7 +22,6 @@ func DriveOf(dir string) Drive {
 		return Drive{Kind: "unknown"}
 	}
 
-	// GetDriveType wants a root: "P:\" or "\\server\share\".
 	root := filepath.VolumeName(abs)
 	if root == "" {
 		return Drive{Kind: "unknown"}
@@ -39,8 +37,6 @@ func DriveOf(dir string) Drive {
 
 	switch windows.GetDriveType(p) {
 	case windows.DRIVE_FIXED:
-		// A torrent writes pieces in swarm order — a seek per piece on a spinning
-		// disk — while ffmpeg reads the same drive, so the head thrashes and both crawl.
 		if spinning(root) {
 			return Drive{Kind: "hard drive", Slow: true}
 		}
@@ -58,7 +54,6 @@ func DriveOf(dir string) Drive {
 	}
 }
 
-// A disk's "seek penalty" (spinning vs SSD), read with no access rights so no elevation is needed.
 const (
 	ioctlStorageQueryProperty = 0x2D1400
 	seekPenaltyProperty       = 7
@@ -83,9 +78,7 @@ func spinning(root string) bool {
 	return err == nil && penalty
 }
 
-// Split out so a test tells "solid state" from "could not ask", which warn alike.
 func seekPenalty(root string) (bool, error) {
-	// The volume device, \\.\P:, takes no trailing backslash.
 	device := `\\.\` + strings.TrimSuffix(root, `\`)
 	name, err := windows.UTF16PtrFromString(device)
 	if err != nil {

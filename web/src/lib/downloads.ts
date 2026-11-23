@@ -67,9 +67,14 @@ export function byEpisode(items: Download[]): EpisodeRow[] {
 
 export const rowKey = (d: EpisodeRow) => `pc:${d.key}`
 
-export function sortDownloads(items: Download[], queued: Queued[], hidden?: ReadonlySet<string>): DownloadSections {
+export function sortDownloads(items: Download[], allQueued: Queued[], hidden?: ReadonlySet<string>): DownloadSections {
+  const all = byEpisode(items)
+  const going = new Set(
+    all.filter((d) => hidden?.has(rowKey(d))).flatMap((d) => d.episodes.map((e) => `${d.animeId}-${e}`)),
+  )
+  const queued = going.size ? allQueued.filter((q) => !going.has(`${q.animeId}-${q.epKey}`)) : allQueued
   const entries = new Map(queued.map((q) => [`${q.animeId}-${q.epKey}`, q]))
-  const rows = byEpisode(items).filter((d) => !hidden?.has(rowKey(d)))
+  const rows = all.filter((d) => !hidden?.has(rowKey(d)))
   const paired = rows.map((d) => {
     const q = d.episodes.map((e) => entries.get(`${d.animeId}-${e}`)).find(Boolean)
     return q ? { ...d, queued: q } : d
@@ -147,19 +152,19 @@ export function downloadsReport(s: DownloadSections, unit?: SpeedUnit): string {
   const waiting = (q: Queued | undefined) => (q?.retryAt ? ` · ${retryNote(q)}: ${q.error}` : '')
   const queuedLine = (q: Queued) =>
     `- ${q.title ?? `Anime ${q.animeId}`} episode ${q.episode}` +
-    `${q.torrent ? ` — ${Math.round(q.torrent.percent)}% on disk` : ''}${q.error ? ` — ${q.error}` : ''}${waiting(q)}`
+    `${q.torrent ? ` · ${Math.round(q.torrent.percent)}% on disk` : ''}${q.error ? ` · ${q.error}` : ''}${waiting(q)}`
   const downloadLine = (d: Download) =>
-    `- ${downloadLabel(d)} — ${downloadProgress(d, unit)}${d.pinned ? ' · playing' : ''}${d.kept ? ' · kept' : ''}${waiting(d.queued)}` +
+    `- ${downloadLabel(d)} · ${downloadProgress(d, unit)}${d.pinned ? ' · playing' : ''}${d.kept ? ' · kept' : ''}${waiting(d.queued)}` +
     (d.title ? `\n  ${d.name}` : '')
   const section = (name: string, lines: string[]) => (lines.length ? [`${name} (${lines.length})`, ...lines, ''] : [])
 
   return [
     `Yoru downloads at ${new Date().toLocaleTimeString()}`,
     '',
-    ...section('Downloading', [...s.searching.map((q) => `${queuedLine(q)} — finding a release`), ...s.active.map(downloadLine)]),
+    ...section('Downloading', [...s.searching.map((q) => `${queuedLine(q)} · finding a release`), ...s.active.map(downloadLine)]),
     ...section('Waiting', [...s.held.map(downloadLine), ...s.waitingQueue.map(queuedLine)]),
     ...section('Failed', s.failed.map(queuedLine)),
-    ...section('On disk', s.finished.map((d) => `- ${downloadLabel(d)} — ${bytes(d.bytesOnDisk)}${d.kept ? ' · kept' : ''}`)),
+    ...section('On disk', s.finished.map((d) => `- ${downloadLabel(d)} · ${bytes(d.bytesOnDisk)}${d.kept ? ' · kept' : ''}`)),
   ]
     .join('\n')
     .trim()

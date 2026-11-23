@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// Normalise folds what is surely the same title: case, punctuation, apostrophes, spacing.
 func TestNormaliseEquivalentSpellings(t *testing.T) {
 	groups := [][]string{
 		{"Jujutsu Kaisen", "JUJUTSU KAISEN", "jujutsu  kaisen"},
@@ -25,8 +24,6 @@ func TestNormaliseEquivalentSpellings(t *testing.T) {
 	}
 }
 
-// Fold reconciles the three ways a long vowel gets romanised. It is lossy, so
-// it is only ever consulted after an exact Normalise match fails.
 func TestFoldReconcilesRomanisation(t *testing.T) {
 	groups := [][]string{
 		{"Sousou no Frieren", "Sōsō no Frieren", "Soosoo no Frieren"},
@@ -45,7 +42,6 @@ func TestFoldReconcilesRomanisation(t *testing.T) {
 	}
 }
 
-// Folding must not undo what Normalise already settled.
 func TestFoldKeepsSeasonsDistinct(t *testing.T) {
 	if Fold("Show Season 1") == Fold("Show Season 2") {
 		t.Fatal("seasons collapsed together")
@@ -74,7 +70,6 @@ func TestNormaliseRomanNumerals(t *testing.T) {
 }
 
 func TestNormaliseKeepsDistinctTitlesDistinct(t *testing.T) {
-	// Over-normalising is worse: two shows collapsed into one form make the wrong pick unavoidable.
 	distinct := [][2]string{
 		{"Steins;Gate", "Steins;Gate 0"},
 		{"Show Season 1", "Show Season 2"},
@@ -105,7 +100,6 @@ func TestNormaliseHandlesJapaneseAndEdgeCases(t *testing.T) {
 		}
 	}
 
-	// Japanese passes through unharmed; there is nothing to fold.
 	if got := Normalise("進撃の巨人"); got != "進撃の巨人" {
 		t.Errorf("native title altered: %q", got)
 	}
@@ -122,8 +116,6 @@ func TestNormaliseIsIdempotent(t *testing.T) {
 	}
 }
 
-// Normalise is called from many goroutines at once (every search and index
-// build), so a shared transform.Chain would panic with a slice-bounds error.
 func TestNormaliseIsConcurrencySafe(t *testing.T) {
 	titles := []string{
 		"Sōsō no Frieren", "Kimetsu no Yaiba", "Jūjutsu Kaisen",

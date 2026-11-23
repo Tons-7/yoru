@@ -16,12 +16,10 @@ func maskForIP(ip net.IP) []byte {
 	}
 }
 
-// Generate the CRC used to make or validate secure node ID.
 func crcIP(ip net.IP, rand uint8) uint32 {
 	if ip4 := ip.To4(); ip4 != nil {
 		ip = ip4
 	}
-	// Copy IP so we can make changes. Go sux at this.
 	ip = append(make(net.IP, 0, len(ip)), ip...)
 	mask := maskForIP(ip)
 	for i := range mask {
@@ -32,7 +30,6 @@ func crcIP(ip net.IP, rand uint8) uint32 {
 	return crc32.Checksum(ip[:len(mask)], crc32.MakeTable(crc32.Castagnoli))
 }
 
-// Makes a 20-byte node ID secure in place (http://www.libtorrent.org/dht_sec.html).
 func SecureNodeId(id *krpc.ID, ip net.IP) {
 	crc := crcIP(ip, id[19])
 	id[0] = byte(crc >> 24 & 0xff)
@@ -40,8 +37,6 @@ func SecureNodeId(id *krpc.ID, ip net.IP) {
 	id[2] = byte(crc>>8&0xf8) | id[2]&7
 }
 
-// Returns whether the node ID is considered secure. The id is the 20 raw
-// bytes. http://www.libtorrent.org/dht_sec.html
 func NodeIdSecure(id [20]byte, ip net.IP) bool {
 	if isLocalNetwork(ip) {
 		return true
@@ -78,7 +73,6 @@ func init() {
 	classC = mustParseCIDRIPNet("192.168.0.0/16")
 }
 
-// A local network address, exempt from node ID checks (http://www.libtorrent.org/dht_sec.html#enforcement).
 func isLocalNetwork(ip net.IP) bool {
 	if classA.Contains(ip) {
 		return true

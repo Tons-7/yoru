@@ -1,4 +1,3 @@
-// Release notes as the About tab reads them, run straight by Node: node scripts/notes-check.mjs
 const { parseNotes, spans } = await import(new URL('../src/lib/notes.ts', import.meta.url))
 
 let failures = 0

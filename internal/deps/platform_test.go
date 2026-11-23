@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// Names and archive layout differ by OS, the part most likely wrong on a platform not this one.
 func TestComponentFilesPerOS(t *testing.T) {
 	cases := []struct {
 		name, goos string
@@ -26,12 +25,10 @@ func TestComponentFilesPerOS(t *testing.T) {
 	}
 }
 
-// Anime4K always auto-fetches; a command shows only for what this OS can't fetch.
 func TestManualCommandOnlyForUnfetchable(t *testing.T) {
 	if ManualCommand("anime4k") != "" {
 		t.Error("anime4k is auto-fetched everywhere; it should have no manual command")
 	}
-	// The exact command is OS-specific, but on Windows nothing is manual.
 	if runtime.GOOS == "windows" {
 		for _, name := range []string{"ffmpeg", "mpv"} {
 			if ManualCommand(name) != "" {
@@ -53,7 +50,6 @@ func TestFfmpegLinuxURL(t *testing.T) {
 	}
 }
 
-// 32-bit Linux gets a static build too, and an arch with none gets the package manager's command.
 func TestFfmpegLinuxURLCoversThirtyTwoBit(t *testing.T) {
 	for arch, want := range map[string]string{"386": "i686", "arm": "armhf"} {
 		url, err := ffmpegLinuxURLFor(arch)

@@ -27,8 +27,6 @@ import (
 	pp "yoru/internal/bt/peer_protocol"
 )
 
-// Local repro: a stream read stuck on a chunk a silent peer holds while a healthy peer keeps delivering others.
-// SILENTPEER=1; SILENTMIB, SILENTPIECEKIB, SILENTHEALTHY/SLOW/VIDEO (KiB/s), SILENTREQQ, SILENTSECS.
 func TestSilentPeer(t *testing.T) {
 	if os.Getenv("SILENTPEER") != "1" {
 		t.Skip("set SILENTPEER=1")
@@ -43,7 +41,6 @@ func TestSilentPeer(t *testing.T) {
 	t.Logf("knobs %+v; a full healthy queue drains in %.0fs", k,
 		float64(min(k.reqq, 963)*16)/float64(k.healthyKiB))
 
-	// The healthy peer alone, observed from the moment its queue is deep.
 	t.Run("Baseline", func(t *testing.T) {
 		r := silentStart(t, k, dir, mi, data)
 		r.join(r.fake("healthy", k.healthyKiB<<10, -1))
@@ -52,7 +49,6 @@ func TestSilentPeer(t *testing.T) {
 		r.observe(k.observe)
 		r.report()
 	})
-	// A peer that never sends joins once the healthy peer's queue is deep: as the poorer peer it may steal.
 	t.Run("SilentJoinsLate", func(t *testing.T) {
 		r := silentStart(t, k, dir, mi, data)
 		r.join(r.fake("healthy", k.healthyKiB<<10, -1))
@@ -62,7 +58,6 @@ func TestSilentPeer(t *testing.T) {
 		r.observe(k.observe)
 		r.report()
 	})
-	// Same, but the late peer does send, slowly.
 	t.Run("SlowJoinsLate", func(t *testing.T) {
 		r := silentStart(t, k, dir, mi, data)
 		r.join(r.fake("healthy", k.healthyKiB<<10, -1))
@@ -72,7 +67,6 @@ func TestSilentPeer(t *testing.T) {
 		r.observe(k.observe)
 		r.report()
 	})
-	// The silent peer is alone first, serves 1 MiB, then holds the reader's next chunks; the healthy one joins.
 	t.Run("SilentFirst", func(t *testing.T) {
 		r := silentStart(t, k, dir, mi, data)
 		s := r.join(r.fake("silent", k.healthyKiB<<10, 1<<20))
@@ -82,7 +76,6 @@ func TestSilentPeer(t *testing.T) {
 		r.observe(k.observe)
 		r.report()
 	})
-	// Both from the start, the silent one never sending.
 	t.Run("Together", func(t *testing.T) {
 		r := silentStart(t, k, dir, mi, data)
 		r.join(r.fake("healthy", k.healthyKiB<<10, -1))
@@ -91,7 +84,6 @@ func TestSilentPeer(t *testing.T) {
 		r.observe(k.observe)
 		r.report()
 	})
-	// Swarm churn, opt-in (SILENTCHURN=1): a fresh silent peer each time the healthy queue is refilled.
 	t.Run("Churn", func(t *testing.T) {
 		if os.Getenv("SILENTCHURN") != "1" {
 			t.Skip("set SILENTCHURN=1")
@@ -102,7 +94,6 @@ func TestSilentPeer(t *testing.T) {
 		for i := range 3 {
 			r.awaitDeep()
 			r.join(r.fake(fmt.Sprintf("silent%d", i+1), 0, 0))
-			// Wait for the healthy queue to drain before the next one, so each joins a fresh refill.
 			for r.led.outstanding()["healthy"] > 100 {
 				time.Sleep(20 * time.Millisecond)
 			}
@@ -115,8 +106,7 @@ func TestSilentPeer(t *testing.T) {
 type silentKnobs struct {
 	mib, pieceKiB, healthyKiB, slowKiB, videoKiB, reqq int
 	observe                                            time.Duration
-	// fast: a tenth of Yoru's drop and rescue timings, so a regression test runs in seconds.
-	fast bool
+	fast                                               bool
 }
 
 func silentEnv(name string, def int) int {
@@ -126,7 +116,6 @@ func silentEnv(name string, def int) int {
 	return def
 }
 
-// silentTorrent is one episode-sized file in a folder, as a pack of one.
 func silentTorrent(t *testing.T, k silentKnobs) (string, metainfo.MetaInfo, []byte) {
 	t.Helper()
 	dir := t.TempDir()
@@ -151,7 +140,6 @@ func silentTorrent(t *testing.T, k silentKnobs) (string, metainfo.MetaInfo, []by
 	return dir, mi, data
 }
 
-// silentRun is one scenario: Yoru's engine, its peers, a paced reader on the stream URL and what was seen.
 type silentRun struct {
 	t        *testing.T
 	k        silentKnobs
@@ -164,10 +152,9 @@ type silentRun struct {
 	pieceLen int64
 	size     int64
 	drops    atomic.Int32
-	// sheds: drops for sending nothing at all, as against holding the piece a read waits on.
-	sheds   atomic.Int32
-	logDone atomic.Bool
-	fakes   []*silentSeed
+	sheds    atomic.Int32
+	logDone  atomic.Bool
+	fakes    []*silentSeed
 
 	start    time.Time
 	pos      atomic.Int64
@@ -202,7 +189,6 @@ type silentStarve struct {
 
 func silentStart(t *testing.T, k silentKnobs, dir string, mi metainfo.MetaInfo, data []byte) *silentRun {
 	t.Helper()
-	// Yoru's own timings, or a tenth of them for the regression tests; TestMain shortens some for the others.
 	j, sh, re, g, c := janitorEvery, shedAfter, rescueAfter, regroupAfter, censusEvery
 	janitorEvery, shedAfter, rescueAfter, regroupAfter, censusEvery = 5*time.Second, 15*time.Second, 8*time.Second, 20*time.Second, 30*time.Second
 	if k.fast {
@@ -216,7 +202,6 @@ func silentStart(t *testing.T, k silentKnobs, dir string, mi metainfo.MetaInfo, 
 	}
 	r := &silentRun{t: t, k: k, led: newSilentLedger(), hash: mi.HashInfoBytes(), data: data,
 		pieceLen: info.PieceLength, size: info.TotalLength()}
-	// Metadata only: closed before the add, so every byte comes from the scenario's own peers.
 	meta := seeder(t, dir, mi)
 	metaAddr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: meta.LocalPort()}
 	e, err := New(Options{CacheDir: t.TempDir(), SessionDir: t.TempDir()}, slog.New(&silentLog{r: r}))
@@ -268,7 +253,6 @@ func (r *silentRun) join(f *silentSeed) *silentSeed {
 	return f
 }
 
-// stream opens the stream URL as ffmpeg does and reads it at -readrate 2 with a 60 s initial burst.
 func (r *silentRun) stream() {
 	r.ctx, r.stop = context.WithCancel(context.Background())
 	r.finished = make(chan struct{})
@@ -292,7 +276,6 @@ func (r *silentRun) stream() {
 	r.t.Cleanup(r.halt)
 }
 
-// blockMin is the shortest wait recorded as a blocked read: a second under the fast timings.
 func (r *silentRun) blockMin() time.Duration {
 	if r.k.fast {
 		return time.Second
@@ -352,7 +335,6 @@ func (r *silentRun) read(body io.Reader) {
 	}
 }
 
-// monitor samples once a second: who holds the chunk a stuck read waits on, and stretches with no progress.
 func (r *silentRun) monitor() {
 	burst, pace := r.pace()
 	tick := time.NewTicker(time.Second)
@@ -387,7 +369,6 @@ func (r *silentRun) monitor() {
 		}
 		pos := r.pos.Load()
 		behind := burst + pace*now.Sub(r.start).Seconds() - float64(pos)
-		// Behind its pace by over a second and getting under a quarter of it: the reader is starved.
 		starved := behind > pace && float64(pos-lastPos) < pace/4
 		lastPos = pos
 		if starved {
@@ -433,7 +414,6 @@ func (r *silentRun) monitor() {
 	}
 }
 
-// waitingOn names the first chunk at or after pos not yet received, and who holds its request.
 func (r *silentRun) waitingOn(pos int64) string {
 	k, h, held, found := r.led.waiting(pos, r.pieceLen, r.size)
 	if !found {
@@ -446,11 +426,9 @@ func (r *silentRun) waitingOn(pos int64) string {
 	return fmt.Sprintf("%s (held by %s for %.0fs)", where, h.peer, time.Since(h.since).Seconds())
 }
 
-// awaitDeep waits for the healthy peer to hold a full request queue, which only drains to be refilled.
 func (r *silentRun) awaitDeep() {
 	deep := min(r.k.reqq, 963) * 9 / 10
 	if r.k.fast {
-		// A queue only grows each time it drains, so a while downloading lets it grow as deep as it gets here.
 		deep = 8
 		time.Sleep(time.Until(r.start.Add(10 * time.Second)))
 	}
@@ -510,7 +488,6 @@ func (r *silentRun) report() {
 		r.starved.holder, mib(r.pos.Load()), mib(r.size), r.drops.Load(), r.led.stealCounts(), strings.Join(peers, "; "))
 }
 
-// silentLog passes Yoru's info lines to the test log and counts the peers it dropped.
 type silentLog struct{ r *silentRun }
 
 func (h *silentLog) Enabled(_ context.Context, l slog.Level) bool { return l >= slog.LevelInfo }
@@ -542,19 +519,16 @@ type silentHolding struct {
 	since time.Time
 }
 
-// silentLedger follows every request Yoru's client sends, through bt's callbacks (called under its lock).
 type silentLedger struct {
-	mu     sync.Mutex
-	names  map[string]string
-	holder map[silentChunk]silentHolding
-	got    map[silentChunk]bool
-	useful map[string]int64
-	steals map[string]int
-	// Per peer: requests outstanding, and the batch sent since it last had none, in order.
-	count   map[string]int
-	batch   map[string][]silentChunk
-	batchAt map[string]time.Time
-	// Piece states near the previous batch's end, read just after a new batch began (SILENTTRACE).
+	mu         sync.Mutex
+	names      map[string]string
+	holder     map[silentChunk]silentHolding
+	got        map[silentChunk]bool
+	useful     map[string]int64
+	steals     map[string]int
+	count      map[string]int
+	batch      map[string][]silentChunk
+	batchAt    map[string]time.Time
 	tor        atomic.Pointer[bt.Torrent]
 	lastSent   map[string]silentChunk
 	batchState map[string]string
@@ -573,7 +547,6 @@ func newSilentLedger() *silentLedger {
 		lastSent: map[string]silentChunk{}, batchState: map[string]string{}, hist: map[silentChunk][]string{}}
 }
 
-// note keeps a chunk's last few request events. Caller holds l.mu.
 func (l *silentLedger) note(c silentChunk, ev string) {
 	h := append(l.hist[c], time.Now().Format("15:04:05.000")+" "+ev)
 	l.hist[c] = h[max(0, len(h)-4):]
@@ -585,7 +558,6 @@ func (l *silentLedger) history(c silentChunk) []string {
 	return slices.Clone(l.hist[c])
 }
 
-// snapshot reads piece states around piece p once bt's lock is free; callbacks run under it.
 func (l *silentLedger) snapshot(peer string, p uint32) {
 	t := l.tor.Load()
 	if t == nil || os.Getenv("SILENTTRACE") != "1" {
@@ -604,7 +576,6 @@ func (l *silentLedger) snapshot(peer string, p uint32) {
 	}()
 }
 
-// batchOf describes a peer's latest batch: when it began, its size, piece span, and where c sits in it.
 func (l *silentLedger) batchOf(peer string, c silentChunk) string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -644,7 +615,6 @@ func (l *silentLedger) hook(cfg *bt.ClientConfig) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		c, who := silentChunk{uint32(ev.Index), uint32(ev.Begin)}, l.who(ev.Peer)
-		// A steal is a delete from one peer followed at once by a request of the same chunk from another.
 		if l.lastDel.ok && l.lastDel.c == c && l.lastDel.peer != who {
 			l.steals[who+"<-"+l.lastDel.peer]++
 		}
@@ -712,7 +682,6 @@ func (l *silentLedger) outstanding() map[string]int {
 	return out
 }
 
-// runs is a peer's latest batch in request order as piece runs, e.g. 3/60 8/0-63.
 func (l *silentLedger) runs(peer string) string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -733,7 +702,6 @@ func (l *silentLedger) runs(peer string) string {
 	return strings.Join(parts, " ")
 }
 
-// heldBy lists up to n chunks a peer holds, as piece/chunk, and how many in all.
 func (l *silentLedger) heldBy(peer string, n int) string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -778,7 +746,6 @@ func (l *silentLedger) waiting(pos, pieceLen, size int64) (silentChunk, silentHo
 	return silentChunk{}, silentHolding{}, false, false
 }
 
-// silentSeed is a minimal BitTorrent seeder: FIFO like libtorrent, at a set rate, silent after serve bytes.
 type silentSeed struct {
 	name     string
 	addr     *net.TCPAddr
@@ -840,7 +807,7 @@ func (s *silentSeed) conn(c net.Conn) {
 	go func() { <-ctx.Done(); c.Close() }()
 	hs := make([]byte, 68)
 	if _, err := io.ReadFull(c, hs); err != nil || string(hs[:20]) != pp.Protocol || string(hs[28:48]) != string(s.hash[:]) {
-		return // an obfuscated attempt: bt dials again in plain text
+		return
 	}
 	var wmu sync.Mutex
 	send := func(b []byte) {
@@ -857,7 +824,6 @@ func (s *silentSeed) conn(c net.Conn) {
 	hello, _ := bencode.Marshal(pp.ExtendedHandshakeMessage{M: map[pp.ExtensionName]pp.ExtensionNumber{}, V: "silent-peer", Reqq: s.reqq})
 	msg(pp.Message{Type: pp.Extended, ExtendedID: pp.HandshakeExtendedID, ExtendedPayload: hello})
 	if s.name != "healthy" && os.Getenv("SILENTBITFIELD") == "1" {
-		// All but the last piece: bt counts each piece, refreshing its cached order; a full one is HaveAll.
 		have := make([]bool, (int64(len(s.data))+s.pieceLen-1)/s.pieceLen)
 		for i := range len(have) - 1 {
 			have[i] = true
@@ -891,7 +857,6 @@ func (s *silentSeed) conn(c net.Conn) {
 			}
 		}
 	}()
-	// Requests are served in the order they came, at the limiter's pace, until the peer goes quiet.
 	go func() {
 		for {
 			mu.Lock()
@@ -936,7 +901,6 @@ func (s *silentSeed) conn(c net.Conn) {
 			wake.Broadcast()
 			mu.Unlock()
 		case pp.Cancel:
-			// Fast extension: a cancelled request still queued is answered with a reject, as libtorrent does.
 			r := m.RequestSpec()
 			mu.Lock()
 			i := slices.Index(queue, r)

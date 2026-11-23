@@ -12,8 +12,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// A download stopped before its first bytes (an episode started playing) stays this episode's, so the
-// retry resumes it: unrecorded, the sweep listed it under no show and the queue searched again.
 func TestInterruptedDownloadIsStillTheEpisodes(t *testing.T) {
 	engine := newFakeEngine()
 	engine.stuck[goodHash] = true
@@ -22,7 +20,6 @@ func TestInterruptedDownloadIsStillTheEpisodes(t *testing.T) {
 
 	st := prefetchStore(t)
 	ctx := context.Background()
-	// Named as the fake engine names its file, so the held copy is recognised as the show's.
 	episodes, english := 28, "Sousou no Frieren"
 	if _, err := st.ImportList(ctx,
 		[]store.Anime{{ID: 1, Romaji: "Frieren", English: &english, Synonyms: "[]", Genres: "[]", Episodes: &episodes}},
@@ -53,7 +50,6 @@ func TestInterruptedDownloadIsStillTheEpisodes(t *testing.T) {
 	}
 }
 
-// Playing an episode already whole on disk pauses nothing; "continue" pauses nothing ever.
 func TestYieldOnlyForAnEpisodeStillArriving(t *testing.T) {
 	engine := newFakeEngine()
 	p := newPlayback(t, engine, nil)
@@ -61,7 +57,6 @@ func TestYieldOnlyForAnEpisodeStillArriving(t *testing.T) {
 	if err := p.store.EnsureAnime(ctx, 2); err != nil {
 		t.Fatal(err)
 	}
-	// Another show's download, half way.
 	engine.ids[5] = deadHash
 	if err := p.store.RecordTorrent(ctx, store.TorrentRecord{
 		InfoHash: deadHash, EngineID: 5, Name: "other", AnimeID: 2, EpKey: "1", FilePath: "other.mkv", TotalSize: 100,
@@ -71,7 +66,6 @@ func TestYieldOnlyForAnEpisodeStillArriving(t *testing.T) {
 	if err := p.store.PinCache(ctx, deadHash, 0, false); err != nil {
 		t.Fatal(err)
 	}
-	// This show's episode, whole on disk.
 	engine.ids[6] = goodHash
 	if err := p.store.RecordTorrent(ctx, store.TorrentRecord{
 		InfoHash: goodHash, EngineID: 6, Name: "mine", AnimeID: 1, EpKey: "1", FilePath: "mine.mkv", TotalSize: 100,

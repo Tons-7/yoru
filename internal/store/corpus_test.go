@@ -43,7 +43,6 @@ func TestSaveCorpusStoresTitles(t *testing.T) {
 	}
 }
 
-// Re-running the seed must not multiply rows, since it is a periodic job.
 func TestSaveCorpusIsIdempotent(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -61,7 +60,6 @@ func TestSaveCorpusIsIdempotent(t *testing.T) {
 	}
 }
 
-// A later source may know a field the seed did not; it must not blank one it does not know about.
 func TestSaveCorpusMergesFields(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -100,7 +98,6 @@ func TestSaveCorpusSkipsUnusableRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Empty, blank and punctuation-only titles normalise to nothing.
 	if written != 1 {
 		t.Fatalf("wrote %d titles, want only the usable one", written)
 	}
@@ -124,7 +121,6 @@ func TestKnownIDsIncludesDead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Dead ids count as known, or every refresh re-requests them forever.
 	for _, id := range []int{1, 2, 99, 100} {
 		if _, ok := known[id]; !ok {
 			t.Errorf("id %d missing from known set", id)
@@ -207,7 +203,6 @@ func TestBuildIndexResolvesEveryTitleVariant(t *testing.T) {
 	}
 }
 
-// Unknown year and episode count are stored as NULL, and one such row must not fail the index build.
 func TestBuildIndexToleratesNullMetadata(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -241,7 +236,6 @@ func TestBuildIndexEmptyCorpus(t *testing.T) {
 	}
 }
 
-// Built through the store, so the index carries seasons and season two stays season two.
 func TestIndexKnowsEachEntrysSeason(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

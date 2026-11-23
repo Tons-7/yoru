@@ -6,14 +6,11 @@ import (
 	"strings"
 )
 
-// Rejection names the rule that refused a release, so the UI shows the reason.
 type Rejection struct {
 	Rule   string `json:"rule"`
 	Reason string `json:"reason"`
 }
 
-// Independent specs decide acceptance (à la Sonarr), separate from scoring; the
-// first tier to reject stops the rest, so a definitive rule isn't hidden behind a guess.
 type spec struct {
 	name   string
 	tier   int
@@ -28,10 +25,9 @@ const (
 )
 
 var (
-	discImage  = regexp.MustCompile(`(?i)\b(bdmv|dvdiso|bdiso|iso|disc\s*\d*|avc\s+dts-hd)\b`)
+	discImage  = regexp.MustCompile(`(?i)\b(bdmv|dvdiso|bdiso)\b|\.iso\b|\biso\s+image\b`)
 	sampleFile = regexp.MustCompile(`(?i)\bsample\b`)
-	// A title ending in a file extension names one file; these are not ones a player opens.
-	notVideo = regexp.MustCompile(`(?i)\.(gxs|xdelta|zip|rar|7z|ass|ssa|srt|sub|idx|mka|flac|mp3|ogg|pdf|txt|nfo|exe|iso)$`)
+	notVideo   = regexp.MustCompile(`(?i)\.(gxs|xdelta|zip|rar|7z|ass|ssa|srt|sub|idx|mka|flac|mp3|ogg|pdf|txt|nfo|exe|iso)$`)
 )
 
 var specs = []spec{
@@ -56,7 +52,6 @@ var specs = []spec{
 	{
 		name: "seeders", tier: tierUnplayable,
 		reject: func(c Candidate, _ Preferences) string {
-			// Only a counted zero is a dead swarm.
 			if c.Torrent.SeedersKnown && c.Torrent.Seeders == 0 {
 				return "no seeders"
 			}
@@ -64,7 +59,6 @@ var specs = []spec{
 		},
 	},
 	{
-		// A disc image is a whole Blu-ray no player here can seek into, not an episode.
 		name: "disc image", tier: tierUnplayable,
 		reject: func(c Candidate, _ Preferences) string {
 			if discImage.MatchString(c.Torrent.Title) {
@@ -74,7 +68,6 @@ var specs = []spec{
 		},
 	},
 	{
-		// Patches, subtitle packs and soundtracks are filed beside the show under its name.
 		name: "not a video", tier: tierUnplayable,
 		reject: func(c Candidate, _ Preferences) string {
 			if notVideo.MatchString(strings.TrimSpace(c.Torrent.Title)) {
@@ -113,7 +106,7 @@ var specs = []spec{
 			if prefs.Audio == "dub" {
 				return "no English dub"
 			}
-			return "English dub only"
+			return "dubbed only, no Japanese audio"
 		},
 	},
 	{
@@ -126,7 +119,6 @@ var specs = []spec{
 		},
 	},
 	{
-		// The user's own: still offered in the picker with the reason, never taken on its own.
 		name: "avoided", tier: tierPolicy,
 		reject: func(c Candidate, prefs Preferences) string {
 			for _, g := range prefs.AvoidGroups {
@@ -157,8 +149,6 @@ var specs = []spec{
 	},
 }
 
-// evaluateSpecs returns every rejection from the first tier that refuses the
-// release, so the message is about the real problem, not its consequences.
 func evaluateSpecs(c Candidate, prefs Preferences) []Rejection {
 	var out []Rejection
 	tier := 0
@@ -181,19 +171,15 @@ func evaluateSpecs(c Candidate, prefs Preferences) []Rejection {
 
 func (r Rejection) String() string { return fmt.Sprintf("%s: %s", r.Rule, r.Reason) }
 
-// Unwanted reports a release the audio or raw choice rules out, whatever else is true of it.
 func Unwanted(c Candidate, prefs Preferences) bool {
 	return (!prefs.AllowRaw && IsRaw(c)) || audioMismatch(c.Release, prefs.Audio)
 }
 
-// IsRaw reports an untranslated broadcast capture (transport streams always are).
 func IsRaw(c Candidate) bool {
 	return c.Release.Extension == "ts" ||
 		strings.Contains(strings.ToLower(c.Torrent.Category), "raw")
 }
 
-// RejectedOnlyAsRaw reports a release that would have been picked if it
-// carried subtitles, which is the normal state of a brand-new episode.
 func (r Result) RejectedOnlyAsRaw() bool {
 	if len(r.Rejections) == 0 {
 		return false

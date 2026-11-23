@@ -26,7 +26,6 @@ interface CharacterData {
   voices: Array<{ id?: number; name: string; image?: string; language: string }>
 }
 
-/** A character: who voiced them, and the shows they're in, the viewer's first. */
 export function CharacterPage() {
   const id = Number(useParams().characterId)
   const character = useQuery({
@@ -38,6 +37,7 @@ export function CharacterPage() {
   const c = character.data
   useDocumentTitle(c ? personName(c.name) : undefined)
 
+  if (!(id > 0)) return <ErrorState error={new Error('Unknown character')} />
   if (character.isPending) return <PeopleSkeleton />
   if (!c) return <ErrorState error={character.error} retry={() => void character.refetch()} />
 

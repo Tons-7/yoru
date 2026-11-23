@@ -118,7 +118,7 @@ export function deviceSmooth(): DeviceSmooth {
 }
 export const setDeviceSmooth = (choice: DeviceSmooth) => writeKey(DEVICE_KEY, choice === 'auto' ? null : choice)
 
-const touchDevice = () => typeof matchMedia === 'function' && matchMedia('(hover: none) and (pointer: coarse)').matches
+export const touchDevice = () => typeof matchMedia === 'function' && matchMedia('(hover: none) and (pointer: coarse)').matches
 
 export function smoothHere(choice: DeviceSmooth, shared: boolean): boolean {
   if (choice === 'off') return false
@@ -212,8 +212,13 @@ const canvasOwners = new WeakMap<HTMLCanvasElement, object>()
 export function claimCanvas(canvas: HTMLCanvasElement): object {
   const token = {}
   canvasOwners.set(canvas, token)
+  canvasRedraws.delete(canvas)
   return token
 }
+
+const canvasRedraws = new WeakMap<HTMLCanvasElement, () => void>()
+export const setCanvasRedraw = (canvas: HTMLCanvasElement, redraw: () => void) => canvasRedraws.set(canvas, redraw)
+export const redrawCanvas = (canvas: HTMLCanvasElement) => canvasRedraws.get(canvas)?.()
 export const ownsCanvas = (canvas: HTMLCanvasElement, token: object) => canvasOwners.get(canvas) === token
 
 export interface SmoothLive {
@@ -288,13 +293,14 @@ async function load(): Promise<Engine> {
     file('flyhighfg.weights').then((r) => r.arrayBuffer()),
   ])
   let engine: FhEngine
-  let device: GPUDevice
+  let device: GPUDevice | undefined
   let model: FhModel
   try {
     engine = await lib.FhEngine.create({})
     device = engine.device() as GPUDevice
     model = engine.loadModel(graph, manifest, new Uint8Array(weights))
   } catch (err) {
+    device?.destroy()
     broken = { err, at: Date.now() }
     throw err
   }
@@ -384,6 +390,8 @@ const CRAWL_FPS = 10
 const SAMPLE_EVERY = 30
 const SAMPLE_RETRIES = 8
 const RECOVER_WINDOWS = 15
+const PRECISE_ABOVE = 1280
+let preciseTooSlow = false
 
 type Frame = { source: number } | { output: number }
 interface Request {
@@ -503,11 +511,14 @@ async function start({
   undo.push(() => releaseAhead(engine))
   await compiledAhead(engine, device)
   if (run.stopped) throw new Error('stopped while starting')
-  const stream: FhStream = engine.stream(
-    model,
-    { width: size.width, height: size.height },
-    { mode: 'video', cadence: held, held_frames: { mean: 0.0033, max: 0.06 }, inputs: INPUTS, outputs: OUTPUTS },
-  )
+  let precise = !preciseTooSlow && Math.max(size.width, size.height) > PRECISE_ABOVE
+  const open = (): FhStream =>
+    engine.stream(
+      model,
+      { width: size.width, height: size.height, preciseMotion: precise },
+      { mode: 'video', cadence: held, held_frames: { mean: 0.0033, max: 0.06 }, inputs: INPUTS, outputs: OUTPUTS },
+    )
+  let stream = open()
   undo.push(() => stream.free())
   const base: { mode: PaceMode; lookahead: boolean; fps_limit: number } = {
     mode: ratePace(rate, lastScreenHz(), 0).mode,
@@ -520,8 +531,11 @@ async function start({
   const format = navigator.gpu.getPreferredCanvasFormat()
   context.configure({ device, format, alphaMode: 'opaque' })
   const token = claimCanvas(canvas)
+  canvas.dataset.precise = precise ? '1' : '0'
   undo.push(() => {
-    if (ownsCanvas(canvas, token)) context.unconfigure()
+    if (!ownsCanvas(canvas, token)) return
+    canvasRedraws.delete(canvas)
+    context.unconfigure()
   })
 
   const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' })
@@ -601,7 +615,12 @@ async function start({
   }
 
   const shownGroups = new Map<string, GPUBindGroup>()
+  let lastShown: Frame | undefined
+  setCanvasRedraw(canvas, () => {
+    if (lastShown) present(lastShown)
+  })
   const present = (frame: Frame) => {
+    lastShown = frame
     const source = 'source' in frame
     const slot = source ? frame.source : frame.output
     const key = `${source ? 'i' : 'o'}${slot}`
@@ -741,13 +760,33 @@ async function start({
   const recent: number[] = []
   let busy = false
   let handle = 0
+  let dropPrecise = false
+  const withoutPrecise = () => {
+    dropPrecise = false
+    const next = open()
+    const old = stream
+    stream = next
+    setTimeout(() => {
+      try {
+        old.free()
+      } catch (err) {
+        console.debug('smooth motion: released after its device', err)
+      }
+    }, 2000)
+    slotViews.clear()
+    shownGroups.clear()
+    canvas.dataset.precise = '0'
+    restart()
+    stream.warmUp()
+  }
   const onFrame = async (_now: number, meta: VideoFrameCallbackMetadata) => {
     if (run.stopped) return
     handle = video.requestVideoFrameCallback(onFrame)
     if (busy) return
     busy = true
-    const mine = epoch
     try {
+      if (dropPrecise) withoutPrecise()
+      const mine = epoch
       const now = performance.now()
       const at = meta.mediaTime * 1000
       const slot = stream.nextInput(recent)
@@ -808,7 +847,7 @@ async function start({
     const next = ratePace(pace, screenHz, sourceHz, stepsDown)
     const fps = Math.round(next.fps)
     canvas.dataset.target = String(fps)
-    knownRunning.tell(fps)
+    if (ownsCanvas(canvas, token)) knownRunning.tell(fps)
     if (sameMode(next.mode, base.mode)) return
     base.mode = next.mode
     pacer.setOptions(now, { ...base, playback_rate: video.playbackRate })
@@ -847,8 +886,10 @@ async function start({
     if (!ownsCanvas(canvas, token)) return
     live.delete(video)
     knownRunning.tell(0)
+    knownSource.tell(0)
     delete canvas.dataset.shown
     delete canvas.dataset.target
+    delete canvas.dataset.precise
   })
   const onTick = (now: number) => {
     if (run.stopped) return
@@ -895,6 +936,13 @@ async function start({
     }
     if (slowWindows < SLOW_WINDOWS) return
     slowWindows = 0
+    if (precise) {
+      precise = false
+      preciseTooSlow = true
+      dropPrecise = true
+      lastCounts = null
+      return
+    }
     const current = ratePace(pace, screenHz, sourceHz, stepsDown)
     if (pace === 'auto' && ratePace(pace, screenHz, sourceHz, stepsDown + 1).fps < current.fps) {
       stepsDown++

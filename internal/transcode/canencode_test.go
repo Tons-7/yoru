@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// listingFFmpeg is a script answering -version and -encoders like ffmpeg does.
 func listingFFmpeg(t *testing.T, encoders string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -34,7 +33,6 @@ func listingFFmpeg(t *testing.T, encoders string) string {
 	return path
 }
 
-// Without libx264 (Fedora's ffmpeg-free) or a working hardware encoder, nothing streams.
 func TestCanEncodeNeedsAnH264Encoder(t *testing.T) {
 	ctx := context.Background()
 	if CanEncode(ctx, listingFFmpeg(t, " V....D libopenh264           OpenH264 H.264")) {

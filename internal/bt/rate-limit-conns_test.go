@@ -10,7 +10,6 @@ import (
 	"yoru/internal/bt/internal/testutil"
 )
 
-// A busy download emptying a capped bucket doesn't shut other torrents out of peers; a zero limit does.
 func TestCappedClientStillMakesConns(t *testing.T) {
 	limiter := rate.NewLimiter(rate.Inf, 256<<10)
 	cfg := TestingConfig(t)
@@ -32,14 +31,12 @@ func TestCappedClientStillMakesConns(t *testing.T) {
 		defer cl.unlock()
 		return tt.newConnsAllowed()
 	}
-	// Once its pieces are checked it wants data, so peers.
 	for end := time.Now().Add(5 * time.Second); !allowed(); time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(end) {
 			t.Fatal("the torrent never wanted peers")
 		}
 	}
 
-	// What a download at the cap does to the shared bucket.
 	limiter.SetLimit(1 << 20)
 	limiter.ReserveN(time.Now(), limiter.Burst())
 	limiter.ReserveN(time.Now(), limiter.Burst())

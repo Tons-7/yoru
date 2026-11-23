@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// Pinning a release clears its episode's other releases (one swapped in mid-episode) but no other episode's.
 func TestPinPlayingClearsOnlyItsEpisode(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

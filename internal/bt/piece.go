@@ -2,7 +2,6 @@ package bt
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"iter"
 	"sync"
@@ -13,24 +12,18 @@ import (
 	"github.com/anacrolix/missinggo/v2/bitmap"
 	"github.com/anacrolix/missinggo/v2/panicif"
 
-	"yoru/internal/bt/merkle"
 	"yoru/internal/bt/metainfo"
 	pp "yoru/internal/bt/peer_protocol"
-	"yoru/internal/bt/segments"
 	"yoru/internal/bt/storage"
 )
 
-// Why is it an int64?
 type pieceVerifyCount = int64
 
 type Piece struct {
-	// The piece's SHA1, from the metainfo "pieces" field; nil if the info isn't v1 compatible.
-	hash *metainfo.Hash
-	// Not easy to use unique.Handle because we need this as a slice sometimes.
-	hashV2 g.Option[[32]byte]
-	t      *Torrent
-	index  pieceIndex
-	// First and one after the last file indexes.
+	hash               *metainfo.Hash
+	hashV2             g.Option[[32]byte]
+	t                  *Torrent
+	index              pieceIndex
 	beginFile, endFile int
 
 	readerCond chansync.BroadcastCond
@@ -38,31 +31,20 @@ type Piece struct {
 	numVerifies     pieceVerifyCount
 	numVerifiesCond chansync.BroadcastCond
 
-	publicPieceState PieceState
-	// Piece-specific priority. There are other priorities like File and Reader.
-	priority PiecePriority
-	// Availability on top of len(Torrent.connsWithAllPieces): one per peer outside that set that has it,
-	// counted once the info is known.
+	publicPieceState     PieceState
+	priority             PiecePriority
 	relativeAvailability int
 
-	// This can be locked when the Client lock is taken, but probably not vice versa.
 	pendingWritesMutex sync.Mutex
 	pendingWrites      int
 	noPendingWrites    sync.Cond
 
-	// Connections that have written data to this piece since its last check.
-	// This can include connections that have closed.
 	dirtiers map[*Peer]struct{}
 
-	// Value to twiddle to detect races.
-	race byte
-	// Currently being hashed.
-	hashing bool
-	// The piece state may have changed, and is being synchronized with storage.
-	marking bool
-	// The Completion.Ok field cached from the storage layer.
-	storageCompletionOk bool
-	// Sticks on once set for the first time.
+	race                       byte
+	hashing                    bool
+	marking                    bool
+	storageCompletionOk        bool
 	storageCompletionHasBeenOk bool
 }
 
@@ -208,16 +190,15 @@ func (p *Piece) bytesLeft() (ret pp.Integer) {
 	return p.length() - p.numDirtyBytes()
 }
 
-// Forces the piece data to be rehashed.
 func (p *Piece) VerifyData() error {
 	return p.VerifyDataContext(context.Background())
 }
 
-// VerifyDataContext rehashes the piece and waits, which leaves hashing concurrency to the caller.
 func (p *Piece) VerifyDataContext(ctx context.Context) error {
 	locker := p.t.cl.locker()
 	locker.Lock()
 	if p.t.closed.IsSet() {
+		locker.Unlock()
 		return errTorrentClosed
 	}
 	target, err := p.t.queuePieceCheck(p.index)
@@ -225,15 +206,17 @@ func (p *Piece) VerifyDataContext(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	//log.Printf("target: %d", target)
+	return p.waitVerified(ctx, target)
+}
+
+func (p *Piece) waitVerified(ctx context.Context, target pieceVerifyCount) error {
+	locker := p.t.cl.locker()
 	for {
 		locker.RLock()
 		done := p.numVerifies >= target
-		//log.Printf("got %d verifies", p.numVerifies)
 		numVerifiesChanged := p.numVerifiesCond.Signaled()
 		locker.RUnlock()
 		if done {
-			//log.Print("done")
 			return nil
 		}
 		select {
@@ -265,7 +248,6 @@ func (p *Piece) SetPriority(prio PiecePriority) {
 	p.t.updatePiecePriority(p.index, "Piece.SetPriority")
 }
 
-// This is priority based only on piece, file and reader priorities.
 func (p *Piece) purePriority() (ret PiecePriority) {
 	for _, f := range p.files() {
 		ret.Raise(f.prio)
@@ -281,17 +263,13 @@ func (p *Piece) purePriority() (ret PiecePriority) {
 }
 
 func (p *Piece) ignoreForRequests() bool {
-	// Ordered by cheapest checks and most likely to persist first.
 
-	// There's a method that gets this with complete, but that requires a bitmap lookup. Defer that.
 	if !p.storageCompletionOk {
-		// Piece completion unknown.
 		return true
 	}
 	if p.hashing || p.marking || !p.haveHash() || p.t.dataDownloadDisallowed.IsSet() {
 		return true
 	}
-	// This is valid after we know that storage completion has been cached.
 	if p.t.pieceComplete(p.index) {
 		return true
 	}
@@ -301,7 +279,6 @@ func (p *Piece) ignoreForRequests() bool {
 	return false
 }
 
-// This is the priority adjusted for piece state like completion, hashing etc.
 func (p *Piece) effectivePriority() (ret PiecePriority) {
 	if p.ignoreForRequests() {
 		return PiecePriorityNone
@@ -309,15 +286,12 @@ func (p *Piece) effectivePriority() (ret PiecePriority) {
 	return p.purePriority()
 }
 
-// UpdateCompletion rereads the piece's completion from storage (and priority with it), for data changed
-// outside the Client.
 func (p *Piece) UpdateCompletion() {
 	p.t.cl.lock()
 	defer p.t.cl.unlock()
 	p.t.updatePieceCompletion(p.index)
 }
 
-// TODO: Probably don't include Completion.Err?
 func (p *Piece) completion() (ret storage.Completion) {
 	ret.Ok = p.storageCompletionOk
 	if ret.Ok {
@@ -334,13 +308,10 @@ func (p *Piece) State() PieceState {
 	return p.t.PieceState(p.index)
 }
 
-// The first possible request index for the piece.
 func (p *Piece) requestIndexBegin() RequestIndex {
 	return p.t.pieceRequestIndexBegin(p.index)
 }
 
-// The maximum end request index for the piece. Some of the requests might not be valid, it's for
-// cleaning up arrays and bitmaps in broad strokes.
 func (p *Piece) requestIndexMaxEnd() RequestIndex {
 	new := min(p.t.pieceRequestIndexBegin(p.index+1), p.t.maxEndRequest())
 	if false {
@@ -354,17 +325,12 @@ func (p *Piece) availability() int {
 	return len(p.t.connsWithAllPieces) + p.relativeAvailability
 }
 
-// For v2 torrents, files are aligned to pieces so there should always only be a single file for a
-// given piece.
 func (p *Piece) mustGetOnlyFile() *File {
 	panicif.NotEq(p.numFiles(), 1)
 	return (*p.t.files)[p.beginFile]
 }
 
-// Sets the v2 piece hash, queuing initial piece checks if appropriate.
 func (p *Piece) setV2Hash(v2h [32]byte) {
-	// See Torrent.onSetInfo. We want to trigger an initial check if appropriate, if we didn't yet
-	// have a piece hash (can occur with v2 when we don't start with piece layers).
 	p.t.storageLock.Lock()
 	oldV2Hash := p.hashV2.Set(v2h)
 	p.t.storageLock.Unlock()
@@ -374,7 +340,6 @@ func (p *Piece) setV2Hash(v2h [32]byte) {
 	}
 }
 
-// Can't do certain things if we don't know the piece hash.
 func (p *Piece) haveHash() bool {
 	if p.hash != nil {
 		return true
@@ -387,30 +352,6 @@ func (p *Piece) haveHash() bool {
 
 func (p *Piece) hasPieceLayer() bool {
 	return p.numFiles() == 1 && p.mustGetOnlyFile().length > p.t.info.PieceLength
-}
-
-// TODO: rehashes on every call; the hashes could be made once.
-func (p *Piece) obtainHashV2() (hash [32]byte, err error) {
-	if p.hashV2.Ok {
-		hash = p.hashV2.Value
-		return
-	}
-	if !p.hasPieceLayer() {
-		hash = p.mustGetOnlyFile().piecesRoot.Unwrap()
-		return
-	}
-	storage := p.Storage()
-	if c := storage.Completion(); c.Ok && !c.Complete {
-		err = errors.New("piece incomplete")
-		return
-	}
-
-	h := merkle.NewHash()
-	if _, err = storage.WriteTo(h); err != nil {
-		return
-	}
-	h.SumMinLength(hash[:0], int(p.t.info.PieceLength))
-	return
 }
 
 func (p *Piece) files() iter.Seq2[int, *File] {
@@ -427,25 +368,14 @@ func (p *Piece) numFiles() int {
 	return p.endFile - p.beginFile
 }
 
-func (p *Piece) hasActivePeerConnRequests() (ret bool) {
-	for ri := p.requestIndexBegin(); ri < p.requestIndexMaxEnd(); ri++ {
-		_, ok := p.t.requestState[ri]
-		ret = ret || ok
-	}
-	return
-}
-
-// The value of numVerifies after the next hashing operation that hasn't yet begun.
 func (p *Piece) nextNovelHashCount() (ret pieceVerifyCount) {
 	ret = p.numVerifies + 1
 	if p.hashing {
-		// The next novel hash will be the one after the current one.
 		ret++
 	}
 	return
 }
 
-// Here so it's zero-arity and we can use it in DeferOnce.
 func (p *Piece) publishStateChange() {
 	t := p.t
 	cur := t.pieceState(p.index)
@@ -456,11 +386,4 @@ func (p *Piece) publishStateChange() {
 			cur,
 		})
 	}
-}
-
-func (p *Piece) fileExtents(offsetIntoPiece int64) iter.Seq2[int, segments.Extent] {
-	return p.t.fileSegmentsIndex.Unwrap().LocateIter(segments.Extent{
-		Start:  p.torrentBeginOffset() + offsetIntoPiece,
-		Length: int64(p.length()) - offsetIntoPiece,
-	})
 }

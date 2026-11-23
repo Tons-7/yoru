@@ -11,8 +11,6 @@ func play(t *testing.T, s *Store, animeID int, ep string, pos, dur float64) {
 	playThrough(t, s, animeID, ep, 0, pos, dur)
 }
 
-// playThrough reports the way a player does — every few seconds, each report
-// carrying what played since the last — from one position to another.
 func playThrough(t *testing.T, s *Store, animeID int, ep string, from, to, dur float64) bool {
 	t.Helper()
 	const step = 10.0
@@ -112,7 +110,6 @@ func TestHistoryListsEpisodesNewestFirst(t *testing.T) {
 	}
 }
 
-// A MAL-only show has a negative id; forgetting it used to clear everything.
 func TestForgetHistoryOfAMALOnlyShow(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

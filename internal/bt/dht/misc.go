@@ -3,8 +3,6 @@ package dht
 import (
 	"net"
 
-	"github.com/anacrolix/missinggo/v2/iter"
-
 	"yoru/internal/bt/dht/int160"
 	"yoru/internal/bt/dht/krpc"
 	"yoru/internal/bt/dht/types"
@@ -29,7 +27,7 @@ type addrMaybeId = types.AddrMaybeId
 
 func randomIdInBucket(rootId int160.T, bucketIndex int) int160.T {
 	id := int160.FromByteArray(krpc.RandomNodeID())
-	for i := range iter.N(bucketIndex) {
+	for i := range bucketIndex {
 		id.SetBit(i, rootId.GetBit(i))
 	}
 	id.SetBit(bucketIndex, !rootId.GetBit(bucketIndex))

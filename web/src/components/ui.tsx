@@ -5,10 +5,11 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
+  type KeyboardEvent,
   type ReactNode,
 } from 'react'
 import { Link } from 'react-router-dom'
-import { cx } from '../lib/format'
+import { cx, motion } from '../lib/format'
 import { buttonClass, ControlLabel, type ButtonSize, type ButtonVariant } from '../lib/ui'
 
 export function Button({
@@ -45,39 +46,7 @@ export function LinkButton({
   )
 }
 
-export function FilterToggle({
-  on,
-  onChange,
-  children,
-}: {
-  on: boolean
-  onChange: (on: boolean) => void
-  children: ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={on}
-      onClick={() => onChange(!on)}
-      className={cx(
-        'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium ring-1 transition-colors pointer-coarse:min-h-11',
-        on
-          ? 'bg-accent-500/20 text-accent-300 ring-accent-500/40'
-          : 'bg-base-850 text-base-300 ring-white/[0.06] hover:text-white',
-      )}
-    >
-      <span
-        className={cx(
-          'grid size-3.5 place-items-center rounded-full text-[9px] transition-colors',
-          on ? 'bg-accent-500 text-white' : 'bg-base-700 text-transparent',
-        )}
-      >
-        ✓
-      </span>
-      {children}
-    </button>
-  )
-}
+export { ToggleChip as FilterToggle } from './Chips'
 
 export function PageHeader({
   title,
@@ -181,6 +150,15 @@ export function ConfirmInline({
   pending?: boolean
   note?: ReactNode
 }) {
+  const cancel = (e: { currentTarget: Element }) => {
+    const around = e.currentTarget.closest('span.contents')?.parentElement ?? null
+    onCancel()
+    requestAnimationFrame(() => {
+      if (around?.isConnected && !around.contains(document.activeElement)) {
+        around.querySelector<HTMLElement>('button:not([disabled]), a[href], [tabindex="0"]')?.focus()
+      }
+    })
+  }
   return (
     <span
       className="contents"
@@ -188,14 +166,14 @@ export function ConfirmInline({
         if (e.key !== 'Escape') return
         e.preventDefault()
         e.stopPropagation()
-        onCancel()
+        cancel(e)
       }}
     >
       {note && <span className="text-xs text-base-400 max-sm:basis-full">{note}</span>}
       <Button variant={tone === 'danger' ? 'danger' : 'primary'} size={size} onClick={onConfirm} disabled={pending}>
         {label}
       </Button>
-      <Button variant="ghost" size={size} onClick={onCancel} autoFocus>
+      <Button variant="ghost" size={size} onClick={cancel} autoFocus>
         Cancel
       </Button>
     </span>
@@ -216,7 +194,7 @@ export function Pager({
   if (page <= 1 && !hasMore) return null
   const go = (n: number) => {
     onPage(n)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    window.scrollTo({ top: 0, behavior: motion() })
   }
   return (
     <nav aria-label="Pages" className="flex items-center justify-center gap-3 pt-2">
@@ -256,12 +234,26 @@ export function Empty({
   hint,
   icon,
   action,
+  card = false,
 }: {
   title: string
-  hint?: string
+  hint?: ReactNode
   icon?: ReactNode
   action?: ReactNode
+  card?: boolean
 }) {
+  if (card) {
+    return (
+      <section className="surface flex flex-col items-center px-6 py-8 text-center">
+        <span className="mb-4 grid size-14 place-items-center rounded-2xl bg-base-800 text-base-300">
+          {icon ?? <EmptyIcon />}
+        </span>
+        <p className="text-[17px] font-semibold text-base-100">{title}</p>
+        {hint && <p className="mt-1 max-w-sm text-[15px] text-balance text-base-400">{hint}</p>}
+        {action && <div className="mt-5 flex flex-wrap justify-center gap-2">{action}</div>}
+      </section>
+    )
+  }
   return (
     <Centered>
       <div className="flex max-w-sm flex-col items-center px-4 text-center">
@@ -331,19 +323,19 @@ export function SaveHint({ state }: { state: SaveState }) {
   const shown = state.isSuccess && faded !== state.submittedAt
   if (state.isPending) return <span className="text-xs text-base-500">Saving…</span>
   if (state.isError) {
-    return <span className="text-xs text-recap">{state.error instanceof Error ? state.error.message : 'Not saved'}</span>
+    return <span className="text-xs text-red-300">{state.error instanceof Error ? state.error.message : 'Not saved'}</span>
   }
   return shown ? <span className="text-xs text-emerald-300">Saved</span> : null
 }
 
 export function RefreshFailed({ retry }: { retry: () => void }) {
   return (
-    <p role="status" className="flex flex-wrap items-center gap-2 text-xs text-base-400">
+    <div role="status" className="flex flex-wrap items-center gap-2 text-[13px] text-base-400">
       <span>Couldn't refresh, showing what was loaded.</span>
-      <button onClick={retry} className="text-accent-300 underline-offset-2 hover:underline">
+      <Button size="sm" onClick={retry}>
         Try again
-      </button>
-    </p>
+      </Button>
+    </div>
   )
 }
 
@@ -384,10 +376,31 @@ export function Segmented<T extends string>({
   className?: string
   label?: string
 }) {
+  const rowLabel = useContext(ControlLabel)
+  const name = label ?? rowLabel ?? undefined
+  const step = (e: KeyboardEvent<HTMLDivElement>) => {
+    const at = options.findIndex((o) => o.value === value)
+    const next =
+      e.key === 'ArrowRight' || e.key === 'ArrowDown'
+        ? (at + 1) % options.length
+        : e.key === 'ArrowLeft' || e.key === 'ArrowUp'
+          ? (at - 1 + options.length) % options.length
+          : e.key === 'Home'
+            ? 0
+            : e.key === 'End'
+              ? options.length - 1
+              : -1
+    if (next < 0 || next === at) return
+    e.preventDefault()
+    onChange(options[next].value)
+    const buttons = e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+    buttons[next]?.focus()
+  }
   return (
     <div
-      role={label ? 'radiogroup' : 'tablist'}
-      aria-label={label}
+      role="radiogroup"
+      aria-label={name}
+      onKeyDown={step}
       className={cx(
         'max-w-full gap-0.5 overflow-x-auto rounded-xl bg-base-900 p-1 no-scrollbar',
         full ? 'flex w-full' : 'inline-flex',
@@ -399,9 +412,9 @@ export function Segmented<T extends string>({
         return (
           <button
             key={option.value}
-            role={label ? 'radio' : 'tab'}
-            aria-selected={label ? undefined : active}
-            aria-checked={label ? active : undefined}
+            role="radio"
+            aria-checked={active}
+            tabIndex={active ? 0 : -1}
             ref={active ? keepInStrip : undefined}
             onClick={() => onChange(option.value)}
             className={cx(
@@ -519,12 +532,22 @@ export function Select({
   )
 }
 
-export function LabelledSwitch({ label, on, onChange }: { label: string; on: boolean; onChange: (on: boolean) => void }) {
+export function SwitchTrack({ on }: { on: boolean }) {
   return (
-    <label className="flex cursor-pointer items-center gap-2.5 text-sm text-base-200 pointer-coarse:min-h-11">
-      {label}
-      <Switch on={on} onChange={onChange} aria-label={label} />
-    </label>
+    <span
+      aria-hidden
+      className={cx(
+        'relative h-6 w-11 shrink-0 rounded-full transition-colors duration-120 pointer-coarse:h-8 pointer-coarse:w-[3.25rem]',
+        on ? 'bg-accent-500' : 'bg-base-700',
+      )}
+    >
+      <span
+        className={cx(
+          'absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow-sm transition-transform duration-120 pointer-coarse:size-7',
+          on && 'translate-x-5',
+        )}
+      />
+    </span>
   )
 }
 
@@ -549,17 +572,82 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!on)}
       className={cx(
-        'tap relative h-6 w-11 shrink-0 rounded-full transition-colors duration-[120ms] disabled:opacity-60 pointer-coarse:h-8 pointer-coarse:w-[3.25rem]',
+        'tap relative h-6 w-11 shrink-0 rounded-full transition-colors duration-120 disabled:opacity-60 pointer-coarse:h-8 pointer-coarse:w-[3.25rem]',
         'focus:outline-hidden focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-base-950',
         on ? 'bg-accent-500' : 'bg-base-700',
       )}
     >
       <span
         className={cx(
-          'absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow-sm transition-transform duration-[120ms] pointer-coarse:size-7',
+          'absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow-sm transition-transform duration-120 pointer-coarse:size-7',
           on && 'translate-x-5',
         )}
       />
     </button>
+  )
+}
+
+export function CloseButton({ onClick, label = 'Close' }: { onClick: () => void; label?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className="tap relative grid size-9 shrink-0 place-items-center rounded-full text-base-400 transition-colors hover:bg-base-800 hover:text-base-100 pointer-coarse:size-11"
+    >
+      <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+        <path d="m6 6 12 12M18 6 6 18" />
+      </svg>
+    </button>
+  )
+}
+
+export function ScorePicker({
+  value,
+  onChange,
+  pending = false,
+  small = false,
+  label = 'Your score',
+}: {
+  value: number
+  onChange: (score: number) => void
+  pending?: boolean
+  small?: boolean
+  label?: string
+}) {
+  const cell = small ? 'h-8 text-xs pointer-coarse:h-11' : 'h-10 text-sm pointer-coarse:h-11'
+  return (
+    <div role="group" aria-label={label} className="grid grid-cols-5 gap-1.5">
+      {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+        <button
+          key={n}
+          type="button"
+          aria-pressed={n === value}
+          aria-label={`Score ${n}`}
+          disabled={pending}
+          onClick={() => onChange(n === value ? 0 : n)}
+          className={cx(
+            'rounded-lg font-semibold tabular-nums transition-colors',
+            cell,
+            n === value ? 'bg-accent-500 text-white' : 'bg-base-800 text-base-100 hover:bg-base-700',
+          )}
+        >
+          {n}
+        </button>
+      ))}
+      <button
+        type="button"
+        aria-pressed={value === 0}
+        disabled={pending}
+        onClick={() => onChange(0)}
+        className={cx(
+          'col-span-5 rounded-lg font-medium transition-colors',
+          cell,
+          value === 0 ? 'bg-base-700 text-base-100' : 'bg-base-800 text-base-300 hover:bg-base-700',
+        )}
+      >
+        No score
+      </button>
+    </div>
   )
 }

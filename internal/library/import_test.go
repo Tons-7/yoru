@@ -36,7 +36,6 @@ func TestToAnimePrefersRomajiThenUserPreferred(t *testing.T) {
 	}
 }
 
-// Nil slices must serialise as [] because the columns are NOT NULL.
 func TestToAnimeSerialisesEmptyArrays(t *testing.T) {
 	a := toAnime(anilist.Media{})
 	if a.Synonyms != "[]" || a.Genres != "[]" {

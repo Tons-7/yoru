@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// TRENDING_DESC is AniList's rolling "right now"; Rising computes week and month from daily trends.
 const (
 	SortTrending  = "trending"
 	SortWeek      = "week"
@@ -19,7 +18,6 @@ const (
 	SortFavourite = "favourites"
 )
 
-// RisingWindow gives the number of days a sort covers, and whether it is one of the computed windows at all.
 func RisingWindow(sort string) (int, bool) {
 	switch strings.ToLower(sort) {
 	case SortWeek:
@@ -46,7 +44,6 @@ func Sorts() []string {
 	}
 }
 
-// Season returns AniList's season enum and year for a moment, by northern-hemisphere quarters.
 func Season(t time.Time) (string, int) {
 	switch t.Month() {
 	case time.January, time.February, time.March:
@@ -60,7 +57,6 @@ func Season(t time.Time) (string, int) {
 	}
 }
 
-// NextSeason rolls over into the following year after autumn.
 func NextSeason(t time.Time) (string, int) {
 	season, year := Season(t)
 	switch season {
@@ -79,12 +75,9 @@ type DiscoverPage struct {
 	Media       []Media
 	HasNextPage bool
 	Total       int
-	// Dropped counts entries left out of Media that the Total still counts: a studio's manga.
-	Dropped int
+	Dropped     int
 }
 
-// discoverQuery is built per call because the media filters differ by sort and
-// GraphQL has no way to omit an argument whose variable is null in a filter.
 func discoverQuery(filters string, sort string) string {
 	return fmt.Sprintf(`query Discover($page: Int!, $perPage: Int!) {
   Page(page: $page, perPage: $perPage) {
@@ -94,7 +87,6 @@ func discoverQuery(filters string, sort string) string {
 }`, sort, filters, mediaFields)
 }
 
-// Discover lists anime by one of the supported rankings. Page is 1-based.
 func (c *Client) Discover(ctx context.Context, sort string, page, perPage int) (DiscoverPage, error) {
 	order, ok := sorts[strings.ToLower(sort)]
 	if !ok {
@@ -116,7 +108,6 @@ func (c *Client) Discover(ctx context.Context, sort string, page, perPage int) (
 		season, year := NextSeason(time.Now())
 		filters = fmt.Sprintf(", season: %s, seasonYear: %d", season, year)
 	case SortTopRated:
-		// Without a floor the top of the list is obscure titles with three votes and a perfect score.
 		filters = ", popularity_greater: 5000"
 	}
 

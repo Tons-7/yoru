@@ -12,7 +12,6 @@ import (
 	"yoru/internal/bt/tracker/udp"
 )
 
-// A tracker is whoever a magnet names: a malformed peer entry is an error, not a crash.
 func TestUnmarshalHTTPResponseMalformedPeerDicts(t *testing.T) {
 	for _, body := range []string{
 		"d5:peersld2:ipi0e4:porti0eeee",
@@ -67,7 +66,6 @@ func TestUnmarshalHttpResponsePeers6NotCompact(t *testing.T) {
 	))
 }
 
-// Checks that infohash bytes that correspond to spaces are escaped with %20 instead of +.
 func TestSetAnnounceInfohashParamWithSpaces(t *testing.T) {
 	someUrl := &url.URL{}
 	ihBytes := [20]uint8{

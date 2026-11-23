@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { copyText } from './downloads'
 import { jumpMeant } from './seekIntent'
 import { readKey, writeKey } from './storage'
+import { toast } from './toast'
 
 export interface TogetherLink {
   base: string
@@ -132,14 +134,23 @@ const DRIFT_START = 0.6
 const DRIFT_DONE = 0.15
 const DRIFT_RATE = 0.03
 
-const REASONS = new Map<string, (c: Change) => string>([
-  ['pause', (c) => `${c.by} paused`],
-  ['play', (c) => `${c.by} played`],
-  ['seek', (c) => `${c.by} jumped`],
-  ['episode', (c) => `${c.by} switched to episode ${c.state.episode}`],
-  ['show', (c) => `${c.by} switched to ${c.title || 'another show'}, episode ${c.state.episode}`],
-  ['audio', (c) => `${c.by} switched everyone to ${c.state.audio === 'dub' ? 'the English dub' : 'Japanese audio'}`],
-])
+function changeLine(reason: unknown, c: Change): string | undefined {
+  switch (reason) {
+    case 'pause':
+      return `${c.by} paused`
+    case 'play':
+      return `${c.by} played`
+    case 'seek':
+      return `${c.by} jumped`
+    case 'episode':
+      return `${c.by} switched to episode ${c.state.episode}`
+    case 'show':
+      return `${c.by} switched to ${c.title || 'another show'}, episode ${c.state.episode}`
+    case 'audio':
+      return `${c.by} switched everyone to ${c.state.audio === 'dub' ? 'the English dub' : 'Japanese audio'}`
+  }
+  return undefined
+}
 
 export function useRoom(link: TogetherLink | null, seat: Seat | null) {
   const [view, setView] = useState<RoomView | null>(null)
@@ -153,6 +164,17 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
   const push = useCallback((line: Omit<RoomLine, 'id'>) => {
     setLines((was) => [...was.slice(-199), { ...line, id: ++lineId.current }])
   }, [])
+
+  const scope = link && seat ? `${link.code}:${seat.member}` : ''
+  const [shownScope, setShownScope] = useState(scope)
+  if (shownScope !== scope) {
+    setShownScope(scope)
+    setStatus('connecting')
+    setView(null)
+    setLines([])
+    setKnocks([])
+    setWaitingFor([])
+  }
 
   useEffect(() => {
     if (!link || !seat) return
@@ -187,17 +209,21 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
           stopped = true
           socket?.close()
           break
-        case 'room':
-          setView(event as unknown as RoomView)
+        case 'room': {
+          const next = event as unknown as RoomView
+          setView(next)
+          setWaitingFor(next.members.filter((m) => m.connected && !m.browsing && !m.ready).map((m) => m.name))
           setStatus('in')
           break
+        }
         case 'state': {
           setView((was) => (was ? { ...was, state: event.state as RoomState } : was))
           setWaitingFor((event.waitingFor as string[] | undefined) ?? [])
-          const says = typeof event.reason === 'string' ? REASONS.get(event.reason) : undefined
-          if (says && typeof event.by === 'string') {
-            push({ kind: 'event', text: says({ by: event.by, title: typeof event.title === 'string' ? event.title : '', state: event.state as RoomState }) })
-          }
+          const text =
+            typeof event.by === 'string'
+              ? changeLine(event.reason, { by: event.by, title: typeof event.title === 'string' ? event.title : '', state: event.state as RoomState })
+              : undefined
+          if (text) push({ kind: 'event', text })
           break
         }
         case 'suggest': {
@@ -209,8 +235,20 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
         case 'react':
           push({ kind: event.type, from: event.from as string, member: event.member as string | undefined, text: event.text as string })
           break
+        case 'link': {
+          const fresh = typeof event.link === 'string' ? event.link : ''
+          if (!fresh) break
+          push({ kind: 'event', text: 'The room has a new link. Send it to your friends again.' })
+          toast('The room has a new link', 'info', {
+            label: 'Copy',
+            run: () => void copyText(fresh),
+          })
+          break
+        }
         case 'knock':
-          setKnocks((was) => [...was, { member: event.member as string, name: event.name as string }])
+          setKnocks((was) =>
+            was.some((k) => k.member === event.member) ? was : [...was, { member: event.member as string, name: event.name as string }],
+          )
           break
       }
     }
@@ -231,6 +269,7 @@ export function useRoom(link: TogetherLink | null, seat: Seat | null) {
         .catch((err: unknown) => {
           if (stopped) return
           if (err instanceof TypeError) {
+            setStatus((s) => (s === 'in' ? 'connecting' : s))
             retry = setTimeout(connect, wait)
             wait = Math.min(wait * 2, 10000)
             return

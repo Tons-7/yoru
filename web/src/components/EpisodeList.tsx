@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { api, hasFiller, type Episode } from '../lib/api'
-import { airTime, clockTime, cx, relativeTime } from '../lib/format'
+import { airTime, clockTime, cx, motion, relativeTime } from '../lib/format'
 import {
   refreshDownloads,
   refreshListState,
@@ -18,7 +18,8 @@ import {
 import { isUnaired } from '../lib/episodes'
 import { cannotSave, saveEpisodes, savedKey, useSaved } from '../lib/offline'
 import { buttonClass } from '../lib/ui'
-import { Badge, Button, ConfirmInline, SearchInput } from './ui'
+import { readKey, writeKey } from '../lib/storage'
+import { Badge, Button, CloseButton, ConfirmInline, SearchInput, Segmented } from './ui'
 import { MoreMenu, type MoreItem } from './MoreMenu'
 import { useInUpNext } from '../lib/upnext'
 import { conceal, reveal, useRevealed } from '../lib/spoilers'
@@ -58,6 +59,8 @@ function outWhen(unix: number | undefined, now: number, withTime = true) {
 type Show = 'all' | 'unwatched' | 'downloaded'
 type Art = 'still' | 'tile'
 
+const views = new Map<number, { term: string; show: Show; page: number; placedFor?: string; at: number }>()
+
 export function EpisodeList({
   animeId,
   episodes,
@@ -74,9 +77,14 @@ export function EpisodeList({
   upNext?: number
 }) {
   const now = useNow()
-  const [term, setTerm] = useState('')
-  const [show, setShow] = useState<Show>('all')
-  const [page, setPage] = useState(0)
+  const [kept] = useState(() => {
+    const v = views.get(animeId)
+    return v && Date.now() - v.at < 2000 ? v : undefined
+  })
+  const [term, setTerm] = useState(kept?.term ?? '')
+  const [show, setShow] = useState<Show>(kept?.show ?? 'all')
+  const [page, setPage] = useState(kept?.page ?? 0)
+  const view = useRef({ term, show, page, placedFor: kept?.placedFor })
 
   const [selecting, setSelecting] = useState(false)
   const [picked, setPicked] = useState<Set<number>>(() => new Set())
@@ -92,7 +100,6 @@ export function EpisodeList({
   const savedHere = useMemo(() => new Set(saved.map((e) => e.key)), [saved])
   const savingHere = useMemo(() => new Set(jobs.map((j) => savedKey(j.animeId, j.episode))), [jobs])
   const prefs = usePrefs()
-  const autoDeletes = prefs.data?.effective['cache.autodelete'] === 'now'
   const busy = useMemo(() => {
     const set = new Set<number>()
     for (const q of queue.data?.items ?? []) if (q.animeId === animeId && q.state !== 'failed') set.add(q.episode)
@@ -106,6 +113,7 @@ export function EpisodeList({
     [queue.data, animeId],
   )
   const showPrefs = usePrefs(animeId)
+  const deleteMode = showPrefs.data?.effective['cache.autodelete'] ?? prefs.data?.effective['cache.autodelete'] ?? 'off'
   const setPref = useSetPref()
   const showsAll = showPrefs.data?.overrides?.['display.spoilers'] === 'off'
   const anyHidden = episodes.some((e) => e.spoiler)
@@ -145,9 +153,11 @@ export function EpisodeList({
       refreshListState(qc)
     },
   })
+  const [confirmMany, setConfirmMany] = useState(false)
   const stopSelecting = () => {
     setSelecting(false)
     setPicked(new Set())
+    setConfirmMany(false)
   }
   const toggle = (number: number) =>
     setPicked((prev) => {
@@ -177,22 +187,31 @@ export function EpisodeList({
   const allPlanned = released.length > 0 && released.every((e) => e.planned)
   const planned = released.some((e) => e.planned)
 
+  const long = aired.length > PAGE_SIZE
+  const [, reorder] = useState(0)
+  const newest = long && readKey(`yoru.episodes.newest.${animeId}`) === '1'
+
   const filtered = useMemo(() => {
     let list = aired
     if (show === 'unwatched') list = list.filter((e) => !e.watched)
     if (show === 'downloaded') list = list.filter((e) => e.onDisk)
     const q = term.trim().toLowerCase()
-    if (!q) return list
-    const asNumber = Number(q)
-    if (Number.isInteger(asNumber) && asNumber > 0) {
-      return list.filter((e) => String(e.display || e.number).includes(q))
+    if (q) {
+      const asNumber = Number(q)
+      list =
+        Number.isInteger(asNumber) && asNumber > 0
+          ? list.filter((e) => String(e.display || e.number).includes(q))
+          : list.filter((e) => `${e.titleEn ?? ''} ${e.titleJa ?? ''} ${e.overview ?? ''}`.toLowerCase().includes(q))
     }
-    return list.filter((e) =>
-      `${e.titleEn ?? ''} ${e.titleJa ?? ''} ${e.overview ?? ''}`.toLowerCase().includes(q),
-    )
-  }, [aired, term, show])
+    return newest ? list.toReversed() : list
+  }, [aired, term, show, newest])
 
   const firstUnwatched = useMemo(() => aired.find((e) => !e.watched && !later.has(e.number)), [aired, later])
+  const marking = (from: number, to: number) => {
+    if (deleteMode === 'now') return aired.some((e) => e.onDisk && !e.watched && e.number >= from && e.number <= to)
+    if (deleteMode === 'keep2') return aired.some((e) => e.onDisk && e.number <= to - 2)
+    return false
+  }
   const lastWatched = useMemo(() => [...aired].reverse().find((e) => e.watched), [aired])
   const lastOut = released[released.length - 1]
   const canMarkAll = !!lastOut && !lastOut.watched && !!firstUnwatched && firstUnwatched.number < lastOut.number
@@ -202,8 +221,20 @@ export function EpisodeList({
   const pages = Math.ceil(filtered.length / PAGE_SIZE)
   const at = Math.min(page, Math.max(0, pages - 1))
   const paged = pages > 1 ? filtered.slice(at * PAGE_SIZE, (at + 1) * PAGE_SIZE) : filtered
+  const selectableAll = filtered.filter((e) => !later.has(e.number)).map((e) => e.number)
+  const pageNumbers = paged.filter((e) => !later.has(e.number)).map((e) => e.number)
+  const pickedInOrder = () => [...picked].sort((a, b) => a - b)
 
-  const [placedFor, setPlacedFor] = useState<string>()
+  const [placedFor, setPlacedFor] = useState<string | undefined>(kept?.placedFor)
+  useEffect(() => {
+    view.current = { term, show, page, placedFor }
+  })
+  useEffect(
+    () => () => {
+      views.set(animeId, { ...view.current, at: Date.now() })
+    },
+    [animeId],
+  )
   const place = current ?? upNext
   const placeKey = current != null ? `${animeId} playing ${current}` : `${animeId} next`
   if (place && placedFor !== placeKey) {
@@ -212,6 +243,13 @@ export function EpisodeList({
       setPlacedFor(placeKey)
       setPage(Math.floor(index / PAGE_SIZE))
     }
+  }
+  const setOrder = (toNewest: boolean) => {
+    if (toNewest === newest) return
+    writeKey(`yoru.episodes.newest.${animeId}`, toNewest ? '1' : null)
+    const index = place ? filtered.findIndex((e) => e.number === place) : -1
+    setPage(index >= 0 ? Math.floor((filtered.length - 1 - index) / PAGE_SIZE) : 0)
+    reorder((n) => n + 1)
   }
   const search = (value: string) => {
     setTerm(value)
@@ -227,7 +265,7 @@ export function EpisodeList({
   const turn = (n: number, below: boolean) => {
     setPage(n)
     if (compact) list.current?.scrollTo({ top: 0 })
-    if (below) top.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    if (below) top.current?.scrollIntoView({ block: 'start', behavior: motion() })
   }
   const pager = (below: boolean, inline = false) => (
     <nav
@@ -292,82 +330,31 @@ export function EpisodeList({
     <div className="space-y-3">
       {!compact && (
         <div className="space-y-2.5">
-          {selecting ? (
-            <>
-              <div className="flex min-h-11 items-center justify-between gap-3">
-                <span className="text-sm text-base-300 tabular-nums">{picked.size} selected</span>
-                <Button
-                  size="sm"
-                  onClick={() =>
-                    setPicked((prev) => {
-                      const next = new Set(prev)
-                      for (const e of paged) if (!later.has(e.number)) next.add(e.number)
-                      return next
-                    })
-                  }
-                >
-                  Select page
-                </Button>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button variant="ghost" size="sm" disabled={download.isPending} onClick={stopSelecting}>
-                  Cancel
-                </Button>
-                <span className="ml-auto flex flex-wrap items-center justify-end gap-2">
-                  {guest && (
-                    <Button
-                      size="sm"
-                      disabled={picked.size === 0}
-                      onClick={() => {
-                        const reason = cannotSave()
-                        if (!reason) saveEpisodes([...picked].sort((a, b) => a - b).map((episode) => ({ animeId, episode })))
-                        setNote(reason ?? `Saving ${picked.size} to this device: see Downloads, On this device`)
-                        stopSelecting()
-                      }}
-                    >
-                      Save to this device
-                    </Button>
-                  )}
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => download.mutate([...picked].sort((a, b) => a - b))}
-                    disabled={picked.size === 0 || download.isPending}
-                  >
-                    {download.isPending ? 'Queuing…' : 'Download selected'}
-                  </Button>
-                </span>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="flex min-h-11 items-center justify-between gap-3">
-                {progress}
-                {selectable && (
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      setNote(null)
-                      setConfirmAll(false)
-                      setSelecting(true)
-                    }}
-                  >
-                    Select<span className="sr-only"> episodes…</span>
-                  </Button>
+          <div className="flex min-h-11 items-center justify-between gap-3">
+            {progress}
+            {selectable && !selecting && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setNote(null)
+                  setConfirmAll(false)
+                  setSelecting(true)
+                }}
+              >
+                Select<span className="sr-only"> episodes…</span>
+              </Button>
+            )}
+          </div>
+          {released.length > 0 && (
+            <div aria-hidden className="h-1 overflow-hidden rounded-full bg-base-800">
+              <div
+                className={cx(
+                  'h-full rounded-full transition-[width] duration-500',
+                  done ? 'bg-emerald-400' : 'bg-accent-500',
                 )}
-              </div>
-              {released.length > 0 && (
-                <div aria-hidden className="h-1 overflow-hidden rounded-full bg-base-800">
-                  <div
-                    className={cx(
-                      'h-full rounded-full transition-[width] duration-500',
-                      done ? 'bg-emerald-400' : 'bg-accent-500',
-                    )}
-                    style={{ width: `${(watchedCount / released.length) * 100}%` }}
-                  />
-                </div>
-              )}
-            </>
+                style={{ width: `${(watchedCount / released.length) * 100}%` }}
+              />
+            </div>
           )}
 
           {download.isError && (
@@ -399,6 +386,18 @@ export function EpisodeList({
               )}
               {(searchable || pages > 1) && (
                 <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
+                  {long && (
+                    <Segmented
+                      label="Episode order"
+                      size="sm"
+                      value={newest ? 'newest' : 'oldest'}
+                      onChange={(v) => setOrder(v === 'newest')}
+                      options={[
+                        { value: 'oldest', label: 'Oldest' },
+                        { value: 'newest', label: 'Newest' },
+                      ]}
+                    />
+                  )}
                   {searchable && (
                     <SearchInput
                       value={term}
@@ -416,7 +415,7 @@ export function EpisodeList({
           )}
 
           {confirmAll && canMarkAll && (
-            <div className="flex flex-wrap items-center justify-end gap-2 rounded-card bg-base-900 p-2.5">
+            <div className="flex flex-wrap items-center justify-end gap-2 surface p-2.5">
               <span className="mr-auto text-[13px] text-base-300">
                 Mark {allFrom} to {allTo} watched?
               </span>
@@ -424,7 +423,7 @@ export function EpisodeList({
                 tone="accent"
                 size="sm"
                 label={`Mark ${allFrom}–${allTo}`}
-                note={autoDeletes && released.some((e) => !e.watched && e.onDisk) ? 'Deletes their files' : undefined}
+                note={marking(firstUnwatched?.number ?? 1, lastOut.number) ? 'Deletes their files' : undefined}
                 onConfirm={() => markAll.mutate(lastOut.number)}
                 onCancel={() => setConfirmAll(false)}
                 pending={markAll.isPending}
@@ -517,7 +516,15 @@ export function EpisodeList({
                   ? 'saving'
                   : undefined
             }
-            autoDeletes={autoDeletes}
+            autoDeletes={
+              !episode.watched &&
+              marking(
+                firstUnwatched && firstUnwatched.number < episode.number && !later.has(episode.number)
+                  ? firstUnwatched.number
+                  : episode.number,
+                episode.number,
+              )
+            }
           />
         ))}
         {paged.length === 0 && (
@@ -528,6 +535,127 @@ export function EpisodeList({
       </ul>
 
       {pages > 1 && pager(true)}
+
+      {!compact && selecting && (
+        <EpisodeSelectBar
+          count={picked.size}
+          total={selectableAll.length}
+          paged={pages > 1}
+          pageChosen={pageNumbers.length > 0 && pageNumbers.every((n) => picked.has(n))}
+          allChosen={selectableAll.length > 0 && selectableAll.every((n) => picked.has(n))}
+          onPage={(on) =>
+            setPicked((prev) => {
+              const next = new Set(prev)
+              for (const n of pageNumbers) {
+                if (on) next.add(n)
+                else next.delete(n)
+              }
+              return next
+            })
+          }
+          onAll={(on) => {
+            setConfirmMany(false)
+            setPicked(new Set(on ? selectableAll : []))
+          }}
+          onClose={stopSelecting}
+          confirming={confirmMany}
+          pending={download.isPending}
+          onDownload={() => (picked.size > 24 ? setConfirmMany(true) : download.mutate(pickedInOrder()))}
+          onConfirm={() => download.mutate(pickedInOrder(), { onSettled: () => setConfirmMany(false) })}
+          onBack={() => setConfirmMany(false)}
+          onSave={
+            guest
+              ? () => {
+                  const reason = cannotSave()
+                  if (!reason) saveEpisodes(pickedInOrder().map((episode) => ({ animeId, episode })))
+                  setNote(reason ?? `Saving ${picked.size} to this device: see Downloads, On this device`)
+                  stopSelecting()
+                }
+              : undefined
+          }
+        />
+      )}
+    </div>
+  )
+}
+
+function EpisodeSelectBar({
+  count,
+  total,
+  paged,
+  pageChosen,
+  allChosen,
+  onPage,
+  onAll,
+  onClose,
+  confirming,
+  pending,
+  onDownload,
+  onConfirm,
+  onBack,
+  onSave,
+}: {
+  count: number
+  total: number
+  paged: boolean
+  pageChosen: boolean
+  allChosen: boolean
+  onPage: (on: boolean) => void
+  onAll: (on: boolean) => void
+  onClose: () => void
+  confirming: boolean
+  pending: boolean
+  onDownload: () => void
+  onConfirm: () => void
+  onBack: () => void
+  onSave?: () => void
+}) {
+  return (
+    <div className="sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-30 sm:bottom-4">
+      <div
+        role="toolbar"
+        aria-label="Selected episodes"
+        className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-card bg-base-750 p-2 shadow-panel"
+      >
+        {confirming ? (
+          <>
+            <p className="min-w-0 flex-1 pl-2 text-sm text-base-100 tabular-nums">
+              Download {count.toLocaleString()} episodes?
+            </p>
+            <Button variant="primary" onClick={onConfirm} disabled={pending}>
+              {pending ? 'Queuing…' : `Download ${count.toLocaleString()}`}
+            </Button>
+            <Button variant="ghost" onClick={onBack} disabled={pending} autoFocus>
+              Back
+            </Button>
+          </>
+        ) : (
+          <>
+            <CloseButton onClick={onClose} label="Stop selecting" />
+            <p aria-live="polite" className="mr-1 text-sm whitespace-nowrap text-base-200 tabular-nums">
+              <span className="font-semibold text-white">{count.toLocaleString()}</span> of {total.toLocaleString()} selected
+            </p>
+            {paged && (
+              <Button variant="ghost" size="sm" onClick={() => onPage(!pageChosen)}>
+                {pageChosen ? 'Clear page' : 'Select page'}
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => onAll(!allChosen)} disabled={total === 0}>
+              {allChosen ? 'Clear all' : 'Select all'}
+            </Button>
+            <span className="ml-auto flex items-center gap-2">
+              {onSave && (
+                <Button onClick={onSave} disabled={count === 0}>
+                  Save here
+                </Button>
+              )}
+              <Button variant="primary" onClick={onDownload} disabled={count === 0 || pending} className="tabular-nums">
+                {pending ? 'Queuing…' : count === 0 ? 'Download' : `Download ${count.toLocaleString()}`}
+              </Button>
+            </span>
+          </>
+        )}
+      </div>
     </div>
   )
 }
@@ -542,24 +670,12 @@ function Filters({
   options: { value: Show; label: string; hidden?: boolean }[]
 }) {
   return (
-    <div role="tablist" aria-label="Show episodes" className="inline-flex gap-0.5 rounded-xl bg-base-900 p-1">
-      {options
-        .filter((o) => !o.hidden)
-        .map((o) => (
-          <button
-            key={o.value}
-            role="tab"
-            aria-selected={value === o.value}
-            onClick={() => onChange(o.value)}
-            className={cx(
-              'h-8 rounded-lg px-3 text-[13px] font-medium transition-colors pointer-coarse:min-h-11',
-              value === o.value ? 'bg-base-750 text-base-100' : 'text-base-400 hover:text-base-100',
-            )}
-          >
-            {o.label}
-          </button>
-        ))}
-    </div>
+    <Segmented
+      label="Show episodes"
+      value={value}
+      onChange={onChange}
+      options={options.filter((o) => !o.hidden).map(({ value: v, label }) => ({ value: v, label }))}
+    />
   )
 }
 
@@ -747,7 +863,7 @@ function EpisodeRow({
   const qc = useQueryClient()
   const fetch = useMutation({
     meta: { inline: true },
-    mutationFn: () => api.post<{ queued: boolean }>('/api/download', { animeId, episode: number }),
+    mutationFn: () => api.post<{ queued: boolean }>('/api/download', { animeId, episode: episode.number }),
     onSuccess: () => refreshDownloads(qc),
   })
   const resetFetch = fetch.reset
@@ -770,7 +886,7 @@ function EpisodeRow({
   })
 
   const spans = watched ? unmarksTo !== undefined : marksFrom !== undefined
-  const deletes = !watched && !!episode.onDisk && autoDeletes
+  const deletes = autoDeletes
   const tickLabel = watched
     ? unmarksTo !== undefined
       ? `Mark ${number} to ${unmarksTo} not watched`
@@ -944,7 +1060,7 @@ function EpisodeRow({
     episode.recap ? 'recap' : '',
   ].filter(Boolean)
 
-  const markFromMenu = () => (deletes ? setConfirming(true) : mark.mutate(!watched))
+  const markFromMenu = () => (spans || deletes ? setConfirming(true) : mark.mutate(!watched))
   const saveReason = cannotSave()
   const groups: (MoreItem | false)[][] = onToggle
     ? []
@@ -1069,7 +1185,7 @@ function EpisodeRow({
                   ? `Mark ${marksFrom}–${number}`
                   : `Mark ${number}`
             }
-            note={deletes ? 'Deletes the file' : undefined}
+            note={deletes ? (spans ? 'Deletes files' : 'Deletes a file') : undefined}
             onConfirm={() => mark.mutate(!watched)}
             onCancel={() => setConfirming(false)}
             pending={mark.isPending}

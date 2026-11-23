@@ -132,11 +132,12 @@ func (b bindAddrs) resolver() *net.Resolver {
 	}}
 }
 
-func bootstrapVia(res *net.Resolver) dht.StartingNodesGetter {
+func bootstrapVia(network string, res *net.Resolver) dht.StartingNodesGetter {
 	return func() ([]dht.Addr, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		return dht.ResolveHostPortsVia(ctx, res, dht.DefaultGlobalBootstrapHostPorts)
+		addrs, err := dht.ResolveHostPortsVia(ctx, res, dht.DefaultGlobalBootstrapHostPorts)
+		return dht.AddrsForNetwork(network, addrs), err
 	}
 }
 
@@ -168,7 +169,7 @@ func applyBinding(cfg *bt.ClientConfig, b bindAddrs) {
 	cfg.TrackerListenPacket = b.listenPacket
 	if res != nil {
 		cfg.TrackerResolver = res
-		cfg.DhtStartingNodes = func(string) dht.StartingNodesGetter { return bootstrapVia(res) }
+		cfg.DhtStartingNodes = func(network string) dht.StartingNodesGetter { return bootstrapVia(network, res) }
 	}
 	cfg.NoDefaultPortForwarding = true
 }
@@ -216,7 +217,7 @@ func (e *Engine) watchNetwork() {
 			if e.Ensure(context.Background()) == nil {
 				e.log.Info("the chosen network is up; torrents carry on", "adapter", adapter, "address", now.String())
 			}
-		case err == nil && up && !now.keeps(bound):
+		case err == nil && up && (bound.none() || !now.keeps(bound)):
 			e.rebind("the chosen network's address changed")
 		}
 	}

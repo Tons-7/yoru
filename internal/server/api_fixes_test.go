@@ -11,7 +11,6 @@ import (
 	"yoru/internal/store"
 )
 
-// A paired device cannot sign the host's trackers out or swap its keys.
 func TestTrackerLogoutAndKeysAreHostOnly(t *testing.T) {
 	h := newHarness(t, config.Config{Addr: "127.0.0.1:4321"}, nil)
 	h.server.token = "s3cret"
@@ -24,7 +23,6 @@ func TestTrackerLogoutAndKeysAreHostOnly(t *testing.T) {
 	}
 }
 
-// A range that ends before it starts is a bad request, not a crash.
 func TestDownloadAllRefusesAnEmptyRange(t *testing.T) {
 	h, _ := downloadsHarness(t)
 	for _, body := range []string{`{"animeId":1,"from":20,"to":0}`, `{"animeId":1,"from":5,"to":3}`} {
@@ -34,7 +32,6 @@ func TestDownloadAllRefusesAnEmptyRange(t *testing.T) {
 	}
 }
 
-// The catalogue being down is a 502 like everywhere else; only a sort Yoru does not know is a 400.
 func TestDiscoverTellsABadSortFromAnOutage(t *testing.T) {
 	down := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -47,7 +44,6 @@ func TestDiscoverTellsABadSortFromAnOutage(t *testing.T) {
 	}
 }
 
-// Every setting with a fixed vocabulary is checked, and numbers must be numbers.
 func TestPrefsRefuseTyposInEverySetting(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	for key, bad := range map[string]string{
@@ -65,7 +61,6 @@ func TestPrefsRefuseTyposInEverySetting(t *testing.T) {
 	}
 }
 
-// A device the host turned down is still turned down without its cookie: its address answers for it.
 func TestDeniedDeviceCannotAskAgainByDroppingItsCookie(t *testing.T) {
 	h := approvalHarness(t, approvalOnce)
 	d := newDevice(t, h)
@@ -83,14 +78,12 @@ func TestDeniedDeviceCannotAskAgainByDroppingItsCookie(t *testing.T) {
 	}
 }
 
-// A library folder already configured stays even when its drive is unplugged; only a new one is checked.
 func TestOfflineLibraryFolderDoesNotBlockOtherEdits(t *testing.T) {
 	h, _, _, dir := localHarness(t)
 	paths := func(list ...string) string { b, _ := json.Marshal(map[string]any{"paths": list}); return string(b) }
 	if code, body := h.call(t, "POST", "/api/local/paths", paths(dir)); code != http.StatusOK {
 		t.Fatalf("saving a good folder answered %d %v", code, body)
 	}
-	// Configured, then gone: a flash drive. Later configured by hand in the setting, as a scan would leave it.
 	gone := dir + "-gone"
 	configured, _ := json.Marshal([]string{dir, gone})
 	h.store.SetSetting(t.Context(), "library.paths", string(configured))

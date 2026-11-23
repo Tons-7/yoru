@@ -22,8 +22,7 @@ type fileTorrentImpl struct {
 	segmentLocater    segments.Index
 	infoHash          metainfo.Hash
 	io                fileIo
-	// Save memory by pointing to the other data.
-	client *fileClientImpl
+	client            *fileClientImpl
 }
 
 func (fts *fileTorrentImpl) logger() *slog.Logger {
@@ -45,7 +44,6 @@ func (fts *fileTorrentImpl) setPieceCompletion(p int, complete bool) error {
 	return fts.pieceCompletion().Set(fts.pieceCompletionKey(p), complete)
 }
 
-// Set piece completions based on whether all files in each piece are not .part files.
 func (fts *fileTorrentImpl) setCompletionFromPartFiles() error {
 	notComplete := make([]bool, fts.info.NumPieces())
 	for fileIndex := range fts.files {
@@ -59,7 +57,6 @@ func (fts *fileTorrentImpl) setCompletionFromPartFiles() error {
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			fts.logger().Warn("error checking file size", "err", err)
 		}
-		// Ensure all pieces associated with a file are not marked as complete (at most unknown).
 		for pieceIndex := f.beginPieceIndex(); pieceIndex < f.endPieceIndex(); pieceIndex++ {
 			notComplete[pieceIndex] = true
 		}
@@ -68,8 +65,6 @@ func (fts *fileTorrentImpl) setCompletionFromPartFiles() error {
 		if nc {
 			c := fts.getCompletion(i)
 			if c.Complete {
-				// TODO: We need to set unknown so that verification of the data we do have could
-				// occur naturally but that'll be a big change.
 				panicif.Err(fts.setPieceCompletion(i, false))
 			}
 		} else {
@@ -100,9 +95,7 @@ func (fts *fileTorrentImpl) getCompletion(piece int) Completion {
 }
 
 func (fts *fileTorrentImpl) Piece(p metainfo.Piece) PieceImpl {
-	// Create a view onto the file-based torrent storage.
 	_io := fileTorrentImplIO{fts}
-	// Return the appropriate segments of this.
 	return &filePieceImpl{
 		fts,
 		p,
@@ -111,11 +104,7 @@ func (fts *fileTorrentImpl) Piece(p metainfo.Piece) PieceImpl {
 	}
 }
 
-// Close lets go of the mapped files: kept until exit, Windows couldn't delete them.
 func (fs *fileTorrentImpl) Close() error {
-	if m, ok := fs.io.(*mmapFileIo); ok {
-		return m.closeAll()
-	}
 	return nil
 }
 
@@ -127,11 +116,8 @@ func (fts *fileTorrentImpl) file(index int) file {
 	}
 }
 
-// Open file for reading.
 func (me *fileTorrentImpl) openSharedFile(file file) (f sharedFileIf, err error) {
 	file.mu.RLock()
-	// Fine to open once under each name on a unix system. We could make the shared file keys more
-	// constrained, but it shouldn't matter. TODO: Ensure at most one of the names exist.
 	if me.partFiles() {
 		f, err = me.io.openForSharedRead(file.partFilePath())
 	}
@@ -142,11 +128,8 @@ func (me *fileTorrentImpl) openSharedFile(file file) (f sharedFileIf, err error)
 	return
 }
 
-// Open file for reading. Not a shared handle if that matters.
 func (me *fileTorrentImpl) openFile(file file) (f fileReader, err error) {
 	file.mu.RLock()
-	// Fine to open once under each name on a unix system. We could make the shared file keys more
-	// constrained, but it shouldn't matter. TODO: Ensure at most one of the names exist.
 	if me.partFiles() {
 		f, err = me.io.openForRead(file.partFilePath())
 	}
@@ -158,7 +141,6 @@ func (me *fileTorrentImpl) openFile(file file) (f fileReader, err error) {
 }
 
 func (fst *fileTorrentImpl) openForWrite(file file) (_ fileWriter, err error) {
-	// It might be possible to have a writable handle shared files cache if we need it.
 	fst.logger().Debug("openForWrite", "file.safeOsPath", file.safeOsPath)
 	return fst.io.openForWrite(fst.pathForWrite(&file), file.FileInfo.Length)
 }

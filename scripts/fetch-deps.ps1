@@ -1,27 +1,3 @@
-<#
-.SYNOPSIS
-Downloads the external binaries Yoru shells out to, into bin/.
-
-.DESCRIPTION
-Yoru needs programs it does not bundle: ffmpeg and ffprobe for transcoding,
-and mpv (with the Anime4K shaders) for external playback. This resolves the
-current version of each from upstream, downloads it, and extracts only what
-Yoru uses.
-
-Re-running is cheap: a component whose recorded version already matches is
-skipped unless -Force is given. What was installed is recorded in
-bin/versions.json so a build can be reproduced.
-
-.PARAMETER Component
-Fetch only some of ffmpeg, mpv, anime4k. Default is all.
-
-.PARAMETER Force
-Re-download even when the recorded version already matches.
-
-.EXAMPLE
-./scripts/fetch-deps.ps1
-./scripts/fetch-deps.ps1 -Component mpv -Force
-#>
 [CmdletBinding()]
 param(
     [ValidateSet('ffmpeg', 'mpv', 'anime4k')]
@@ -32,12 +8,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'   # Write-Progress makes downloads several times slower.
+$ProgressPreference = 'SilentlyContinue'
 
 if (-not $BinDir) { $BinDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'bin' }
 $manifestPath = Join-Path $BinDir 'versions.json'
 
-# TLS 1.2 isn't Windows PowerShell 5.1's default, and every source below refuses anything older.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $github = @{ 'User-Agent' = 'yoru-fetch-deps'; 'Accept' = 'application/vnd.github+json' }
@@ -53,11 +28,9 @@ function Get-Manifest {
 }
 
 function Save-Manifest($manifest) {
-    # No BOM: Windows PowerShell's utf8 puts one first, and the Go side could not read the file at all.
     [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 4))
 }
 
-# Checked against the checksum the source publishes, as the in-app installer checks the same downloads.
 function Get-Download($url, $destination, $digest) {
     Write-Note "downloading $url"
     Invoke-WebRequest -Uri $url -OutFile $destination -UseBasicParsing -TimeoutSec 900
@@ -72,14 +45,11 @@ function Get-Download($url, $destination, $digest) {
     Write-Note 'checksum ok'
 }
 
-# The sha256 GitHub records for an asset, or nothing for releases older than that.
 function Get-AssetDigest($asset) {
     if ($asset.digest -and $asset.digest -match '^sha256:([0-9a-fA-F]{64})$') { return $Matches[1] }
     return $null
 }
 
-# Windows ships bsdtar, which reads 7-Zip as well as zip. Requiring a separate
-# 7-Zip install just to unpack mpv would defeat the point of this script.
 function Expand-Download($archive, $destination) {
     New-Item -ItemType Directory -Force -Path $destination | Out-Null
 
@@ -94,7 +64,6 @@ function Expand-Download($archive, $destination) {
     }
 }
 
-# Copy-Item fails on a running executable, as when Yoru is open; saying so beats an access-denied trace.
 function Install-Binary($source, $name) {
     $target = Join-Path $BinDir $name
     try {
@@ -111,8 +80,6 @@ function Find-One($root, $pattern) {
     return $hit.FullName
 }
 
-# gyan.dev tracks ffmpeg releases more closely than the GitHub build farms and
-# publishes the version as a bare string, so no scraping is needed.
 function Resolve-Ffmpeg {
     $raw = (Invoke-WebRequest 'https://www.gyan.dev/ffmpeg/builds/release-version' -UseBasicParsing -TimeoutSec 60).Content
     if ($raw -is [byte[]]) { $raw = [Text.Encoding]::UTF8.GetString($raw) }
@@ -132,8 +99,6 @@ function Resolve-Ffmpeg {
     }
 }
 
-# The plain x86_64 build runs anywhere; the -v3 variant needs AVX2 and the -dev
-# archive is headers and import libraries rather than a player.
 function Resolve-Mpv {
     $release = Invoke-RestMethod 'https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest' -Headers $github -TimeoutSec 60
     $asset = $release.assets |
@@ -149,13 +114,11 @@ function Resolve-Mpv {
     }
 }
 
-# Upscaling shaders for mpv. Under a megabyte, and useless without mpv.
 function Resolve-Anime4K {
     $release = Invoke-RestMethod 'https://api.github.com/repos/bloc97/Anime4K/releases/latest' -Headers $github -TimeoutSec 60
     $asset = $release.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
     if (-not $asset) { throw "no zip in Anime4K release $($release.tag_name)" }
 
-    # Older than GitHub's digests: pinned, the release has not changed since 2021.
     $digest = Get-AssetDigest $asset
     if (-not $digest -and $release.tag_name -eq 'v4.0.1') { $digest = '139cd282086457c5adc79caf7b75b8b825091d71c9b54958c18745fea62d7ed7' }
     return [pscustomobject]@{
@@ -169,7 +132,6 @@ function Resolve-Anime4K {
 $components = [ordered]@{
     ffmpeg  = @{ Resolve = ${function:Resolve-Ffmpeg};  Files = @('ffmpeg.exe', 'ffprobe.exe') }
     mpv     = @{ Resolve = ${function:Resolve-Mpv};     Files = @('mpv.exe', 'mpv.com') }
-    # mpv resolves the chain from bin/shaders, so the layout matters.
     anime4k = @{ Resolve = ${function:Resolve-Anime4K}; Glob = '*.glsl'; Into = 'shaders' }
 }
 

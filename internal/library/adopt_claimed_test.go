@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// A torrent a fetch is still warming has no record yet; adopted now it would be a nameless download,
-// and stay one if the fetch then failed. The sweep leaves it to the fetch.
 func TestAdoptLeavesAFetchInFlightAlone(t *testing.T) {
 	c, st, engine := ownedFixture(t)
 	engine.ids[1] = goodHash

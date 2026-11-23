@@ -4,7 +4,6 @@ import (
 	"reflect"
 )
 
-// Due to ConnStats, must be 64-bit aligned on 32-bit platforms for its atomics.
 type TorrentStats struct {
 	AllConnStats
 	TorrentStatCounters
@@ -12,8 +11,6 @@ type TorrentStats struct {
 }
 
 type AllConnStats struct {
-	// Aggregates stats over all connections past and present. Some values may not have much meaning
-	// in the aggregate context.
 	ConnStats
 	WebSeeds  ConnStats
 	PeerConns ConnStats
@@ -26,9 +23,7 @@ func (me *AllConnStats) Copy() (ret AllConnStats) {
 	return
 }
 
-// Instantaneous metrics in Torrents, and aggregated for Clients.
 type TorrentGauges struct {
-	// Ordered by expected descending quantities (if all is well).
 	TotalPeers       int
 	PendingPeers     int
 	ActivePeers      int

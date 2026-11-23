@@ -16,12 +16,13 @@ import {
 } from '../components/DownloadsBits'
 import { MoreMenu } from '../components/MoreMenu'
 import { SavingJob } from '../components/SavingJob'
-import { Button, ConfirmInline, LinkButton, ProgressBar, Switch } from '../components/ui'
+import { Button, ConfirmInline, Empty, LinkButton, ProgressBar, Switch } from '../components/ui'
+import { buttonClass } from '../lib/ui'
 import { bytes, cx } from '../lib/format'
 import {
   cannotSave,
   knowsNetwork,
-  removeSaved,
+  removeSavedMany,
   saveEpisodes,
   savedKey,
   setSaveQuality,
@@ -115,9 +116,7 @@ function removeEpisodes(episodes: SavedEpisode[], word: string) {
       ? `Removed ${one.title} episode ${one.episode} from this ${word}`
       : `Removed ${episodeCount(episodes.length)} from this ${word}`,
     failed: "Couldn't remove it",
-    run: async () => {
-      for (const e of episodes) await removeSaved(e.key)
-    },
+    run: () => removeSavedMany(episodes.map((e) => e.key)),
   })
 }
 
@@ -175,7 +174,11 @@ export function DeviceList({ offline = false }: { offline?: boolean }) {
       {jobs.length > 0 && (
         <section aria-label="Saving" className="surface px-4 pt-3 pb-1">
           <h2 className="text-sm font-semibold text-base-100">Saving</h2>
-          <p className="text-[13px] text-base-400">Keep Yoru open while it saves. It carries on where it stopped.</p>
+          <p className="text-[13px] text-base-400">
+            {offline
+              ? "Waiting: this device can't reach the PC. Saving carries on once it can."
+              : 'Keep Yoru open while it saves. It carries on where it stopped.'}
+          </p>
           <ul className="divide-y divide-line">
             {jobs.map((j) => {
               const key = savedKey(j.animeId, j.episode)
@@ -313,7 +316,6 @@ function ShowRow({
           type="button"
           onClick={onToggle}
           aria-expanded={open}
-          aria-label={`${open ? 'Hide' : 'Show'} episodes of ${show.title}`}
           className="flex min-w-0 flex-1 items-center gap-3 text-left"
         >
           <Poster src={show.cover} />
@@ -421,15 +423,12 @@ function SavedRow({
 function NothingSaved({ offline, why, word }: { offline: boolean; why: string | null; word: string }) {
   return (
     <div className="space-y-4">
-      <section className="surface flex flex-col items-center px-6 py-8 text-center">
-        <span className="mb-4 grid size-14 place-items-center rounded-2xl bg-base-800 text-base-300">
-          <DownloadIcon />
-        </span>
-        <p className="text-[17px] font-semibold text-base-100">Nothing saved yet</p>
-        <p className="mt-1 max-w-sm text-[15px] text-balance text-base-400">
-          Save episodes to watch with the PC off. Subtitles come too.
-        </p>
-      </section>
+      <Empty
+        card
+        icon={<DownloadIcon />}
+        title="Nothing saved yet"
+        hint="Save episodes to watch with the PC off. Subtitles come too."
+      />
       {!offline && <ReadyToSave why={why} word={word} />}
       {!offline && (
         <LinkButton to="/browse" variant="primary" size="lg" className="w-full">
@@ -490,6 +489,17 @@ export function DeviceStorage() {
   const watched = useWatched()
   const word = useDeviceWord()
   const [freeing, setFreeing] = useState(false)
+  const [kept, setKept] = useState(true)
+  useEffect(() => {
+    let live = true
+    void navigator.storage
+      ?.persisted?.()
+      .then((on) => live && setKept(on))
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [saved.length])
   const room = useRoomHere(
     `${saved.length}-${jobs.length}-${status.size}`,
     [...status.values()].some((s) => s.phase === 'saving'),
@@ -517,6 +527,11 @@ export function DeviceStorage() {
         low={low}
         onFree={saved.length > 0 ? () => setFreeing(true) : undefined}
       />
+      {!kept && saved.length > 0 && (
+        <p className="mt-2 text-sm text-base-400">
+          This {word} may clear saved episodes when space runs low. Install Yoru to keep them.
+        </p>
+      )}
       {freeing && (
         <BottomSheet title="Free up space" detail={`On this ${word}`} onClose={() => setFreeing(false)}>
           <FreeUpList word={word} onDone={() => setFreeing(false)} />
@@ -549,16 +564,34 @@ function FreeUpList({ word, onDone }: { word: string; onDone?: () => void }) {
         title="Remove watched episodes"
         detail={seen.length > 0 ? `${episodeCount(seen.length)} · ${bytes(seen.reduce((n, e) => n + e.bytes, 0))}` : 'Nothing watched yet'}
         action={
-          <Button
-            size="sm"
-            disabled={seen.length === 0}
-            onClick={() => {
-              removeEpisodes(seen, word)
-              onDone?.()
-            }}
-          >
-            Remove
-          </Button>
+          confirm === -1 ? (
+            <ConfirmInline
+              size="sm"
+              label={`Remove ${episodeCount(seen.length)}`}
+              note={`From this ${word} only`}
+              onConfirm={() => {
+                setConfirm(null)
+                removeEpisodes(seen, word)
+                onDone?.()
+              }}
+              onCancel={() => setConfirm(null)}
+            />
+          ) : (
+            <Button
+              size="sm"
+              disabled={seen.length === 0}
+              onClick={() => {
+                if (seen.length > 1) {
+                  setConfirm(-1)
+                  return
+                }
+                removeEpisodes(seen, word)
+                onDone?.()
+              }}
+            >
+              Remove
+            </Button>
+          )
         }
       />
       {shows.map((s) => (
@@ -683,7 +716,7 @@ function CantSave({ why }: { why: string }) {
           : 'Set up HTTPS on the PC under Settings, Devices, then open Yoru by that address here.'}
       </p>
       {secure && (
-        <a href={secure} className="inline-block text-accent-300 underline-offset-2 hover:underline">
+        <a href={secure} className={buttonClass('primary', 'sm')}>
           Open the secure address
         </a>
       )}

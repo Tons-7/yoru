@@ -40,7 +40,6 @@ func sampleMedia(id int) anilist.Media {
 	}
 }
 
-// A show first seen in Browse is kept, and joins the corpus so it can be matched.
 func TestRememberKeepsShowAndAddsItToCorpus(t *testing.T) {
 	st := rememberStore(t)
 	imp := NewImporter(st, nil, discard())
@@ -63,7 +62,6 @@ func TestRememberKeepsShowAndAddsItToCorpus(t *testing.T) {
 		t.Error("not in the corpus")
 	}
 
-	// Seen again inside ten minutes: nothing newer to write.
 	imp.Remember(page, []anilist.Media{sampleMedia(154587)})
 	select {
 	case <-added:
@@ -72,7 +70,6 @@ func TestRememberKeepsShowAndAddsItToCorpus(t *testing.T) {
 	}
 }
 
-// An answer from the saved copy is old: storing it would stamp it current.
 func TestSavedAnswersAreNeverWrittenBack(t *testing.T) {
 	st := rememberStore(t)
 	imp := NewImporter(st, nil, discard())
@@ -92,7 +89,6 @@ func TestSavedAnswersAreNeverWrittenBack(t *testing.T) {
 	}
 }
 
-// The saved row read back reads as what AniList sent, bar studio ids.
 func TestFromRecordRoundTrips(t *testing.T) {
 	st := rememberStore(t)
 	m := sampleMedia(9)

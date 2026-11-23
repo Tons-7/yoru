@@ -3,6 +3,5 @@
 package dht
 
 func ignoreReadFromError(error) bool {
-	// Good unix.
 	return false
 }

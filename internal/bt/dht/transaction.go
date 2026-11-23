@@ -11,8 +11,6 @@ import (
 
 var TransactionTimeout = errors.New("transaction timed out")
 
-// Transaction keeps track of a message exchange between nodes, such as a
-// query message and a response message.
 type transaction struct {
 	onResponse func(krpc.Msg)
 }

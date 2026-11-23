@@ -25,7 +25,7 @@ func ipv4AddrPortFromKrpcNodeAddr(na krpc.NodeAddr) (_ netip.AddrPort, err error
 func ipv6AddrPortFromKrpcNodeAddr(na krpc.NodeAddr) (_ netip.AddrPort, err error) {
 	ip6 := na.IP.To16()
 	if ip6 == nil {
-		err = fmt.Errorf("not an ipv4 address: %v", na.IP)
+		err = fmt.Errorf("not an ipv6 address: %v", na.IP)
 		return
 	}
 	addr := netip.AddrFrom16(*(*[16]byte)(ip6))

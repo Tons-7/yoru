@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,8 +24,6 @@ func (c *countingSource) Search(context.Context, Query) ([]Torrent, error) {
 	return []Torrent{{Title: "result", InfoHash: "abc"}}, nil
 }
 
-// Opening the sources list and then pressing play searched twice, and every
-// failed release searched again. On a slow line each round is seconds.
 func TestRepeatedSearchAsksTheSourceOnce(t *testing.T) {
 	inner := &countingSource{}
 	c := NewCached(inner)
@@ -51,7 +50,6 @@ func TestRepeatedSearchAsksTheSourceOnce(t *testing.T) {
 	}
 }
 
-// A failed search is usually a timeout, and repeating it is the whole point.
 func TestFailuresAreNotCached(t *testing.T) {
 	inner := &countingSource{err: errors.New("timeout")}
 	c := NewCached(inner)
@@ -66,7 +64,6 @@ func TestFailuresAreNotCached(t *testing.T) {
 	}
 }
 
-// The same query asked twice at once goes out once; the second caller takes the first's answer.
 func TestConcurrentIdenticalSearchesShareOneRequest(t *testing.T) {
 	inner := &slowSource{release: make(chan struct{})}
 	c := NewCached(inner)
@@ -91,7 +88,6 @@ func TestConcurrentIdenticalSearchesShareOneRequest(t *testing.T) {
 	}
 }
 
-// The first asker leaving (the sources list closed) doesn't fail Play waiting on the same search.
 func TestLeavingAskerDoesNotFailTheOthers(t *testing.T) {
 	inner := &slowSource{release: make(chan struct{}), honour: true}
 	c := NewCached(inner)
@@ -127,7 +123,7 @@ func TestLeavingAskerDoesNotFailTheOthers(t *testing.T) {
 }
 
 type slowSource struct {
-	honour  bool // gives up when its context ends, as the real indexers do
+	honour  bool
 	release chan struct{}
 	started atomic.Int32
 	calls   atomic.Int32
@@ -147,4 +143,43 @@ func (s *slowSource) Search(ctx context.Context, _ Query) ([]Torrent, error) {
 		return nil, ctx.Err()
 	}
 	return []Torrent{{Title: "result", InfoHash: "abc"}}, nil
+}
+
+func TestAnExpiredSearchAsksAgain(t *testing.T) {
+	inner := &countingSource{}
+	c := NewCached(inner)
+	ctx := context.Background()
+	q := Query{Text: "show"}
+	c.Search(ctx, q)
+	c.mu.Lock()
+	for k, e := range c.entries {
+		e.expires = time.Now().Add(-time.Second)
+		c.entries[k] = e
+	}
+	c.mu.Unlock()
+	c.Search(ctx, q)
+	if inner.calls != 2 {
+		t.Fatalf("asked the source %d times, want a fresh ask after expiry", inner.calls)
+	}
+}
+
+func TestStoreSweepsOnlyExpiredEntries(t *testing.T) {
+	c := NewCached(&countingSource{})
+	past, future := time.Now().Add(-time.Minute), time.Now().Add(time.Minute)
+	for i := range 501 {
+		at := future
+		if i%2 == 0 {
+			at = past
+		}
+		c.entries[fmt.Sprint(i)] = cachedSearch{expires: at}
+	}
+	c.store("new", nil)
+	if len(c.entries) != 250+1 {
+		t.Fatalf("%d entries left, want the 250 live ones plus the new one", len(c.entries))
+	}
+	for k, e := range c.entries {
+		if k != "new" && e.expires.Before(time.Now()) {
+			t.Fatalf("expired entry %s survived", k)
+		}
+	}
 }

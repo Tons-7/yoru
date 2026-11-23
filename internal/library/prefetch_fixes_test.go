@@ -12,7 +12,6 @@ import (
 	"yoru/internal/store"
 )
 
-// A release chosen by hand is recorded as such, so the identity check cannot replace it on the next play.
 func TestHandPickedReleaseIsRecordedAsManual(t *testing.T) {
 	engine := newFakeEngine()
 	engine.finished[ep2Also] = true
@@ -31,7 +30,6 @@ func TestHandPickedReleaseIsRecordedAsManual(t *testing.T) {
 	}
 }
 
-// A picked hash the episode's search doesn't list (a SeaDex batch) is fetched by hash, not failed as missing.
 func TestPickedReleaseOutsideTheSearchIsFetchedByItsHash(t *testing.T) {
 	const batch = "dddddddddddddddddddddddddddddddddddddddd"
 	engine := newFakeEngine()
@@ -48,7 +46,6 @@ func TestPickedReleaseOutsideTheSearchIsFetchedByItsHash(t *testing.T) {
 	}
 }
 
-// A fetch's claim on its torrent ends with the fetch, so adoption resumes for one left unrecorded.
 func TestClaimEndsWithTheFetch(t *testing.T) {
 	_, pref, _ := pipeline(t, newFakeEngine())
 	flight, _ := pref.beginFetch(1, 2)
@@ -62,7 +59,6 @@ func TestClaimEndsWithTheFetch(t *testing.T) {
 	}
 }
 
-// A release resolved a moment ago is not resolved again on the next visit.
 func TestPrepareDoesNotRepeatAFreshResolve(t *testing.T) {
 	_, pref, idx := pipeline(t, newFakeEngine(), frieren(ep2Hash, 2))
 	prefs := score.DefaultPreferences()
@@ -81,7 +77,6 @@ func TestPrepareDoesNotRepeatAFreshResolve(t *testing.T) {
 		t.Fatalf("searched %d more times for a release resolved a moment ago", n-searched)
 	}
 
-	// An old one is worth resolving again.
 	pref.mu.Lock()
 	got := pref.prepared[prepareKey(1, 2)]
 	got.at = time.Now().Add(-preparedFresh - time.Minute)
@@ -91,8 +86,6 @@ func TestPrepareDoesNotRepeatAFreshResolve(t *testing.T) {
 	eventually(t, "a second resolve", func() bool { return idx.searches() > searched })
 }
 
-// A library row whose file was deleted outside Yoru no longer stands in for the episode: the queue
-// downloads it, and the row is marked missing.
 func TestAStaleLibraryRowDoesNotStandInForTheEpisode(t *testing.T) {
 	engine := newFakeEngine()
 	engine.finished[ep2Hash] = true
@@ -115,7 +108,6 @@ func TestAStaleLibraryRowDoesNotStandInForTheEpisode(t *testing.T) {
 		t.Fatal("the stale row still stands")
 	}
 
-	// With the file there, the library copy is used and nothing is downloaded.
 	third := filepath.Join(filepath.Dir(path), "Frieren - 03.mkv")
 	if err := os.WriteFile(third, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
@@ -133,7 +125,6 @@ func TestAStaleLibraryRowDoesNotStandInForTheEpisode(t *testing.T) {
 	}
 }
 
-// Giving up on a download whose episode is playing leaves it running: pausing it would freeze the stream.
 func TestStoppingADownloadSparesTheOnePlaying(t *testing.T) {
 	engine := newFakeEngine()
 	engine.stuck[ep2Hash] = true
@@ -146,7 +137,6 @@ func TestStoppingADownloadSparesTheOnePlaying(t *testing.T) {
 
 	outcome := fetchInBackground(pref, false)
 	eventually(t, "the fetch to add its torrent", func() bool { _, ok := pref.Fetching(1, 2); return ok })
-	// Play takes it over and the stream pins it.
 	if err := play.store.RecordTorrent(ctx, store.TorrentRecord{
 		InfoHash: ep2Hash, EngineID: 1, Name: "[Best] Sousou no Frieren - 02 [1080p].mkv", AnimeID: 1, EpKey: "2",
 		FilePath: "x.mkv", TotalSize: 100,

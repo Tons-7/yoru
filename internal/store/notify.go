@@ -23,7 +23,6 @@ type Notification struct {
 const (
 	NotifyRelease = "release"
 	NotifyAiring  = "airing"
-	NotifyError   = "error"
 	NotifyUpdate  = "update"
 
 	NotifyDelay = "delay"
@@ -39,11 +38,15 @@ func (s *Store) AddNotification(ctx context.Context, n Notification) (int64, err
 		}
 	}
 
+	now := time.Now().Unix()
+	if n.CreatedAt <= 0 || n.CreatedAt > now || n.CreatedAt < now-30*24*3600 {
+		n.CreatedAt = now
+	}
 	res, err := s.w.ExecContext(ctx, `
 		INSERT INTO notification (kind, anime_id, episode, title, body, payload, created_at)
 		VALUES (?,?,?,?,?,?,?)`,
 		n.Kind, nullableInt(deref(n.AnimeID)), nullableInt(deref(n.Episode)),
-		n.Title, nullable(n.Body), payload, time.Now().Unix())
+		n.Title, nullable(n.Body), payload, n.CreatedAt)
 	if err != nil {
 		return 0, err
 	}
@@ -127,13 +130,16 @@ func (s *Store) DeleteNotification(ctx context.Context, id int64) (int, error) {
 
 func (s *Store) AlreadyNotified(ctx context.Context, infoHash string, animeID, episode int) (bool, error) {
 	var one int
+	if animeID == 0 || episode <= 0 {
+		err := s.r.QueryRowContext(ctx,
+			`SELECT 1 FROM notified_release WHERE info_hash = ?`, infoHash).Scan(&one)
+		return err == nil, nil
+	}
 	err := s.r.QueryRowContext(ctx,
-		`SELECT 1 FROM notified_release WHERE info_hash = ?`, infoHash).Scan(&one)
+		`SELECT 1 FROM notified_release WHERE info_hash = ? AND anime_id = ? AND episode = ?`,
+		infoHash, animeID, episode).Scan(&one)
 	if err == nil {
 		return true, nil
-	}
-	if animeID == 0 || episode <= 0 {
-		return false, nil
 	}
 
 	err = s.r.QueryRowContext(ctx,
@@ -191,6 +197,27 @@ func (s *Store) ShowDelay(ctx context.Context, animeID int) (d AiringDelay, ok b
 		  AND coalesce(a.status, '') <> 'FINISHED' AND (a.next_episode IS NULL OR a.next_episode <= d.episode)
 		ORDER BY d.episode DESC LIMIT 1`, animeID).Scan(&d.AnimeID, &d.Episode, &d.WasAt, &d.NowAt)
 	return d, err == nil
+}
+
+func (s *Store) ShowDelays(ctx context.Context) (map[int]AiringDelay, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT d.anime_id, d.episode, d.was_at, d.now_at FROM airing_delay d JOIN anime a ON a.id = d.anime_id
+		WHERE (d.now_at IS NULL OR d.now_at > unixepoch())
+		  AND coalesce(a.status, '') <> 'FINISHED' AND (a.next_episode IS NULL OR a.next_episode <= d.episode)
+		ORDER BY d.anime_id, d.episode`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int]AiringDelay{}
+	for rows.Next() {
+		var d AiringDelay
+		if err := rows.Scan(&d.AnimeID, &d.Episode, &d.WasAt, &d.NowAt); err != nil {
+			return nil, err
+		}
+		out[d.AnimeID] = d
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) Notified(ctx context.Context, kind string, animeID int) bool {
@@ -275,7 +302,7 @@ func (s *Store) recordRelease(ctx context.Context, infoHash string, animeID, epi
 	_, err := s.w.ExecContext(ctx, `
 		INSERT INTO notified_release (info_hash, anime_id, episode, created_at, announced)
 		VALUES (?,?,?,?,?) ON CONFLICT DO UPDATE SET announced = max(announced, excluded.announced)`,
-		infoHash, nullableInt(animeID), nullableInt(episode), time.Now().Unix(), boolInt(announced))
+		infoHash, animeID, max(episode, 0), time.Now().Unix(), boolInt(announced))
 	return err
 }
 
@@ -301,8 +328,10 @@ func (f Follow) Latest(now int64) int {
 	case f.NextEpisode > 0:
 		return f.NextEpisode - 1
 	}
-	if ended, err := time.Parse("2006-01-02", f.EndDate); err == nil && now-ended.Unix() < 7*24*3600 {
-		return f.Episodes
+	if ended, err := time.Parse("2006-01-02", f.EndDate); err == nil {
+		if d := now - ended.Unix(); d >= -9*3600 && d < 7*24*3600 {
+			return f.Episodes
+		}
 	}
 	return 0
 }
@@ -324,7 +353,11 @@ func (s *Store) EpisodeAired(ctx context.Context, animeID, episode int) (bool, i
 	if err != nil || next == nil || at == nil {
 		return true, 0
 	}
-	return aired(episode, *next, int64(*at), time.Now().Unix()), int64(*at)
+	ok := aired(episode, *next, int64(*at), time.Now().Unix())
+	if episode != *next {
+		return ok, 0
+	}
+	return ok, int64(*at)
 }
 
 const followQuery = `

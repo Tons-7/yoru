@@ -12,7 +12,6 @@ import (
 	"yoru/internal/sound"
 )
 
-// Every sound setting on every channel count encodes in full, to FLAC or AAC, from TrueHD's 40-sample frames.
 func TestEverySoundOptionEncodes(t *testing.T) {
 	ffmpeg, ffprobe := binaries(t)
 	clips := map[int]string{}

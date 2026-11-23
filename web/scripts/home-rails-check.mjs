@@ -61,6 +61,16 @@ check((upcomingBox?.y ?? 0) > (trendingBox?.y ?? 0), 'and sits below Top 10',
 check(await rail('Upcoming').locator('a[href^="/anime/"]').first().isVisible(), 'with cards in it')
 await page.screenshot({ path: `${SHOTS}/home-upcoming.png`, fullPage: true })
 
+const setAlerts = (value) => fetch(`${BASE}/api/prefs`, { method: 'POST', body: JSON.stringify({ key: 'notify.enabled', value }) })
+await setAlerts('false')
+await page.reload({ waitUntil: 'domcontentloaded' })
+check(await until(() => rail('Upcoming').getByText('Alerts are off for every show').isVisible()), 'with alerts off, Upcoming says so')
+check((await rail('Upcoming').getByRole('link', { name: 'Turn alerts on' }).getAttribute('href').catch(() => '')) === '/settings?tab=Notifications',
+  'and links to turning them on')
+await setAlerts('true')
+await page.reload({ waitUntil: 'domcontentloaded' })
+await until(() => rail('Upcoming').locator('a[href^="/anime/"]').first().isVisible())
+
 const seeAll = (title) => rail(title).getByRole('link', { name: title, exact: true }).first()
 const seasonHref = await seeAll('This season').getAttribute('href')
 check(seasonHref === `/browse?season=${here.season}&year=${here.year}&sort=popular`,

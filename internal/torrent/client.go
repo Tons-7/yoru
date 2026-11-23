@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -29,7 +30,9 @@ type Client struct {
 
 	stream *http.Client
 	base   string
-	engine Engine
+
+	cacheDir string
+	engine   Engine
 
 	mu         sync.Mutex
 	badMagnets map[string]time.Time
@@ -223,6 +226,9 @@ func (c *Client) Inspect(parent context.Context, magnet string) (*Torrent, error
 	defer cancel()
 
 	got, err := c.listFiles(ctx, magnet)
+	if errors.Is(err, ErrUnavailable) {
+		return got, err
+	}
 	if err = timedOut(ctx, parent, err); err != nil && parent.Err() == nil {
 		c.markMagnetFailed(magnet, err)
 	}
@@ -265,16 +271,20 @@ func (c *Client) magnetFailure(magnet string) (time.Time, error, bool) {
 
 func (c *Client) markMagnetFailed(magnet string, why error) {
 	c.mu.Lock()
-	c.badMagnets[magnet] = time.Now().Add(inspectFailTTL)
-	if c.badReasons != nil {
-		c.badReasons[magnet] = why
+	now := time.Now()
+	for m, until := range c.badMagnets {
+		if now.After(until) {
+			delete(c.badMagnets, m)
+			delete(c.badReasons, m)
+		}
 	}
+	c.badMagnets[magnet] = now.Add(inspectFailTTL)
+	c.badReasons[magnet] = why
 	c.mu.Unlock()
 }
 
 func (c *Client) Add(ctx context.Context, magnet string, file File) (*Torrent, error) {
 	return c.add(ctx, c.http, magnet, url.Values{
-		"overwrite":        {"true"},
 		"only_files_regex": {"^" + regexp.QuoteMeta(file.Name) + "$"},
 	})
 }
@@ -495,13 +505,27 @@ func (c *Client) AwaitPaced(ctx context.Context, id int, stall time.Duration, pa
 	var best int64
 	var quiet time.Duration
 	var samples []sample
+	var percent float64
 
 	for {
 		stats, err := c.Stats(ctx, id)
 		if err != nil {
-			return err
+			if ctx.Err() != nil || !transient(err) {
+				return err
+			}
+			quiet += AwaitPoll
+			if quiet >= stall {
+				return &StallError{Percent: percent, Quiet: quiet, Cause: err.Error()}
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(AwaitPoll):
+			}
+			continue
 		}
-		progress, percent, done := pace.Progress(stats)
+		progress, p, done := pace.Progress(stats)
+		percent = p
 		switch {
 		case done:
 			return nil
@@ -541,6 +565,14 @@ func (c *Client) AwaitPaced(ctx context.Context, id int, stall time.Duration, pa
 	}
 }
 
+func transient(err error) bool {
+	if errors.Is(err, ErrUnavailable) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
 func (s Stats) Checking() bool { return s.State == "initializing" && !s.Finished }
 
 func (c *Client) PauseUnfinished(ctx context.Context, keep func(infoHash string) bool) (paused, kept int, checking []string, err error) {
@@ -571,6 +603,19 @@ func (c *Client) PauseUnfinished(ctx context.Context, keep func(infoHash string)
 
 func (c *Client) Delete(ctx context.Context, id int) error {
 	return c.post(ctx, fmt.Sprintf("/torrents/%d/delete", id))
+}
+
+func (c *Client) WithCacheDir(dir string) *Client {
+	c.cacheDir = dir
+	return c
+}
+
+func (c *Client) InCache(ctx context.Context, id int) bool {
+	if c.cacheDir == "" {
+		return true
+	}
+	d, err := c.Details(ctx, id)
+	return err == nil && Within(c.cacheDir, d.OutputFolder)
 }
 
 func (c *Client) Forget(ctx context.Context, id int) error {
@@ -688,6 +733,9 @@ func (c *Client) send(client *http.Client, req *http.Request, out any) error {
 		return err
 	}
 
+	if res.StatusCode == http.StatusServiceUnavailable {
+		return fmt.Errorf("%w: engine %s: %s", ErrUnavailable, req.URL.Path, strings.TrimSpace(string(body)))
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("engine %s: HTTP %d: %s",
 			req.URL.Path, res.StatusCode, strings.TrimSpace(string(body)))
@@ -709,17 +757,6 @@ func PickVideo(files []File) (File, int, bool) {
 		}
 	}
 	return best, bestIdx, bestIdx >= 0
-}
-
-func PickEpisode(files []File, numbers ...int) (File, int, bool) {
-	if len(numbers) == 0 {
-		return PickVideo(files)
-	}
-	return PickNumbered(files, numbers[0], numbers)
-}
-
-func PickNumbered(files []File, episode int, numbers []int) (File, int, bool) {
-	return PickInPack(files, episode, numbers, Scope{})
 }
 
 func PickByTitle(files []File, episode int, numbers []int, scope Scope) (File, int, bool) {

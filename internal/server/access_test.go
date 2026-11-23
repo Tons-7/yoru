@@ -519,6 +519,7 @@ func TestSecretClassification(t *testing.T) {
 	secret := []string{
 		"anilist.token", "access.token", "anilist.client.secret", "anilist.state",
 		"anilist.client_secret", "mal.client_secret", "mal.refresh.token",
+		"mal.state", "mal.verifier.token", "https.duckdns.token", "jimaku.token", "push.vapid_key", "skips.submitter",
 	}
 
 	plain := []string{

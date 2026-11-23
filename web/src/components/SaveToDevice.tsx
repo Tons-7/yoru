@@ -1,6 +1,7 @@
+import { toast } from '../lib/toast'
 import type { ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { cannotSave, saveEpisodes, savedKey, useSaved, type SaveStatus } from '../lib/offline'
+import { cannotSave, retrySave, saveEpisodes, savedKey, useSaved, type SaveStatus } from '../lib/offline'
 import { useAccess } from '../lib/queries'
 import type { ButtonVariant } from '../lib/ui'
 import { Button, LinkButton } from './ui'
@@ -9,8 +10,10 @@ function saveWords(s?: SaveStatus): string {
   switch (s?.phase) {
     case 'saving':
       return `Saving ${s.total ? Math.floor((s.done / s.total) * 100) : 0}%`
+    case 'preparing':
+      return 'Getting it ready'
     case 'waiting':
-      return 'Saving once the PC has it'
+      return `Saving once the PC has it${s.percent != null ? ` · ${Math.floor(s.percent)}%` : ''}`
     case 'stopped':
       return 'Save stopped'
     case 'paused':
@@ -51,8 +54,12 @@ export function SaveToDevice({
   if (!access.data || access.data.host) return null
   const key = savedKey(animeId, episode)
   const save = () => {
-    if (cannotSave()) navigate('/saved')
-    else saveEpisodes([{ animeId, episode }])
+    const why = cannotSave()
+    if (why) {
+      toast(why, 'info', { label: 'How to', run: () => navigate('/saved') })
+      return
+    }
+    saveEpisodes([{ animeId, episode }])
   }
 
   if (className) {
@@ -61,6 +68,13 @@ export function SaveToDevice({
         <Link to="/saved" className={`${className} text-emerald-300`}>
           <Label icon={icon} long="On this device" short="Saved" />
         </Link>
+      )
+    }
+    if (status.get(key)?.phase === 'failed') {
+      return (
+        <button type="button" className={`${className} text-red-300`} onClick={() => retrySave(key)}>
+          <Label icon={icon} long="Couldn't save · Try again" short="Try again" />
+        </button>
       )
     }
     if (jobs.some((j) => savedKey(j.animeId, j.episode) === key)) {
@@ -82,6 +96,13 @@ export function SaveToDevice({
       <LinkButton to="/saved" variant={variant}>
         On this device
       </LinkButton>
+    )
+  }
+  if (status.get(key)?.phase === 'failed') {
+    return (
+      <Button variant={variant} onClick={() => retrySave(key)}>
+        Couldn't save · Try again
+      </Button>
     )
   }
   if (jobs.some((j) => savedKey(j.animeId, j.episode) === key)) {

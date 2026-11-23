@@ -29,13 +29,12 @@ import (
 
 const phone = "192.168.1.50:5555"
 
-// device is a remote browser: it keeps cookies between requests like one.
 type device struct {
 	h       *harness
 	t       *testing.T
 	cookies map[string]string
 	ua      string
-	addr    string // phone when empty
+	addr    string
 }
 
 func (d *device) get(target string, page bool) *http.Response {
@@ -72,7 +71,6 @@ func newDevice(t *testing.T, h *harness) *device {
 		ua: "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36"}
 }
 
-// host calls a host-only route from the machine itself.
 func (h *harness) host(t *testing.T, method, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
@@ -135,7 +133,6 @@ func TestDeviceWaitsUntilTheHostAccepts(t *testing.T) {
 		t.Fatalf("api after approval: %d, want 200", res.StatusCode)
 	}
 
-	// Remembered across a restart: the decision is in the database.
 	h.server.approvals = approvals{}
 	if res := d.get("/api/health", false); res.StatusCode != http.StatusOK {
 		t.Fatalf("after restart: %d, want 200", res.StatusCode)
@@ -164,7 +161,6 @@ func TestDeclinedDeviceStaysOutAndDoesNotAskAgain(t *testing.T) {
 	}
 }
 
-// Open-in-app links end only when a device that had access loses it; turning away a stranger keeps them.
 func TestOnlyALostDeviceEndsTheLinks(t *testing.T) {
 	h := approvalHarness(t, approvalOnce)
 	friend, stranger := newDevice(t, h), newDevice(t, h)
@@ -224,7 +220,6 @@ func TestPendingRequestsAreCapped(t *testing.T) {
 	}
 }
 
-// A browser that keeps no cookies asks again on every reload; it stays one waiting device, not twenty.
 func TestCookielessBrowserWaitsOnce(t *testing.T) {
 	h := approvalHarness(t, approvalOnce)
 	for range 5 {
@@ -294,7 +289,6 @@ func TestDeviceNames(t *testing.T) {
 	}
 }
 
-// selfSigned writes a throwaway certificate for name and returns its paths.
 func selfSigned(t *testing.T, name string) (certPath, keyPath string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

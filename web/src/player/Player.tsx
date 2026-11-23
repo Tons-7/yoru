@@ -28,11 +28,12 @@ import {
   VOICE_LEVELS,
   type VoiceLevel,
 } from '../lib/api'
-import { clockTime, cx, languageName, speed } from '../lib/format'
+import { clockTime, cx, languageName, motion, speed } from '../lib/format'
 import { refreshDownloads, useAccess, useNow, useSpeedUnit } from '../lib/queries'
+import { toast } from '../lib/toast'
 import { SHOW_SHORTCUTS } from '../components/keys'
 import { PlayIcon } from '../components/PosterCard'
-import { Spinner } from '../components/ui'
+import { CloseButton, Spinner, SwitchTrack } from '../components/ui'
 import { menuItems, useDismiss, useMediaQuery, useMenuButton, useModalFocus, useRoomAbove, walkMenu } from '../lib/hooks'
 import { readKey, writeKey } from '../lib/storage'
 import { buttonClass } from '../lib/ui'
@@ -54,8 +55,9 @@ import {
 } from './smooth'
 import { formatFps } from './rates'
 import { useTouchGestures } from './gestures'
-import { castImpossible, episodeKey, isBrave, useCast, type CastPhase, type CastSdk, type QueuedMedia } from './cast'
+import { castImpossible, episodeKey, useCast, type CastPhase, type CastSdk, type QueuedMedia } from './cast'
 import { useAirPlay } from './airplay'
+import { saveScreenshot } from './screenshot'
 import {
   SKIPPED_GUARD,
   skipKind,
@@ -103,9 +105,24 @@ function toggleFullscreen(shell: HTMLElement | null, video: HTMLVideoElement | n
   }
 }
 
+const pendingResume = new WeakMap<HTMLVideoElement, () => void>()
+
+function dropResume(video: HTMLVideoElement | null) {
+  const was = video && pendingResume.get(video)
+  if (!video || !was) return
+  video.removeEventListener('canplay', was)
+  pendingResume.delete(video)
+}
+
 function resumeAfterRebuild(video: HTMLVideoElement | null, wasPlaying: boolean) {
   if (!video || !wasPlaying) return
-  video.addEventListener('canplay', () => void video.play().catch(() => {}), { once: true })
+  dropResume(video)
+  const resume = () => {
+    pendingResume.delete(video)
+    void video.play().catch(() => {})
+  }
+  pendingResume.set(video, resume)
+  video.addEventListener('canplay', resume, { once: true })
 }
 
 const LANGUAGE_TAGS: Record<string, string[]> = {
@@ -432,11 +449,24 @@ export function Player({
   const [soundState, setSoundState] = useState<SoundOptions>(sound?.options ?? DEFAULT_SOUND)
   const [epoch, setEpoch] = useState(0)
   const [resumeAt, setResumeAt] = useState(startAt)
+  const resumeRef = useRef(startAt)
+  useEffect(() => {
+    resumeRef.current = resumeAt
+  }, [resumeAt])
+  const position = (v: HTMLVideoElement | null | undefined) =>
+    v && v.readyState >= HTMLMediaElement.HAVE_METADATA ? v.currentTime : resumeRef.current
   const [lostError, setLostError] = useState<string | null>(null)
 
+  const [subtitleWaitOver, setSubtitleWaitOver] = useState<string>()
+  const [subtitlesFor, setSubtitlesFor] = useState<string>()
+  const [framedFor, setFramedFor] = useState<string>()
+  const playedByHand = useRef<string | undefined>(undefined)
   const [attached, setAttached] = useState(stream?.id)
   if (stream?.id !== attached) {
     setAttached(stream?.id)
+    setSubtitleWaitOver(undefined)
+    setSubtitlesFor(undefined)
+    setFramedFor(undefined)
     setAudioTrack(stream?.audioTrack ?? 0)
     setSoundState(stream?.sound ? soundFrom(stream.sound) : (sound?.options ?? DEFAULT_SOUND))
     setEpoch(0)
@@ -466,7 +496,7 @@ export function Player({
         () => {
           if (liveId.current !== id) return
           resumeAfterRebuild(video, playing)
-          setResumeAt(video?.currentTime ?? startAt)
+          setResumeAt(position(video))
           setWaiting(true)
           setEpoch((e) => e + 1)
         },
@@ -477,7 +507,7 @@ export function Player({
         },
       )
     },
-    [stream?.id, audioTrack, video, startAt, showNotice],
+    [stream?.id, audioTrack, video, showNotice],
   )
   useEffect(() => {
     audioChosen.current = false
@@ -495,7 +525,7 @@ export function Player({
         () => {
           if (liveId.current !== id) return
           resumeAfterRebuild(video, playing)
-          setResumeAt(video?.currentTime ?? startAt)
+          setResumeAt(position(video))
           setWaiting(true)
           setEpoch((e) => e + 1)
           sound?.onChange(next)
@@ -507,7 +537,7 @@ export function Player({
         },
       )
     },
-    [stream?.id, soundState, video, startAt, sound, showNotice],
+    [stream?.id, soundState, video, sound, showNotice],
   )
   const cycleVoice = useCallback(() => {
     switchSound({ voice: VOICE_LEVELS[(VOICE_LEVELS.indexOf(soundState.voice) + 1) % VOICE_LEVELS.length] })
@@ -524,8 +554,24 @@ export function Player({
   }, [onUndecodable, showNotice])
   const airplaySub = track == null ? 'off' : stream?.subtitles.some((t) => t.index === track) ? String(track) : ''
   const airplayLink = stream?.airplay && (airplaySub ? `${stream.airplay}?sub=${airplaySub}` : stream.airplay)
-  const { error, final, hls, streamEnded } = useHlsSource(video, playlist, resumeAt, recover, undecodable, airplayLink)
+  const reopenStream = useCallback(() => {
+    if (!video) return
+    resumeAfterRebuild(video, !video.paused && !video.ended)
+    setResumeAt(position(video))
+    setWaiting(true)
+    setEpoch((e) => e + 1)
+  }, [video])
+  const { error, final, hls, streamEnded } = useHlsSource(
+    video,
+    playlist,
+    resumeAt,
+    () => (onSessionLost ? recover() : setLostError("This saved episode couldn't be read.")),
+    undecodable,
+    airplayLink,
+    reopenStream,
+  )
   const airplay = useAirPlay(video)
+  const canOpenUp = useAccess().data?.canSwitch === true
   useKeepAlive(video, playlist, recover)
   recoverRef.current = () => {
     if (recovering.current || !onSessionLost) return
@@ -542,7 +588,7 @@ export function Player({
         if (!sameSound(snd, DEFAULT_SOUND) && stream?.id) {
           void api.post(`/api/stream/${stream.id}/sound${soundQuery(snd)}`).catch(() => {})
         }
-        setResumeAt(video?.currentTime ?? startAt)
+        setResumeAt(position(video))
         setWaiting(true)
         setEpoch((e) => e + 1)
         resumeAfterRebuild(video, wasPlaying)
@@ -565,6 +611,14 @@ export function Player({
     [stream, extraTracks],
   )
   const subtitleTracks = subtitleStream?.subtitles ?? NO_TRACKS
+  const pickedFor = useRef<string | null>(null)
+  const pickTrack = useCallback(
+    (index: number | null) => {
+      pickedFor.current = stream?.id ? episodeKey(stream.id) : null
+      setTrack(index)
+    },
+    [stream?.id],
+  )
   const addTrack = useCallback(
     (t: SubtitleTrack) => {
       if (!stream?.id) return
@@ -572,9 +626,9 @@ export function Player({
         const kept = prev.stream === stream.id ? prev.tracks : []
         return { stream: stream.id, tracks: [...kept.filter((old) => old.index !== t.index), t] }
       })
-      setTrack(t.index)
+      pickTrack(t.index)
     },
-    [stream?.id],
+    [stream?.id, pickTrack],
   )
   const blobs = useRef(new Set<string>())
   useEffect(() => {
@@ -607,19 +661,54 @@ export function Player({
     videoPip.active || systemFullscreen,
     subDelay,
   )
+  const saved = !!stream?.saved
+  const ownKey = (() => {
+    const m = /^(-?\d+)-(\d+)/.exec(stream?.id ?? '')
+    return m && !saved ? `${m[1]}/${m[2]}` : null
+  })()
+  const [ownKept, setOwnKept] = useState<string | null>(null)
   const loadOwnFile = useCallback(
     async (file: File) => {
       try {
         const ass = await readSubtitleFile(file)
         addTrack({ index: OWN_TRACK, title: file.name, url: URL.createObjectURL(new Blob([ass])), whole: true })
         showNotice(`Subtitles: ${file.name}`)
+        if (ownKey) {
+          void api.put(`/api/own-subtitle/${ownKey}`, { name: file.name, ass }).then(() => setOwnKept(ownKey), () => {})
+        }
       } catch (e) {
         showNotice(e instanceof Error ? e.message : "Couldn't read that file", 6000)
       }
     },
-    [addTrack, showNotice],
+    [addTrack, showNotice, ownKey],
   )
-  const saved = !!stream?.saved
+  useEffect(() => {
+    if (!ownKey) return
+    let live = true
+    api
+      .get<{ name: string; ass: string } | undefined>(`/api/own-subtitle/${ownKey}`)
+      .then((kept) => {
+        if (!live || !kept?.ass) return
+        setOwnKept(ownKey)
+        addTrack({ index: OWN_TRACK, title: kept.name, url: URL.createObjectURL(new Blob([kept.ass])), whole: true })
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [ownKey, addTrack])
+  const forgetOwnFile =
+    ownKey && ownKept === ownKey
+      ? () => {
+          void api.del(`/api/own-subtitle/${ownKey}`).then(
+            () => {
+              setOwnKept(null)
+              showNotice("This episode won't load that file again")
+            },
+            () => showNotice("Couldn't forget the file", 6000),
+          )
+        }
+      : undefined
   const jimakuSet = useQuery({
     queryKey: ['jimaku'],
     queryFn: () => api.get<{ set: boolean }>('/api/jimaku'),
@@ -649,6 +738,15 @@ export function Player({
   const smoothState = picture.smooth
   const tellSmoothState = useEffectEvent((state: SmoothState) => smooth?.onState?.(state))
   useEffect(() => tellSmoothState(smoothState), [smoothState])
+  const noticeFailure = useEffectEvent((what: string) => showNotice(what, 6000))
+  useEffect(() => {
+    if (upscaleState === 'failed') noticeFailure('Anime4K stopped; playing without it.')
+    if (upscaleState === 'unsupported') noticeFailure("Anime4K needs WebGPU, which this browser doesn't have.")
+  }, [upscaleState])
+  useEffect(() => {
+    if (smoothState === 'failed') noticeFailure("Smooth motion couldn't start; playing without it.")
+    if (smoothState === 'unsupported') noticeFailure("Smooth motion needs WebGPU, which this browser doesn't have.")
+  }, [smoothState])
   const drawn = upscaleState === 'on' || smoothState === 'on'
   const painted = useFreshFrames(video, drawn)
   const showUpscaled = drawn && painted
@@ -658,21 +756,24 @@ export function Player({
     .join('|')
   const audioLanguage = stream?.audio?.[audioTrack]?.language ?? ''
   const [chosenFor, setChosenFor] = useState<string>()
+  const trackEpisode = stream?.id ? episodeKey(stream.id) : ''
   useEffect(() => {
-    const tracks = [...(stream?.subtitles ?? [])].sort((a, b) => Number(!!a.pictures) - Number(!!b.pictures))
-    setTrack(tracks.length ? (chooseWithDub(tracks, subLanguages ?? ['en'], audioLanguage, withDub)?.index ?? null) : null)
+    const kept = pickedFor.current === trackEpisode && (track === null || subtitleTracks.some((t) => t.index === track))
+    if (!kept) {
+      pickedFor.current = null
+      const tracks = [...(stream?.subtitles ?? [])].sort((a, b) => Number(!!a.pictures) - Number(!!b.pictures))
+      setTrack(tracks.length ? (chooseWithDub(tracks, subLanguages ?? ['en'], audioLanguage, withDub)?.index ?? null) : null)
+    }
     setChosenFor(trackList)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trackList, audioLanguage, withDub])
+  }, [trackEpisode, trackList, audioLanguage, withDub])
 
-  const [subtitleWaitOver, setSubtitleWaitOver] = useState<string>()
   useEffect(() => {
     if (!stream?.id) return
     const id = stream.id
     const timer = window.setTimeout(() => setSubtitleWaitOver(id), SUBTITLE_WAIT)
     return () => clearTimeout(timer)
   }, [stream?.id])
-  const [subtitlesFor, setSubtitlesFor] = useState<string>()
   const subtitlesForRef = useRef(subtitlesFor)
   subtitlesForRef.current = subtitlesFor
   const subtitlesDrawable = chosenFor === trackList && subtitlesReady
@@ -680,7 +781,10 @@ export function Player({
     if (stream?.id && (subtitlesDrawable || subtitleWaitOver === stream.id)) setSubtitlesFor(stream.id)
   }, [stream?.id, subtitlesDrawable, subtitleWaitOver])
   const subtitlesSettled = !!stream?.id && subtitlesFor === stream.id
-  const playedByHand = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!stream?.id) playedByHand.current = undefined
+    return () => dropResume(video)
+  }, [stream?.id, video])
   useEffect(() => {
     if (!video || !stream?.id) return
     const id = stream.id
@@ -695,9 +799,27 @@ export function Player({
 
   const autoPlayRef = useRef(autoPlay)
   autoPlayRef.current = autoPlay
+  const pausedByUser = useRef<string | null>(null)
+  useEffect(() => {
+    if (!video || !stream?.id) return
+    const key = episodeKey(stream.id)
+    const onPause = () => {
+      if (!video.ended && video.currentTime > 1) pausedByUser.current = key
+    }
+    const onPlaying = () => {
+      if (pausedByUser.current === key) pausedByUser.current = null
+    }
+    video.addEventListener('pause', onPause)
+    video.addEventListener('playing', onPlaying)
+    return () => {
+      video.removeEventListener('pause', onPause)
+      video.removeEventListener('playing', onPlaying)
+    }
+  }, [video, stream?.id])
   const holdingStart = autoPlay && !!stream?.id && !subtitlesSettled
   useEffect(() => {
     if (!video || !stream?.id || !autoPlayRef.current || !subtitlesSettled || playedByHand.current === stream.id) return
+    if (pausedByUser.current === episodeKey(stream.id)) return
     const id = stream.id
     const start = () => {
       if (castingRef.current) return
@@ -739,9 +861,11 @@ export function Player({
       last = video.currentTime
     }
 
+    let finished = false
     const report = (at: number, final = false) => {
       reporter(at, duration, played, final, video.paused)
       played = 0
+      finished = final
     }
     placeRef.current = (at, d) => {
       position = last = at
@@ -773,7 +897,7 @@ export function Player({
       video.removeEventListener('ended', ended)
       window.removeEventListener('pagehide', flush)
       placeRef.current = null
-      if (duration > 0) report(position, true)
+      if (duration > 0 && !finished) report(position, true)
     }
   }, [video, stream?.id])
 
@@ -784,6 +908,7 @@ export function Player({
   castingRef.current = casting
   const castTo = useCallback(async () => {
     if (!stream?.id || !video) return
+    let wasPlaying = false
     try {
       const chosen = stream.subtitles.find((t) => t.index === track)
       const params = new URLSearchParams()
@@ -801,14 +926,16 @@ export function Player({
       if (link.note) showNotice(link.note, 6000)
       else if (track != null && !chosen) showNotice("The TV shows the episode's own subtitles; loaded ones stay here", 6000)
       const shown = track == null ? -1 : link.subtitles.findIndex((s) => s.index === track)
+      wasPlaying = !video.paused && !video.ended
       video.pause()
       await startCast({
-        key: episodeKey(stream.id), url: link.url, title: title ?? '', subtitle, artwork, startAt: video.currentTime,
+        key: episodeKey(stream.id), url: link.url, title: title ?? '', subtitle, artwork, startAt: position(video),
         subtitles: link.subtitles, subtitleTrack: shown >= 0 ? shown : undefined,
         textStyle: castStyle(lookPreset, subScale),
         queue: (link.queue ?? []).map((q) => ({ ...q, subtitleTrack: q.subtitles.length ? 0 : undefined })),
       })
     } catch (e) {
+      if (wasPlaying && !castingRef.current) void video.play().catch(() => {})
       const message = e instanceof Error ? e.message : String(e)
       if (!/cancel/i.test(message)) showNotice(`Couldn't cast: ${message}`, 6000)
     }
@@ -879,6 +1006,7 @@ export function Player({
     const id = window.setInterval(() => {
       const t = video.currentTime
       const d = video.duration
+      if (told && d > 0 && d - t > 8) told = false
       if (told || video.ended || video.paused || !(d > 0) || d - t > 8 || Math.abs(t - last) > 0.05) {
         last = t
         still = 0
@@ -995,11 +1123,18 @@ export function Player({
     if (!playing || !('wakeLock' in navigator)) return
     let lock: WakeLockSentinel | null = null
     let gone = false
+    let asking = false
     const take = () => {
-      if (document.visibilityState !== 'visible' || (lock && !lock.released)) return
+      if (asking || document.visibilityState !== 'visible' || (lock && !lock.released)) return
+      asking = true
       navigator.wakeLock.request('screen').then(
-        (l) => (gone ? void l.release() : (lock = l)),
+        (l) => {
+          asking = false
+          if (gone) void l.release()
+          else lock = l
+        },
         () => {
+          asking = false
         },
       )
     }
@@ -1082,7 +1217,12 @@ export function Player({
     setControlsVisible(true)
     window.clearTimeout(hideTimer.current)
     hideTimer.current = window.setTimeout(() => {
-      if (!video?.paused && held.current.size === 0) setControlsVisible(false)
+      if (video?.paused || held.current.size > 0) return
+      const focused = document.activeElement
+      if (focused instanceof HTMLElement && focused !== shell.current && shell.current?.contains(focused)) {
+        shell.current.focus({ preventScroll: true })
+      }
+      setControlsVisible(false)
     }, 2600)
   }, [video])
   const holdControls = useCallback(
@@ -1135,9 +1275,9 @@ export function Player({
     if (tracks.length === 0) return
     const at = tracks.findIndex((t) => t.index === track)
     const next = at + 1 < tracks.length ? tracks[at + 1] : null
-    setTrack(next ? next.index : null)
+    pickTrack(next ? next.index : null)
     showNotice(next ? `Subtitles: ${subtitleLabel(tracks, next)}` : 'Subtitles off')
-  }, [subtitleTracks, track, showNotice])
+  }, [subtitleTracks, track, showNotice, pickTrack])
   const [infoOpen, setInfoOpen] = useState(false)
   const toggleInfo = useCallback(() => setInfoOpen((v) => !v), [])
   useKeymap()
@@ -1291,13 +1431,12 @@ export function Player({
       setAvOpen(open)
       if (!open) return
       nudge()
-      shell.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      shell.current?.scrollIntoView({ block: 'nearest', behavior: motion() })
     },
     [nudge],
   )
   useImperativeHandle(controls, () => ({ fullscreen: goFullscreen, settings: openSettings }), [goFullscreen, openSettings])
 
-  const [framedFor, setFramedFor] = useState<string>()
   const firstLoad = !!stream && framedFor !== stream.id
 
   const audioName = languageName(stream?.audio?.[audioTrack]?.language)
@@ -1309,8 +1448,18 @@ export function Player({
     factsRef.current?.({ audio: audioName, subtitles: subtitleFact })
   }, [audioName, subtitleFact])
 
+  const takeScreenshot = useCallback(() => {
+    if (!video) return
+    saveScreenshot(video, drawn ? canvas : null, title, subtitle).then(
+      (copied) => showNotice(copied ? 'Screenshot saved and copied' : 'Screenshot saved', 1800),
+      () => showNotice("Couldn't take a screenshot", 3000),
+    )
+  }, [video, drawn, canvas, title, subtitle, showNotice])
+
   useKeyboard({
     off: !!mini,
+    away: !!docked,
+    onNoLock: sideways,
     video,
     togglePlay,
     seekBy,
@@ -1331,6 +1480,7 @@ export function Player({
     mark: skipMarks ? markKey : undefined,
     sizeSubs: track === null ? undefined : stepSubSize,
     theatre: onTheatre,
+    screenshot: casting ? undefined : takeScreenshot,
   })
 
   const [stalledFor, setStalledFor] = useState(0)
@@ -1375,7 +1525,9 @@ export function Player({
   }, [failed])
 
   const downloadInstead = async () => {
-    const [animeId, episode] = (stream?.id ?? '').split('-').map(Number)
+    const m = /^(-?\d+)-(\d+)/.exec(stream?.id ?? '')
+    const animeId = m ? Number(m[1]) : 0
+    const episode = m ? Number(m[2]) : 0
     if (!animeId || !episode) return
     try {
       await api.post('/api/download', { animeId, episode })
@@ -1435,7 +1587,7 @@ export function Player({
               Download it instead and watch later
             </button>
           ))}
-        {queueError && <p className="mt-2 text-xs text-recap">{queueError}</p>}
+        {queueError && <p className="mt-2 text-xs text-red-300">{queueError}</p>}
       </>
     ) : null
   const minimizable = !!onMinimize && !wide && !fullscreen && !pip.active && !mini
@@ -1451,7 +1603,7 @@ export function Player({
       audio={audioMenu}
       tracks={stream ? subtitleTracks : undefined}
       value={track}
-      onChange={setTrack}
+      onChange={pickTrack}
       scale={subScale}
       onScale={changeSubScale}
       delay={subDelay}
@@ -1460,6 +1612,7 @@ export function Player({
       onKeepDelay={onKeepDelay}
       look={onSubLook && { value: lookPreset, onChange: onSubLook, raised: subRaised, onRaised: onSubRaised }}
       onLoadFile={(file) => void loadOwnFile(file)}
+      onForgetFile={forgetOwnFile}
       jimaku={
         stream && jimakuSet && !saved
           ? {
@@ -1550,7 +1703,9 @@ export function Player({
           onResume?.('seek')
         }}
         onSeeked={() => markSeeking(false)}
-        onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+        onTimeUpdate={(e) => {
+          if (e.currentTarget.readyState !== HTMLMediaElement.HAVE_NOTHING) setTime(Math.floor(e.currentTarget.currentTime * 2) / 2)
+        }}
         onDurationChange={(e) => setDuration(e.currentTarget.duration)}
         onVolumeChange={(e) => {
           setVolume(e.currentTarget.volume)
@@ -1621,7 +1776,7 @@ export function Player({
                   ref={tryAgain}
                   onClick={() => {
                     if (error) {
-                      setResumeAt(video?.currentTime || startAt)
+                      setResumeAt(position(video) || startAt)
                       setWaiting(true)
                       resumeAfterRebuild(video, true)
                       setEpoch((e) => e + 1)
@@ -1714,7 +1869,7 @@ export function Player({
 
       <div
         className={cx(
-          'pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent px-3 pt-10 pb-2 transition-opacity duration-200 sm:px-4 sm:pb-3',
+          'pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-black/90 via-black/50 to-transparent px-3 pt-10 pb-2 transition-opacity duration-200 sm:px-4 sm:pb-3',
           pip.active || theatre ? '' : 'sm:rounded-b-xl',
           controlsVisible ? 'opacity-100' : 'opacity-0',
           (mini || (startingNow && !wide)) && 'hidden',
@@ -1785,7 +1940,7 @@ export function Player({
             {pip.active ? (
               <button
                 onClick={() => void pip.toggle()}
-                className="flex items-center gap-1.5 rounded-lg bg-white/15 px-2.5 py-1.5 text-xs font-medium text-white ring-1 ring-white/20 backdrop-blur-sm hover:bg-white/25"
+                className="flex items-center gap-1.5 min-h-11 rounded-lg bg-white/15 px-3 py-1.5 text-xs font-medium text-white ring-1 ring-white/20 backdrop-blur-sm hover:bg-white/25"
               >
                 <PiPIcon />
                 Back to tab
@@ -1810,10 +1965,27 @@ export function Player({
                     onClick={() =>
                       stream?.airplay
                         ? airplay.pick()
-                        : showNotice('AirPlay needs access from other devices: turn it on in Settings, Devices.', 6000)
+                        : canOpenUp
+                          ? toast('AirPlay needs access from other devices.', 'info', {
+                              label: 'Turn on',
+                              run: () =>
+                                void api
+                                  .post('/api/access/network', { lan: true })
+                                  .then(() => {
+                                    void qc.invalidateQueries({ queryKey: ['access'] })
+                                    toast('Access is on. Start the episode again to use AirPlay.', 'info')
+                                  })
+                                  .catch((e: Error) => toast(e.message, 'error')),
+                            })
+                          : showNotice('AirPlay needs access from other devices: turn it on in Settings, Devices.', 6000)
                     }
                   >
                     <AirPlayIcon on={airplay.active} />
+                  </IconButton>
+                )}
+                {!casting && (
+                  <IconButton label="Screenshot" hint={keyHint('screenshot')} onClick={takeScreenshot}>
+                    <ScreenshotIcon />
                   </IconButton>
                 )}
                 {pip.supported ? (
@@ -1839,7 +2011,7 @@ export function Player({
 
       <div
         className={cx(
-          'pointer-events-none absolute inset-x-0 top-0 bg-gradient-to-b from-black/70 to-transparent transition-opacity duration-200',
+          'pointer-events-none absolute inset-x-0 top-0 bg-linear-to-b from-black/70 to-transparent transition-opacity duration-200',
           pip.active ? 'p-2' : 'px-2 pt-2 pb-6 sm:p-4',
           controlsVisible ? 'opacity-100' : 'opacity-0',
           mini && 'hidden',
@@ -2092,7 +2264,7 @@ function useLoadedRanges(streamId: string | undefined, video: HTMLVideoElement |
         const res = await api.get<{ complete: boolean; ranges: Array<[number, number]> }>(`/api/stream/${streamId}/loaded`)
         if (stopped) return
         setLoaded({ stream: streamId, ranges: res.ranges })
-        if (!res.complete) timer = setTimeout(() => void untilWatching(null, () => stopped).then(read), 4000)
+        if (!res.complete) timer = setTimeout(() => void untilWatching(null, () => stopped).then(read), video?.paused ? 12_000 : 4000)
       } catch {
         if (!stopped) timer = setTimeout(read, 10_000)
       }
@@ -2174,7 +2346,7 @@ function Volume({
         value={muted ? 0 : volume}
         onChange={(e) => onChange(Number(e.target.value))}
         aria-label="Volume"
-        className="w-0 accent-[var(--color-accent-500)] opacity-0 transition-all duration-200 group-hover/vol:w-20 group-hover/vol:opacity-100 group-focus-within/vol:w-20 group-focus-within/vol:opacity-100 pointer-coarse:w-20 pointer-coarse:opacity-100"
+        className="w-20 accent-[var(--color-accent-500)]"
       />
     </div>
   )
@@ -2207,6 +2379,7 @@ function AudioSubtitlesPanel({
   onKeepDelay,
   look,
   onLoadFile,
+  onForgetFile,
   jimaku,
 }: {
   open: boolean
@@ -2228,6 +2401,7 @@ function AudioSubtitlesPanel({
   onKeepDelay?: (delay: number) => void
   look?: { value: SubLook; onChange: (look: SubLook) => void; raised?: boolean; onRaised?: (raised: boolean) => void }
   onLoadFile: (file: File) => void
+  onForgetFile?: () => void
   jimaku?: { streamId: string; onPick: (file: JimakuFile) => void }
 }) {
   const close = useCallback(() => onOpen(false), [onOpen])
@@ -2399,7 +2573,7 @@ function AudioSubtitlesPanel({
                       type="button"
                       onClick={() => setMoreFor(more ? null : foreignKey)}
                       aria-expanded={more}
-                      className="mx-2 flex min-h-10 w-[calc(100%-1rem)] items-center gap-3 rounded-lg px-2.5 py-1.5 text-left text-sm text-base-200 transition-colors hover:bg-white/[0.05] pointer-coarse:min-h-12"
+                      className="mx-2 flex min-h-10 w-[calc(100%-1rem)] items-center gap-3 rounded-lg px-2.5 py-1.5 text-left text-sm text-base-200 transition-colors hover:bg-white/5 pointer-coarse:min-h-12"
                     >
                       <span className="min-w-0 flex-1">
                         {more ? 'Fewer languages' : `More languages · ${others.length}`}
@@ -2420,7 +2594,7 @@ function AudioSubtitlesPanel({
                       {jimakuFiles.isPending ? (
                         <p className="px-4 py-2 text-xs text-base-400">Looking…</p>
                       ) : jimakuFiles.isError ? (
-                        <p className="px-4 py-2 text-xs text-recap">{(jimakuFiles.error as Error).message}</p>
+                        <p className="px-4 py-2 text-xs text-red-300">{(jimakuFiles.error as Error).message}</p>
                       ) : jimakuFiles.data.files.length === 0 ? (
                         <p className="px-4 py-2 text-xs text-base-400">None for this episode</p>
                       ) : (
@@ -2441,9 +2615,18 @@ function AudioSubtitlesPanel({
                     <button
                       type="button"
                       onClick={() => picker.current?.click()}
-                      className="mx-2 mt-1 flex min-h-10 items-center rounded-lg px-2.5 text-left text-xs font-medium text-accent-300 transition-colors hover:bg-white/[0.05] pointer-coarse:min-h-11"
+                      className="mx-2 mt-1 flex min-h-10 items-center rounded-lg px-2.5 text-left text-xs font-medium text-accent-300 transition-colors hover:bg-white/5 pointer-coarse:min-h-11"
                     >
                       Load a subtitle file…
+                    </button>
+                  )}
+                  {tracks && onForgetFile && (
+                    <button
+                      type="button"
+                      onClick={onForgetFile}
+                      className="mx-2 flex min-h-10 items-center rounded-lg px-2.5 text-left text-xs font-medium text-base-300 transition-colors hover:bg-white/5 hover:text-white pointer-coarse:min-h-11"
+                    >
+                      Forget the loaded file for this episode
                     </button>
                   )}
                   <input
@@ -2848,7 +3031,7 @@ function PlayerMenu({
               />
               {playback?.upscale && (
                 <MenuItem
-                  label="Sharper picture"
+                  label="Sharper picture (Anime4K)"
                   value={playback.upscale.value}
                   onClick={() => {
                     close()
@@ -3185,9 +3368,7 @@ function MenuToggle({
         <span className="block">{label}</span>
         {caption && <span className="block text-xs text-base-500">{caption}</span>}
       </span>
-      <span aria-hidden className={cx('relative h-5 w-9 shrink-0 rounded-full transition-colors', on ? 'bg-accent-500' : 'bg-base-700')}>
-        <span className={cx('absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform', on && 'translate-x-4')} />
-      </span>
+      <SwitchTrack on={on} />
     </button>
   )
 }
@@ -3224,6 +3405,7 @@ function markSaved(kind: string, saved: SkipMarkResult): string {
 
 function SkipTimesPanel({ skips, video, marking }: { skips: SkipRange[]; video: HTMLVideoElement | null; marking: Marking }) {
   const [said, setSaid] = useState<{ text: string; error?: boolean } | null>(null)
+  const [forgetting, setForgetting] = useState(false)
   const ownMarks = skips.some((r) => r.source === 'marked')
   const { from, setFrom } = marking
   const markStart = (kind: 'op' | 'ed') => {
@@ -3273,13 +3455,22 @@ function SkipTimesPanel({ skips, video, marking }: { skips: SkipRange[]; video: 
               Mark where the ending starts
             </MenuRow>
             {ownMarks && (
-              <MenuRow selected={false} onClick={marking.forget}>
-                Forget my marks
+              <MenuRow
+                selected={false}
+                onClick={() => {
+                  if (!forgetting) return setForgetting(true)
+                  setForgetting(false)
+                  marking.forget()
+                }}
+              >
+                <span className={forgetting ? 'text-red-300' : undefined}>
+                  {forgetting ? 'Tap again to forget every mark' : 'Forget my marks'}
+                </span>
               </MenuRow>
             )}
           </>
         )}
-        {said && <p className={cx('px-3 py-1 text-xs', said.error ? 'text-recap' : 'text-base-300')}>{said.text}</p>}
+        {said && <p className={cx('px-3 py-1 text-xs', said.error ? 'text-red-300' : 'text-base-300')}>{said.text}</p>}
         <p className="px-3 py-1 text-xs text-base-500 pointer-coarse:hidden">
           Or press {keyHint('markStart')} and {keyHint('markEnd')} as it plays. Marks move onto the music's edges.
         </p>
@@ -3314,7 +3505,7 @@ function MenuRow({
       role="menuitemradio"
       aria-checked={selected}
       onClick={onClick}
-      className={cx(menuRow, 'py-1.5', selected ? 'bg-white/[0.08] font-medium text-white' : 'text-base-200')}
+      className={cx(menuRow, 'py-1.5', selected ? 'bg-white/8 font-medium text-white' : 'text-base-200')}
     >
       <span className="min-w-0 flex-1 truncate">{children}</span>
       <svg viewBox="0 0 24 24" aria-hidden className={cx('size-4 shrink-0 text-accent-300', !selected && 'invisible')}>
@@ -3356,11 +3547,17 @@ function useKeyboard({
   mark,
   sizeSubs,
   theatre,
+  screenshot,
   off,
+  away,
+  onNoLock,
 }: {
   sizeSubs?: (by: number) => void
   theatre?: () => void
+  screenshot?: () => void
   off?: boolean
+  away?: boolean
+  onNoLock?: () => void
   video: HTMLVideoElement | null
   togglePlay: () => void
   seekBy: (n: number) => void
@@ -3438,7 +3635,7 @@ function useKeyboard({
           showVolume()
           break
         case 'fullscreen':
-          toggleFullscreen(shell, video)
+          toggleFullscreen(shell, video, onNoLock)
           break
         case 'subEarlier':
         case 'subLater':
@@ -3482,6 +3679,10 @@ function useKeyboard({
           if (!theatre) return
           theatre()
           break
+        case 'screenshot':
+          if (!screenshot) return
+          screenshot()
+          break
       }
       nudge()
     }
@@ -3489,22 +3690,23 @@ function useKeyboard({
       if (actionFor(e) === 'forward10') holdFast(false)
     }
     const release = () => holdFast(false)
-    window.addEventListener('keydown', onKey)
-    window.addEventListener('keyup', onKeyUp)
-    window.addEventListener('blur', release)
+    const main = away && extra ? null : window
+    main?.addEventListener('keydown', onKey)
+    main?.addEventListener('keyup', onKeyUp)
+    main?.addEventListener('blur', release)
     extra?.addEventListener('keydown', onKey)
     extra?.addEventListener('keyup', onKeyUp)
     extra?.addEventListener('blur', release)
     return () => {
-      window.removeEventListener('keydown', onKey)
-      window.removeEventListener('keyup', onKeyUp)
-      window.removeEventListener('blur', release)
+      main?.removeEventListener('keydown', onKey)
+      main?.removeEventListener('keyup', onKeyUp)
+      main?.removeEventListener('blur', release)
       extra?.removeEventListener('keydown', onKey)
       extra?.removeEventListener('keyup', onKeyUp)
       extra?.removeEventListener('blur', release)
     }
   }, [video, togglePlay, seekBy, nudge, shell, extra, showVolume, shiftSubDelay, skip, cycleVoice, next, previous,
-    stepRate, stepFrame, cycleSubtitles, toggleInfo, holdFast, mark, sizeSubs, theatre, off])
+    stepRate, stepFrame, cycleSubtitles, toggleInfo, holdFast, mark, sizeSubs, theatre, screenshot, off, away, onNoLock])
 }
 
 function IconButton({
@@ -3711,6 +3913,8 @@ function CastButton({
   const close = useCallback(() => setOpen(false), [])
   const ref = useDismiss<HTMLDivElement>(close, open)
   const { backdrop, style: sheetStyle, className: sheetClass } = usePopSheet(ref, open, close)
+  const sheet = useRef<HTMLDivElement>(null)
+  useModalFocus(sheet, open)
   useEffect(() => {
     onOpen(open)
     return () => onOpen(false)
@@ -3739,9 +3943,7 @@ function CastButton({
       detail: !secure
         ? undefined
         : sdkState === 'off'
-          ? isBrave()
-            ? "Brave has casting turned off: turn on Media Router in Brave's Settings, Extensions, then restart Brave."
-            : "This browser can't cast. Chrome can, on a computer or an Android phone."
+          ? "Casting is off here. Turn on Media Router in this browser's settings, or use Chrome."
           : sdkState === 'failed'
             ? "Casting didn't load. Check this device is online, then reload the page."
             : undefined,
@@ -3769,7 +3971,7 @@ function CastButton({
           >
             {openUp.isPending ? 'Turning on…' : 'Turn on'}
           </button>
-          {openUp.isError && <span className="text-recap">{(openUp.error as Error).message}</span>}
+          {openUp.isError && <span className="text-red-300">{(openUp.error as Error).message}</span>}
         </span>
       ) : (
         'The TV plays from Yoru over your network: turn this on in Settings, Devices.'
@@ -3810,12 +4012,16 @@ function CastButton({
       {backdrop}
       {open && (
         <div
+          ref={sheet}
           role="dialog"
           aria-label="Cast to a TV"
           style={sheetStyle}
           className={sheetClass('w-80 max-w-[calc(100vw-2rem)]', 'p-3 text-sm')}
         >
-          <p className="font-medium text-white">Cast to a TV</p>
+          <div className="flex items-start justify-between gap-2">
+            <p className="font-medium text-white">Cast to a TV</p>
+            <CloseButton onClick={close} />
+          </div>
           <p className="mt-0.5 text-xs text-base-400">
             {ready ? 'Everything is ready.' : 'Casting needs all of these:'}
           </p>
@@ -3845,6 +4051,15 @@ function CastButton({
   )
 }
 
+function ScreenshotIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z" />
+      <circle cx="12" cy="12.5" r="3.2" />
+    </svg>
+  )
+}
+
 function NeedMark({ met }: { met: boolean | null }) {
   return (
     <span
@@ -3852,7 +4067,7 @@ function NeedMark({ met }: { met: boolean | null }) {
       aria-label={met ? 'Done' : met === false ? 'Missing' : 'Not known yet'}
       className={cx(
         'mt-0.5 grid size-5 shrink-0 place-items-center rounded-full text-xs leading-none',
-        met ? 'bg-emerald-400 text-base-950' : met === false ? 'ring-1 ring-recap text-recap' : 'ring-1 ring-base-600',
+        met ? 'bg-emerald-400 text-base-950' : met === false ? 'ring-1 ring-recap text-red-300' : 'ring-1 ring-base-600',
       )}
     >
       {met ? '✓' : met === false ? '!' : ''}
@@ -3877,28 +4092,55 @@ function CastingPanel({
   onSeek: (to: number) => void
   onStop: () => void
 }) {
+  const [drag, setDrag] = useState<number | null>(null)
+  const dragRef = useRef<number | null>(null)
+  const move = (to: number) => {
+    dragRef.current = to
+    setDrag(to)
+  }
+  const commit = () => {
+    const to = dragRef.current
+    if (to == null) return
+    dragRef.current = null
+    setDrag(null)
+    onSeek(to)
+  }
+  const shown = drag ?? time
+  const nudge = (by: number) => onSeek(Math.max(0, Math.min(duration || Infinity, time + by)))
+  const side = 'grid size-11 place-items-center rounded-full bg-white/10 text-xs font-semibold text-white ring-1 ring-white/20 hover:bg-white/20'
   return (
     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-black/85 p-6 text-center">
       <CastIcon on />
       <p className="text-sm text-white/80">
         Playing on <span className="font-semibold text-white">{device || 'your TV'}</span>
       </p>
-      <button
-        onClick={onPlayPause}
-        aria-label={paused ? 'Play on the TV' : 'Pause on the TV'}
-        className="grid size-14 place-items-center rounded-full bg-white/15 text-white ring-1 ring-white/25 hover:bg-white/25"
-      >
-        {paused ? <PlayIcon /> : <span className="text-xl font-bold">❚❚</span>}
-      </button>
+      <div className="flex items-center gap-4">
+        <button onClick={() => nudge(-10)} aria-label="Back 10 seconds on the TV" className={side}>
+          −10
+        </button>
+        <button
+          onClick={onPlayPause}
+          aria-label={paused ? 'Play on the TV' : 'Pause on the TV'}
+          className="grid size-14 place-items-center rounded-full bg-white/15 text-white ring-1 ring-white/25 hover:bg-white/25"
+        >
+          {paused ? <PlayIcon /> : <span className="text-xl font-bold">❚❚</span>}
+        </button>
+        <button onClick={() => nudge(10)} aria-label="Forward 10 seconds on the TV" className={side}>
+          +10
+        </button>
+      </div>
       <div className="flex w-full max-w-md items-center gap-3 text-xs tabular-nums text-white/80">
-        <span>{clockTime(time)}</span>
+        <span>{clockTime(shown)}</span>
         <input
           type="range"
           min={0}
           max={Math.max(duration, 1)}
           step={1}
-          value={Math.min(time, duration)}
-          onChange={(e) => onSeek(Number(e.target.value))}
+          value={Math.min(shown, duration)}
+          onChange={(e) => move(Number(e.target.value))}
+          onPointerUp={commit}
+          onKeyUp={commit}
+          onBlur={commit}
           aria-label="Seek on the TV"
           className="h-11 flex-1 accent-accent-500"
         />

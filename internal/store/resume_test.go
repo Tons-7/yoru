@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// Reaching the end of the bar is not the same as watching the episode: the
-// position has to get there and enough of it has to have actually played.
 func TestPeekAtTheEndingIsNotWatched(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -16,7 +14,6 @@ func TestPeekAtTheEndingIsNotWatched(t *testing.T) {
 		t.Fatal("five minutes in is not watched")
 	}
 
-	// A tap at the end of the bar, a second of the credits, pause.
 	watched, err := s.SavePlayback(ctx, PlaybackState{
 		AnimeID: 1, EpKey: "2", Position: 1420, Duration: 1435, Played: 1,
 	})
@@ -27,7 +24,6 @@ func TestPeekAtTheEndingIsNotWatched(t *testing.T) {
 		t.Error("a seek to the end counted as watching the episode")
 	}
 
-	// The peek must not have replaced the resume point either.
 	at, err := s.ResumeAt(ctx, 1, "2")
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +41,6 @@ func TestPeekAtTheEndingIsNotWatched(t *testing.T) {
 	}
 }
 
-// Playing through marks the episode, and a finished one starts over, not in the credits.
 func TestPlayingThroughIsWatchedAndStartsOver(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -66,13 +61,11 @@ func TestPlayingThroughIsWatchedAndStartsOver(t *testing.T) {
 	}
 }
 
-// Skipping the opening and the ending is still watching the episode.
 func TestSkippingOpeningAndEndingIsWatched(t *testing.T) {
 	s := newTestStore(t)
 	seedCatalogue(t, s, 1, "FINISHED", 12)
 
 	playThrough(t, s, 1, "3", 0, 10, 1435)
-	// Skip the opening: a jump, nothing played.
 	if _, err := s.SavePlayback(context.Background(), PlaybackState{
 		AnimeID: 1, EpKey: "3", Position: 100, Duration: 1435,
 	}); err != nil {
@@ -81,7 +74,6 @@ func TestSkippingOpeningAndEndingIsWatched(t *testing.T) {
 	if playThrough(t, s, 1, "3", 100, 1290, 1435) {
 		t.Fatal("watched before the threshold")
 	}
-	// Skip the ending.
 	watched, err := s.SavePlayback(context.Background(), PlaybackState{
 		AnimeID: 1, EpKey: "3", Position: 1400, Duration: 1435,
 	})
@@ -93,7 +85,6 @@ func TestSkippingOpeningAndEndingIsWatched(t *testing.T) {
 	}
 }
 
-// A watched episode wound back to its middle resumes there and returns to the continue rail.
 func TestWatchedEpisodeWoundBackResumesThere(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -133,7 +124,6 @@ func TestWatchedEpisodeWoundBackResumesThere(t *testing.T) {
 	}
 }
 
-// An episode's first report is accepted wherever it lands: there is no earlier resume point to protect.
 func TestFirstReportNearTheEndIsKept(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

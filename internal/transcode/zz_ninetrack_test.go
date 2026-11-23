@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// The 9-subtitle-track HEVC file that dies instantly inside a live server.
 func TestNineTrackFileEncodes(t *testing.T) {
 	src := os.Getenv("NINETRACK")
 	if src == "" {
@@ -27,7 +26,6 @@ func TestNineTrackFileEncodes(t *testing.T) {
 	defer m.Close("nine")
 	t.Logf("plan: %+v", s.Plan)
 
-	// The server's exact concurrency: prestart, init and segment 0 together.
 	var wg sync.WaitGroup
 	wg.Add(3)
 	var initErr, segErr error

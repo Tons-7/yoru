@@ -1,4 +1,3 @@
-// A phone: bottom tabs, touch on the picture, the floating window's subtitles, installing, manifest shortcuts.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -26,7 +25,6 @@ const context = await browser.newContext({
   isMobile: true,
   userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36',
 })
-// The system's floating window, not Chromium's whole-player one, as on a phone.
 await context.addInitScript(() => {
   delete window.documentPictureInPicture
   delete Window.prototype.documentPictureInPicture
@@ -38,7 +36,6 @@ const cdp = await context.newCDPSession(page)
 const touch = (type, points) =>
   cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) })
 
-// ---------------------------------------------------------------- tabs along the bottom
 await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
 const tabs = page.getByRole('navigation', { name: 'Main' })
 check(await until(() => tabs.isVisible()), 'a phone has its tabs along the bottom')
@@ -50,17 +47,15 @@ await page.screenshot({ path: `${SHOTS}/phone-tabs.png` })
 await tabs.getByRole('link', { name: 'Schedule' }).click()
 check(await until(() => page.url().endsWith('/schedule')), 'the Schedule tab opens Schedule')
 check(await until(async () => (await tabs.getByRole('link', { name: 'Schedule' }).getAttribute('aria-current')) === 'page'), 'and shows it as the current place')
-await page.getByRole('tab', { name: /^Out now/ }).click()
+await page.getByRole('radio', { name: /^Out now/ }).click()
 check(await until(() => page.url().includes('view=out')) && await until(() => page.locator('a[href^="/watch/"]').first().isVisible(), 30_000),
   'Out now is a side of Schedule', page.url())
 
-// ---------------------------------------------------------------- the manifest
 const manifest = await (await fetch(`${BASE}/manifest.webmanifest`)).json()
 check(manifest.shortcuts?.map((s) => s.name).join(',') === 'Up next,Schedule,Downloads,Search', 'the installed app has shortcuts',
   JSON.stringify(manifest.shortcuts?.map((s) => s.name)))
 check(manifest.launch_handler?.client_mode?.[0] === 'navigate-existing', 'and opens in the window already open')
 
-// ---------------------------------------------------------------- installing
 await page.goto(`${BASE}/you`, { waitUntil: 'domcontentloaded' })
 await page.getByRole('button', { name: /^Install Yoru/ }).click()
 check(await until(() => page.url().includes('tab=Devices')), 'Install Yoru with no offer from the browser goes to Settings')
@@ -78,11 +73,9 @@ await page.getByRole('button', { name: 'Install Yoru' }).click()
 check(await until(() => page.evaluate(() => window.__prompted === true)), "with the browser's offer, one tap asks it")
 check(await until(() => page.getByText('Installed.', { exact: true }).isVisible()), 'and says it was installed')
 
-// ---------------------------------------------------------------- touch on the picture
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 const video = page.locator('video').first()
 check(await until(() => video.evaluate((v) => v.readyState >= 2), 60_000), 'the episode loads')
-// Played, not just loaded: an episode's start waits for its subtitles to draw.
 await until(() => video.evaluate((v) => !v.paused && v.currentTime > 0.2), 30_000)
 const vbox = await video.boundingBox()
 const at = (fx, fy = 0.5) => [vbox.x + vbox.width * fx, vbox.y + vbox.height * fy]
@@ -110,7 +103,6 @@ await sleep(500)
 const scrubbed = await state()
 check(Math.abs(scrubbed.time - 60) < 3 && scrubbed.paused, 'a sideways drag a quarter across moves 30 s, without playing', JSON.stringify(scrubbed))
 
-// High on the picture, clear of the Skip button.
 const pinch = async (from, to) => {
   await touch('touchStart', [at(0.5 - from, 0.25), at(0.5 + from, 0.25)])
   await touch('touchMove', [at(0.5 - (from + to) / 2, 0.25), at(0.5 + (from + to) / 2, 0.25)])
@@ -126,7 +118,7 @@ await page.mouse.move(vbox.x + 10, vbox.y + 10)
 await page.getByRole('region', { name: 'Video player' }).getByRole('button', { name: 'Full screen', exact: true }).click()
 const full = await until(() => page.evaluate(() => !!document.fullscreenElement), 4000)
 if (!full) {
-  console.log('skip the swipe out of fullscreen: this browser refused fullscreen')
+  console.log('SKIP the swipe out of fullscreen: this browser refused fullscreen')
 } else {
   const fbox = { x: 0, y: 0, width: 412, height: 915 }
   await touch('touchStart', [[fbox.width / 2, fbox.height * 0.3]])
@@ -138,7 +130,6 @@ if (!full) {
   check(await until(() => page.evaluate(() => !document.fullscreenElement)), 'in fullscreen, a swipe down leaves it')
 }
 
-// ---------------------------------------------------------------- the system's floating window
 const captions = () =>
   video.evaluate((v) => {
     const t = [...v.textTracks].find((tt) => tt.label === 'Subtitles')
@@ -148,7 +139,6 @@ const pipButton = page.getByRole('button', { name: 'Picture in picture' })
 await page.mouse.move(vbox.x + 20, vbox.y + 20)
 check(await until(() => pipButton.isVisible()), 'with no whole-player window, the video alone floats')
 await pipButton.click()
-// A headless browser may turn the window down; the player hears the same event either way.
 if (!(await until(() => page.evaluate(() => !!document.pictureInPictureElement), 2000))) {
   await video.evaluate((v) => v.dispatchEvent(new Event('enterpictureinpicture')))
 }

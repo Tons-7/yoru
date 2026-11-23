@@ -11,7 +11,6 @@ import (
 )
 
 type mapPieceCompletion struct {
-	// TODO: Generics. map of InfoHash to *memoryTorrentJustComplete.
 	m sync.Map
 }
 

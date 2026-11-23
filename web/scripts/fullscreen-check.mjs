@@ -1,4 +1,3 @@
-// Entering and leaving fullscreen keeps the picture, not a black screen over a playing episode.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -45,7 +44,6 @@ const report = () =>
       width: Math.round(box.width),
       t: v.currentTime,
       paused: v.paused,
-      // The subtitle layer is a transparent canvas; anything else is a cover.
       onTop: onTop?.tagName ?? 'none',
     }
   })
@@ -53,7 +51,6 @@ const report = () =>
 const before = await report()
 check(!before.paused && before.width > 0, 'playing in the page', JSON.stringify(before))
 
-// The player's own button, as a viewer would: the mouse wakes the hidden controls first.
 await page.mouse.move(700, 400)
 await page.mouse.move(720, 420)
 await page.getByRole('button', { name: 'Full screen', exact: true }).click()

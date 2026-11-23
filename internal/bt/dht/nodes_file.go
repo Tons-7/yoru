@@ -13,17 +13,13 @@ func WriteNodesToFile(ns []krpc.NodeInfo, fileName string) (err error) {
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(fileName, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
-	if err != nil {
+	tmp := fileName + ".tmp"
+	if err = os.WriteFile(tmp, b, 0o640); err != nil {
 		return
 	}
-	defer func() {
-		closeErr := f.Close()
-		if err == nil {
-			err = closeErr
-		}
-	}()
-	_, err = f.Write(b)
+	if err = os.Rename(tmp, fileName); err != nil {
+		os.Remove(tmp)
+	}
 	return
 }
 

@@ -11,7 +11,6 @@ import (
 	"yoru/internal/store"
 )
 
-// A show mid-cour: five episodes out, the sixth broadcasting tomorrow.
 func airingStore(t *testing.T, nextEpisode int, airingAt int64, progress int) *store.Store {
 	t.Helper()
 	st := prefetchStore(t)
@@ -51,7 +50,6 @@ func pollWith(t *testing.T, st *store.Store, results []indexer.Torrent) WatchRep
 	return rep
 }
 
-// The reported bug: on Sunday the app announced an episode airing the next Saturday, then failed to play it.
 func TestNoNotificationBeforeTheEpisodeAirs(t *testing.T) {
 	tomorrow := time.Now().Add(24 * time.Hour).Unix()
 	st := airingStore(t, 6, tomorrow, 5)
@@ -84,7 +82,6 @@ func TestNotifiesOnceTheEpisodeHasAired(t *testing.T) {
 	}
 }
 
-// Notifications and auto-download are separate switches: the bell off used to stop every auto-download.
 func TestAutoDownloadWithNotificationsOff(t *testing.T) {
 	anHourAgo := time.Now().Add(-time.Hour).Unix()
 	st := airingStore(t, 6, anHourAgo, 5)
@@ -117,7 +114,6 @@ func TestAutoDownloadWithNotificationsOff(t *testing.T) {
 	}
 }
 
-// Catching up on a show mid-season: the latest aired episode is news, the backlog behind it is not.
 func TestCatchingUpAnnouncesOnlyTheLatestAiredEpisode(t *testing.T) {
 	tomorrow := time.Now().Add(24 * time.Hour).Unix()
 	st := airingStore(t, 6, tomorrow, 3)
@@ -139,7 +135,6 @@ func TestCatchingUpAnnouncesOnlyTheLatestAiredEpisode(t *testing.T) {
 	}
 }
 
-// A pack stating no range covers nothing in particular; announcing it claims an episode that may not exist.
 func TestUnnumberedPackDoesNotAnnounceAnEpisode(t *testing.T) {
 	st := airingStore(t, 6, time.Now().Add(-time.Hour).Unix(), 5)
 
@@ -153,7 +148,6 @@ func TestUnnumberedPackDoesNotAnnounceAnEpisode(t *testing.T) {
 	}
 }
 
-// A pack that does state its range holds the episode, so it still counts.
 func TestStatedPackStillAnnounces(t *testing.T) {
 	st := airingStore(t, 6, time.Now().Add(-time.Hour).Unix(), 5)
 
@@ -167,7 +161,6 @@ func TestStatedPackStillAnnounces(t *testing.T) {
 	}
 }
 
-// A finished show has no airing data, and everything about it has aired.
 func TestFollowAired(t *testing.T) {
 	now := time.Now().Unix()
 	tests := []struct {

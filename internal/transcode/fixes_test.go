@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// The sheet decodes keyframes only, and a failed sheet is not retried on every poll.
 func TestSheetSkipsNonKeyframesAndRemembersFailure(t *testing.T) {
 	args := sheetArgs("ep.mkv", "fps=1/10", "out.jpg")
 	i := slices.Index(args, "-skip_frame")
@@ -56,8 +55,6 @@ func TestSheetSkipsNonKeyframesAndRemembersFailure(t *testing.T) {
 	}
 }
 
-// A hardware encoder failing after it wrote segments: switching to software drops them and the init,
-// since libx264's parameters are not the hardware encoder's.
 func TestSwitchToSoftwareDropsWhatTheHardwareEncoderWrote(t *testing.T) {
 	s := &Session{dir: t.TempDir(), Segments: 6, encoder: "h264_nvenc", Plan: Plan{VideoCodec: "h264_nvenc"},
 		log: slog.New(slog.NewTextHandler(io.Discard, nil))}
@@ -78,21 +75,18 @@ func TestSwitchToSoftwareDropsWhatTheHardwareEncoderWrote(t *testing.T) {
 		}
 	}
 
-	// Nothing written yet: nothing to drop, and the switch is the same.
 	fresh := &Session{dir: t.TempDir(), Segments: 6, encoder: "h264_nvenc", Plan: Plan{VideoCodec: "h264_nvenc"}}
 	if fresh.switchToSoftware(); fresh.Plan.VideoCodec != softwareEncoder {
 		t.Error("the switch did not happen")
 	}
 }
 
-// Closing a replaced session leaves the replacement's directory, the id still owned; the old one's goes.
 func TestCloseLeavesAReplacementSessionAlone(t *testing.T) {
 	m := &Manager{sessions: map[string]*Session{}}
 	oldDir, dir := t.TempDir(), t.TempDir()
 	old := &Session{ID: "1-1", dir: oldDir, refs: 1}
 	m.sessions["1-1"] = old
 
-	// What Close does under its lock, then a reopen lands before the teardown.
 	m.mu.Lock()
 	delete(m.sessions, "1-1")
 	replacement := &Session{ID: "1-1", dir: dir, refs: 1}
@@ -118,7 +112,6 @@ func TestCloseLeavesAReplacementSessionAlone(t *testing.T) {
 	}
 }
 
-// Lines are written beside the picture only for a torrent still arriving; a whole file needs no second process.
 func TestLiveSubtitlesOnlyForTorrentSources(t *testing.T) {
 	if !liveSubtitlesWanted("http://127.0.0.1:5000/torrents/3/stream/0") {
 		t.Error("a torrent source should get live subtitles")

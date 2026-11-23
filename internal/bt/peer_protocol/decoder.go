@@ -12,15 +12,11 @@ import (
 )
 
 type Decoder struct {
-	R *bufio.Reader
-	// Gives *[]byte (no allocation putting one back) big enough for a piece message's data; the chunk size
-	// holds for the decoder's life.
+	R         *bufio.Reader
 	Pool      *sync.Pool
-	MaxLength Integer // TODO: Should this include the length header or not?
+	MaxLength Integer
 }
 
-// This limits reads to the length of a message, returning io.EOF when the end of the message bytes
-// are reached. If you aren't expecting io.EOF, you should probably wrap it with expectReader.
 type decodeReader struct {
 	lr io.LimitedReader
 	br *bufio.Reader
@@ -56,7 +52,6 @@ func (dr *decodeReader) UnreadLength() int64 {
 	return dr.lr.N
 }
 
-// Reads that must be satisfied: io.EOF becomes io.ErrUnexpectedEOF, so not for readers that read to the end.
 type expectReader struct {
 	dr *decodeReader
 }
@@ -81,8 +76,6 @@ func (er expectReader) UnreadLength() int64 {
 	return er.dr.UnreadLength()
 }
 
-// io.EOF is returned if the source terminates cleanly on a message boundary. TODO: Raise error
-// level for protocol errors, log them, or add an error type.
 func (d *Decoder) Decode(msg *Message) (err error) {
 	var dr decodeReader
 	{
@@ -144,11 +137,12 @@ func readMessageAfterType(msg *Message, r *expectReader, piecePool *sync.Pool) (
 		if piecePool == nil {
 			msg.Piece = make([]byte, dataLen)
 		} else {
-			msg.Piece = *piecePool.Get().(*[]byte)
-			if int64(cap(msg.Piece)) < dataLen {
+			buf := piecePool.Get().(*[]byte)
+			if int64(cap(*buf)) < dataLen {
+				piecePool.Put(buf)
 				return errors.New("piece data longer than expected")
 			}
-			msg.Piece = msg.Piece[:dataLen]
+			msg.Piece = (*buf)[:dataLen]
 		}
 		_, err = io.ReadFull(r, msg.Piece)
 	case Extended:
@@ -202,6 +196,7 @@ func readSeq(r io.Reader, data ...any) (err error) {
 }
 
 func unmarshalBitfield(b []byte) (bf []bool) {
+	bf = make([]bool, 0, 8*len(b))
 	for _, c := range b {
 		for i := 7; i >= 0; i-- {
 			bf = append(bf, (c>>uint(i))&1 == 1)

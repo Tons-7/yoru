@@ -24,7 +24,6 @@ import (
 type Player interface {
 	Play(ctx context.Context, opts player.Options) error
 	Events() <-chan player.Event
-	Running() bool
 	Stop()
 }
 
@@ -47,7 +46,9 @@ type Playback struct {
 	cacheDir string
 	log      *slog.Logger
 
-	trackGen atomic.Uint64
+	trackGen   atomic.Uint64
+	trackEp    atomic.Uint64
+	advanceErr atomic.Pointer[string]
 
 	yieldMu  sync.Mutex
 	yielded  []string
@@ -55,6 +56,8 @@ type Playback struct {
 
 	stageMu sync.Mutex
 	stages  map[string]Stage
+
+	stageHeld map[string]int
 }
 
 type Prober interface {
@@ -155,7 +158,7 @@ func (p *Playback) Start(ctx context.Context, req PlayRequest) (*Session, error)
 		}
 	}
 
-	p.SetStage(req.AnimeID, req.Episode, Stage{Step: "search"})
+	p.EnterStage(req.AnimeID, req.Episode, Stage{Step: "search"})
 	defer p.ClearStage(req.AnimeID, req.Episode)
 
 	p.yieldMu.Lock()
@@ -176,7 +179,7 @@ func (p *Playback) Start(ctx context.Context, req PlayRequest) (*Session, error)
 		p.prefetch.AwaitPrepare(ctx, req.AnimeID, req.Episode)
 	}
 
-	if req.InfoHash == "" {
+	if req.InfoHash == "" || p.recordedRelease(ctx, req) {
 		if session, ok, err := p.reattach(ctx, req); err != nil {
 			return nil, err
 		} else if ok {
@@ -190,7 +193,7 @@ func (p *Playback) Start(ctx context.Context, req PlayRequest) (*Session, error)
 		return nil, err
 	}
 
-	if err := p.store.RecordTorrent(ctx, store.TorrentRecord{
+	if err := p.store.RecordTorrent(context.WithoutCancel(ctx), store.TorrentRecord{
 		InfoHash:  release.Torrent.InfoHash,
 		EngineID:  live.ID,
 		Name:      added.Details.Name,
@@ -228,7 +231,19 @@ func (p *Playback) Start(ctx context.Context, req PlayRequest) (*Session, error)
 
 	started = true
 	p.prefetchAfter(req)
+	time.AfterFunc(unopenedResume, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		p.resumeYielded(ctx)
+	})
 	return session, nil
+}
+
+var unopenedResume = 2 * time.Minute
+
+func (p *Playback) recordedRelease(ctx context.Context, req PlayRequest) bool {
+	rec, ok, err := p.store.TorrentForEpisode(ctx, req.AnimeID, epKey(req.Episode))
+	return err == nil && ok && strings.EqualFold(rec.InfoHash, req.InfoHash)
 }
 
 func (p *Playback) EngineAddr() string {
@@ -274,7 +289,7 @@ func (p *Playback) startLocal(ctx context.Context, req PlayRequest) (*Session, b
 }
 
 func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, bool, error) {
-	rec, ok, err := p.store.TorrentForEpisode(ctx, req.AnimeID, epKey(req.Episode))
+	rec, ok, err := p.store.PlayableForEpisode(ctx, req.AnimeID, epKey(req.Episode))
 	if err != nil {
 		return nil, false, nil
 	}
@@ -289,7 +304,10 @@ func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, boo
 				p.handBack(context.WithoutCancel(ctx), req, rec.InfoHash)
 			}
 		}()
-		defer func() { recorded = p.store.TorrentClaimed(context.WithoutCancel(ctx), rec.InfoHash) }()
+		defer func() {
+			got, ok, err := p.store.TorrentForEpisode(context.WithoutCancel(ctx), req.AnimeID, epKey(req.Episode))
+			recorded = err == nil && ok && strings.EqualFold(got.InfoHash, rec.InfoHash)
+		}()
 	}
 
 	if !heldStands(ctx, p.store, p.finder, req.AnimeID, req.Episode, rec) {
@@ -336,7 +354,7 @@ func (p *Playback) reattach(ctx context.Context, req PlayRequest) (*Session, boo
 			if f, i, ok := torrent.PickByTitle(detail.Files, req.Episode, numbers, scope); ok && i != rec.FileIndex {
 				p.log.Info("held pack is numbered in another order; playing the file titled for this episode",
 					"anime", req.AnimeID, "episode", req.Episode, "was", rec.FilePath, "now", f.Name)
-				rec.FileIndex, rec.FilePath = i, f.Name
+				rec.FileIndex, rec.FilePath, rec.TotalSize = i, f.Name, f.Length
 			}
 		}
 	}
@@ -588,6 +606,7 @@ type attempt struct {
 	alreadyHeld bool
 	slow        bool
 	err         error
+	restore     func(context.Context)
 }
 
 func (p *Playback) race(
@@ -621,7 +640,12 @@ func (p *Playback) race(
 				case results <- a:
 				case <-raceCtx.Done():
 					if a.err == nil && a.live != nil && !a.alreadyHeld {
-						p.discard(context.WithoutCancel(ctx), a.live.ID, a.added.Details.InfoHash)
+						clean := context.WithoutCancel(ctx)
+						if ctx.Err() != nil {
+							p.afterAbort(func() { p.discard(clean, a.live.ID, a.added.Details.InfoHash) })
+						} else {
+							p.discard(clean, a.live.ID, a.added.Details.InfoHash)
+						}
 					}
 				}
 			}(i)
@@ -706,7 +730,7 @@ func (p *Playback) race(
 		case <-slowWait:
 			slowWaited, slowWait = true, nil
 		case <-ctx.Done():
-			go p.discardLosers(ctx, outcomes, -1)
+			go p.discardAborted(ctx, outcomes)
 			return zero, nil, nil, torrent.File{}, 0, ctx.Err()
 		}
 		if arrived {
@@ -770,10 +794,59 @@ func lines(resolution string) int {
 func (p *Playback) discardLosers(ctx context.Context, outcomes []*attempt, winner int) {
 	clean := context.WithoutCancel(ctx)
 	for _, a := range outcomes {
-		if a != nil && a.index != winner && a.err == nil && a.live != nil && !a.alreadyHeld {
-			p.discard(clean, a.live.ID, a.added.Details.InfoHash)
+		if a == nil || a.index == winner || a.err != nil || a.live == nil {
+			continue
+		}
+		if a.alreadyHeld {
+			if a.restore != nil {
+				a.restore(clean)
+			}
+			continue
+		}
+		p.discard(clean, a.live.ID, a.added.Details.InfoHash)
+	}
+}
+
+var (
+	abortGrace = 15 * time.Second
+	abortPoll  = 2 * time.Second
+	abortLimit = 2 * time.Minute
+)
+
+func (p *Playback) afterAbort(run func()) {
+	time.Sleep(abortGrace)
+	for end := time.Now().Add(abortLimit); time.Now().Before(end); time.Sleep(abortPoll) {
+		p.yieldMu.Lock()
+		busy := p.starting > 0
+		p.yieldMu.Unlock()
+		if !busy {
+			break
 		}
 	}
+	run()
+}
+
+func (p *Playback) discardAborted(ctx context.Context, outcomes []*attempt) {
+	clean := context.WithoutCancel(ctx)
+	var begun []*attempt
+	for _, a := range outcomes {
+		if a == nil || a.err != nil || a.live == nil {
+			continue
+		}
+		if !a.alreadyHeld {
+			begun = append(begun, a)
+		} else if a.restore != nil {
+			a.restore(clean)
+		}
+	}
+	if len(begun) == 0 {
+		return
+	}
+	p.afterAbort(func() {
+		for _, a := range begun {
+			p.discard(clean, a.live.ID, a.added.Details.InfoHash)
+		}
+	})
 }
 
 func (p *Playback) tryCandidate(
@@ -793,12 +866,38 @@ func (p *Playback) tryCandidate(
 		p.log.Warn("release unusable, trying the next", "title", release.Torrent.Title, "err", err)
 		return fail(fmt.Errorf("inspect torrent: %w", err))
 	}
-	_, alreadyHeld := held[strings.ToLower(added.Details.InfoHash)]
+	heldID, alreadyHeld := held[strings.ToLower(added.Details.InfoHash)]
+	unclaim := func() {}
+	if p.prefetch != nil {
+		unclaim = p.prefetch.claimWhile(added.Details.InfoHash)
+	}
+	defer unclaim()
 
 	file, fileIndex, ok := pickFile(added.Details.Files, release)
 	if !ok {
 		p.log.Warn("episode missing from release", "title", added.Details.Name)
 		return fail(fmt.Errorf("episode %d not found inside %q", req.Episode, added.Details.Name))
+	}
+
+	var restore func(context.Context)
+	if alreadyHeld && heldID > 0 {
+		if before, err := p.torrent.Stats(ctx, heldID); err == nil {
+			wasPaused := before.State == "paused"
+			wasIncluded := fileIndex < len(before.FileIncluded) && before.FileIncluded[fileIndex]
+			id := heldID
+			restore = func(ctx context.Context) {
+				if !wasIncluded {
+					if err := p.torrent.IncludeFile(ctx, id, fileIndex, false); err != nil {
+						p.log.Debug("leave the held release as it was", "torrent", id, "err", err)
+					}
+				}
+				if wasPaused {
+					if err := p.torrent.Pause(ctx, id); err != nil {
+						p.log.Debug("pause the held release again", "torrent", id, "err", err)
+					}
+				}
+			}
+		}
 	}
 
 	live, err := p.torrent.Add(ctx, release.Torrent.Magnet(), file)
@@ -829,7 +928,10 @@ func (p *Playback) tryCandidate(
 				"title", release.Torrent.Title, "seeders", release.Torrent.Seeders, "err", err)
 		}
 		if !alreadyHeld {
+			unclaim()
 			p.discard(context.WithoutCancel(ctx), live.ID, added.Details.InfoHash)
+		} else if restore != nil {
+			restore(context.WithoutCancel(ctx))
 		}
 		return fail(fmt.Errorf("no data from the swarm: %w", err))
 	}
@@ -845,7 +947,7 @@ func (p *Playback) tryCandidate(
 	}
 	return attempt{
 		index: index, release: release, added: added, live: live,
-		file: file, fileIndex: fileIndex, alreadyHeld: alreadyHeld, slow: slow,
+		file: file, fileIndex: fileIndex, alreadyHeld: alreadyHeld, slow: slow, restore: restore,
 	}
 }
 
@@ -918,6 +1020,9 @@ func (p *Playback) Suspend(ctx context.Context, animeID, episode int) {
 	if global, err := p.store.Prefs(ctx, 0); err == nil && global.Bool("cache.prefetch_full") {
 		p.log.Info("download left running to finish the episode",
 			"anime", animeID, "episode", episode)
+		return
+	}
+	if p.startingShow(animeID) || (p.prefetch != nil && p.prefetch.Claimed(hash)) {
 		return
 	}
 	if err := p.torrent.Pause(ctx, id); err != nil {
@@ -1029,6 +1134,10 @@ func (p *Playback) handBack(ctx context.Context, req PlayRequest, hash string) {
 }
 
 func (p *Playback) discard(ctx context.Context, id int, hash string) {
+	if p.prefetch != nil && p.prefetch.Claimed(hash) {
+		p.log.Info("leaving a release another download is using", "torrent", id)
+		return
+	}
 	discardUnclaimed(ctx, p.store, p.torrent, p.log, id, hash)
 }
 
@@ -1061,7 +1170,7 @@ func (p *Playback) candidates(ctx context.Context, req PlayRequest) ([]score.Res
 
 	if req.InfoHash != "" {
 		for _, r := range found.Results {
-			if r.Torrent.InfoHash == req.InfoHash {
+			if strings.EqualFold(r.Torrent.InfoHash, req.InfoHash) {
 				return []score.Result{r}, nil
 			}
 		}
@@ -1110,11 +1219,15 @@ func airsIn(at int64) string {
 	case d <= 0:
 		return ""
 	case d < time.Hour:
-		return fmt.Sprintf("; it airs in %d minutes", int(d.Minutes()))
+		return "; it airs in " + count(max(1, int(d.Minutes())), "minute")
 	case d < 24*time.Hour:
-		return fmt.Sprintf("; it airs in %d hours", int(d.Hours()))
+		return "; it airs in " + count(int(d.Hours()+0.5), "hour")
 	}
-	return fmt.Sprintf("; it airs in %d days", int(d.Hours()/24))
+	return "; it airs in " + count(int(d.Hours()/24+0.5), "day")
+}
+
+func count(n int, unit string) string {
+	return fmt.Sprintf("%d %s%s", n, unit, plural(n))
 }
 
 func noRelease(found Candidates, req PlayRequest, aired bool, airsAt int64) error {
@@ -1196,16 +1309,27 @@ func (p *Playback) launch(ctx context.Context, req PlayRequest, s *Session) erro
 		if err := player.WriteChapters(path, ranges, duration); err == nil {
 			opts.ChaptersFile = path
 		}
+		go pruneChapterFiles(p.cacheDir, time.Now())
 	}
 
 	name, pl := p.external(ctx)
 	if pl == nil {
 		return fmt.Errorf("no desktop player")
 	}
+	if p.player != nil && p.player != pl {
+		p.player.Stop()
+	}
+	for _, other := range p.players {
+		if other != pl {
+			other.Stop()
+		}
+	}
+	p.trackEp.Store(uint64(uint32(req.AnimeID))<<32 | uint64(uint32(req.Episode)))
 	gen := p.trackGen.Add(1)
 	if err := pl.Play(ctx, opts); err != nil {
 		return fmt.Errorf("start %s: %w", name, err)
 	}
+	p.advanceErr.Store(nil)
 	s.Player = name
 	go p.track(pl, req.AnimeID, req.Episode, req.Season, gen, ending)
 	return nil
@@ -1265,17 +1389,33 @@ func (p *Playback) autoSkip(ctx context.Context, req PlayRequest, prefs store.Pr
 func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64, ending float64) {
 	const saveEvery = 5 * time.Second
 
-	var last time.Time
-	var reported, positioned bool
+	var last, lastPresence time.Time
+	var reported, positioned, paused bool
 
 	var played, lastPos, lastDur float64
 	const maxStep = 5.0
 
 	for ev := range pl.Events() {
 		if p.trackGen.Load() != gen {
+			if positioned {
+				p.save(animeID, episode, player.Event{Kind: player.EventExit, Position: lastPos, Duration: lastDur}, played, ending)
+			}
+			if cur := p.trackEp.Load(); cur != 0 && cur != uint64(uint32(animeID))<<32|uint64(uint32(episode)) {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				if hash, index, err := p.store.CachedFile(ctx, animeID, epKey(episode)); err == nil && hash != "" {
+					p.store.PinCache(ctx, hash, index, false)
+				}
+				cancel()
+			}
 			return
 		}
 		switch ev.Kind {
+		case player.EventPause:
+			paused = ev.Paused
+			if ev.Duration > 0 {
+				lastDur = ev.Duration
+			}
+			p.presence.Report(context.Background(), animeID, episode, lastPos, lastDur, paused, false, true)
 		case player.EventPosition:
 			positioned = true
 			if step := ev.Position - lastPos; step > 0 && step <= maxStep {
@@ -1285,7 +1425,10 @@ func (p *Playback) track(pl Player, animeID, episode, season int, gen uint64, en
 			if ev.Duration > 0 {
 				lastDur = ev.Duration
 			}
-			p.presence.Report(context.Background(), animeID, episode, ev.Position, lastDur, ev.Paused, false, true)
+			if now := time.Now(); now.Sub(lastPresence) >= time.Second {
+				lastPresence = now
+				p.presence.Report(context.Background(), animeID, episode, ev.Position, lastDur, paused || ev.Paused, false, true)
+			}
 
 			if time.Since(last) < saveEvery {
 				continue
@@ -1358,7 +1501,17 @@ func (p *Playback) advance(animeID, episode, season int) {
 		Prefs:    prefsFromSettings(prefs),
 	}); err != nil {
 		p.log.Warn("auto-advance", "anime", next.AnimeID, "episode", next.Episode, "err", err)
+		msg := fmt.Sprintf("Episode %d didn't start: %v", next.Episode, err)
+		p.advanceErr.Store(&msg)
 	}
+}
+
+func (p *Playback) External() (animeID, episode int, failed string) {
+	ep := p.trackEp.Load()
+	if msg := p.advanceErr.Load(); msg != nil {
+		failed = *msg
+	}
+	return int(ep >> 32), int(uint32(ep)), failed
 }
 
 func (p *Playback) watched(animeID, episode int) {

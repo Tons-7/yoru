@@ -89,22 +89,26 @@ func (s *Server) WarmRankings(ctx context.Context) {
 	}
 }
 
-func (s *Server) ranked(r *http.Request, sort string, page, perPage int) (anilist.DiscoverPage, error) {
+func (s *Server) ranked(r *http.Request, sort string, page, perPage int) (anilist.DiscoverPage, bool, error) {
 	days, computed := anilist.RisingWindow(sort)
 	if !computed {
-		return s.anilist.Discover(r.Context(), sort, page, perPage)
+		result, err := s.anilist.Discover(r.Context(), sort, page, perPage)
+		return result, false, err
 	}
 
 	if hit, ok := s.rising.get(sort); ok {
-		return hit, nil
+		return hit, true, nil
 	}
-	return s.rising.compute(sort, func() (anilist.DiscoverPage, error) {
-		result, err := s.anilist.Rising(r.Context(), days, max(perPage, 30))
-		if err == nil && !anilist.UsedSaved(r.Context()) {
+	result, err := s.rising.compute(sort, func() (anilist.DiscoverPage, error) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
+		defer cancel()
+		result, err := s.anilist.Rising(ctx, days, max(perPage, 30))
+		if err == nil && !anilist.UsedSaved(ctx) {
 			s.rising.put(sort, result)
 		}
 		return result, err
 	})
+	return result, false, err
 }
 
 type risingCache struct {
@@ -163,13 +167,18 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusBadRequest, map[string]any{"error": "unknown sort " + sort, "sorts": anilist.Sorts()})
 		return
 	}
-	result, err := s.ranked(r, sort, page, perPage)
+	result, cached, err := s.ranked(r, sort, page, perPage)
 	if err != nil {
 		s.fail(w, "discover", err)
 		return
 	}
 
-	items := s.decorate(r, result.Media)
+	var items []discoverItem
+	if cached {
+		items = s.decorateOnly(r, result.Media)
+	} else {
+		items = s.decorate(r, result.Media)
+	}
 
 	if page <= 0 {
 		page = 1

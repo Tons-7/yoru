@@ -321,6 +321,9 @@ func better(a, b Result) bool {
 	if a.AutoPick && a.outdated != b.outdated {
 		return !a.outdated
 	}
+	if a.AutoPick && a.unreadable != b.unreadable {
+		return !a.unreadable
+	}
 	if a.AutoPick && a.sticky != b.sticky {
 		return a.sticky
 	}
@@ -332,9 +335,6 @@ func better(a, b Result) bool {
 	}
 	if a.AutoPick && a.SeaDexBest != b.SeaDexBest {
 		return a.SeaDexBest
-	}
-	if a.AutoPick && a.unreadable != b.unreadable {
-		return !a.unreadable
 	}
 	if a.AutoPick && a.Playable != b.Playable {
 		return a.Playable
@@ -573,7 +573,10 @@ func ladderPlace(res string, prefs Preferences, best bool) float64 {
 	if seen == 0 {
 		return 0
 	}
-	return 0.5
+	if h, err := strconv.Atoi(strings.TrimRight(res, "pi")); err == nil && h > 0 {
+		return 0.5 * min(float64(h), 4320) / 4320
+	}
+	return 0.25
 }
 
 func (r *Result) add(reason string) { r.Reasons = append(r.Reasons, reason) }

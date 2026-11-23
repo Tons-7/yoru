@@ -20,7 +20,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// aniRecorder is an AniList fake that answers reads with a fixed body and keeps every mutation's variables.
 type aniRecorder struct {
 	body string
 
@@ -65,7 +64,6 @@ func withSync(d *Deps) {
 	d.Sync = library.NewSync(d.Store, d.AniList, d.Log)
 }
 
-// Hand edits must reach the trackers behind the response, not on the next poll.
 func TestHandEditsArePushedAtOnce(t *testing.T) {
 	ani := &aniRecorder{body: `{"data":{}}`}
 	h := newHarness(t, config.Config{}, ani.handler, withSync)
@@ -99,7 +97,6 @@ func TestHandEditsArePushedAtOnce(t *testing.T) {
 	}
 }
 
-// The picker lists what the finder ranked, hash included, for the play call.
 func TestEpisodeSourcesListsRankedReleases(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil, func(d *Deps) {
 		d.Finder = library.NewFinder(d.Store, d.Indexer, d.Log)
@@ -133,7 +130,6 @@ func TestEpisodeSourcesListsRankedReleases(t *testing.T) {
 	}
 }
 
-// A pasted magnet is kept only from a POST: a link to the GET, opened from another site, plants nothing.
 func TestEpisodeSourcesKeepsAPastedMagnetOnlyFromAPost(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil, func(d *Deps) {
 		d.Finder = library.NewFinder(d.Store, d.Indexer, d.Log)
@@ -170,7 +166,6 @@ func TestEpisodeSourcesWithoutFinder(t *testing.T) {
 	}
 }
 
-// The downloads list says a torrent is being re-checked after launch, not paused.
 func TestDownloadsReportCheckingAndEpisodes(t *testing.T) {
 	eng := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -224,8 +219,6 @@ func TestDownloadsReportCheckingAndEpisodes(t *testing.T) {
 	}
 }
 
-// Random without genres draws from the corpus and resolves the card upstream;
-// with nothing in the corpus (a fresh install still seeding) it asks AniList.
 func TestRandomDrawsFromTheCorpusThenAniList(t *testing.T) {
 	var randomQueries int
 	h := newHarness(t, config.Config{}, func(w http.ResponseWriter, r *http.Request) {
@@ -308,7 +301,6 @@ func TestBookmarkRejectsMissingAnime(t *testing.T) {
 	}
 }
 
-// A MAL-only show (negative id) can be tagged, ticked, rated and bookmarked.
 func TestHandlersAcceptMALOnlyIDs(t *testing.T) {
 	ani := &aniRecorder{body: `{"data":{}}`}
 	h := newHarness(t, config.Config{}, ani.handler, withSync)
@@ -339,12 +331,42 @@ func TestHandlersAcceptMALOnlyIDs(t *testing.T) {
 	if b, _ := h.store.Bookmark(ctx, -900); !b.Favourite {
 		t.Fatal("bookmark not stored")
 	}
-	// Nothing goes to AniList for it.
 	time.Sleep(200 * time.Millisecond)
 	if saves := ani.awaitSaves(0); len(saves) != 0 {
 		t.Fatalf("pushed to AniList: %v", saves)
 	}
 	if res, _ := h.do(t, "GET", "/api/episodes?id=-900"); res.StatusCode != 200 {
 		t.Fatalf("episodes: HTTP %d", res.StatusCode)
+	}
+}
+
+func TestPlayedEpisodeIsPushedToAniList(t *testing.T) {
+	ani := &aniRecorder{body: `{"data":{}}`}
+	h := newHarness(t, config.Config{}, ani.handler, withSync)
+	seedShow(t, h, 1, 12)
+
+	watched := false
+	for pos := 60.0; pos <= 1440 && !watched; pos += 60 {
+		_, body := h.postJSON(t, "/api/progress", map[string]any{"animeId": 1, "episode": 1, "position": pos,
+			"duration": 1440, "played": pos})
+		watched, _ = body["watched"].(bool)
+	}
+	if !watched {
+		t.Fatal("playing the whole episode never counted it as watched")
+	}
+	saves := ani.awaitSaves(1)
+	if len(saves) == 0 || saves[len(saves)-1]["progress"] != float64(1) {
+		t.Fatalf("a watched episode pushed %v, want progress 1", saves)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		dirty, _ := h.store.DirtyEntries(context.Background(), 0)
+		if len(dirty) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("still dirty after the push: %+v", dirty)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

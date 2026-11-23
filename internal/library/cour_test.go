@@ -16,8 +16,6 @@ import (
 	"yoru/internal/store"
 )
 
-// Bleach: Thousand-Year Blood War is four AniList entries sharing a base title,
-// each restarting at one, which TheTVDB files as one season counted through.
 const (
 	bleach       = 269
 	tybw1        = 116674
@@ -66,11 +64,10 @@ func bleachStore(t *testing.T) *store.Store {
 	if err := st.SaveRelations(ctx, nil, rels); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.RebuildFranchises(ctx); err != nil {
+	if _, err := st.RebuildFranchisesFor(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
-	// Each entry counts from one; the cross-cour numbering is derived.
 	episodes := func(id, count int) {
 		var eps []metadata.Episode
 		for n := 1; n <= count; n++ {
@@ -110,14 +107,12 @@ func TestCourTellsTheEntryFromItsSiblings(t *testing.T) {
 			t.Errorf("sibling words %v lack %q", req.Cour.Siblings, w)
 		}
 	}
-	// Words every cour shares name the show, not a cour.
 	for _, w := range []string{"bleach", "sennen", "kessen", "thousand"} {
 		if slices.Contains(req.Cour.Siblings, w) || slices.Contains(req.Cour.Own, w) {
 			t.Errorf("%q was taken for a cour marker", w)
 		}
 	}
 
-	// The first cour is the one the bare name belongs to.
 	titles, _ = st.SearchTitles(ctx, tybw1)
 	english, _ = st.EnglishTitle(ctx, tybw1)
 	first := f.numbering(ctx, Request{AnimeID: tybw1, Episode: 5}, titles, english)
@@ -126,8 +121,6 @@ func TestCourTellsTheEntryFromItsSiblings(t *testing.T) {
 	}
 }
 
-// Without TheTVDB's numbering the alias is counted out of the franchise: the
-// cours before this one give the season's count, everything before it the absolute.
 func TestAliasesAreDerivedFromTheFranchise(t *testing.T) {
 	st := bleachStore(t)
 	f := NewFinder(st, fixedIndexer{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -139,11 +132,9 @@ func TestAliasesAreDerivedFromTheFranchise(t *testing.T) {
 		return f.numbering(ctx, Request{AnimeID: id, Episode: episode}, titles, english).Alias
 	}
 
-	// 13 + 13 + 14 cours before it, and 366 episodes of the original series.
 	if got := alias(tybwCalamity, 2); got.Tvdb != 42 || got.Absolute != 408 {
 		t.Errorf("The Calamity episode 2: %+v, want 42 / 408", got)
 	}
-	// No run before the first cour; the series before it still counts.
 	if got := alias(tybw1, 5); got.Tvdb != 0 || got.Absolute != 371 {
 		t.Errorf("Thousand-Year Blood War episode 5: %+v, want 0 / 371", got)
 	}
@@ -151,7 +142,6 @@ func TestAliasesAreDerivedFromTheFranchise(t *testing.T) {
 		t.Errorf("the first entry has nothing to count: %+v", got)
 	}
 
-	// A catalogue that does carry the numbering is believed over the count.
 	if _, err := st.SaveEpisodes(ctx, tybwCalamity, []metadata.Episode{
 		{Number: 2, TvdbNumber: 99, Absolute: 999, Season: 17},
 	}); err != nil {
@@ -160,7 +150,6 @@ func TestAliasesAreDerivedFromTheFranchise(t *testing.T) {
 	if got := alias(tybwCalamity, 2); got.Tvdb != 99 || got.Absolute != 999 {
 		t.Errorf("catalogue alias = %+v, want 99 / 999", got)
 	}
-	// So is one saying the numbers agree: it is not a gap to fill.
 	if _, err := st.SaveEpisodes(ctx, tybwCalamity, []metadata.Episode{
 		{Number: 2, TvdbNumber: 2, Absolute: 2, Season: 17},
 	}); err != nil {
@@ -171,8 +160,6 @@ func TestAliasesAreDerivedFromTheFranchise(t *testing.T) {
 	}
 }
 
-// Cours either side of an entry that is not one leave no way to know where the
-// count restarts, so only the absolute is offered: it counts everything.
 func TestASplitRunOffersNoCountedThroughNumber(t *testing.T) {
 	conn, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -208,7 +195,7 @@ func TestASplitRunOffersNoCountedThroughNumber(t *testing.T) {
 	if err := st.SaveRelations(ctx, nil, rels); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.RebuildFranchises(ctx); err != nil {
+	if _, err := st.RebuildFranchisesFor(ctx, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,36 +208,25 @@ func TestASplitRunOffersNoCountedThroughNumber(t *testing.T) {
 	}
 }
 
-// What each release is, for a request of The Calamity episode 5.
 var calamityReleases = []struct {
 	title     string
 	accepted  bool
 	confirmed bool
 	numbers   []int
 }{
-	// A sibling cour's episode 5, and by far the most seeded "05".
 	{"[Erai-raws] Bleach - Sennen Kessen Hen - Soukoku Tan - 05 [1080p][HEVC][Multiple Subtitle][2DC8C704].mkv", false, false, nil},
 	{"[Group] Bleach - Sennen Kessen-hen - Ketsubetsu-tan - 45 [1080p].mkv", false, false, nil},
-	// The first cour's episode 5: a bare name counts from the first cour.
 	{"[SubsPlease] Bleach - Sennen Kessen-hen - 05 (1080p) [ABCD1234].mkv", false, false, nil},
 	{"[Group] Bleach - Sennen Kessen-hen (01-13) [Batch][1080p]", false, false, nil},
-	// Counted through the season under the bare name.
 	{"[DKB] Bleach - Sennen Kessen-hen - 45 [1080p][HEVC x265 10bit][Multi-Subs][5069A3B6].mkv", true, true, []int{45, 411}},
 	{"[Group] Bleach - Sennen Kessen-hen (41-50) [Batch][1080p]", true, true, []int{45, 411}},
-	// Named for this cour, so its own count applies.
 	{"[Erai-raws] Bleach - Sennen Kessen Hen - Kashin Tan - 05 [1080p][HEVC].mkv", true, true, []int{5, 45, 411}},
 	{"[Group] Bleach - Thousand-Year Blood War - The Calamity - 05 [1080p].mkv", true, true, []int{5, 45, 411}},
-	// The original series' episode 45 is not Thousand-Year Blood War's.
 	{"[Group] Bleach - 45 [1080p].mkv", false, false, nil},
-	// Absolute numbering is unique across the whole show.
 	{"[Group] Bleach - 411 [1080p].mkv", true, true, []int{45, 411}},
-	// An unnumbered pack is settled by its file list, by the numbers a bare pack can carry.
 	{"[Group] Bleach - Sennen Kessen-hen [1080p][BD]", true, false, []int{45, 411}},
-	// The original series' pack holds a file numbered 45: its own episode 45.
 	{"[Group] Bleach [1080p][BD]", false, false, nil},
-	// Naming the cour is enough, however the show is shortened.
 	{"[Group] Bleach TYBW - The Calamity [BD]", true, false, []int{5, 45, 411}},
-	// The counted-through number under a stated season, for this show only.
 	{"[Group] Bleach S17E45 [1080p].mkv", true, true, []int{45, 411}},
 	{"[Group] Some Other Show S02E45 [1080p].mkv", false, false, nil},
 }
@@ -296,7 +272,6 @@ func TestFindKeepsOnlyThisCoursEpisode(t *testing.T) {
 		t.Errorf("best = %+v", found.Best)
 	}
 
-	// Searched under the season's count as well as its own.
 	var seasonCount, own bool
 	for _, q := range found.Queries {
 		seasonCount = seasonCount || strings.HasSuffix(q, " 45")
@@ -307,8 +282,6 @@ func TestFindKeepsOnlyThisCoursEpisode(t *testing.T) {
 	}
 }
 
-// The first cour owns the bare name: its own count applies without a marker,
-// and a later cour's release or the season's count is something else.
 func TestFindForTheFirstCourTakesTheBareName(t *testing.T) {
 	st := bleachStore(t)
 	results := []indexer.Torrent{

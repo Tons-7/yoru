@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,14 +15,14 @@ type StatusWriter interface {
 	WriteStatus(io.Writer)
 }
 
-// The key is the route pattern. The value is nil when the resource is released.
 var (
 	mu  sync.Mutex
 	sws = map[string]StatusWriter{}
 )
 
 func ExportStatusWriter(sw StatusWriter, path string, t testing.TB) (release func()) {
-	pattern := fmt.Sprintf("/%s/%s", t.Name(), path)
+	name := strings.NewReplacer("{", "_", "}", "_").Replace(t.Name())
+	pattern := fmt.Sprintf("/%s/%s", name, path)
 	t.Logf("exporting status path %q", pattern)
 	release = func() {
 		mu.Lock()

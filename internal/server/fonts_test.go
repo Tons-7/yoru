@@ -14,7 +14,6 @@ import (
 	"yoru/internal/transcode"
 )
 
-// One build of a file at a time, even while its session is forgotten around it.
 func TestBuildOnceHoldsAsTheSessionGoes(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.streams = transcode.NewManager("ffmpeg", "ffprobe", t.TempDir(), "libx264", slog.New(slog.DiscardHandler))
@@ -35,7 +34,6 @@ func TestBuildOnceHoldsAsTheSessionGoes(t *testing.T) {
 				}
 				time.Sleep(100 * time.Microsecond)
 				inside.Add(-1)
-				// Never made, so every caller builds in turn.
 				return errors.New("not made")
 			})
 		}()
@@ -50,7 +48,6 @@ func TestBuildOnceHoldsAsTheSessionGoes(t *testing.T) {
 	}
 }
 
-// Fonts are kept per session folder: closing an episode forgets all of its folders, and only its own.
 func TestSessionGoneForgetsOnlyItsFonts(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.server.streams = transcode.NewManager("ffmpeg", "ffprobe", t.TempDir(), "libx264", slog.New(slog.DiscardHandler))

@@ -32,7 +32,6 @@ func TestNestedMaps(t *testing.T) {
 	qt.Assert(t, qt.IsFalse(second.Exists()))
 	qt.Assert(t, qt.IsTrue(root.Exists()))
 	qt.Assert(t, qt.IsTrue(first.Exists()))
-	// See if we get panics deleting an already deleted item.
 	last.Delete()
 	secondPath.Delete()
 	qt.Assert(t, qt.IsFalse(root.Exists()))

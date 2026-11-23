@@ -7,8 +7,6 @@ import (
 	"yoru/internal/metadata"
 )
 
-// An episode's score and thread show once it's watched, never before; and they're due for a show
-// with something watched until saved, then not again within the week.
 func TestEpisodeScoresShowOnceWatched(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

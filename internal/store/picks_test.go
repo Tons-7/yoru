@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// A finished show's sequel off the list is missed; not one planned, favourited, started, dropped, unaired, or
-// after a show still being watched.
 func TestSequelsMissed(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

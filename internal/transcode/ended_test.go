@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// A pass cut off at a segment's start leaves a bare styp, which was served as a segment with no media.
 func TestSegmentReadyNeedsMedia(t *testing.T) {
 	dir := t.TempDir()
 	stub := filepath.Join(dir, "20.mp4")
@@ -25,7 +24,6 @@ func TestSegmentReadyNeedsMedia(t *testing.T) {
 	}
 }
 
-// ffmpeg exits 0 on a cut source; only its words say the end was not the file's.
 func TestEndedEarlyReadsFFmpegsWords(t *testing.T) {
 	for detail, want := range map[string]bool{
 		"[http @ 0x1] Stream ends prematurely at 52428800, should be 1452868595":            true,
@@ -40,7 +38,6 @@ func TestEndedEarlyReadsFFmpegsWords(t *testing.T) {
 	}
 }
 
-// A file on disk with a damaged tail lost its last segment on every pass, and that segment never came.
 func TestOnlyAStreamIsCutShort(t *testing.T) {
 	cut := "[in#0/matroska,webm @ 0x2] Error during demuxing: I/O error"
 	if !cutShort("http://127.0.0.1:1234/torrents/1/stream/0", cut) {
@@ -51,7 +48,6 @@ func TestOnlyAStreamIsCutShort(t *testing.T) {
 	}
 }
 
-// Reconnect options go on the engine's HTTP stream only: a file input rejects them and ffmpeg would not start.
 func TestReconnectOnlyForHTTP(t *testing.T) {
 	if got := reconnectArgs("http://127.0.0.1:1234/torrents/1/stream/0"); !slices.Contains(got, "-reconnect") {
 		t.Errorf("no reconnect for the engine stream: %v", got)

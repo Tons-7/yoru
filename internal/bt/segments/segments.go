@@ -22,11 +22,8 @@ type (
 	ConsecutiveExtentIter = iter.Seq[Extent]
 )
 
-// TODO: Does this handle discontiguous extents?
 func scanConsecutive(haystack ConsecutiveExtentIter, needle Extent) iter.Seq[Extent] {
 	return func(yield func(Extent) bool) {
-		// Extents have been found in the haystack, and we're waiting for the needle to end. This is
-		// kind of for backwards compatibility for some tests that expect to have zero-length extents.
 		startedNeedle := false
 		next, stop := iter.Pull(haystack)
 		defer stop()

@@ -4,7 +4,6 @@ package config
 
 import (
 	"errors"
-	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -33,9 +32,7 @@ func PickFolder(title, start string) (string, error) {
 		return "", ErrPickBusy
 	}
 	defer pickMu.Unlock()
-	if info, err := os.Stat(start); err != nil || !info.IsDir() {
-		start = ""
-	}
+	start = pickStart(start)
 
 	var cmd *exec.Cmd
 	switch picker := linuxPicker(); {
@@ -45,10 +42,8 @@ func PickFolder(title, start string) (string, error) {
 			ask += " default location POSIX file " + appleText(start)
 		}
 		cmd = exec.Command("osascript",
-			"-e", `tell application "System Events"`,
 			"-e", "activate",
 			"-e", "set picked to "+ask,
-			"-e", "end tell",
 			"-e", "return POSIX path of picked")
 	case strings.HasSuffix(picker, "zenity"):
 		args := []string{"--file-selection", "--directory", "--title=" + title}

@@ -9,7 +9,6 @@ import (
 	"yoru/internal/config"
 )
 
-// The sort picked on Browse survives the query string all the way to AniList.
 func TestBrowseSortReachesAniList(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

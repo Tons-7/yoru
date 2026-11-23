@@ -15,7 +15,6 @@ import (
 	"time"
 )
 
-// Half downloaded, holes zeroed: tiles come from the part on disk, as the whole sheet's, and none from holes.
 func TestPartialSheetFromThePartsOnDisk(t *testing.T) {
 	ffmpeg, _ := binaries(t)
 	dir := t.TempDir()
@@ -56,7 +55,6 @@ func TestPartialSheetFromThePartsOnDisk(t *testing.T) {
 	if ready || !sheet.Ready || !sheet.Partial || sheet.Version != made {
 		t.Fatalf("read = %+v, %v; want a partial sheet of the %d tiles made", sheet, ready, made)
 	}
-	// The bytes on disk hold 40% to 70% of a steady clip: tiles there, none well outside.
 	for i := range plan.Count {
 		at := float64(i) * plan.Interval / duration
 		if sheet.Have[i] == '1' && (at < 0.35 || at > 0.75) {
@@ -112,26 +110,21 @@ func decodeJPEG(path string) image.Image {
 	return img
 }
 
-// The file's last cluster ends at its end: nothing can follow it, so its tiles are made.
 func TestLeadingUpTakesTheLastCluster(t *testing.T) {
 	clusters := []cluster{{at: 100, end: 200, time: 10}, {at: 200, end: 300, time: 15}}
 	all := []Span{{0, 300}}
 	if from, to, ok := leadingUp(clusters, all, all, 17, 300); !ok || from != 100 || to != 300 {
 		t.Errorf("leadingUp at the end = %d, %d, %v; want 100, 300, true", from, to, ok)
 	}
-	// Mid-file with nothing on disk after it, a later cluster might start by want.
 	if _, _, ok := leadingUp(clusters, all, all, 17, 1000); ok {
 		t.Error("leadingUp with the bytes after the last cluster unknown went ahead")
 	}
-	// On disk after it but not yet scanned: a cluster there is unknown, so it doesn't go ahead either.
 	if _, _, ok := leadingUp(clusters, []Span{{0, 400}}, all, 17, 1000); ok {
 		t.Error("leadingUp went ahead over bytes on disk that no scan has read")
 	}
 }
 
-// A cluster header split by a span's edge is found once the rest arrives.
 func TestScanFindsAHeaderAcrossTheEdge(t *testing.T) {
-	// ID, an 8-byte size, a CRC-32, Timestamp 1000 ticks, then a SimpleBlock: starting 20 before the span.
 	head := []byte{0x1F, 0x43, 0xB6, 0x75, 0x01, 0, 0, 0, 0, 0, 0x10, 0, 0xBF, 0x84, 1, 2, 3, 4, 0xE7, 0x82, 0x03, 0xE8, 0xA3}
 	data := make([]byte, 8192)
 	copy(data[1000:], head)
@@ -139,7 +132,6 @@ func TestScanFindsAHeaderAcrossTheEdge(t *testing.T) {
 	if len(got) != 1 || got[0].at != 1000 || got[0].time != 1 {
 		t.Errorf("clusters = %+v, want one at 1000, 1 s", got)
 	}
-	// The same bytes with frame data after the Timestamp are not a cluster.
 	data[1000+len(head)-1] = 0x42
 	if got := scanClusters(context.Background(), bytes.NewReader(data), Span{1020, 8192}, 1_000_000); len(got) != 0 {
 		t.Errorf("a look-alike in frame data = %+v, want none", got)

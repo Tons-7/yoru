@@ -8,7 +8,6 @@ import (
 	"yoru/internal/store"
 )
 
-// fakeCard keeps what the Discord card was told.
 type fakeCard struct {
 	shown   []discord.Watching
 	cleared int
@@ -18,7 +17,6 @@ func (f *fakeCard) SetEnabled(bool)         {}
 func (f *fakeCard) Show(w discord.Watching) { f.shown = append(f.shown, w) }
 func (f *fakeCard) Clear()                  { f.cleared++ }
 
-// The card shows this machine's playback, others' if allowed, never an adult title, and goes when it ends.
 func TestPresenceReports(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)
@@ -60,12 +58,18 @@ func TestPresenceReports(t *testing.T) {
 	if card.cleared != 2 {
 		t.Errorf("the episode ended and the card stayed: cleared %d", card.cleared)
 	}
-	// A show not in the catalogue has nothing to show.
+	p.Report(ctx, 154587, 7, 10, 1440, false, false, true)
+	cleared := card.cleared
+	p.Report(ctx, 999, 1, 10, 1440, false, false, false)
+	p.Report(ctx, 154587, 3, 1440, 1440, false, true, false)
+	if card.cleared != cleared {
+		t.Errorf("another device's adult or finished report cleared this machine's card")
+	}
+	card.shown = card.shown[:2]
 	p.Report(ctx, 42, 1, 1, 100, false, false, true)
 	if len(card.shown) != 2 {
 		t.Errorf("an unknown show was shown")
 	}
-	// Nor one without AniList's record, which says adult or not: a MAL-only title, or a show not yet loaded.
 	for _, id := range []int{-424242, 777} {
 		if err := st.EnsureAnime(ctx, id); err != nil {
 			t.Fatal(err)

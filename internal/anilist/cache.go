@@ -22,14 +22,14 @@ type responseCache struct {
 	mu      sync.Mutex
 	entries map[string]cached
 
-	inflight map[string]chan struct{}
+	inflight map[string]*flight
 	failed   map[string]bool
 }
 
 func newResponseCache() *responseCache {
 	return &responseCache{
 		entries:  map[string]cached{},
-		inflight: map[string]chan struct{}{},
+		inflight: map[string]*flight{},
 	}
 }
 
@@ -37,10 +37,8 @@ func isMutation(query string) bool {
 	return strings.HasPrefix(strings.TrimSpace(query), "mutation")
 }
 
-func cacheKey(query string, body []byte, token string) string {
+func cacheKey(body []byte, token string) string {
 	sum := sha256.New()
-	sum.Write([]byte(query))
-	sum.Write([]byte{0})
 	sum.Write(body)
 	sum.Write([]byte{0})
 	sum.Write([]byte(token))
@@ -65,8 +63,14 @@ func (c *responseCache) put(key string, body []byte) {
 func (c *responseCache) noteFailed(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.failed == nil || len(c.failed) > cacheEntries {
+	if c.failed == nil {
 		c.failed = map[string]bool{}
+	}
+	for old := range c.failed {
+		if len(c.failed) <= cacheEntries {
+			break
+		}
+		delete(c.failed, old)
 	}
 	c.failed[key] = true
 }
@@ -87,33 +91,48 @@ func (c *responseCache) putUntil(key string, body []byte, expires time.Time) {
 				delete(c.entries, k)
 			}
 		}
-
-		for k := range c.entries {
-			if len(c.entries) < cacheEntries {
-				break
+	}
+	for len(c.entries) >= cacheEntries {
+		var soonest string
+		var at time.Time
+		for k, e := range c.entries {
+			if soonest == "" || e.expires.Before(at) {
+				soonest, at = k, e.expires
 			}
-			delete(c.entries, k)
 		}
+		delete(c.entries, soonest)
 	}
 	delete(c.failed, key)
 	c.entries[key] = cached{body: body, expires: expires}
 }
 
-func (c *responseCache) enter(key string) (chan struct{}, bool) {
+type flight struct {
+	wait chan struct{}
+	err  error
+}
+
+func (c *responseCache) enter(key string) (*flight, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if wait, busy := c.inflight[key]; busy {
-		return wait, false
+	if f, busy := c.inflight[key]; busy {
+		return f, false
 	}
-	wait := make(chan struct{})
-	c.inflight[key] = wait
-	return wait, true
+	f := &flight{wait: make(chan struct{})}
+	c.inflight[key] = f
+	return f, true
 }
 
-func (c *responseCache) done(key string, wait chan struct{}) {
+func (c *responseCache) done(key string, f *flight, err error) {
 	c.mu.Lock()
 	delete(c.inflight, key)
+	f.err = err
 	c.mu.Unlock()
-	close(wait)
+	close(f.wait)
+}
+
+func (c *responseCache) failure(f *flight) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return f.err
 }

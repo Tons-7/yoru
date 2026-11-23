@@ -6,7 +6,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError, fetchAuthed, type DownloadFile, type Page } from '../lib/api'
 import { downloadLabel, PACES, retryNote, rowKey, sortDownloads, type DownloadPart, type DownloadSections, type EpisodeRow } from '../lib/downloads'
-import { bytes, cx, relativeTime, speed } from '../lib/format'
+import { bytes, cx, playLabel, relativeTime, speed } from '../lib/format'
 import {
   refreshDownloads,
   useAccess,
@@ -29,6 +29,7 @@ import { BetterCopyOffer } from '../components/BetterCopy'
 import { BottomSheet } from '../components/BottomSheet'
 import {
   CheckBox,
+  CrossGlyph,
   DownloadIcon,
   FreeRow,
   iconButton,
@@ -57,7 +58,6 @@ import {
   ProgressBar,
   RefreshFailed,
   Segmented,
-  Select,
   Skeleton,
   TextInput,
 } from '../components/ui'
@@ -171,7 +171,7 @@ function Handle({ sortable, position }: { sortable: Sortable; position?: number 
       {...sortable.handle}
       aria-label={`Drag to reorder${position ? `, ${ordinal(position)} in line` : ''}`}
       title="Drag to change its place in line"
-      className="tap relative flex h-7 min-w-7 shrink-0 cursor-grab touch-none items-center justify-center gap-0.5 self-center rounded-md bg-white/[0.05] px-1 text-xs tabular-nums text-base-400 hover:text-base-200 active:cursor-grabbing"
+      className="tap relative flex h-7 min-w-7 shrink-0 cursor-grab touch-none items-center justify-center gap-0.5 self-center rounded-md bg-white/5 px-1 text-xs tabular-nums text-base-400 hover:text-base-200 active:cursor-grabbing"
     >
       <GripGlyph />
       {position}
@@ -209,9 +209,9 @@ function PackEpisodes({ hash }: { hash: string }) {
       {open && files.isError && (
         <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-red-300">
           {(files.error as Error).message}
-          <button onClick={() => void files.refetch()} className="text-accent-300 hover:underline">
+          <Button size="sm" onClick={() => void files.refetch()}>
             Try again
-          </button>
+          </Button>
         </p>
       )}
       {open && files.isSuccess && (
@@ -229,7 +229,7 @@ function PackEpisodes({ hash }: { hash: string }) {
                 onClick={() => keep.mutate(f)}
                 disabled={keep.isPending}
                 aria-pressed={f.kept}
-                aria-label="Keep"
+                aria-label={`Keep episode ${f.epKey}`}
                 title={f.kept ? 'Kept. Click to stop keeping it.' : 'Keep: stays until you remove it.'}
                 className={keepButton(f.kept)}
               >
@@ -267,12 +267,23 @@ function setKept(qc: ReturnType<typeof useQueryClient>, infoHash: string, kept: 
   )
 }
 
+const sorted: {
+  from?: [unknown, unknown, unknown]
+  items: Download[]
+  sections?: ReturnType<typeof sortDownloads>
+} = { items: [] }
+
 function useVisibleDownloads() {
   const downloads = useDownloads()
   const queue = useDownloadQueue()
   const hidden = useHiddenKeys()
-  const items = (downloads.data?.items ?? []).filter((d) => !hidden.has(pcKey(d.infoHash)))
-  return { downloads, queue, items, sections: sortDownloads(items, queue.data?.items ?? [], hidden) }
+  const from = sorted.from
+  if (!sorted.sections || !from || from[0] !== downloads.data || from[1] !== queue.data || from[2] !== hidden) {
+    sorted.items = (downloads.data?.items ?? []).filter((d) => !hidden.has(pcKey(d.infoHash)))
+    sorted.sections = sortDownloads(sorted.items, queue.data?.items ?? [], hidden)
+    sorted.from = [downloads.data, queue.data, hidden]
+  }
+  return { downloads, queue, items: sorted.items, sections: sorted.sections }
 }
 
 const removedWords = (ds: Download[]) =>
@@ -338,13 +349,18 @@ function OnlineDownloads({ phone }: { phone: boolean }) {
   const phoneCount =
     here.saved.filter((e) => !hidden.has(`saved:${e.key}`)).length +
     here.jobs.filter((j) => !hidden.has(`saved:${savedKey(j.animeId, j.episode)}`)).length
+  const [settled, setSettled] = useState<Side | null>(null)
+  const ready = !!(access.data || access.isError) && (host || !!chosen || here.loaded)
+  if (ready && !host && !chosen && settled === null) {
+    setSettled(phoneCount > 0 ? 'phone' : (lastSide() ?? (cannotSave() ? 'pc' : 'phone')))
+  }
 
   if (!access.data && !access.isError) return <Skeleton className="mx-auto h-64 w-full max-w-[1120px]" />
   if (!host && !chosen && !here.loaded) return <Skeleton className="mx-auto h-64 w-full max-w-[1120px]" />
 
   const side: Side = host
     ? 'pc'
-    : (chosen ?? (phoneCount > 0 ? 'phone' : (lastSide() ?? (cannotSave() ? 'pc' : 'phone'))))
+    : (chosen ?? settled ?? (phoneCount > 0 ? 'phone' : (lastSide() ?? (cannotSave() ? 'pc' : 'phone'))))
   const choose = (next: Side) => {
     rememberSide(next)
     if (phone) navigate(next === 'pc' ? '/downloads?on=pc' : '/saved', { replace: true })
@@ -415,6 +431,7 @@ function SideSwitch({
 }) {
   return (
     <Segmented<Side>
+      label="Downloads on"
       options={[
         { value: 'phone', label: word === 'phone' ? 'This phone' : 'This device', count: phoneCount },
         { value: 'pc', label: 'On the PC', count: pcCount },
@@ -453,13 +470,14 @@ function useReachable() {
     if (ok) void sendWatched()
   }
   useEffect(() => {
+    if (back) return
     const first = window.setTimeout(() => void check(), 0)
     const id = window.setInterval(() => void check(), 15_000)
     return () => {
       window.clearTimeout(first)
       window.clearInterval(id)
     }
-  }, [])
+  }, [back])
   return { back, checking, check: () => void check() }
 }
 
@@ -472,7 +490,7 @@ function OfflineDownloads() {
   const unsent = Object.values(watched).filter((w) => w.dirty).length
 
   return (
-    <div className="mx-auto w-full max-w-[1120px] space-y-4 px-4 pt-6 pb-16 sm:px-6">
+    <div className="mx-auto w-full max-w-[1120px] space-y-4 px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-16 sm:px-6">
       <PageHeader title="Downloads" />
       <div
         role="status"
@@ -612,7 +630,14 @@ function PcList({ host }: { host: boolean }) {
   const dequeue = useMutation({
     mutationFn: (q: Queued) =>
       api.del(`/api/download/all/${q.animeId}?episode=${encodeURIComponent(q.epKey)}`),
-    onSuccess: done,
+    onSuccess: (_, q) => {
+      done()
+      if (q.torrent) return
+      toast(`Removed ${q.title ?? 'it'} episode ${q.episode} from the queue`, 'info', {
+        label: 'Undo',
+        run: () => requeue.mutate(q),
+      })
+    },
   })
 
   const [picking, setPicking] = useState<{ animeId: number; episode: number; current?: string } | null>(null)
@@ -723,12 +748,10 @@ function PcList({ host }: { host: boolean }) {
       ),
     onMutate: async (ds: EpisodeRow[]) => {
       await qc.cancelQueries({ queryKey: ['downloads'] })
-      const previous = qc.getQueryData<{ items: Download[]; count: number }>(['downloads'])
       for (const d of ds) setKept(qc, d.infoHash, !d.kept, d.part?.fileIndex)
-      return { previous }
     },
-    onError: (err, ds, context) => {
-      if (context?.previous) qc.setQueryData(['downloads'], context.previous)
+    onError: (err, ds) => {
+      for (const d of ds) setKept(qc, d.infoHash, d.kept, d.part?.fileIndex)
       toast(`Couldn't change what is kept: ${(err as Error).message}`, 'error', {
         label: 'Try again',
         run: () => keep.mutate(ds),
@@ -739,21 +762,23 @@ function PcList({ host }: { host: boolean }) {
   })
   const keepNow = (ds: EpisodeRow[]) => {
     if (ds.length === 0) return
-    keep.mutate(ds)
     const one = ds.length === 1 ? ds[0] : null
     const what = one ? downloadLabel(one) : episodeCount(episodesIn(ds))
-    if (ds.some((d) => d.kept)) {
-      toast(`Stopped keeping ${what}. Auto tidy can delete ${one ? 'it' : 'them'} once watched.`, 'info', {
-        label: 'Undo',
-        run: () => keep.mutate(ds.map((d) => ({ ...d, kept: false }))),
-      })
-      return
+    const said = () => {
+      if (ds.some((d) => d.kept)) {
+        toast(`Stopped keeping ${what}. Auto tidy can delete ${one ? 'it' : 'them'} once watched.`, 'info', {
+          label: 'Undo',
+          run: () => keep.mutate(ds.map((d) => ({ ...d, kept: false }))),
+        })
+        return
+      }
+      toast(
+        one ? `Kept ${what}. It stays until you remove it.` : `Kept ${what}. They stay until you remove them.`,
+        'info',
+        { label: 'Undo', run: () => keep.mutate(ds.map((d) => ({ ...d, kept: true }))) },
+      )
     }
-    toast(
-      one ? `Kept ${what}. It stays until you remove it.` : `Kept ${what}. They stay until you remove them.`,
-      'info',
-      { label: 'Undo', run: () => keep.mutate(ds.map((d) => ({ ...d, kept: true }))) },
-    )
+    keep.mutate(ds, { onSuccess: said })
   }
 
   if (isError && !data) return <ErrorState error={error} retry={() => refetch()} />
@@ -854,7 +879,9 @@ function PcList({ host }: { host: boolean }) {
   }
   const removeChosen = () => {
     const shows = byShow(finished).filter((x): x is Show => 'items' in x)
-    const wholeShow = shows.some((s) => s.items.every((d) => d.pinned || picked.has(d.key)))
+    const wholeShow = shows.some(
+      (s) => s.items.some((d) => picked.has(d.key)) && s.items.every((d) => d.pinned || picked.has(d.key)),
+    )
     if (!confirmPicked && (episodesIn(chosen) > 5 || wholeShow)) return setConfirmPicked(true)
     removeLater(chosen)
     stopSelecting()
@@ -865,7 +892,7 @@ function PcList({ host }: { host: boolean }) {
     word,
     arrange: (animeId, epKey, action) =>
       action === 'now' ? now.mutate({ animeId, epKey }) : arrange.mutate({ animeId, epKey, action }),
-    lineLength: line.length,
+    lineLength: line.reduce((n, x, i) => (x.q || x.d?.queued ? i + 1 : n), 0),
     selecting: selecting ? { picked, toggle } : undefined,
     queueHeld: (d) => d.episodes.some((e) => waitingKeys.has(`${d.animeId}-${e}`)),
     changeRelease: (animeId, episode, current) => setPicking({ animeId, episode, current }),
@@ -880,7 +907,7 @@ function PcList({ host }: { host: boolean }) {
     confirming: confirmRemove,
     confirm: setConfirmRemove,
     removing: remove.isPending,
-    toggling: pauseResume.isPending,
+    toggling: (d) => pauseResume.isPending && pauseResume.variables?.d.key === d.key,
     keep: keepNow,
     remove: (rows) => remove.mutate(rows),
     removeLater,
@@ -911,7 +938,7 @@ function PcList({ host }: { host: boolean }) {
       {!queuePaused && queue.data?.short && (
         <p role="status" className={notice}>
           {`Downloads wait for room: ${host ? queue.data.short.drive : 'the PC'} has ${bytes(queue.data.short.freeBytes)} free, and they need ${bytes(queue.data.short.needBytes)}. They carry on once there's space.`}
-          <Link to="/settings?tab=Storage" className="tap relative shrink-0 text-[13px] font-medium text-accent-300 hover:underline">
+          <Link to="/downloads?on=pc&free=1" className="tap relative shrink-0 text-[13px] font-medium text-accent-300 hover:underline">
             Free space
           </Link>
         </p>
@@ -941,23 +968,24 @@ function PcList({ host }: { host: boolean }) {
       {isPending ? (
         <Skeleton className="h-64 w-full" />
       ) : rows.length === 0 ? (
-        <section className="surface flex flex-col items-center px-6 py-8 text-center">
-          <span className="mb-4 grid size-14 place-items-center rounded-2xl bg-base-800 text-base-300">
-            <DownloadIcon />
-          </span>
-          <p className="text-[17px] font-semibold text-base-100">Nothing downloaded</p>
-          <p className="mt-1 max-w-sm text-[15px] text-balance text-base-400">
-            {keptGo
+        <Empty
+          card
+          icon={<DownloadIcon />}
+          title="Nothing downloaded"
+          hint={
+            keptGo
               ? 'Episodes you watch stay here for a while. Downloads are deleted once watched too.'
-              : 'Episodes you watch stay here for a while. Episodes you download stay until you remove them.'}
-          </p>
-          <LinkButton to="/schedule?view=out" variant="primary" className="mt-5">
-            Find something to watch
-          </LinkButton>
-          <Link to="/library" className="tap relative mt-3 text-sm font-medium text-accent-300 hover:underline">
-            Open Library
-          </Link>
-        </section>
+              : 'Episodes you watch stay here for a while. Episodes you download stay until you remove them.'
+          }
+          action={
+            <>
+              <LinkButton to="/schedule?view=out" variant="primary">
+                Find something to watch
+              </LinkButton>
+              <LinkButton to="/library">Open Library</LinkButton>
+            </>
+          }
+        />
       ) : (
         <DndContext
           sensors={sensors}
@@ -1012,7 +1040,7 @@ function PcList({ host }: { host: boolean }) {
                 <HoldRow
                   key={`hold-${r.hold.animeId}-${r.hold.episode}`}
                   hold={r.hold}
-                  pending={takeNow.isPending}
+                  pending={takeNow.isPending && takeNow.variables?.animeId === r.hold.animeId && takeNow.variables?.episode === r.hold.episode}
                   onNow={() => takeNow.mutate(r.hold)}
                 />
               )
@@ -1064,7 +1092,6 @@ function PcList({ host }: { host: boolean }) {
         </SortableContext>
         </DndContext>
       )}
-      {changeRelease.isError && <p className="text-[13px] text-red-300">{(changeRelease.error as Error).message}</p>}
 
       {selecting && (
         <SelectBar
@@ -1159,7 +1186,7 @@ function byShow(finished: EpisodeRow[]): (EpisodeRow | Show)[] {
     if (placed.has(d.animeId)) return []
     placed.add(d.animeId)
     const first = (x: EpisodeRow) => Number(x.episodes[0]) || 0
-    return [{ animeId: d.animeId, title: d.title, cover: d.cover, items: [...items].sort((a, b) => first(a) - first(b)) }]
+    return [{ animeId: d.animeId, title: d.title, cover: d.cover, items: items.toSorted((a, b) => first(a) - first(b)) }]
   })
 }
 
@@ -1173,7 +1200,7 @@ interface RowActions {
   confirming: string | null
   confirm: (key: string | null) => void
   removing: boolean
-  toggling: boolean
+  toggling: (d: EpisodeRow) => boolean
   keep: (ds: EpisodeRow[]) => void
   remove: (rows: EpisodeRow[]) => void
   removeLater: (ds: EpisodeRow[]) => void
@@ -1218,13 +1245,13 @@ const rail = 'flex shrink-0 items-center gap-1.5 max-sm:w-full max-sm:justify-en
 
 const inlineRail = 'flex shrink-0 items-center gap-1.5 self-center'
 
-const card = 'rounded-card bg-base-900'
+const card = 'surface'
 
 const menuClass = iconButton
 
 function deviceItem(ds: Download[], actions: RowActions): MoreItem | null {
   const to = actions.toDevice
-  const ready = ds.filter((d) => d.percent >= 100 && !!d.animeId && d.episodes.length > 0)
+  const ready = ds.filter((d) => d.percent >= 100 && !!d.animeId && d.episodes.some((e) => Number(e) > 0))
   if (!to || ready.length === 0) return null
   const states = ready.map((d) => to.state(d))
   if (states.every((s) => s === 'saved')) return { label: `On this ${actions.word}`, to: '/saved' }
@@ -1294,7 +1321,7 @@ function ShowRows({
         <Link to={`/anime/${show.animeId}`} className="shrink-0">
           <Poster src={show.cover} />
         </Link>
-        <button onClick={onToggle} className="min-w-0 flex-1 text-left">
+        <button onClick={onToggle} aria-expanded={open} className="min-w-0 flex-1 text-left">
           <p className="truncate font-semibold text-base-100">{name}</p>
           <p className="mt-0.5 text-sm text-base-400 tabular-nums">
             {episodes} episodes · {bytes(size)}
@@ -1348,7 +1375,7 @@ function DiskProblem({ d, host }: { d: Download; host: boolean }) {
           : d.warning!.charAt(0).toUpperCase() + d.warning!.slice(1)}
       </span>
       {full && (
-        <Link to="/settings?tab=Storage" className="font-medium text-accent-300 hover:underline">
+        <Link to="/downloads?on=pc&free=1" className="font-medium text-accent-300 hover:underline">
           Free space
         </Link>
       )}
@@ -1402,8 +1429,16 @@ function DownloadRow({
   const first = Number(d.episodes[0])
   const name = `${d.title ?? d.name}${numbers ? ` episode${numbers}` : ''}`
   const onPhone = !unfinished && actions.toDevice?.state(d) === 'saved'
+  const onHost = useAccess().data?.host === true
   const items = [
     !!d.animeId && first > 0 && { label: 'Play', to: `/watch/${d.animeId}/${first}` },
+    onHost && d.bytesOnDisk > 0 && {
+      label: 'Show in folder',
+      run: () =>
+        void api
+          .post(`/api/downloads/${d.infoHash}/reveal`)
+          .catch((e: Error) => toast(`Couldn't show ${name}: ${e.message}`, 'error')),
+    },
     !d.pinned && !!d.animeId && d.episodes.length === 1 && first > 0 && {
       label: 'Change release',
       run: () => actions.changeRelease(d.animeId!, first, d.infoHash),
@@ -1442,11 +1477,16 @@ function DownloadRow({
         ) : (
           <Gutter>{position}</Gutter>
         )}
-        {!nested && (
-          <Link to={d.animeId ? `/anime/${d.animeId}` : '#'} className="shrink-0">
-            <Poster src={d.cover} />
-          </Link>
-        )}
+        {!nested &&
+          (d.animeId ? (
+            <Link to={`/anime/${d.animeId}`} tabIndex={-1} aria-hidden className="shrink-0">
+              <Poster src={d.cover} />
+            </Link>
+          ) : (
+            <span className="shrink-0">
+              <Poster src={d.cover} />
+            </span>
+          ))}
         <div className="min-w-0 flex-1">
           {nested ? (
             <p className="truncate text-sm font-medium text-base-100">{numbers ? `Episode${numbers}` : d.name}</p>
@@ -1498,7 +1538,7 @@ function DownloadRow({
             {unfinished && !d.checking && (
               <button
                 onClick={() => actions.pauseResume(d)}
-                disabled={actions.toggling}
+                disabled={actions.toggling(d)}
                 aria-label={d.paused ? 'Resume download' : 'Pause download'}
                 title={d.paused ? 'Resume this one' : 'Pause this one. The next in line starts; "Pause all" stops everything.'}
                 className={iconButton}
@@ -1511,7 +1551,7 @@ function DownloadRow({
               <button
                 onClick={() => actions.keep([d])}
                 aria-pressed={d.kept}
-                aria-label="Keep"
+                aria-label={`Keep ${d.title ?? d.name}`}
                 title={
                   d.kept
                     ? `Kept until you remove ${d.episodes.length > 1 ? 'them' : 'it'}. Click to stop keeping ${
@@ -1542,7 +1582,7 @@ function Gutter({ children }: { children?: ReactNode }) {
     <span
       className={cx(
         'grid h-7 min-w-7 shrink-0 place-items-center self-center rounded-md px-1 text-xs tabular-nums text-base-400',
-        children != null ? 'bg-white/[0.05]' : 'max-sm:hidden',
+        children != null ? 'bg-white/5' : 'max-sm:hidden',
       )}
     >
       {children}
@@ -1616,10 +1656,10 @@ function QueueRow({
         <Poster src={q.cover} />
 
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-base-100">
+          <Link to={`/anime/${q.animeId}`} className="block truncate text-sm font-medium text-base-100 hover:underline">
             {q.title ?? `Anime ${q.animeId}`}
             <span className="ml-1.5 font-normal text-base-400">episode {q.episode}</span>
-          </p>
+          </Link>
           {q.error && q.state === 'failed' && <p className="truncate text-[13px] text-red-300">{q.error}</p>}
           {q.retryAt && (
             <p className="truncate text-[13px] text-amber-300">
@@ -1692,7 +1732,7 @@ function QueueRow({
               title={got ? 'Remove from the queue and delete what it got' : 'Remove from the queue'}
               className={deleteButton}
             >
-              ✕
+              <CrossGlyph />
             </button>
           )}
           {position != null && (q.state === 'pending' || q.state === 'paused') && (
@@ -1719,7 +1759,16 @@ function QueueRow({
 function PcStorage({ host }: { host: boolean }) {
   const room = useDriveRoom()
   const { queue, items, sections } = useVisibleDownloads()
-  const [freeing, setFreeing] = useState(false)
+  const [params, setParams] = useSearchParams()
+  const [freeing, setFreeingState] = useState(params.get('free') === '1')
+  const setFreeing = (on: boolean) => {
+    setFreeingState(on)
+    if (!on && params.has('free')) {
+      const next = new URLSearchParams(params)
+      next.delete('free')
+      setParams(next, { replace: true })
+    }
+  }
   const info = room.data as CacheRoom | undefined
   const used = sizeOf(items)
   const free = info?.freeBytes ?? null
@@ -1774,6 +1823,7 @@ function PcFreeUpList({ onDone }: { onDone?: () => void }) {
     onSettled: () => {
       setConfirm(null)
       refreshDownloads(qc)
+      onDone?.()
     },
   })
   const passing = sections.finished.filter((d) => !d.kept && !d.pinned)
@@ -1798,15 +1848,27 @@ function PcFreeUpList({ onDone }: { onDone?: () => void }) {
         title="Not kept"
         detail={passing.length > 0 ? `${episodeCount(episodesIn(passing))} · ${bytes(sizeOf(passing))}` : 'Nothing to clear: the rest are kept'}
         action={
-          <Button size="sm" disabled={passing.length === 0} onClick={clearNotKept}>
-            Clear
-          </Button>
+          confirm === 'passing' ? (
+            <ConfirmInline
+              size="sm"
+              label={`Remove ${episodeCount(episodesIn(passing))}`}
+              onConfirm={() => {
+                setConfirm(null)
+                clearNotKept()
+              }}
+              onCancel={() => setConfirm(null)}
+            />
+          ) : (
+            <Button size="sm" disabled={passing.length === 0} onClick={() => setConfirm('passing')}>
+              Clear
+            </Button>
+          )
         }
       />
       {unfinished.length > 0 && (
         <FreeRow
-          title="Unfinished downloads"
-          detail={`${episodeCount(episodesIn(unfinished))} · ${bytes(sizeOf(unfinished))} so far`}
+          title="Not kept, unfinished too"
+          detail={`${episodeCount(episodesIn(unfinished) + episodesIn(passing))} · ${bytes(sizeOf(unfinished) + sizeOf(passing))} so far`}
           action={
             confirm === 'all' ? (
               <ConfirmInline
@@ -1875,30 +1937,36 @@ function PcSettings() {
   const set = (key: string, value: string) => setPref.mutate({ key, value })
   return (
     <PanelCard title="Auto tidy on the PC">
-      <label className="block space-y-1.5">
-        <span className="block text-[13px] text-base-400">Watched episodes</span>
-        <Select value={mode} onChange={(v) => set('cache.autodelete', v)} aria-label="Watched episodes" className="w-full">
-          <option value="off">Keep until space runs low</option>
-          <option value="now">Delete right after watching</option>
-          <option value="keep2">Delete once two more are watched</option>
-        </Select>
-      </label>
-      <label className="block space-y-1.5">
-        <span className="block text-[13px] text-base-400">Room for watched episodes</span>
-        <Select value={budget} onChange={(v) => set('cache.budget_bytes', v)} aria-label="Room for watched episodes" className="w-full">
-          {budgets.map((b) => (
-            <option key={b} value={b}>
-              {bytes(Number(b))}
-            </option>
-          ))}
-        </Select>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[13px] text-base-400">Auto-delete watched</span>
+        <ValueMenu
+          aria-label="Auto-delete watched"
+          value={mode}
+          onChange={(v) => set('cache.autodelete', v)}
+          options={[
+            { value: 'off', label: 'Off' },
+            { value: 'now', label: 'Right after watching' },
+            { value: 'keep2', label: 'Once two more are watched' },
+          ]}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[13px] text-base-400">Budget</span>
+          <ValueMenu
+            aria-label="Budget"
+            value={budget}
+            onChange={(v) => set('cache.budget_bytes', v)}
+            options={budgets.map((b) => ({ value: b, label: bytes(Number(b)) }))}
+          />
+        </div>
         <span className={cx('block text-[13px] tabular-nums', budget && passing > Number(budget) ? 'text-amber-300' : 'text-base-400')}>
           {budget ? `${bytes(passing)} in use of ${bytes(Number(budget))}` : `${bytes(passing)} in use`}
         </span>
-      </label>
+      </div>
       <p className="text-[13px] text-base-400">
         {keptGo ? 'Kept episodes are deleted too, once watched. ' : 'Kept episodes stay until you remove them. '}
-        <Link to="/settings?tab=Storage" className="font-medium text-accent-300 hover:underline">
+        <Link to="/downloads?on=pc&free=1" className="font-medium text-accent-300 hover:underline">
           More in Settings
         </Link>
       </p>
@@ -1916,6 +1984,8 @@ interface LocalFile {
   resolution?: string
   releaseGroup?: string
   confidence: number
+  missing?: boolean
+  showTitle?: string
 }
 
 interface SearchHit {
@@ -1962,7 +2032,7 @@ function AssignFile({ file, onDone }: { file: LocalFile; onDone: () => void }) {
             <img src={picked.coverImage.medium} alt="" className="h-12 w-8 rounded object-cover" />
           )}
           <p className="min-w-0 flex-1 truncate text-sm text-base-100">{name(picked)}</p>
-          <button onClick={() => setPicked(null)} className="text-xs text-base-400 hover:text-white">
+          <button onClick={() => setPicked(null)} className="tap rounded px-1.5 text-xs text-base-400 hover:text-white pointer-coarse:min-h-11">
             Change
           </button>
         </div>
@@ -1986,7 +2056,7 @@ function AssignFile({ file, onDone }: { file: LocalFile; onDone: () => void }) {
                 <li key={h.id}>
                   <button
                     onClick={() => setPicked(h)}
-                    className="flex w-full items-center gap-2.5 rounded-md px-2 py-1 text-left hover:bg-base-850"
+                    className="flex w-full items-center gap-2.5 rounded-md px-2 py-1 text-left hover:bg-base-850 pointer-coarse:min-h-11"
                   >
                     {h.coverImage?.medium ? (
                       <img src={h.coverImage.medium} alt="" className="h-10 w-7 rounded object-cover" />
@@ -2026,7 +2096,7 @@ function AssignFile({ file, onDone }: { file: LocalFile; onDone: () => void }) {
         >
           {assign.isPending ? 'Saving…' : 'Save'}
         </button>
-        {assign.isError && <span className="text-xs text-recap">{(assign.error as Error).message}</span>}
+        {assign.isError && <span className="text-xs text-red-300">{(assign.error as Error).message}</span>}
       </div>
     </div>
   )
@@ -2034,19 +2104,25 @@ function AssignFile({ file, onDone }: { file: LocalFile; onDone: () => void }) {
 
 export function LocalFiles() {
   const [unmatchedOnly, setUnmatchedOnly] = useState(false)
+  const [missingOnly, setMissingOnly] = useState(false)
   const [page, setPage] = useState(1)
   const setUnmatched = (v: boolean) => {
     setUnmatchedOnly(v)
+    if (v) setMissingOnly(false)
+    setPage(1)
+  }
+  const setMissing = (v: boolean) => {
+    setMissingOnly(v)
+    if (v) setUnmatchedOnly(false)
     setPage(1)
   }
   const qc = useQueryClient()
   const { data, isPending, isError, error, refetch } = useQuery({
-    queryKey: ['localFiles', unmatchedOnly, page],
+    queryKey: ['localFiles', unmatchedOnly, missingOnly, page],
     queryFn: () =>
       api.get<Page<LocalFile>>(
-        `/api/local/files?perPage=100&page=${page}${unmatchedOnly ? '&unmatched=true' : ''}`,
+        `/api/local/files?perPage=100&page=${page}${unmatchedOnly ? '&unmatched=true' : ''}${missingOnly ? '&missing=true' : ''}`,
       ),
-    placeholderData: (prev) => prev,
   })
   const stats = useQuery({
     queryKey: ['local'],
@@ -2061,6 +2137,7 @@ export function LocalFiles() {
     },
   })
   const [assigning, setAssigning] = useState<number | null>(null)
+  const [forgetting, setForgetting] = useState(false)
   useClampPage(data?.items.length === 0, page, data?.total, 100, setPage)
 
   if (isError && !data) return <ErrorState error={error} retry={() => refetch()} />
@@ -2072,18 +2149,31 @@ export function LocalFiles() {
         meta={data && data.items.length > 0 ? `${data.total} files` : undefined}
         actions={
           <>
-            {missing > 0 && (
-              <Button
-                onClick={() => forget.mutate()}
-                disabled={forget.isPending}
-                title="Files a scan no longer found. Forgetting drops their records; unplug a drive and they stay."
-              >
-                Forget {missing} missing
-              </Button>
-            )}
+            {missing > 0 &&
+              (forgetting ? (
+                <ConfirmInline
+                  label={`Forget ${missing}`}
+                  note="Missing only lists them"
+                  onConfirm={() => forget.mutate(undefined, { onSettled: () => setForgetting(false) })}
+                  onCancel={() => setForgetting(false)}
+                  pending={forget.isPending}
+                />
+              ) : (
+                <Button
+                  onClick={() => setForgetting(true)}
+                  title="Files a scan no longer found. Forgetting drops their records; unplug a drive and they stay."
+                >
+                  Forget {missing} missing
+                </Button>
+              ))}
             <FilterToggle on={unmatchedOnly} onChange={setUnmatched}>
               Unmatched only
             </FilterToggle>
+            {(missing > 0 || missingOnly) && (
+              <FilterToggle on={missingOnly} onChange={setMissing}>
+                Missing only
+              </FilterToggle>
+            )}
             <LinkButton to="/settings?tab=Library">Manage folders</LinkButton>
           </>
         }
@@ -2115,8 +2205,18 @@ export function LocalFiles() {
               <li key={f.id} className="p-2.5">
                 <div className="flex items-center gap-3">
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm text-base-100">{f.path.split(/[\\/]/).pop()}</p>
+                    <p className="flex items-center gap-2 text-sm text-base-100">
+                      <span className="truncate">{f.path.split(/[\\/]/).pop()}</span>
+                      {f.missing && <Badge tone="recap">Missing</Badge>}
+                    </p>
                     <p className="mt-0.5 truncate text-xs text-base-500">
+                      {f.showTitle && (
+                        <span className="text-base-300">
+                          {f.showTitle}
+                          {f.episode ? ` · Episode ${f.episode}` : ''}
+                          {' · '}
+                        </span>
+                      )}
                       {bytes(f.size)}
                       {f.resolution && ` · ${f.resolution}`}
                       {f.releaseGroup && ` · ${f.releaseGroup}`}
@@ -2125,16 +2225,16 @@ export function LocalFiles() {
                   {f.animeId ? (
                     <Link
                       to={`/watch/${f.animeId}/${f.episode ?? 1}`}
-                      className="shrink-0 rounded-md bg-base-800 px-2.5 py-1 text-xs text-base-100 hover:bg-base-700"
+                      className="inline-flex shrink-0 items-center rounded-md bg-base-800 px-2.5 py-1 text-xs text-base-100 hover:bg-base-700 pointer-coarse:min-h-11"
                     >
-                      Play ep {f.episode ?? '?'}
+                      {playLabel(f.episode ?? '?', false)}
                     </Link>
                   ) : (
                     <Badge tone="filler">Unmatched</Badge>
                   )}
                   <button
                     onClick={() => setAssigning(assigning === f.id ? null : f.id)}
-                    className="shrink-0 rounded-md px-2.5 py-1 text-xs text-base-300 transition-colors hover:bg-base-800 hover:text-white"
+                    className="shrink-0 rounded-md px-2.5 py-1 text-xs text-base-300 transition-colors hover:bg-base-800 hover:text-white pointer-coarse:min-h-11"
                   >
                     {assigning === f.id ? 'Cancel' : f.animeId ? 'Reassign' : 'Assign'}
                   </button>

@@ -81,6 +81,8 @@ func avatarHost(raw string) bool {
 }
 
 func (s *Server) trackerAvatarURL(ctx context.Context) (source, link string) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
 	if token, _ := s.store.Setting(ctx, "anilist.token"); token != "" {
 		link, _ = s.store.Setting(ctx, "anilist.avatar")
 		if link == "" && s.avatars.due("anilist", avatarRetry) {

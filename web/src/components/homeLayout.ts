@@ -1,9 +1,11 @@
-import { useCallback, useState } from 'react'
+import { createContext, useCallback, useState } from 'react'
 import { HOME_ROWS, hiddenRows, type HomeRow } from '../lib/homeRows'
 import { usePrefs, useSetPref } from '../lib/queries'
 import { readKey, writeKey } from '../lib/storage'
 
 export const HOME_LAYOUT = HOME_ROWS
+
+export const RailFold = createContext<(() => void) | undefined>(undefined)
 
 export type HomeRowId = HomeRow
 

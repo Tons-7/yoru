@@ -1,6 +1,7 @@
 package score
 
 import (
+	"strings"
 	"testing"
 
 	"yoru/internal/film"
@@ -28,9 +29,13 @@ func TestDiscImagesAreRejected(t *testing.T) {
 		}
 	}
 
-	ok := candidate("[Judas] Show - 01 [BD 1080p HEVC 10bit].mkv", 40, 1<<30)
-	if got := Rank([]Candidate{ok}, prefs)[0]; !got.AutoPick {
-		t.Errorf("a BD encode was rejected: %q", got.Blocked)
+	for _, title := range []string{
+		"[Judas] Show - 01 [BD 1080p HEVC 10bit].mkv",
+		"[Group] Show - 01 (BD Remux 1080p AVC DTS-HD MA 5.1).mkv",
+	} {
+		if got := Rank([]Candidate{candidate(title, 40, 1<<30)}, prefs)[0]; strings.Contains(got.Blocked, "disc image") {
+			t.Errorf("an episode file was called a disc image: %s", title)
+		}
 	}
 }
 

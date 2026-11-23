@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// The error net/http's HTTP/2 transport returns on a GOAWAY, wrapped as a body read wraps it.
 func goAway(code string) error {
 	return fmt.Errorf("reading body: %w", fmt.Errorf(
 		"http2: server sent GOAWAY and closed the connection; LastStreamID=3, ErrCode=%s, debug=%q", code, ""))

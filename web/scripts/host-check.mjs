@@ -137,7 +137,7 @@ await page.evaluate(async () => {
 })
 await page.reload({ waitUntil: 'domcontentloaded' })
 check(await until(() => page.evaluate(() => !!navigator.serviceWorker.controller)), 'the worker takes the page')
-check(await until(() => page.getByRole('tab').first().isVisible()), 'pages load through it as before')
+check(await until(() => page.getByRole('navigation', { name: 'Settings sections' }).isVisible()), 'pages load through it as before')
 let down = true
 await context.route('**/unreachable-probe', (route) => (down ? route.abort('connectionrefused') : route.fallback()))
 await page.goto(`${BASE}/unreachable-probe`, { waitUntil: 'domcontentloaded' }).catch(() => {})

@@ -23,7 +23,10 @@ export function FilterMenu({
 }) {
   const [open, setOpen] = useState(false)
   const [term, setTerm] = useState('')
-  const close = useCallback(() => setOpen(false), [])
+  const close = useCallback(() => {
+    setOpen(false)
+    setTerm('')
+  }, [])
   const ref = useDismiss<HTMLDivElement>(close, open)
   const trigger = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -40,7 +43,7 @@ export function FilterMenu({
   const toggle = (option: string) => {
     if (!multiple) {
       onChange(values[0] === option ? [] : [option])
-      setOpen(false)
+      close()
       return
     }
     onChange(
@@ -91,7 +94,7 @@ export function FilterMenu({
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => (open ? close() : setOpen(true))}
         className={cx(
           'flex h-9 items-center gap-1.5 rounded-full px-3.5 text-sm font-medium transition-colors pointer-coarse:min-h-11',
           values.length > 0

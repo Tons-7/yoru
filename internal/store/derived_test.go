@@ -7,8 +7,6 @@ import (
 	"yoru/internal/metadata"
 )
 
-// A show no metadata source has catalogued gets rows invented from its episode
-// count. Releases are the only real evidence of which episodes exist.
 func TestDerivedEpisodesReplaceInventedRows(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -22,7 +20,6 @@ func TestDerivedEpisodesReplaceInventedRows(t *testing.T) {
 		t.Fatalf("expected 8 invented rows, got %d", len(before))
 	}
 
-	// Four have aired and been released; the rest have not.
 	saved, err := s.SaveDerivedEpisodes(ctx, 208685, []int{1, 2, 3, 4})
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +32,6 @@ func TestDerivedEpisodesReplaceInventedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Still eight, four padded from the count, so a mid-season show doesn't end at its latest release.
 	if len(after) != 8 {
 		t.Fatalf("got %d episodes, want 8", len(after))
 	}
@@ -51,7 +47,6 @@ func TestDerivedEpisodesReplaceInventedRows(t *testing.T) {
 	}
 }
 
-// Padding is for release-derived lists only; a real source lists unaired episodes itself.
 func TestPaddingLeavesRealMetadataAlone(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -73,7 +68,6 @@ func TestPaddingLeavesRealMetadataAlone(t *testing.T) {
 	}
 }
 
-// The search costs seconds against every indexer, so it runs once a day.
 func TestDerivedIsRememberedEvenWhenNothingWasFound(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

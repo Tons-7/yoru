@@ -49,8 +49,15 @@ LIMIT ? OFFSET ?`
 
 func (s *Store) History(ctx context.Context, p Paging) (Page[HistoryEntry], error) {
 	mode := s.TitleMode(ctx, 0)
+	threshold := s.thresholds(ctx)
 
-	rows, err := s.r.QueryContext(ctx, historyQuery, p.PerPage+1, p.Offset())
+	tx, err := s.r.BeginTx(ctx, nil)
+	if err != nil {
+		return Page[HistoryEntry]{}, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, historyQuery, p.PerPage+1, p.Offset())
 	if err != nil {
 		return Page[HistoryEntry]{}, err
 	}
@@ -93,7 +100,6 @@ func (s *Store) History(ctx context.Context, p Paging) (Page[HistoryEntry], erro
 	}
 	rows.Close()
 
-	threshold := s.thresholds(ctx)
 	for i := range out {
 		e := &out[i]
 		var duration float64
@@ -103,8 +109,8 @@ func (s *Store) History(ctx context.Context, p Paging) (Page[HistoryEntry], erro
 		e.Finished = playedThrough(played{e.AnimeID, e.Position, duration, e.Watched, done[i]}, threshold)
 	}
 
-	total, err := s.countRows(ctx, `SELECT count(*) FROM playback p`+historyWhere)
-	if err != nil {
+	var total int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM playback p`+historyWhere).Scan(&total); err != nil {
 		return Page[HistoryEntry]{}, err
 	}
 	return NewPage(out, p, total), nil

@@ -9,20 +9,18 @@ import (
 	"yoru/internal/bt/types/infohash"
 )
 
-// Marshalled as binary by the UDP client, so be careful making changes.
 type AnnounceRequest struct {
 	InfoHash   infohash.T
 	PeerId     types.PeerID
 	Downloaded int64
-	Left       int64 // If less than 0, math.MaxInt64 will be used for HTTP trackers instead.
+	Left       int64
 	Uploaded   int64
-	// Optional: None for the regular announces.
-	Event     AnnounceEvent
-	IPAddress uint32
-	Key       int32
-	NumWant   int32 // How many peer addresses are desired. -1 for default.
-	Port      uint16
-} // 82 bytes
+	Event      AnnounceEvent
+	IPAddress  uint32
+	Key        int32
+	NumWant    int32
+	Port       uint16
+}
 
 type AnnounceEvent = shared.AnnounceEvent
 

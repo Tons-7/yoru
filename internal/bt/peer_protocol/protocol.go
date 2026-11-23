@@ -1,6 +1,7 @@
 package peer_protocol
 
 import (
+	"fmt"
 	"unsafe"
 )
 
@@ -14,7 +15,6 @@ func protocolBytes() []byte {
 
 type MessageType byte
 
-// golang.org/x/tools/cmd/stringer
 //go:generate stringer -type=MessageType
 
 func (mt MessageType) FastExtension() bool {
@@ -22,12 +22,14 @@ func (mt MessageType) FastExtension() bool {
 }
 
 func (mt *MessageType) UnmarshalBinary(b []byte) error {
+	if len(b) != 1 {
+		return fmt.Errorf("message type of %d bytes", len(b))
+	}
 	*mt = MessageType(b[0])
 	return nil
 }
 
 const (
-	// BEP 3
 	Choke         MessageType = 0
 	Unchoke       MessageType = 1
 	Interested    MessageType = 2
@@ -38,20 +40,16 @@ const (
 	Piece         MessageType = 7
 	Cancel        MessageType = 8
 
-	// BEP 5
 	Port MessageType = 9
 
-	// BEP 6 - Fast extension
-	Suggest     MessageType = 0x0d // 13
-	HaveAll     MessageType = 0x0e // 14
-	HaveNone    MessageType = 0x0f // 15
-	Reject      MessageType = 0x10 // 16
-	AllowedFast MessageType = 0x11 // 17
+	Suggest     MessageType = 0x0d
+	HaveAll     MessageType = 0x0e
+	HaveNone    MessageType = 0x0f
+	Reject      MessageType = 0x10
+	AllowedFast MessageType = 0x11
 
-	// BEP 10
 	Extended MessageType = 20
 
-	// BEP 52
 	HashRequest MessageType = 21
 	Hashes      MessageType = 22
 	HashReject  MessageType = 23

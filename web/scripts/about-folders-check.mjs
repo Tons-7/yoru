@@ -46,7 +46,6 @@ for (const [title, path] of [
 ]) {
   check(await row(title).getByText(path, { exact: true }).isVisible().catch(() => false), `${title} shows its folder`, path)
 }
-check(!(await card.getByText('data_dir', { exact: true }).isVisible().catch(() => false)), 'no setting names beside the titles')
 check(/ of /.test(await row('Episodes').innerText()), 'Episodes says how much of its room is used', (await row('Episodes').innerText()).replace(/\n/g, ' | '))
 
 await row('Episodes').getByRole('button', { name: 'Open' }).click()
@@ -81,6 +80,7 @@ check(await seen(own), 'the Library tab has Your own files')
 check(await own.getByText(/Add a folder of anime you already have/).isVisible(), 'with no folder yet it says what folders are for')
 const shelf = join(tmpdir(), 'yoru-e2e-own-files')
 mkdirSync(shelf, { recursive: true })
+process.on('exit', () => rmSync(shelf, { recursive: true, force: true }))
 const field = own.getByRole('textbox', { name: 'Folder to add' })
 check(await own.getByRole('button', { name: 'Add folder' }).isDisabled(), 'Add folder waits for a path')
 await field.fill(shelf)

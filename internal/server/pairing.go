@@ -73,7 +73,10 @@ func (s *Server) pairPage(w http.ResponseWriter, r *http.Request) {
 		secret := NewAccessToken()
 		p = &pairing{code: newPairCode(), name: deviceName(r.UserAgent()), addr: addr, created: now}
 		s.pairs[secret] = p
-		keepCookie(w, r, pairCookie, secret)
+		http.SetCookie(w, &http.Cookie{
+			Name: pairCookie, Value: secret, Path: "/",
+			MaxAge: int(pairFor / time.Second), HttpOnly: true, Secure: secureRequest(r), SameSite: http.SameSiteLaxMode,
+		})
 		s.log.Info("device asks to pair with a code", "device", p.name, "addr", addr)
 	}
 	code, name := "", ""
@@ -165,7 +168,8 @@ func (s *Server) pairApprove(w http.ResponseWriter, r *http.Request) {
 }
 
 func pairingPage(code, name string) string {
-	shown := `<p>Too many devices are waiting to pair. Try again in a few minutes.</p>`
+	shown := `<p>Too many devices are waiting to pair. Try again in a few minutes.</p>
+<button onclick="location.reload()" style="margin-top:1.5rem;min-height:44px;padding:0 1.25rem;border:0;border-radius:.5rem;background:#1e212a;color:#fff;font:inherit">Try again</button>`
 	if code != "" {
 		shown = `<p>On a phone or computer already using Yoru, open Settings, then Devices, and enter this code under
 Pair a device:</p><div class="code">` + code[:3] + "-" + code[3:] + `</div><p class="small">` + html.EscapeString(name) +

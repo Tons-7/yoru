@@ -1,5 +1,3 @@
-// unixzip writes a zip keeping Unix modes, which Compress-Archive drops (so it needed chmod); -app packs a Mac
-// build as Yoru.app. go run ./scripts/unixzip -out x.zip -exec yoru yoru=bin/yoru README.txt=README.txt
 package main
 
 import (
@@ -14,8 +12,6 @@ import (
 	"time"
 )
 
-// infoPlist: LSUIElement, as a server opening its own window would bounce in the Dock as not responding; no
-// version keys, as the in-app updater replaces only the program and they would go stale.
 const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -90,7 +86,6 @@ func main() {
 	}
 }
 
-// icns wraps a 512px PNG as the one image of an Apple icon file ("ic09"); macOS scales it for smaller sizes.
 func icns(png []byte) []byte {
 	var b bytes.Buffer
 	b.WriteString("icns")
@@ -109,7 +104,6 @@ func write(path string, entries []entry) error {
 	zw := zip.NewWriter(f)
 	for _, e := range entries {
 		h := &zip.FileHeader{Name: e.name, Method: zip.Deflate, Modified: time.Now()}
-		// SetMode marks the entry as made on Unix, which is what makes unzip and Archive Utility honour it.
 		h.SetMode(e.mode)
 		w, err := zw.CreateHeader(h)
 		if err != nil {

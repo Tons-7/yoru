@@ -11,45 +11,6 @@ import (
 	"time"
 )
 
-const feedXML = `<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:nyaa="https://feed.example/xmlns/nyaa">
-<channel>
-  <item>
-    <title>[SubsPlease] Sousou no Frieren - 10 (1080p) [7D35515E].mkv</title>
-    <link>https://feed.example/download/1.torrent</link>
-    <guid isPermaLink="true">https://feed.example/view/1</guid>
-    <pubDate>Thu, 06 Aug 2026 17:50:54 -0000</pubDate>
-    <nyaa:seeders>189</nyaa:seeders>
-    <nyaa:leechers>19</nyaa:leechers>
-    <nyaa:downloads>859</nyaa:downloads>
-    <nyaa:infoHash>8011219944FE0000000000000000000000012E9A</nyaa:infoHash>
-    <nyaa:categoryId>1_2</nyaa:categoryId>
-    <nyaa:category>Anime - English-translated</nyaa:category>
-    <nyaa:size>1.4 GiB</nyaa:size>
-    <nyaa:trusted>Yes</nyaa:trusted>
-    <nyaa:remake>No</nyaa:remake>
-  </item>
-  <item>
-    <title>[Group] Some Show - 01 (720p).mkv</title>
-    <guid isPermaLink="true">https://feed.example/view/2</guid>
-    <pubDate>Thu, 06 Aug 2026 12:00:00 -0000</pubDate>
-    <nyaa:seeders>3</nyaa:seeders>
-    <nyaa:leechers>1</nyaa:leechers>
-    <nyaa:downloads>7</nyaa:downloads>
-    <nyaa:infoHash>abcdef0000000000000000000000000000000001</nyaa:infoHash>
-    <nyaa:category>Anime - English-translated</nyaa:category>
-    <nyaa:size>512.0 MiB</nyaa:size>
-    <nyaa:trusted>No</nyaa:trusted>
-    <nyaa:remake>Yes</nyaa:remake>
-  </item>
-  <item>
-    <title>Entry with no hash</title>
-    <guid isPermaLink="true">https://feed.example/view/3</guid>
-    <nyaa:size>1.0 GiB</nyaa:size>
-  </item>
-</channel>
-</rss>`
-
 func testNyaa(t *testing.T, h http.HandlerFunc) *Nyaa {
 	t.Helper()
 	srv := httptest.NewServer(h)
@@ -57,67 +18,29 @@ func testNyaa(t *testing.T, h http.HandlerFunc) *Nyaa {
 	return NewNyaa(srv.URL, WithNyaaDelay(time.Nanosecond))
 }
 
-func TestNyaaLatestParsesFeed(t *testing.T) {
-	var got url.Values
+func TestNyaaWaitsAfterBeingToldToSlowDown(t *testing.T) {
+	calls := 0
 	n := testNyaa(t, func(w http.ResponseWriter, r *http.Request) {
-		got = r.URL.Query()
-		io.WriteString(w, feedXML)
+		calls++
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
 	})
-
-	results, err := n.Latest(context.Background(), Query{Text: "frieren", Filter: FilterTrusted})
-	if err != nil {
-		t.Fatal(err)
+	for range 3 {
+		if _, err := n.Search(context.Background(), Query{Text: "frieren"}); err == nil || !strings.HasPrefix(err.Error(), "HTTP 429") {
+			t.Fatalf("err = %v, want a 429", err)
+		}
 	}
-
-	// The entry without an infohash cannot be downloaded, so it is dropped.
-	if len(results) != 2 {
-		t.Fatalf("got %d results, want 2", len(results))
-	}
-
-	first := results[0]
-	if first.Seeders != 189 || first.Leechers != 19 || first.Downloads != 859 {
-		t.Errorf("peers = %+v", first)
-	}
-	if first.Size != 1503238553 {
-		t.Errorf("size = %d, want 1.4 GiB in bytes", first.Size)
-	}
-	if !first.Trusted || first.Remake {
-		t.Errorf("trusted=%v remake=%v", first.Trusted, first.Remake)
-	}
-	if first.InfoHash != strings.ToLower(first.InfoHash) {
-		t.Errorf("infohash not normalised: %q", first.InfoHash)
-	}
-	if first.Published.IsZero() {
-		t.Error("pubDate not parsed")
-	}
-	if first.Indexer != "nyaa" {
-		t.Errorf("indexer = %q", first.Indexer)
-	}
-
-	if got.Get("q") != "frieren" {
-		t.Errorf("q = %q", got.Get("q"))
-	}
-	if got.Get("f") != "2" {
-		t.Errorf("filter = %q, want trusted-only", got.Get("f"))
-	}
-	// English-translated guarantees subtitles exist; Raw has none.
-	if got.Get("c") != CategoryEnglishSubbed {
-		t.Errorf("category = %q, want %q", got.Get("c"), CategoryEnglishSubbed)
-	}
-	if got.Get("page") != "rss" {
-		t.Errorf("page = %q", got.Get("page"))
+	if calls != 1 {
+		t.Errorf("asked the site %d times while it said to wait", calls)
 	}
 }
 
-func TestNyaaLatestLimit(t *testing.T) {
-	n := testNyaa(t, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, feedXML) })
-
-	results, err := n.Latest(context.Background(), Query{Text: "x", Limit: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("got %d, want 1", len(results))
+func TestNyaaSaysWhenAPageIsNotAListing(t *testing.T) {
+	n := testNyaa(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("<html><body><h1>Checking your browser</h1></body></html>"))
+	})
+	if _, err := n.Search(context.Background(), Query{Text: "frieren"}); err == nil {
+		t.Fatal("an interstitial page read as no results")
 	}
 }
 
@@ -131,17 +54,16 @@ func TestNyaaSearchErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("malformed xml", func(t *testing.T) {
-		n := testNyaa(t, func(w http.ResponseWriter, r *http.Request) {
-			io.WriteString(w, "<rss><channel><item>")
-		})
-		if _, err := n.Latest(context.Background(), Query{Text: "x"}); err == nil {
-			t.Fatal("expected a parse error")
+	t.Run("empty query", func(t *testing.T) {
+		calls := 0
+		n := testNyaa(t, func(w http.ResponseWriter, r *http.Request) { calls++ })
+		if _, err := n.Search(context.Background(), Query{Text: "  "}); err == nil || calls != 0 {
+			t.Fatalf("err = %v after %d calls, want a refusal without asking the site", err, calls)
 		}
 	})
 
 	t.Run("cancelled context", func(t *testing.T) {
-		n := testNyaa(t, func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, feedXML) })
+		n := testNyaa(t, func(w http.ResponseWriter, r *http.Request) {})
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		if _, err := n.Search(ctx, Query{Text: "x"}); err == nil {
@@ -177,7 +99,6 @@ func TestParseSize(t *testing.T) {
 	}
 }
 
-// The RSS feed carries an infohash but no magnet link, so it has to be rebuilt with Nyaa's own tracker list.
 func TestMagnet(t *testing.T) {
 	tr := Torrent{Title: "[Group] Show - 01 [1080p]", InfoHash: "abc123"}
 	magnet := tr.Magnet()
@@ -196,7 +117,6 @@ func TestMagnet(t *testing.T) {
 	}
 }
 
-// A release's own trackers come first, where most of its swarm announces; Nyaa's always (its feed names none).
 func TestMagnetKeepsTheReleasesOwnTrackers(t *testing.T) {
 	own := "udp://tracker.example:1337/announce"
 	got := trackersOf(Torrent{InfoHash: "abc", Trackers: []string{own, trackers[1]}}.Magnet())
@@ -207,7 +127,6 @@ func TestMagnetKeepsTheReleasesOwnTrackers(t *testing.T) {
 	if len(nyaa) == 0 || nyaa[0] != nyaaTracker {
 		t.Errorf("a Nyaa release's trackers %v; want Nyaa's own first", nyaa)
 	}
-	// A raw % in the name fails the query's parse; the trackers beside it still count.
 	if got := trackersOf("magnet:?xt=urn:btih:abc&dn=100%+Ep&tr=" + url.QueryEscape(own)); len(got) != 1 || got[0] != own {
 		t.Errorf("trackers %v beside a bad name; want %s", got, own)
 	}
@@ -243,13 +162,11 @@ func TestMultiDedupesByInfoHash(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("got %d results, want 3 after dedupe", len(got))
 	}
-	// Case differs between indexers; the healthier peer count wins.
 	if got[0].Seeders != 50 {
 		t.Errorf("seeders = %d, want the higher count kept", got[0].Seeders)
 	}
 }
 
-// Nyaa's counts win where both have the torrent; TokyoTosho's silence stays silence where only it does.
 func TestMultiPrefersCountedPeersOverNone(t *testing.T) {
 	m := Multi{Sources: []Source{
 		fakeSource{name: "tokyotosho", results: []Torrent{
@@ -275,7 +192,6 @@ func TestMultiPrefersCountedPeersOverNone(t *testing.T) {
 	}
 }
 
-// The reverse order must not let an uncounted record erase a real count.
 func TestMultiKeepsCountsWhenTheSecondSourceHasNone(t *testing.T) {
 	m := Multi{Sources: []Source{
 		fakeSource{name: "nyaa", results: []Torrent{
@@ -308,7 +224,6 @@ func TestMultiToleratesFailingSource(t *testing.T) {
 	}
 }
 
-// One site empty and another down is still an answer: nothing yet.
 func TestMultiEmptyAndFailingIsNotAnError(t *testing.T) {
 	m := Multi{Sources: []Source{
 		fakeSource{name: "empty"},
@@ -319,7 +234,6 @@ func TestMultiEmptyAndFailingIsNotAnError(t *testing.T) {
 	}
 }
 
-// Either site's trust or remake flag stands, whichever record is kept.
 func TestMultiMergesFlags(t *testing.T) {
 	m := Multi{Sources: []Source{
 		fakeSource{name: "a", results: []Torrent{{InfoHash: "aaa"}}},

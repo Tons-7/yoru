@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// A site that is down reads as one line, not each query's raw error.
 func TestSearchFailureReadsAsOneLinePerSite(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -32,7 +31,7 @@ func TestSearchFailureReadsAsOneLinePerSite(t *testing.T) {
 	if got == nil {
 		t.Fatal("no error")
 	}
-	if want := "couldn't search for releases: nyaa refused the connection; tokyotosho: HTTP 503"; got.Error() != want {
+	if want := "couldn't search for releases: nyaa refused the connection; tokyotosho is having trouble right now"; got.Error() != want {
 		t.Errorf("got  %q\nwant %q", got.Error(), want)
 	}
 	if strings.Contains(got.Error(), addr) {

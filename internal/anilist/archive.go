@@ -42,11 +42,12 @@ func (c *Client) isDown() bool {
 	return time.Now().Before(c.downUntil)
 }
 
-func archiveKey(body []byte, authed bool) string {
+func archiveKey(body []byte, account string) string {
 	sum := sha256.New()
 	sum.Write(body)
-	if authed {
+	if account != "" {
 		sum.Write([]byte{1})
+		sum.Write([]byte(account))
 	}
 	return hex.EncodeToString(sum.Sum(nil))
 }
@@ -54,7 +55,7 @@ func archiveKey(body []byte, authed bool) string {
 func Unreachable(ctx context.Context, err error) bool { return unreachable(ctx, err) }
 
 func unreachable(ctx context.Context, err error) bool {
-	if err == nil || ctx.Err() != nil {
+	if err == nil || ctx.Err() != nil || errors.Is(err, ErrBusy) {
 		return false
 	}
 	if gql, ok := errors.AsType[Errors](err); ok {
@@ -169,8 +170,17 @@ const recheckQuery = `query Recheck { Page(perPage: 1) { pageInfo { total } } }`
 
 func (c *Client) Recheck(ctx context.Context) error {
 	c.mu.Lock()
+	was := c.downUntil
 	c.downUntil = time.Time{}
 	c.mu.Unlock()
 	var out struct{}
-	return c.QueryFresh(ctx, recheckQuery, nil, &out)
+	err := c.QueryFresh(ctx, recheckQuery, nil, &out)
+	if err != nil {
+		c.mu.Lock()
+		if c.downUntil.Before(was) {
+			c.downUntil = was
+		}
+		c.mu.Unlock()
+	}
+	return err
 }

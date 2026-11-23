@@ -40,42 +40,37 @@ func takesGzip(r *http.Request) bool {
 	return false
 }
 
-type packedFile struct {
-	once sync.Once
-	body []byte
-}
-
 type packedFiles struct {
 	assets fs.FS
 	mu     sync.Mutex
-	files  map[string]*packedFile
+	files  map[string]func() []byte
 }
 
 func (p *packedFiles) get(name string) []byte {
 	p.mu.Lock()
 	if p.files == nil {
-		p.files = map[string]*packedFile{}
+		p.files = map[string]func() []byte{}
 	}
 	f := p.files[name]
 	if f == nil {
-		f = &packedFile{}
+		f = sync.OnceValue(func() []byte {
+			raw, err := fs.ReadFile(p.assets, name)
+			if err != nil || len(raw) < gzipFrom {
+				return nil
+			}
+			var out bytes.Buffer
+			zw, _ := gzip.NewWriterLevel(&out, gzip.BestCompression)
+			zw.Write(raw)
+			zw.Close()
+			if out.Len() < len(raw) {
+				return out.Bytes()
+			}
+			return nil
+		})
 		p.files[name] = f
 	}
 	p.mu.Unlock()
-	f.once.Do(func() {
-		raw, err := fs.ReadFile(p.assets, name)
-		if err != nil || len(raw) < gzipFrom {
-			return
-		}
-		var out bytes.Buffer
-		zw, _ := gzip.NewWriterLevel(&out, gzip.BestCompression)
-		zw.Write(raw)
-		zw.Close()
-		if out.Len() < len(raw) {
-			f.body = out.Bytes()
-		}
-	})
-	return f.body
+	return f()
 }
 
 func (p *packedFiles) serve(w http.ResponseWriter, r *http.Request, name string) bool {

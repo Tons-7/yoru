@@ -1,4 +1,3 @@
-// A show's studio (Chainsaw Man: MAPPA) links to its other work; Browse finds studios by name.
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -41,7 +40,6 @@ check(
 )
 await page.screenshot({ path: `${SHOTS}/studio-browse.png` })
 
-// Clearing it, then finding a studio by name.
 await page.getByRole('button', { name: /Remove Studio/ }).click()
 check(await until(async () => !page.url().includes('studio=')), 'clearing the studio drops it from the URL')
 await page.getByRole('button', { name: 'Studio', exact: true }).click()
@@ -52,7 +50,6 @@ await option.first().click()
 check(await until(async () => page.url().includes('studioName=ufotable')), 'picking it filters Browse', page.url())
 check(await until(async () => (await cards.count()) > 3), 'its work is listed', `${await cards.count()} cards`)
 
-// Narrowing a studio's list by format happens on the server.
 const res = await (await fetch(`${BASE}/api/browse?studio=569&formats=MOVIE`)).json()
 check(
   (res.items ?? []).length > 0 && res.items.every((i) => i.format === 'MOVIE'),

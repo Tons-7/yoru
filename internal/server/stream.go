@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/text/unicode/norm"
+
 	"yoru/internal/library"
 	"yoru/internal/proc"
 	"yoru/internal/sound"
@@ -66,7 +68,7 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 
 	id := sessionID(animeID, episode)
 	if s.playback != nil && s.engineSource(source) {
-		s.playback.SetStage(animeID, episode, library.Stage{Step: "start"})
+		s.playback.EnterStage(animeID, episode, library.Stage{Step: "start"})
 		defer s.playback.ClearStage(animeID, episode)
 	}
 	want := s.streamWant(r.Context(), animeID, r.URL.Query().Get("quality"))
@@ -82,10 +84,20 @@ func (s *Server) streamOpen(w http.ResponseWriter, r *http.Request) {
 	}
 	id = session.ID
 	if r.Context().Err() != nil {
+		if s.streams.Close(id) {
+			s.downloader.Release(id)
+			s.SessionGone(id)
+			if animeID, episode, ok := parseSessionID(id); ok && s.playback != nil {
+				s.leftEpisode(context.WithoutCancel(r.Context()), id, animeID, episode)
+			}
+		}
 		if s.playback != nil {
 			s.playback.ResumeYielded(context.WithoutCancel(r.Context()))
 		}
 		return
+	}
+	if again := r.URL.Query().Get("again"); again != "" && again == session.ID && session.Holders() > 1 {
+		s.streams.Close(session.ID)
 	}
 
 	if rec, found, err := s.store.TorrentForEpisode(r.Context(), animeID, strconv.Itoa(episode)); err == nil && found {
@@ -217,7 +229,7 @@ func sidecars(video string) []sidecar {
 		return nil
 	}
 	dir, file := filepath.Split(video)
-	stem := strings.ToLower(strings.TrimSuffix(file, filepath.Ext(file)))
+	stem := norm.NFC.String(strings.ToLower(strings.TrimSuffix(file, filepath.Ext(file))))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -228,7 +240,7 @@ func sidecars(video string) []sidecar {
 		if codec == "" || e.IsDir() {
 			continue
 		}
-		rest, ok := strings.CutPrefix(strings.ToLower(strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))), stem)
+		rest, ok := strings.CutPrefix(norm.NFC.String(strings.ToLower(strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())))), stem)
 		if !ok || (rest != "" && rest[0] != '.') {
 			continue
 		}
@@ -419,6 +431,7 @@ func (s *Server) streamInit(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	session.ServedInit()
 	serveFile(w, r, path, "video/mp4")
 }
 
@@ -451,6 +464,10 @@ func (s *Server) streamSegment(w http.ResponseWriter, r *http.Request) {
 		if !unconvertible(w, err) {
 			http.Error(w, "segment unavailable", http.StatusGatewayTimeout)
 		}
+		return
+	}
+	if session.InitStale() {
+		send(w, http.StatusConflict, map[string]any{"error": "the stream restarted", "code": "reopen"})
 		return
 	}
 	seg, err := session.OpenSegment(n)
@@ -567,7 +584,7 @@ func (s *Server) streamSubtitle(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "extract subtitle", fmt.Errorf("track %d: %w", index, readErr))
 		return
 	}
-	w.Header().Set("X-Yoru-Complete", strconv.FormatBool(complete))
+	w.Header().Set("X-Yoru-Complete", strconv.FormatBool(complete && s.subtitles.Whole(path)))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(track)
@@ -589,8 +606,10 @@ func (s *Server) streamPictureSubtitle(w http.ResponseWriter, r *http.Request) {
 	}
 	path := filepath.Join(session.Dir(), fmt.Sprintf("pgs-%d.sup", index))
 	err = s.buildOnce(path, func(part string) error {
-		cmd := proc.Background(exec.CommandContext(r.Context(), s.cfg.Tool("ffmpeg"), "-hide_banner", "-loglevel", "error",
-			"-y", "-i", s.readable(r.Context(), session), "-map", fmt.Sprintf("0:%d", index), "-c:s", "copy", "-f", "sup", part))
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
+		defer cancel()
+		cmd := proc.Background(exec.CommandContext(ctx, s.cfg.Tool("ffmpeg"), "-hide_banner", "-loglevel", "error",
+			"-y", "-i", s.readable(ctx, session), "-map", fmt.Sprintf("0:%d", index), "-c:s", "copy", "-f", "sup", part))
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("%v: %s", err, bytes.TrimSpace(out))
 		}
@@ -858,7 +877,7 @@ func (s *Server) SessionGone(id string) {
 	}
 	s.building.Range(func(path, mu any) bool {
 		if own(path.(string)) && mu.(*sync.Mutex).TryLock() {
-			s.building.Delete(path)
+			s.building.CompareAndDelete(path, mu)
 			mu.(*sync.Mutex).Unlock()
 		}
 		return true

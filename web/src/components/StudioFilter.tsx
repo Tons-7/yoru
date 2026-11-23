@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, query } from '../lib/api'
 import { cx } from '../lib/format'
+import { buttonClass } from '../lib/ui'
 import { TextInput } from './ui'
 import { useAnchorBox, useDebounced, useDismiss, useModalFocus } from '../lib/hooks'
 
@@ -84,7 +85,12 @@ export function StudioFilter({
               ) : found.isPending ? (
                 <li className="px-2 py-1.5 text-xs text-base-500">Searching…</li>
               ) : found.isError ? (
-                <li className="px-2 py-1.5 text-xs text-recap">Studio search is unavailable right now</li>
+                <li className="flex items-center gap-3 px-2 py-1.5 text-xs text-red-300">
+                  Studio search didn't answer.
+                  <button type="button" onClick={() => found.refetch()} className={buttonClass('secondary', 'sm')}>
+                    Try again
+                  </button>
+                </li>
               ) : (found.data?.studios ?? []).length === 0 ? (
                 <li className="px-2 py-1.5 text-xs text-base-500">No studio by that name</li>
               ) : (

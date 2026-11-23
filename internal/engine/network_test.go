@@ -16,7 +16,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// A new IPv6 privacy address beside the one in use changes nothing; the one in use going does.
 func TestKeepsTheBoundAddress(t *testing.T) {
 	v4, v6, temp := net.ParseIP("10.2.0.2").To4(), net.ParseIP("2001:db8::2"), net.ParseIP("2001:db8::99")
 	bound := bindAddrs{v4: v4, v6: v6}
@@ -35,7 +34,6 @@ func TestKeepsTheBoundAddress(t *testing.T) {
 	}
 }
 
-// fakeDNS answers every A query with answer and reports where each query came from.
 func fakeDNS(t *testing.T, answer net.IP) (port string, from <-chan net.Addr) {
 	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
@@ -80,7 +78,6 @@ func fakeDNS(t *testing.T, answer net.IP) (port string, from <-chan net.Addr) {
 	return port, seen
 }
 
-// With a network chosen, tracker and DHT router names are asked of its DNS server, from its address.
 func TestBoundLookupsAskTheNetworksDNS(t *testing.T) {
 	port, from := fakeDNS(t, net.IPv4(10, 9, 8, 7))
 	old := dnsPort
@@ -109,7 +106,6 @@ func TestBoundLookupsAskTheNetworksDNS(t *testing.T) {
 		}
 	}
 
-	// An adapter given no DNS servers leaves names to the system.
 	cfg = bt.NewDefaultClientConfig()
 	applyBinding(cfg, bindAddrs{v4: vpn.v4})
 	if cfg.TrackerResolver != nil {
@@ -117,7 +113,6 @@ func TestBoundLookupsAskTheNetworksDNS(t *testing.T) {
 	}
 }
 
-// With a network chosen but nothing asked of torrents yet, the client isn't started, nor said to be waiting.
 func TestUnstartedEngineLeftAlone(t *testing.T) {
 	was := networkEvery
 	networkEvery = 20 * time.Millisecond
@@ -141,8 +136,6 @@ func TestUnstartedEngineLeftAlone(t *testing.T) {
 	}
 }
 
-// Torrents kept to an adapter leave only from its address, stop when it drops (nothing over the open line), and
-// carry on under the same id when it's back.
 func TestKeptToAnAdapter(t *testing.T) {
 	was := networkEvery
 	networkEvery = 100 * time.Millisecond
@@ -152,7 +145,6 @@ func TestKeptToAnAdapter(t *testing.T) {
 	var useful atomic.Int64
 	var up atomic.Bool
 	up.Store(true)
-	// A second loopback address stands in for the VPN's: the seeder sees which one a connection comes from.
 	vpn := bindAddrs{v4: net.IPv4(127, 0, 0, 2).To4()}
 	e, id := seedEngine(t, mi, seeds, nil, func(cfg *bt.ClientConfig) {
 		cfg.Callbacks.ReceivedUsefulData = append(cfg.Callbacks.ReceivedUsefulData, func(ev bt.ReceivedUsefulDataEvent) {
@@ -194,7 +186,6 @@ func TestKeptToAnAdapter(t *testing.T) {
 		t.Errorf("network = %+v", n)
 	}
 
-	// The VPN drops: everything stops, and nothing goes out another way.
 	up.Store(false)
 	until("torrents to wait for the network", 3*time.Second, func() bool { return e.Network().Waiting })
 	until("the seeder to lose us", 3*time.Second, func() bool { return len(peersFrom()) == 0 })
@@ -210,7 +201,6 @@ func TestKeptToAnAdapter(t *testing.T) {
 		t.Errorf("listing while down: %v, want it to say torrents wait for vpn", err)
 	}
 
-	// Back: the same torrent, by the same id, finishes.
 	up.Store(true)
 	until("the client to come back", 3*time.Second, func() bool { return !e.Network().Waiting })
 	until("the episode to finish", 30*time.Second, func() bool {
@@ -224,7 +214,6 @@ func TestKeptToAnAdapter(t *testing.T) {
 	}
 }
 
-// Wi-Fi change: connections on the old address go now; the new address redials (regroup set a minute off).
 func TestNetworkChangeRedialsAtOnce(t *testing.T) {
 	was, group, addrs, route := networkEvery, regroupAfter, localAddrs, routeSource
 	networkEvery, regroupAfter = 100*time.Millisecond, time.Minute
@@ -238,7 +227,6 @@ func TestNetworkChangeRedialsAtOnce(t *testing.T) {
 	}
 	set("127.0.0.1", "10.9.9.9")
 	localAddrs = func() map[string]bool { return *machine.Load() }
-	// The peer is reached from 127.0.0.1, standing in for the Wi-Fi's address, while the machine has it.
 	routeSource = func(net.IP) net.IP {
 		if (*machine.Load())["127.0.0.1"] {
 			return net.IPv4(127, 0, 0, 1)
@@ -267,16 +255,13 @@ func TestNetworkChangeRedialsAtOnce(t *testing.T) {
 		}
 	}
 	until("the download to start", 10*time.Second, func() bool { return useful.Load() > 1<<20 })
-	// Remembered by the janitor, as a real swarm's peers are.
 	until("the peer to be remembered", 3*time.Second, func() bool {
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		return len(e.known[en.t.InfoHash()]) > 0
 	})
 
-	// The address in use goes and none comes: dropped, and nothing to redial on yet.
 	set("10.9.9.9")
-	// Closed, a connection's bytes stop at once, though bt lists a uTP one until its reader ends.
 	quiet := func() bool {
 		before := useful.Load()
 		time.Sleep(400 * time.Millisecond)
@@ -289,7 +274,6 @@ func TestNetworkChangeRedialsAtOnce(t *testing.T) {
 	until("the download to carry on", 3*time.Second, func() bool { return useful.Load() > stopped+(256<<10) })
 }
 
-// A change elsewhere (a Docker adapter) leaves working connections alone: here loopback, routed for real.
 func TestUnrelatedAddressChangeLeavesPeersAlone(t *testing.T) {
 	mi, seeds, _ := bigFileSeeders(t, 16<<20, 256<<10, 1<<20)
 	e, id := seedEngine(t, mi, seeds, nil, func(*bt.ClientConfig) {})

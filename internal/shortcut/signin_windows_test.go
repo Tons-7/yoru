@@ -8,7 +8,6 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// On, off, and off when Task Manager disabled it; in a key of the test's own, never the real startup list.
 func TestAtSignInFollowsTheStartupList(t *testing.T) {
 	base := fmt.Sprintf(`Software\yoru-test-%d`, os.Getpid())
 	oldRun, oldApproved := runKey, approvedKey

@@ -85,8 +85,8 @@ func TestEpisodesAirAtBroadcastTime(t *testing.T) {
 	}
 	want := map[int]string{
 		9:  "2026-10-19T14:00:00Z",
-		10: "2026-10-26T00:00:00Z",
-		11: "2026-11-03T00:00:00Z",
+		10: "2026-10-26T15:00:00Z",
+		11: "2026-11-03T15:00:00Z",
 	}
 	for _, e := range got.Episodes {
 		if at := time.Unix(e.AirDate, 0).UTC().Format(time.RFC3339); at != want[e.Number] {
@@ -268,7 +268,7 @@ func TestListingReadsTitlesAndDates(t *testing.T) {
 	if first.Number != 1 || first.TitleEN != "Ilse's Notebook" || first.TitleJA != "イルゼの手帳" || first.Overview != "A scout writes." {
 		t.Errorf("episode 1 = %+v", first)
 	}
-	if first.Runtime != 23 || first.AirDate != 1386547200 {
+	if first.Runtime != 23 || first.AirDate != 1386547200+15*3600 {
 		t.Errorf("runtime %d, air date %d", first.Runtime, first.AirDate)
 	}
 	if second := got.Episodes[1]; second.Number != 2 || second.TitleEN != "" || second.AirDate != 0 {

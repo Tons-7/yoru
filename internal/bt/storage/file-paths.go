@@ -8,19 +8,15 @@ import (
 	"yoru/internal/bt/metainfo"
 )
 
-// Determines the filepath to be used for each file in a torrent.
 type FilePathMaker func(opts FilePathMakerOpts) string
 
-// Determines the directory for a given torrent within a storage client.
 type TorrentDirFilePathMaker func(baseDir string, info *metainfo.Info, infoHash metainfo.Hash) string
 
-// Info passed to a FilePathMaker.
 type FilePathMakerOpts struct {
 	Info *metainfo.Info
 	File *metainfo.FileInfo
 }
 
-// defaultPathMaker just returns the storage client's base directory.
 func defaultPathMaker(baseDir string, info *metainfo.Info, infoHash metainfo.Hash) string {
 	return baseDir
 }

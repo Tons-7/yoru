@@ -1,6 +1,8 @@
 package metainfo
 
 import (
+	"errors"
+	"fmt"
 	"iter"
 	"maps"
 	"slices"
@@ -18,35 +20,61 @@ type FileTreeFile struct {
 	PiecesRoot string `bencode:"pieces root"`
 }
 
-// The fields here don't need bencode tags as the marshalling is done manually.
 type FileTree struct {
 	File FileTreeFile
 	Dir  map[string]FileTree
 }
 
-func (ft *FileTree) UnmarshalBencode(bytes []byte) (err error) {
-	var dir map[string]bencode.Bytes
-	err = bencode.Unmarshal(bytes, &dir)
-	if err != nil {
-		return
+const maxFileTreeDepth = 64
+
+func (ft *FileTree) UnmarshalBencode(bytes []byte) error {
+	var v any
+	if err := bencode.Unmarshal(bytes, &v); err != nil {
+		return err
 	}
-	if propBytes, ok := dir[""]; ok {
-		err = bencode.Unmarshal(propBytes, &ft.File)
-		if err != nil {
-			return
+	return ft.fromValue(v, 0)
+}
+
+func (ft *FileTree) fromValue(v any, depth int) error {
+	if depth > maxFileTreeDepth {
+		return errors.New("file tree is nested too deeply")
+	}
+	dir, ok := v.(map[string]any)
+	if !ok {
+		return fmt.Errorf("file tree entry is a %T, not a dict", v)
+	}
+	if props, ok := dir[FileTreePropertiesKey]; ok {
+		file, ok := props.(map[string]any)
+		if !ok {
+			return fmt.Errorf("file properties are a %T, not a dict", props)
+		}
+		if l, ok := file["length"]; ok {
+			n, ok := l.(int64)
+			if !ok {
+				return fmt.Errorf("file length is a %T, not an integer", l)
+			}
+			ft.File.Length = n
+		}
+		if r, ok := file["pieces root"]; ok {
+			s, ok := r.(string)
+			if !ok {
+				return fmt.Errorf("pieces root is a %T, not a string", r)
+			}
+			ft.File.PiecesRoot = s
 		}
 	}
-	delete(dir, "")
 	g.MakeMapWithCap(&ft.Dir, len(dir))
-	for key, bytes := range dir {
+	for key, child := range dir {
+		if key == FileTreePropertiesKey {
+			continue
+		}
 		var sub FileTree
-		err = sub.UnmarshalBencode(bytes)
-		if err != nil {
-			return
+		if err := sub.fromValue(child, depth+1); err != nil {
+			return err
 		}
 		ft.Dir[key] = sub
 	}
-	return
+	return nil
 }
 
 var _ bencode.Unmarshaler = (*FileTree)(nil)
@@ -55,9 +83,6 @@ func (ft *FileTree) MarshalBencode() (bytes []byte, err error) {
 	if ft.IsDir() {
 		dir := make(map[string]bencode.Bytes, len(ft.Dir))
 		for _, key := range ft.orderedKeys() {
-			if key == FileTreePropertiesKey {
-				continue
-			}
 			sub := g.MapMustGet(ft.Dir, key)
 			subBytes, err := sub.MarshalBencode()
 			if err != nil {
@@ -80,12 +105,8 @@ func (ft *FileTree) MarshalBencode() (bytes []byte, err error) {
 
 var _ bencode.Marshaler = (*FileTree)(nil)
 
-func (ft *FileTree) NumEntries() (num int) {
-	num = len(ft.Dir)
-	if g.MapContains(ft.Dir, FileTreePropertiesKey) {
-		num--
-	}
-	return
+func (ft *FileTree) NumEntries() int {
+	return len(ft.Dir)
 }
 
 func (ft *FileTree) IsDir() bool {
@@ -109,9 +130,6 @@ func (ft *FileTree) upvertedFilesInner(
 	return func(yield func(FileInfo) bool) {
 		if ft.IsDir() {
 			for _, key := range ft.orderedKeys() {
-				if key == FileTreePropertiesKey {
-					continue
-				}
 				sub := g.MapMustGet(ft.Dir, key)
 				for fi := range sub.upvertedFilesInner(pieceLength, append(path, key), offset) {
 					if !yield(fi) {
@@ -121,14 +139,12 @@ func (ft *FileTree) upvertedFilesInner(
 			}
 		} else {
 			yield(FileInfo{
-				Length: ft.File.Length,
-				Path:   append([]string(nil), path...),
-				// BEP 52 requires paths be UTF-8 if possible.
+				Length:        ft.File.Length,
+				Path:          append([]string(nil), path...),
 				PathUtf8:      append([]string(nil), path...),
 				PiecesRoot:    ft.PiecesRootAsByteArray(),
 				TorrentOffset: *offset,
 			})
-			// v2 files are piece aligned. This bumps up the offset to the next piece boundary.
 			*offset += (ft.File.Length + pieceLength - 1) / pieceLength * pieceLength
 		}
 
@@ -138,9 +154,6 @@ func (ft *FileTree) upvertedFilesInner(
 func (ft *FileTree) Walk(path []string, f func(path []string, ft *FileTree)) {
 	f(path, ft)
 	for key, sub := range ft.Dir {
-		if key == FileTreePropertiesKey {
-			continue
-		}
 		sub.Walk(append(path, key), f)
 	}
 }
@@ -151,7 +164,6 @@ func (ft *FileTree) PiecesRootAsByteArray() (ret g.Option[infohash_v2.T]) {
 	}
 	n := copy(ret.Value[:], ft.File.PiecesRoot)
 	if n != 32 {
-		// Must be 32 bytes for meta version 2 and non-empty files. See BEP 52.
 		panic(n)
 	}
 	ret.Ok = true

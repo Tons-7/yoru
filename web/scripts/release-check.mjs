@@ -21,10 +21,11 @@ const CHECKS = [
   ['about-folders-check.mjs'],
   ['alerts-check.mjs'],
   ['avatar-check.mjs'],
-  ['anime4k-tiers-check.mjs', {}, ALONE],
+  ['anime4k-tiers-check.mjs', { HEADLESS: '1' }, ALONE],
   ['autodelete-check.mjs', { YORU_EXTRA_CONFIG: '' }, ALONE],
   ['autonext-seek-check.mjs'],
   ['backup-check.mjs'],
+  ['screenshot-check.mjs'],
   ['browse-filters-check.mjs', {}, ALONE],
   ['browse-paging-check.mjs', {}, ALONE],
   ['cast-check.mjs'],
@@ -89,17 +90,20 @@ const CHECKS = [
   ['wifi-drop-check.mjs'],
   ['exit-log-check.mjs'],
   ['sound-check.mjs'],
+  ['access-approval-check.mjs', { YORU_TEST_CERT: 'phone.test' }, ALONE],
+
+  ['new-features-check.mjs'],
 ]
 
 const only = process.argv.slice(2)
 const checks = only.length ? only.map((name) => CHECKS.find(([c]) => c === name) ?? [name]) : CHECKS
-const LANES = Number(process.env.LANES ?? 4)
+const LANES = Math.min(Number(process.env.LANES ?? 4), 5)
 const failed = []
 
-const step = (name, cmd, cwd) =>
+const step = (name, cmd, cwd, env = {}) =>
   new Promise((done) => {
     console.log(`\n▶ ${name}`)
-    const child = spawn(cmd, [], { cwd, shell: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(cmd, [], { cwd, shell: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } })
     const log = createWriteStream(join(logs, `${name.replaceAll(' ', '-')}.log`))
     for (const out of [child.stdout, child.stderr]) {
       out.on('data', (chunk) => {
@@ -117,9 +121,10 @@ const step = (name, cmd, cwd) =>
 function runCheck([name, env = {}], port) {
   return new Promise((done) => {
     const started = Date.now()
+    const { BIN_ONLY: _bin, YORU_ANIME: _anime, YORU_EXTRA_CONFIG: _config, ...shell } = process.env
     const child = spawn(process.execPath, [join(scriptDir, 'run-player-check.mjs'), name], {
       cwd: webDir,
-      env: { ...process.env, ...env, PORT: String(port), SKIP_BUILD: '1' },
+      env: { ...shell, ...env, PORT: String(port), SKIP_BUILD: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const log = createWriteStream(join(logs, name.replace(/\.mjs$/, '.log')))
@@ -140,16 +145,22 @@ mkdirSync(logs, { recursive: true })
 if (!only.length && process.env.SKIP_GO !== '1') (await step('go vet', 'go vet ./...', repo)) && (await step('go test', 'go test ./...', repo))
 if (!only.length) await step('format helpers', 'node scripts/format-check.mjs', webDir)
 if (!only.length) await step('release notes', 'node scripts/notes-check.mjs', webDir)
+if (!only.length) await step('library text', 'node scripts/library-text-check.mjs', webDir)
 
 let built = process.env.SKIP_BUILD === '1'
 if (!built) {
   const exe = join(tmpdir(), 'yoru-e2e-bin', process.platform === 'win32' ? 'yoru.exe' : 'yoru')
   const gui = process.platform === 'win32' ? '-ldflags "-H windowsgui" ' : ''
-  built = (await step('web build', 'npm run build', webDir)) && (await step('server build', `go build ${gui}-o "${exe}" ./cmd/yoru`, repo))
+  built = (await step('web build', 'pnpm run build', webDir)) && (await step('server build', `go build ${gui}-o "${exe}" ./cmd/yoru`, repo))
 }
 
-if (built && !only.length) await step('self-update', 'node scripts/update-check.mjs', webDir)
-if (built && !only.length) await step('setup guide', 'node scripts/setup-check.mjs', webDir)
+if (built && !only.length && process.platform === 'win32') await step('self-update', 'node scripts/update-check.mjs', webDir)
+if (built && !only.length && process.platform !== 'win32') console.log('\n▶ self-update: skipped, its check builds Windows programs')
+if (built && !only.length) await step('setup guide', 'node scripts/setup-check.mjs', webDir, { SKIP_BUILD: '1' })
+if (built && !only.length) {
+  const exe = join(tmpdir(), 'yoru-e2e-bin', process.platform === 'win32' ? 'yoru.exe' : 'yoru')
+  await step('custom folders', `node scripts/folders-config-check.mjs`, webDir, { YORU_EXE: exe })
+}
 
 if (built) {
   console.log(`\n▶ ${checks.length} checks (logs: ${logs})`)
@@ -161,5 +172,6 @@ if (built) {
   await Promise.all([lane(alone, 4400), ...Array.from({ length: LANES }, (_, i) => lane(rest, 4410 + 10 * i))])
 }
 
+if (!only.length) console.log('\nnot gated here: smooth-check.mjs and subs-sync-check.mjs (need a real window; run them headed by hand)')
 console.log(failed.length ? `\n✗ failed: ${failed.join(', ')}` : '\n✓ all passed')
 process.exitCode = failed.length ? 1 : 0

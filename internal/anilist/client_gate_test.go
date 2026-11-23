@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// A rate-limit pause holds the anonymous fallback too, rather than letting it fire into the same 429.
 func TestAnonymousQueryHonoursThePause(t *testing.T) {
 	var hits atomic.Int32
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +31,6 @@ func TestAnonymousQueryHonoursThePause(t *testing.T) {
 	}
 }
 
-// A refused login costs one wasted request, not one per public read: later reads go without it straight away.
 func TestRefusedLoginIsSkippedForPublicReads(t *testing.T) {
 	var withToken, without atomic.Int32
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +59,6 @@ func TestRefusedLoginIsSkippedForPublicReads(t *testing.T) {
 	}
 }
 
-// The anonymous request carries no token, and its answer is cached apart from the account's.
 func TestAnonymousQueryWithholdsTheToken(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "" {
@@ -83,7 +80,6 @@ func TestAnonymousQueryWithholdsTheToken(t *testing.T) {
 	}
 }
 
-// A caller waiting on someone else's identical request gives up when its own context ends.
 func TestWaiterGivesUpWithItsContext(t *testing.T) {
 	release := make(chan struct{})
 	asked := make(chan struct{}, 1)
@@ -110,7 +106,6 @@ func TestWaiterGivesUpWithItsContext(t *testing.T) {
 	}
 }
 
-// A failed exchange says what the server said, JSON or not.
 func TestExchangeErrorsKeepTheResponse(t *testing.T) {
 	for _, tc := range []struct{ body, want string }{
 		{`{"error":"invalid_client","error_description":"Client authentication failed","hint":"check the secret"}`,

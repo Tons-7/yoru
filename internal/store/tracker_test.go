@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// seedTracked writes the minimum needed for a list entry to exist and resolve to a MyAnimeList id.
 func seedTracked(t *testing.T, s *Store, animeID, malID, episodes int) {
 	t.Helper()
 	ctx := context.Background()
@@ -55,7 +54,6 @@ func TestPendingMALPushesFindsUnsentProgress(t *testing.T) {
 	}
 }
 
-// Anime that MAL has no id for cannot be updated there, so they must not sit in the queue failing forever.
 func TestPendingMALPushesSkipsUnmappedAnime(t *testing.T) {
 	s := newTestStore(t)
 
@@ -86,7 +84,6 @@ func TestMarkPushedClearsAndLocalChangeReopens(t *testing.T) {
 		t.Fatalf("still %d pending after pushing", len(pending))
 	}
 
-	// Watching one more episode has to make it pending again.
 	watch(t, s, 154587, 11)
 	pending, _ = s.PendingMALPushes(ctx, "mal", 50)
 	if len(pending) != 1 {
@@ -97,7 +94,6 @@ func TestMarkPushedClearsAndLocalChangeReopens(t *testing.T) {
 	}
 }
 
-// A status change with no progress change still has to reach the tracker.
 func TestStatusChangeAloneIsPending(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -147,7 +143,6 @@ func TestPendingMALPushTargetsOneAnime(t *testing.T) {
 	}
 }
 
-// Per-tracker state must be independent, or connecting MAL would look like AniList had already been told.
 func TestTrackersDoNotShareState(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -162,7 +157,6 @@ func TestTrackersDoNotShareState(t *testing.T) {
 	}
 }
 
-// Connecting an account must not queue the entire list for re-upload.
 func TestSeedPushedSuppressesRedundantPushes(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -172,7 +166,6 @@ func TestSeedPushedSuppressesRedundantPushes(t *testing.T) {
 	watch(t, s, 1, 5)
 	watch(t, s, 2, 7)
 
-	// MAL already agrees about anime 1 but is behind on anime 2.
 	n, err := s.SeedPushed(ctx, "mal", []TrackerEntry{
 		{AnimeID: 1, Progress: 5, Status: "CURRENT"},
 		{AnimeID: 2, Progress: 3, Status: "CURRENT"},

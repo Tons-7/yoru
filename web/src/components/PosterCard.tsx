@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import type { FollowState } from '../lib/api'
 import type { CardAnime } from '../lib/cards'
-import { cx, posterSet, tint } from '../lib/format'
+import { cx, playLabel, posterSet, tint } from '../lib/format'
 import { useNow } from '../lib/queries'
 import { Badge, ProgressBar } from './ui'
 import { AlertPill } from './AlertPill'
@@ -30,12 +30,14 @@ export function PosterCard({
   quietList,
   alert,
   onOpen,
+  onNotInterested,
 }: {
   anime: CardAnime
   to?: string
   quietList?: boolean
   alert?: boolean
   onOpen?: () => void
+  onNotInterested?: () => void
 }) {
   const href = to ?? `/anime/${anime.id}`
   const now = useNow(600_000) / 1000
@@ -43,7 +45,12 @@ export function PosterCard({
   const watched = anime.progress ?? 0
   const released = anime.aired ?? anime.episodes
   const nextEpisode =
-    anime.airing === 'NOT_YET_RELEASED' || (released != null && watched >= released) ? null : watched + 1
+    anime.airing === 'NOT_YET_RELEASED' ||
+    (released != null && watched >= released) ||
+    (released == null && anime.airing === 'FINISHED')
+      ? null
+      : watched + 1
+  const quickPlay = !!nextEpisode && watched > 0 && (anime.status === 'CURRENT' || anime.status === 'REPEATING')
   const airing = anime.airing === 'RELEASING'
   const fresh = airing && !!anime.aired && !!anime.nextAiringAt && anime.nextAiringAt - now <= WEEK
   const format = anime.format?.replace('_', ' ')
@@ -58,7 +65,7 @@ export function PosterCard({
         play: nextEpisode
           ? {
               to: `/watch/${anime.id}/${nextEpisode}`,
-              label: watched > 0 ? `Continue ep ${nextEpisode}` : 'Watch ep 1',
+              label: playLabel(nextEpisode, watched > 0),
             }
           : undefined,
       }}
@@ -69,6 +76,8 @@ export function PosterCard({
         viewTransition
         onClick={(e) => {
           onOpen?.()
+          if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+          for (const el of document.querySelectorAll<HTMLElement>('[style*="show-art"]')) el.style.viewTransitionName = ''
           const img = e.currentTarget.querySelector('img')
           if (img) img.style.viewTransitionName = 'show-art'
         }}
@@ -76,7 +85,7 @@ export function PosterCard({
         className="press block rounded-poster focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
       >
         <div
-          className="relative aspect-[2/3] overflow-hidden rounded-poster bg-base-850"
+          className="relative aspect-2/3 overflow-hidden rounded-poster bg-base-850"
           style={
             anime.color
               ? { backgroundImage: `linear-gradient(to bottom, ${tint(anime.color, 0.32)}, ${tint(anime.color, 0.12)})` }
@@ -105,7 +114,7 @@ export function PosterCard({
               <span className="line-clamp-3 text-xs font-medium text-white/80">{anime.title}</span>
             </div>
           )}
-          <span aria-hidden className="pointer-events-none absolute inset-0 rounded-poster ring-1 ring-white/[0.08] ring-inset" />
+          <span aria-hidden className="pointer-events-none absolute inset-0 rounded-poster ring-1 ring-white/8 ring-inset" />
 
           {anime.badge ? (
             <div className="absolute top-1.5 left-1.5">
@@ -119,28 +128,31 @@ export function PosterCard({
           ) : null}
 
           {typeof anime.percent === 'number' && anime.percent > 0 && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-base-950/80 to-transparent p-2 pt-6">
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-base-950/80 to-transparent p-2 pt-6">
               <ProgressBar value={anime.percent} />
             </div>
           )}
         </div>
       </Link>
 
-      {nextEpisode && (
-        <div className="pointer-events-none absolute inset-x-0 top-0 grid aspect-[2/3] place-items-center">
+      {quickPlay && (
+        <div className="pointer-events-none absolute inset-x-0 top-0 aspect-2/3">
           <Link
             to={`/watch/${anime.id}/${nextEpisode}`}
-            aria-label={`Play episode ${nextEpisode}`}
-            title={`Play episode ${nextEpisode}`}
-            className="pointer-events-auto grid size-11 place-items-center rounded-full bg-base-950/75 opacity-0 backdrop-blur-sm transition-[opacity,transform] duration-150 group-hover/card:opacity-100 hover:scale-105 hover:bg-accent-500 focus-visible:opacity-100 [@media(hover:none)]:hidden"
+            aria-label={`Play episode ${nextEpisode} of ${anime.title}`}
+            className={cx(
+              'tap pointer-events-auto absolute left-2 flex h-8 items-center gap-1 rounded-full bg-base-950/80 pr-3 pl-2 text-xs font-semibold text-white shadow-md ring-1 ring-white/15 backdrop-blur-sm transition-colors hover:bg-accent-500',
+              typeof anime.percent === 'number' && anime.percent > 0 ? 'bottom-6' : 'bottom-2',
+            )}
           >
             <PlayIcon />
+            Ep {nextEpisode}
           </Link>
         </div>
       )}
 
       <div className="absolute top-1.5 right-1.5">
-        <StatusMenu animeId={anime.id} current={anime.status} compact quiet={quietList} />
+        <StatusMenu animeId={anime.id} current={anime.status} compact quiet={quietList} onNotInterested={onNotInterested} />
       </div>
 
       <Link to={href} tabIndex={-1} aria-hidden className="mt-2 block">
@@ -189,7 +201,7 @@ function AlertButton({ animeId, title, told }: { animeId: number; title: string;
     queryKey: ['alert', animeId],
     queryFn: () => qc.getQueryData<{ notify?: FollowState }>(['anime', animeId])?.notify?.on ?? null,
     staleTime: Infinity,
-    gcTime: Infinity,
+    gcTime: 5 * 60_000,
   })
   const known = qc.getQueryData<{ notify?: FollowState }>(['anime', animeId])?.notify?.on
   const on = asked ?? known ?? saved.data ?? told ?? false

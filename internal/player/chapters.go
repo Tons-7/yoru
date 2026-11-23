@@ -9,23 +9,18 @@ import (
 	"strings"
 )
 
-// The tags matter: the browser player reads lower-case names, as everywhere in the API.
 type SkipRange struct {
-	Kind  string  `json:"kind"`
-	Start float64 `json:"start"`
-	End   float64 `json:"end"`
-	// Source: chapters, aniskip, found (shared sound) or marked (the viewer). ID is AniSkip's, for votes.
-	Source string `json:"source,omitempty"`
-	ID     string `json:"id,omitempty"`
+	Kind   string  `json:"kind"`
+	Start  float64 `json:"start"`
+	End    float64 `json:"end"`
+	Source string  `json:"source,omitempty"`
+	ID     string  `json:"id,omitempty"`
 }
 
-// Part is the part of an episode a kind names: a mixed opening is still the opening.
 func (s SkipRange) Part() string { return strings.TrimPrefix(strings.ToLower(s.Kind), "mixed-") }
 
 func (s SkipRange) Contains(t float64) bool { return t >= s.Start && t < s.End }
 
-// Merge takes each part from the first list that has it, the lists in order of trust; a list keeps its ranges
-// of a part that don't overlap (an A and a B eyecatch, not an opening given as both op and mixed-op).
 func Merge(lists ...[]SkipRange) []SkipRange {
 	out := []SkipRange{}
 	for _, list := range lists {
@@ -57,7 +52,6 @@ func HasPart(ranges []SkipRange, part string) bool {
 	return false
 }
 
-// From keeps the ranges of one source.
 func From(ranges []SkipRange, source string) []SkipRange {
 	var out []SkipRange
 	for _, r := range ranges {
@@ -68,10 +62,8 @@ func From(ranges []SkipRange, source string) []SkipRange {
 	return out
 }
 
-// AutoSkip is which parts skip by themselves; chapters named in Settings always do.
 type AutoSkip struct{ Opening, Ending, Recap, Preview bool }
 
-// Skipped keeps the ranges that skip by themselves.
 func (a AutoSkip) Skipped(ranges []SkipRange) []SkipRange {
 	var out []SkipRange
 	for _, r := range ranges {
@@ -99,7 +91,6 @@ func (a AutoSkip) Skipped(ranges []SkipRange) []SkipRange {
 	return out
 }
 
-// SkipNames reads playback.skip_chapters, a JSON list as Settings saves it: chapter names to always skip.
 func SkipNames(pref string) []string {
 	var names, out []string
 	json.Unmarshal([]byte(pref), &names)
@@ -111,7 +102,6 @@ func SkipNames(pref string) []string {
 	return out
 }
 
-// ChapterKind is a chapter's skip kind: as the probe named it, else "skip" when its title holds one of names.
 func ChapterKind(kind, title string, names []string) string {
 	if kind != "" {
 		return kind
@@ -125,7 +115,6 @@ func ChapterKind(kind, title string, names []string) string {
 	return ""
 }
 
-// EndingStart is where the earliest ending among an episode's ranges begins, 0 when none is marked.
 func EndingStart(ranges []SkipRange) float64 {
 	start := 0.0
 	for _, r := range ranges {
@@ -136,7 +125,6 @@ func EndingStart(ranges []SkipRange) float64 {
 	return start
 }
 
-// uosc's chapter_range_patterns match these titles to tint the seekbar, so they're load-bearing.
 func chapterTitle(kind string) string {
 	switch strings.ToLower(kind) {
 	case "op", "mixed-op":
@@ -154,18 +142,14 @@ func chapterTitle(kind string) string {
 	}
 }
 
-// WriteChapters emits an ffmetadata file for mpv's --chapters-file. Skip data
-// lives outside the video, so chapters have to be supplied alongside it.
 func WriteChapters(path string, ranges []SkipRange, duration float64) error {
 	var b strings.Builder
 	b.WriteString(";FFMETADATA1\n")
 
-	// In time order: the file's own chapters come first, AniSkip's after, and mpv lists them by start.
 	ranges = slices.Clone(ranges)
 	slices.SortFunc(ranges, func(a, b SkipRange) int { return cmp.Compare(a.Start, b.Start) })
 	prev := 0.0
 	for _, r := range ranges {
-		// Empty, or overlapping the one before: two names for one span would mislabel the rest.
 		if r.End <= r.Start || r.Start < prev {
 			continue
 		}

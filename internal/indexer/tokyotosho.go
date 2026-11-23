@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -17,15 +18,11 @@ import (
 )
 
 const (
-	// Every uncached search waits on it too, so it is paced like the aggregator it replaced.
 	tokyoDelay = 1200 * time.Millisecond
 
-	// rss.php's category filter. 1 is Anime.
 	tokyoAnimeCategory = "1"
 )
 
-// TokyoTosho indexes Nyaa, AniDex and its own submissions. Its feed carries no
-// peer counts, so results come back with seeders unknown rather than zero.
 type TokyoTosho struct {
 	http     *http.Client
 	base     string
@@ -39,7 +36,6 @@ func WithTokyoToshoDelay(d time.Duration) TokyoToshoOption {
 	return func(t *TokyoTosho) { t.limiter = rate.NewLimiter(rate.Every(d), 1) }
 }
 
-// NewTokyoTosho reads a TokyoTosho-style site at base. No site is built in.
 func NewTokyoTosho(base string, opts ...TokyoToshoOption) *TokyoTosho {
 	t := &TokyoTosho{
 		http:     &http.Client{Timeout: 30 * time.Second},
@@ -89,7 +85,6 @@ func (t *TokyoTosho) Search(ctx context.Context, q Query) ([]Torrent, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Without one the site serves an empty body.
 	req.Header.Set("User-Agent", "yoru/0.1")
 	req.Header.Set("Accept", "application/rss+xml")
 
@@ -100,7 +95,7 @@ func (t *TokyoTosho) Search(ctx context.Context, q Query) ([]Torrent, error) {
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("tokyotosho: HTTP %d", res.StatusCode)
+		return nil, fmt.Errorf("HTTP %d", res.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
@@ -108,14 +103,16 @@ func (t *TokyoTosho) Search(ctx context.Context, q Query) ([]Torrent, error) {
 		return nil, err
 	}
 
-	// No matches answers closing tags alone, not a document: no results, not a failure.
 	if !bytes.Contains(body, []byte("<item>")) {
-		return nil, nil
+		if bytes.Contains(body, []byte("</rss>")) || bytes.Contains(body, []byte("<channel")) {
+			return nil, nil
+		}
+		return nil, errors.New("the answer is not a search feed")
 	}
 
 	var feed tokyoFeed
 	if err := xml.Unmarshal(body, &feed); err != nil {
-		return nil, fmt.Errorf("tokyotosho: parse feed: %w", err)
+		return nil, fmt.Errorf("parse feed: %w", err)
 	}
 
 	out := make([]Torrent, 0, len(feed.Items))

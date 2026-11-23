@@ -5,7 +5,6 @@ import (
 	"strings"
 )
 
-// mergeASS unions two partial reads of a track: the first's header, events deduplicated in time order.
 func mergeASS(have, read string) string {
 	if strings.TrimSpace(have) == "" {
 		return read
@@ -25,7 +24,6 @@ func mergeASS(have, read string) string {
 	return header + strings.Join(all, "\n") + "\n"
 }
 
-// splitASS returns everything up to and including the [Events] Format line, and the event lines after it.
 func splitASS(s string) (string, []string) {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	lines := strings.Split(s, "\n")
@@ -49,7 +47,6 @@ func splitASS(s string) (string, []string) {
 	return header.String(), events
 }
 
-// eventStart is the Start field (H:MM:SS.cc), zero-padded to sort as text.
 func eventStart(line string) string {
 	_, rest, ok := strings.Cut(line, ":")
 	if !ok {

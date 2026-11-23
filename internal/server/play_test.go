@@ -18,7 +18,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// Enough of the engine for one play.
 func fakeEngine(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -66,7 +65,6 @@ func fakeEngine(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// The browser sends no season; the handler must not invent one.
 func TestPlayWithoutASeasonPlaysTheTitlesSeason(t *testing.T) {
 	h := newHarness(t, config.Config{}, nil)
 	h.indexer.results = []indexer.Torrent{

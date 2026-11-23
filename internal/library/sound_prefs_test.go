@@ -8,7 +8,6 @@ import (
 	"yoru/internal/sound"
 )
 
-// capturingPlayer keeps the options it was launched with.
 type capturingPlayer struct {
 	fakePlayer
 	opts player.Options
@@ -19,7 +18,6 @@ func (c *capturingPlayer) Play(_ context.Context, opts player.Options) error {
 	return nil
 }
 
-// The sound settings reach a desktop player the way they reach the browser.
 func TestDesktopPlayersGetTheSoundSettings(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()

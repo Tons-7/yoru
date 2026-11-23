@@ -8,7 +8,6 @@ import (
 	"testing"
 )
 
-// A cache folder holding Yoru's own folders would hand them to the orphan cleanup; the config refuses it.
 func TestCacheDirMustNotHoldYorusOwnFolders(t *testing.T) {
 	for _, body := range []string{
 		"cache_dir = \".\"\n",
@@ -30,7 +29,6 @@ func TestCacheDirMustNotHoldYorusOwnFolders(t *testing.T) {
 	}
 }
 
-// A broken config.toml names the file, so the message in the log says where to look.
 func TestConfigParseErrorNamesTheFile(t *testing.T) {
 	dir := inTempDir(t)
 	os.WriteFile(filepath.Join(dir, "config.toml"), []byte("cache_dir = \n"), 0o600)
@@ -40,8 +38,6 @@ func TestConfigParseErrorNamesTheFile(t *testing.T) {
 	}
 }
 
-// A second launch hands its URL to the running window: the browser exits clean at once, and that is
-// the window, not a reason to retry and open a tab.
 func TestSecondLaunchTakesACleanExitAsTheHandOff(t *testing.T) {
 	var attempts int
 	oldWindow, oldTab := showWindow, showTab

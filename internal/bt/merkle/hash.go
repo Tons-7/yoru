@@ -14,9 +14,8 @@ func NewHash() *Hash {
 }
 
 type Hash struct {
-	blocks    [][32]byte
-	nextBlock hash.Hash
-	// How many bytes have been written to nextBlock so far.
+	blocks           [][32]byte
+	nextBlock        hash.Hash
 	nextBlockWritten int
 }
 
@@ -63,12 +62,10 @@ func (h *Hash) Sum(b []byte) []byte {
 	return append(b, sum[:]...)
 }
 
-// Sums by extending with zero hashes for blocks missing to meet the given length. Necessary for
-// piece layers hashes for file tail blocks that don't pad to the piece length.
 func (h *Hash) SumMinLength(b []byte, length int) []byte {
 	blocks := h.curBlocks()
 	minBlocks := (length + BlockSize - 1) / BlockSize
-	blocks = append(blocks, make([][32]byte, minBlocks-len(blocks))...)
+	blocks = append(blocks, make([][32]byte, max(0, minBlocks-len(blocks)))...)
 	sum := RootWithPadHash(blocks, [32]byte{})
 	return append(b, sum[:]...)
 }

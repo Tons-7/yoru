@@ -82,8 +82,8 @@ export function Essentials({ guide, setup, back, next }: StepProps) {
                     {locked ? `Needs the ${(PARTS[c.needs ?? '']?.title ?? c.needs ?? '').toLowerCase()}.` : part.text}
                   </span>
                   {running && <ProgressBar value={percent} label={`Downloading ${part.title}`} className="mt-2" />}
-                  {failed && <span className="mt-1 block text-xs text-recap">{progress?.error ?? 'The download failed.'} Continue tries again.</span>}
-                  {c.problem && <span className="mt-1 block text-xs text-recap">{c.problem}</span>}
+                  {failed && <span className="mt-1 block text-xs text-red-300">{progress?.error ?? 'The download failed.'} Continue tries again.</span>}
+                  {c.problem && <span className="mt-1 block text-xs text-red-300">{c.problem}</span>}
                   {!c.present && c.manual && (
                     <span className="mt-2 block text-xs text-base-400">
                       Install it yourself, then reload: <code className="rounded bg-base-800 px-2 py-1 text-base-100 select-all">{c.manual}</code>
@@ -143,7 +143,7 @@ export function Essentials({ guide, setup, back, next }: StepProps) {
         </ul>
       </Card>
       <p className="text-[13px] text-base-400">
-        {install.isError ? <span className="text-recap">{(install.error as Error).message}</span> : "Setup carries on while these download. You don't have to wait here."}
+        {install.isError ? <span className="text-red-300">{(install.error as Error).message}</span> : "Setup carries on while these download. You don't have to wait here."}
       </p>
       <Footer back={back}>
         <Continue
@@ -253,7 +253,7 @@ function TrackerCard({ tracker }: { tracker: Tracker }) {
           <button type="button" onClick={() => connect.mutate()} disabled={connect.isPending || code.trim() === ''} className={buttonClass('primary')}>
             {connect.isPending ? 'Connecting…' : 'Connect'}
           </button>
-          {connect.isError && <p className="basis-full text-xs text-recap">{(connect.error as Error).message}</p>}
+          {connect.isError && <p className="basis-full text-xs text-red-300">{(connect.error as Error).message}</p>}
         </div>
       )}
     </Card>
@@ -307,7 +307,7 @@ export function Account({ guide, back, skip, next }: StepProps) {
             }}
           />
         )}
-        {upload.isError && <p className="text-xs text-recap">{(upload.error as Error).message}</p>}
+        {upload.isError && <p className="text-xs text-red-300">{(upload.error as Error).message}</p>}
         <NameChoice host />
       </Card>
       <Footer back={back} skip={guide.notes.account.done ? undefined : skip}>
@@ -351,6 +351,9 @@ export function Watching({ guide, back, next }: StepProps) {
 
 export function Storage({ guide, setup, back, next }: StepProps) {
   const budget = guide.value('cache.budget_bytes')
+  const budgets = BUDGETS_GB.map((gb) => String(gb * GB))
+  if (budget && !budgets.includes(budget)) budgets.push(budget)
+  budgets.sort((a, b) => Number(a) - Number(b))
   return (
     <Frame
       title="Where things go"
@@ -361,22 +364,37 @@ export function Storage({ guide, setup, back, next }: StepProps) {
           <h2 className="text-[15px] font-semibold text-white">Space watched episodes may use</h2>
           <span className="text-[13px] text-base-400">Your own downloads don't count.</span>
         </div>
-        <div role="radiogroup" aria-label="Space watched episodes may use" className="mt-3.5 flex flex-wrap gap-2">
-          {BUDGETS_GB.map((gb) => {
-            const active = budget === String(gb * GB)
+        <div
+          role="radiogroup"
+          aria-label="Space watched episodes may use"
+          className="mt-3.5 flex flex-wrap gap-2"
+          onKeyDown={(e) => {
+            const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key]
+            if (!step) return
+            e.preventDefault()
+            const at = Math.max(0, budgets.indexOf(budget))
+            const next = budgets[(at + step + budgets.length) % budgets.length]
+            guide.set('cache.budget_bytes', next)
+            e.currentTarget.querySelector<HTMLElement>(`[data-budget="${next}"]`)?.focus()
+          }}
+        >
+          {budgets.map((value) => {
+            const active = budget === value
             return (
               <button
-                key={gb}
+                key={value}
                 type="button"
                 role="radio"
+                data-budget={value}
                 aria-checked={active}
-                onClick={() => guide.set('cache.budget_bytes', String(gb * GB))}
+                tabIndex={active || (!budgets.includes(budget) && value === budgets[0]) ? 0 : -1}
+                onClick={() => guide.set('cache.budget_bytes', value)}
                 className={cx(
                   'h-11 rounded-full border px-5 text-sm transition-colors',
                   active ? 'border-accent-500 bg-accent-500/10 font-semibold text-white' : 'border-base-700 text-base-200 hover:border-base-500',
                 )}
               >
-                {gb} GB
+                {`${Number((Number(value) / GB).toFixed(1))} GB`}
               </button>
             )
           })}
@@ -419,7 +437,8 @@ export function Computer({ guide, back, next }: StepProps) {
     guide.set('notify.enabled', String(on))
     setAlertNote('')
     try {
-      if (on && !(await setDeviceAlerts(true))) setAlertNote('Notifications are blocked for Yoru, so alerts only show inside it.')
+      if (!on) await setDeviceAlerts(false)
+      else if (!(await setDeviceAlerts(true))) setAlertNote('Notifications are blocked for Yoru, so alerts only show inside it.')
     } catch {
       setAlertNote('Alerts show while Yoru is open.')
     }

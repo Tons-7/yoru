@@ -8,7 +8,6 @@ import (
 	"yoru/internal/store"
 )
 
-// A dual-audio release satisfies both preferences; the track is chosen at playback.
 func TestAudioFilter(t *testing.T) {
 	sub := parse.Parse("[SubsPlease] Show - 07 (1080p) [ABCD1234].mkv")
 	dual := parse.Parse("[Group] Show - 07 [1080p][Dual Audio].mkv")
@@ -41,8 +40,6 @@ func TestAudioFilter(t *testing.T) {
 	}
 }
 
-// mentionsDub only spots an explicit dub label. Dual audio is a separate
-// signal the parser already extracts, and the filter combines the two.
 func TestMentionsDub(t *testing.T) {
 	tests := map[string]bool{
 		"[Group] Show - 07 [English Dub]": true,
@@ -65,11 +62,9 @@ func TestSearchTermsLeadWithEpisodeNumber(t *testing.T) {
 	if len(got) == 0 {
 		t.Fatal("no search terms produced")
 	}
-	// A batch always out-seeds one episode, so the number goes in the first query.
 	if got[0] != "Sousou no Frieren 10" {
 		t.Errorf("first term = %q, want the episode number included", got[0])
 	}
-	// A tracker search for a Cyrillic or CJK title returns nothing and only burns a rate-limited request.
 	for _, term := range got {
 		if !mostlyLatin(term) {
 			t.Errorf("non-Latin search term %q", term)
@@ -80,7 +75,6 @@ func TestSearchTermsLeadWithEpisodeNumber(t *testing.T) {
 	}
 }
 
-// Groups split by naming, so a romaji-only search misses releases under the English name.
 func TestSearchTermsPairEpisodeWithBothNamings(t *testing.T) {
 	titles := []string{
 		"Bleach: Sennen Kessen-hen - Kashin-tan",
@@ -91,7 +85,6 @@ func TestSearchTermsPairEpisodeWithBothNamings(t *testing.T) {
 
 	got := searchTerms(titles, english, 41, 0, 0, nil, false)
 
-	// Punctuation is stripped: filenames never carry it, and trackers match tokens.
 	var romajiWithEp, englishWithEp bool
 	for _, term := range got {
 		if term == "Bleach Sennen Kessen-hen - Kashin-tan 41" {
@@ -109,7 +102,6 @@ func TestSearchTermsPairEpisodeWithBothNamings(t *testing.T) {
 	}
 }
 
-// The English title is often the romaji, and a duplicate query is a wasted request.
 func TestSearchTermsSkipsRedundantEnglish(t *testing.T) {
 	got := searchTerms([]string{"Dandadan"}, "Dandadan", 4, 0, 0, nil, false)
 
@@ -135,7 +127,6 @@ func TestSearchTermsAllNonLatin(t *testing.T) {
 	}
 }
 
-// The curated release is often not the most seeded, so it is asked for by name.
 func TestSearchTermsLeadWithCuratedGroup(t *testing.T) {
 	got := searchTerms([]string{"Sousou no Frieren"}, "", 10, 0, 0, []string{"PMR"}, false)
 	if len(got) == 0 {
@@ -144,13 +135,11 @@ func TestSearchTermsLeadWithCuratedGroup(t *testing.T) {
 	if got[0] != "PMR Sousou no Frieren" {
 		t.Fatalf("first term = %q, want the curated group first", got[0])
 	}
-	// The episode-number query must still follow as the fallback.
 	if len(got) < 2 || got[1] != "Sousou no Frieren 10" {
 		t.Fatalf("second term = %v", got)
 	}
 }
 
-// A curated release may use another title; the shortest is the safest to pair the group with.
 func TestCuratedGroupPairsWithShortestTitle(t *testing.T) {
 	titles := []string{"Sousou no Frieren", "Frieren", "Frieren Beyond Journeys End"}
 
@@ -159,7 +148,6 @@ func TestCuratedGroupPairsWithShortestTitle(t *testing.T) {
 		t.Fatalf("first term = %q, want the group paired with the shortest title", got[0])
 	}
 
-	// An abbreviation synonym is short but matches nothing a group writes.
 	got = searchTerms([]string{"Jujutsu Kaisen", "JJK"}, "", 5, 0, 0, []string{"Okay-Subs"}, false)
 	if got[0] != "Okay-Subs Jujutsu Kaisen" {
 		t.Fatalf("first term = %q, want the group paired with a spelled-out title", got[0])
@@ -212,7 +200,6 @@ func TestVerifiesRejectsWrongEpisodeAndSeason(t *testing.T) {
 	}
 }
 
-// AoT Final Season Part 2 episode 1 (17 through the season); Part 3's episode 1 is not it.
 func part2Request() Request {
 	return Request{
 		Episode: 1, Season: 1, Part: 2, Alias: store.EpisodeAlias{Tvdb: 17},
@@ -243,15 +230,12 @@ func TestVerifiesRejectsWrongPart(t *testing.T) {
 	}
 }
 
-// The cour's own numbering is only safe with a part marker agreeing. Otherwise
-// "Attack on Titan - 01" is season one, not the first episode of a later cour.
 func TestVerifiesOwnNumberNeedsAPartMarker(t *testing.T) {
 	req := part2Request()
 
 	if verifies(parse.Parse("[G] Shingeki no Kyojin - 01 [1080p].mkv"), req) {
 		t.Error("an unmarked episode 1 must not satisfy a Part 2 request")
 	}
-	// Inside an unmarked pack the file is only found by the season's count.
 	if got := numbersFor(parse.Parse("[G] Shingeki no Kyojin [Batch].mkv"), req); len(got) != 1 || got[0] != 17 {
 		t.Errorf("unmarked pack offers %v, want [17]", got)
 	}
@@ -260,7 +244,6 @@ func TestVerifiesOwnNumberNeedsAPartMarker(t *testing.T) {
 	}
 }
 
-// Both numberings are searched, because which one a group writes is not predictable from the show.
 func TestSearchTermsIncludeBothNumberings(t *testing.T) {
 	got := searchTerms([]string{"Shingeki no Kyojin: The Final Season Part 2"}, "", 1, 17, 76, nil, false)
 
@@ -281,7 +264,6 @@ func TestSearchTermsIncludeBothNumberings(t *testing.T) {
 	}
 }
 
-// A dub is a handful of releases among hundreds, so it is asked for by name; the sub search is unchanged.
 func TestSearchTermsAskForTheDubByName(t *testing.T) {
 	sub := searchTerms([]string{"Jujutsu Kaisen"}, "", 5, 0, 0, nil, false)
 	for _, term := range sub {
@@ -302,7 +284,6 @@ func TestSearchTermsAskForTheDubByName(t *testing.T) {
 	}
 }
 
-// Most shows never state a season, so only an explicit higher one contradicts season 1.
 func TestVerifiesSeasonOneAllowsUnmarked(t *testing.T) {
 	req := Request{Episode: 5, Season: 1}
 

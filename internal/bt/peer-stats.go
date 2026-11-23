@@ -5,6 +5,5 @@ type PeerStats struct {
 
 	DownloadRate        float64
 	LastWriteUploadRate float64
-	// How many pieces the peer has.
-	RemotePieceCount int
+	RemotePieceCount    int
 }

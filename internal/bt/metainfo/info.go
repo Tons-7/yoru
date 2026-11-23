@@ -14,30 +14,23 @@ import (
 	"yoru/internal/bt/segments"
 )
 
-// The info dictionary. See BEP 3 and BEP 52.
 type Info struct {
-	PieceLength int64 `bencode:"piece length"` // BEP3
-	// BEP 3. This can be omitted because isn't needed in non-hybrid v2 infos. See BEP 52.
-	Pieces   []byte `bencode:"pieces,omitempty"`
-	Name     string `bencode:"name"` // BEP3
-	NameUtf8 string `bencode:"name.utf-8,omitempty"`
-	Length   int64  `bencode:"length,omitempty"` // BEP3, mutually exclusive with Files
+	PieceLength int64  `bencode:"piece length"`
+	Pieces      []byte `bencode:"pieces,omitempty"`
+	Name        string `bencode:"name"`
+	NameUtf8    string `bencode:"name.utf-8,omitempty"`
+	Length      int64  `bencode:"length,omitempty"`
 	ExtendedFileAttrs
-	Private *bool `bencode:"private,omitempty"` // BEP27
-	// TODO: Document this field.
-	Source string     `bencode:"source,omitempty"`
-	Files  []FileInfo `bencode:"files,omitempty"` // BEP3, mutually exclusive with Length
+	Private *bool      `bencode:"private,omitempty"`
+	Source  string     `bencode:"source,omitempty"`
+	Files   []FileInfo `bencode:"files,omitempty"`
 
-	// BEP 52 (BitTorrent v2)
 	MetaVersion int64    `bencode:"meta version,omitempty"`
 	FileTree    FileTree `bencode:"file tree,omitempty"`
 }
 
-// NoName means "no folder" for a multi-file Info.Name (only advisory), which Transmission would otherwise
-// fill in, changing the infohash (transmission/transmission#1775).
 const NoName = "-"
 
-// This is a helper that sets Files and Pieces from a root path and its children.
 func (info *Info) BuildFromFilePath(root string) (err error) {
 	info.Name = func() string {
 		b := filepath.Base(root)
@@ -54,10 +47,8 @@ func (info *Info) BuildFromFilePath(root string) (err error) {
 			return err
 		}
 		if fi.IsDir() {
-			// Directories are implicit in torrent files.
 			return nil
 		} else if path == root {
-			// The root is a file.
 			info.Length = fi.Size()
 			return nil
 		}
@@ -90,8 +81,6 @@ func (info *Info) BuildFromFilePath(root string) (err error) {
 	return
 }
 
-// Concatenates all the files in the torrent into w. open is a function that
-// gets at the contents of the given file.
 func (info *Info) writeFiles(w io.Writer, open func(fi FileInfo) (io.ReadCloser, error)) error {
 	for _, fi := range info.UpvertedFiles() {
 		r, err := open(fi)
@@ -107,8 +96,6 @@ func (info *Info) writeFiles(w io.Writer, open func(fi FileInfo) (io.ReadCloser,
 	return nil
 }
 
-// Sets Pieces (the block of piece hashes in the Info) by using the passed
-// function to get at the torrent data.
 func (info *Info) GeneratePieces(open func(fi FileInfo) (io.ReadCloser, error)) (err error) {
 	if info.PieceLength == 0 {
 		return errors.New("piece length must be non-zero")
@@ -133,30 +120,26 @@ func (info *Info) TotalLength() (ret int64) {
 func (info *Info) NumPieces() (num int) {
 	if info.HasV2() {
 		info.FileTree.Walk(nil, func(path []string, ft *FileTree) {
-			num += int((ft.File.Length + info.PieceLength - 1) / info.PieceLength)
+			if !ft.IsDir() {
+				num += int((ft.File.Length + info.PieceLength - 1) / info.PieceLength)
+			}
 		})
 		return
 	}
 	return len(info.Pieces) / 20
 }
 
-// Whether all files share the same top-level directory name. If they don't, Info.Name is usually used.
 func (info *Info) IsDir() bool {
 	if info.HasV2() {
 		return info.FileTree.IsDir()
 	}
-	// I wonder if we should check for the existence of Info.Length here instead.
 	return len(info.Files) != 0
 }
 
-// The files field, converted up from the old single-file in the parent info dict if necessary. This
-// is a helper to avoid having to conditionally handle single and multi-file torrent infos.
 func (info *Info) UpvertedFiles() (files []FileInfo) {
 	return slices.Collect(info.UpvertedFilesIter())
 }
 
-// The files field, converted up from the old single-file in the parent info dict if necessary. This
-// is a helper to avoid having to conditionally handle single and multi-file torrent infos.
 func (info *Info) UpvertedFilesIter() iter.Seq[FileInfo] {
 	if info.HasV2() {
 		return info.FileTree.upvertedFiles(info.PieceLength)
@@ -164,15 +147,12 @@ func (info *Info) UpvertedFilesIter() iter.Seq[FileInfo] {
 	return info.UpvertedV1Files()
 }
 
-// UpvertedFiles but specific to the files listed in the v1 info fields. This will include padding
-// files for example that wouldn't appear in v2 file trees.
 func (info *Info) UpvertedV1Files() iter.Seq[FileInfo] {
 	return func(yield func(FileInfo) bool) {
 		if len(info.Files) == 0 {
 			yield(FileInfo{
 				Length: info.Length,
-				// No path: Info.Name is the file's own name.
-				Path: nil,
+				Path:   nil,
 			})
 			return
 		}
@@ -198,13 +178,11 @@ func (info *Info) BestName() string {
 	return info.Name
 }
 
-// Whether the Info can be used as a v2 info dict, including having a V2 infohash.
 func (info *Info) HasV2() bool {
 	return info.MetaVersion == 2
 }
 
 func (info *Info) HasV1() bool {
-	// See Upgrade Path in BEP 52.
 	return info.MetaVersion == 0 || info.MetaVersion == 1 || info.Files != nil || info.Length != 0 || len(info.Pieces) != 0
 }
 
@@ -219,5 +197,3 @@ func (info *Info) FileSegmentsIndex() segments.Index {
 		}
 	}))
 }
-
-// TODO: Add NumFiles helper?

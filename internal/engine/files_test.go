@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -70,6 +71,53 @@ func TestRemovingTheMiddleEpisodeKeepsItsNeighboursWhole(t *testing.T) {
 		t.Fatalf("after a restart the neighbours need fetching again: %v", err)
 	}
 	check("after a restart")
+}
+
+func TestDeleteFileRemovesAnUnsharedFile(t *testing.T) {
+	f := newFixture(t)
+	c := ctx(t)
+	in, err := f.client.Inspect(c, f.magnet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := f.client.Add(c, f.magnet, in.Details.Files[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.client.Await(c, added.ID, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(f.cache, "Show Pack", "Show - 03.mkv")
+	if runtime.GOOS == "windows" {
+		held, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		was := freeRetry
+		freeRetry = 50 * time.Millisecond
+		t.Cleanup(func() { freeRetry = was })
+		if err := f.client.DeleteFile(c, added.ID, 2); err != nil {
+			t.Fatalf("a file in use: %v", err)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("the file in use went at once: %v", err)
+		}
+		held.Close()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatal("the file stayed after it was let go")
+	}
+	if err := f.client.DeleteFile(c, added.ID, 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("the removed episode is still there: %v", err)
+	}
 }
 
 func TestOneEpisodeOfAPackPausesAndGoesAlone(t *testing.T) {

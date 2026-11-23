@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	g "github.com/anacrolix/generics"
-	"github.com/anacrolix/missinggo/v2/iter"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-quicktest/qt"
 
@@ -29,7 +28,6 @@ func TestRequestStrategyPieceDoesntAlloc(t *testing.T) {
 	p := makeRequestStrategyPiece(rst)
 	runtime.ReadMemStats(&after)
 	qt.Assert(t, qt.Equals(before.HeapAlloc, after.HeapAlloc))
-	// We have to use p, or it gets optimized away.
 	spew.Fdump(io.Discard, p)
 }
 
@@ -38,22 +36,18 @@ type storagePiece struct {
 }
 
 func (s storagePiece) ReadAt(p []byte, off int64) (n int, err error) {
-	//TODO implement me
 	panic("implement me")
 }
 
 func (s storagePiece) WriteAt(p []byte, off int64) (n int, err error) {
-	//TODO implement me
 	panic("implement me")
 }
 
 func (s storagePiece) MarkComplete() error {
-	//TODO implement me
 	panic("implement me")
 }
 
 func (s storagePiece) MarkNotComplete() error {
-	//TODO implement me
 	panic("implement me")
 }
 
@@ -111,7 +105,7 @@ func BenchmarkRequestStrategy(b *testing.B) {
 	peer.peerChoking = false
 	for b.Loop() {
 		storageClient.completed = 0
-		for pieceIndex := range iter.N(numPieces) {
+		for pieceIndex := range numPieces {
 			tor.cl.lock()
 			tor.updatePieceCompletion(pieceIndex)
 			tor.cl.unlock()
@@ -125,10 +119,8 @@ func BenchmarkRequestStrategy(b *testing.B) {
 					tor.updatePieceCompletion(completed - 1)
 				}()
 			}
-			// Starting and stopping timers around this part causes lots of GC overhead.
 			rs := peer.getDesiredRequestState()
 			tor.cacheNextRequestIndexesForReuse(rs.Requests.requestIndexes)
-			// End of part that should be timed.
 			remainingChunks := (numPieces - completed) * (pieceLength / chunkSize)
 			qt.Assert(b, qt.HasLen(rs.Requests.requestIndexes, min(
 				remainingChunks,

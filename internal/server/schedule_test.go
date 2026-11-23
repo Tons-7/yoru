@@ -11,7 +11,6 @@ import (
 	"yoru/internal/config"
 )
 
-// A week is seven distinct weekdays; an eighth would repeat one in a strip keyed on the name.
 func TestGroupByDayEmitsExactlyOneTabPerDay(t *testing.T) {
 	const offset = 120
 	start := midnight(time.Now(), offset).Unix()
@@ -48,8 +47,6 @@ func TestGroupByDayFlagsToday(t *testing.T) {
 	}
 }
 
-// A 25:30 JST broadcast is Tuesday in Japan but Monday for a US viewer. It lands
-// on the viewer's tab; the JST label rides along because fansub sites quote it.
 func TestGroupByDaySplitsLateNightBroadcastFromItsJSTDay(t *testing.T) {
 	const offset = -300
 
@@ -78,7 +75,6 @@ func TestGroupByDaySplitsLateNightBroadcastFromItsJSTDay(t *testing.T) {
 	}
 }
 
-// Anything outside the window is dropped rather than folded into an edge day.
 func TestGroupByDayIgnoresOutOfWindowItems(t *testing.T) {
 	const offset = 0
 	start := midnight(time.Now(), offset).Unix()
@@ -103,7 +99,6 @@ func TestGroupByDayIgnoresOutOfWindowItems(t *testing.T) {
 }
 
 func TestMidnightSnapsToLocalDayStart(t *testing.T) {
-	// 00:30 UTC on the 11th is still the 10th at UTC-5.
 	at := time.Date(2026, 8, 11, 0, 30, 0, 0, time.UTC)
 
 	got := midnight(at, -300)

@@ -10,7 +10,6 @@ import (
 )
 
 func TestSetupExplainsHalfATranscoder(t *testing.T) {
-	// Nothing on PATH, so only bin/ decides.
 	t.Setenv("PATH", "")
 	bin := t.TempDir()
 	h := newHarness(t, config.Config{BinDir: bin}, nil)

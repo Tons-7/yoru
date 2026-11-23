@@ -1,7 +1,6 @@
 package test
 
 import (
-	"io"
 	"os"
 	"sync"
 	"testing"
@@ -9,7 +8,6 @@ import (
 	"time"
 
 	"github.com/anacrolix/log"
-	"github.com/anacrolix/missinggo/v2/filecache"
 	qt "github.com/go-quicktest/qt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,49 +18,15 @@ import (
 	"yoru/internal/bt/storage"
 )
 
-type fileCacheClientStorageFactoryParams struct {
-	Capacity    int64
-	SetCapacity bool
-}
-
-func newFileCacheClientStorageFactory(ps fileCacheClientStorageFactoryParams) StorageFactory {
-	return func(dataDir string) storage.ClientImplCloser {
-		fc, err := filecache.NewCache(dataDir)
-		if err != nil {
-			panic(err)
-		}
-		var capFuncPtr storage.TorrentCapacity
-		if ps.SetCapacity {
-			fc.SetCapacity(ps.Capacity)
-			f := func() (cap int64, capped bool) {
-				return ps.Capacity, ps.SetCapacity
-			}
-			capFuncPtr = &f
-		}
-
-		return struct {
-			storage.ClientImpl
-			io.Closer
-		}{
-			storage.NewResourcePiecesOpts(
-				fc.AsResourceProvider(),
-				storage.ResourcePiecesOpts{
-					Capacity: capFuncPtr,
-				}),
-			io.NopCloser(nil),
-		}
-	}
-}
-
 func TestClientTransferDefault(t *testing.T) {
 	testClientTransfer(t, testClientTransferParams{
-		LeecherStorage: newFileCacheClientStorageFactory(fileCacheClientStorageFactoryParams{}),
+		LeecherStorage: storage.NewFile,
 	})
 }
 
 func TestClientTransferDefaultNoMetadata(t *testing.T) {
 	testClientTransfer(t, testClientTransferParams{
-		LeecherStorage:               newFileCacheClientStorageFactory(fileCacheClientStorageFactoryParams{}),
+		LeecherStorage:               storage.NewFile,
 		LeecherStartsWithoutMetadata: true,
 	})
 }
@@ -70,7 +34,6 @@ func TestClientTransferDefaultNoMetadata(t *testing.T) {
 func TestClientTransferRateLimitedUpload(t *testing.T) {
 	started := time.Now()
 	testClientTransfer(t, testClientTransferParams{
-		// 13 bytes (the greeting torrent) in 2-byte chunks, so the burst is at least 2: (13-burst)/rate.
 		SeederUploadRateLimiter: rate.NewLimiter(11, 2),
 	})
 	require.True(t, time.Since(started) > time.Second)
@@ -81,55 +44,18 @@ func TestClientTransferRateLimitedDownload(t *testing.T) {
 		LeecherDownloadRateLimiter: rate.NewLimiter(512, 512),
 		ConfigureSeeder: ConfigureClient{
 			Config: func(cfg *bt.ClientConfig) {
-				// If we send too many keep alives, we consume all the leechers available download
-				// rate. The default isn't exposed, but a minute is pretty reasonable.
 				cfg.KeepAliveTimeout = time.Minute
 			},
 		},
 	})
 }
 
-func testClientTransferSmallCache(t *testing.T, setReadahead bool, readahead int64) {
-	testClientTransfer(t, testClientTransferParams{
-		LeecherStorage: newFileCacheClientStorageFactory(fileCacheClientStorageFactoryParams{
-			SetCapacity: true,
-			// Under the piece length, no piece could complete to be hashed.
-			Capacity: 5,
-		}),
-		LeecherStorageCapacity: 5,
-		SetReadahead:           setReadahead,
-		// Not far, or the cache thrashes and drops data we thought we had.
-		Readahead: readahead,
-
-		// These tests don't work well with more than 1 connection to the seeder.
-		ConfigureLeecher: ConfigureClient{
-			Config: func(cfg *bt.ClientConfig) {
-				cfg.DropDuplicatePeerIds = true
-			},
-		},
-	})
-}
-
-func TestClientTransferSmallCachePieceSizedReadahead(t *testing.T) {
-	testClientTransferSmallCache(t, true, 5)
-}
-
-func TestClientTransferSmallCacheLargeReadahead(t *testing.T) {
-	testClientTransferSmallCache(t, true, 15)
-}
-
-func TestClientTransferSmallCacheDefaultReadahead(t *testing.T) {
-	testClientTransferSmallCache(t, false, -1)
-}
-
-func TestFilecacheClientTransferVarious(t *testing.T) {
+func TestFileClientTransferVarious(t *testing.T) {
 	TestLeecherStorage(t, LeecherStorageTestCase{
-		"Filecache", newFileCacheClientStorageFactory(fileCacheClientStorageFactoryParams{}), 0,
+		"File", storage.NewFile, 0,
 	})
 }
 
-// Check that after completing leeching, a leecher transitions to a seeding
-// correctly. Connected in a chain like so: Seeder <-> Leecher <-> LeecherLeecher.
 func testSeedAfterDownloading(t *testing.T, disableUtp bool) {
 	greetingTempDir, mi := testutil.GreetingTestTorrent()
 	defer os.RemoveAll(greetingTempDir)
@@ -152,7 +78,6 @@ func testSeedAfterDownloading(t *testing.T, disableUtp bool) {
 	cfg.Seed = true
 	cfg.DataDir = t.TempDir()
 	cfg.DisableUTP = disableUtp
-	// The leecher-leecher, with bigger chunks, mustn't reach the seeder directly: the leecher must decode them.
 	cfg.DisablePEX = true
 	cfg.Logger = log.Default.WithContextText("leecher")
 	leecher, err := bt.NewClient(cfg)
@@ -185,10 +110,8 @@ func testSeedAfterDownloading(t *testing.T, disableUtp bool) {
 	}())
 	require.NoError(t, err)
 	assert.True(t, ok)
-	// DownloadAll in Leecher while LeecherLeecher reads in order, which can leave LeecherLeecher choked.
 	var wg sync.WaitGroup
 	{
-		// Prioritize a region, and ensure it's been hashed, so we want connections.
 		r := llg.NewReader()
 		llg.VerifyData()
 		wg.Go(func() {

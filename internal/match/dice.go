@@ -1,6 +1,5 @@
 package match
 
-// Sørensen-Dice over bigrams: titles differ by transliteration, not typos, so it beats edit distance.
 func dice(a, b string) float64 {
 	if a == b {
 		return 1

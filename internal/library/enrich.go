@@ -3,7 +3,9 @@ package library
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"maps"
 	"regexp"
 	"strconv"
 	"sync"
@@ -187,6 +189,7 @@ func (e *Enricher) Episodes(ctx context.Context, animeID int) (int, error) {
 	if e.store.EpisodesStale(ctx, animeID, episodeRefresh) {
 		mapping, err := e.meta.Episodes(ctx, animeID)
 		if err != nil {
+			e.flagsAsync(animeID)
 			return 0, err
 		}
 		if len(mapping.Episodes) > 0 {
@@ -208,7 +211,7 @@ func (e *Enricher) Episodes(ctx context.Context, animeID int) (int, error) {
 	return saved, nil
 }
 
-var episodeLabel = regexp.MustCompile(`(?i)(?:episode|ep\.?|第)\s*0*(\d+)`)
+var episodeLabel = regexp.MustCompile(`(?i)(?:\bepisode|\bep\.?|第)\s*0*(\d+)`)
 
 func (e *Enricher) stillsAsync(animeID int) {
 	if e.ani == nil {
@@ -413,11 +416,22 @@ func (e *Enricher) englishTitles(ctx context.Context, animeID int, crawl func() 
 	}
 }
 
+var fillerSiteRetry = 24 * time.Hour
+
 func (e *Enricher) fillerGaps(ctx context.Context, animeID, malID int) {
 	missing, err := e.store.UnclassifiedEpisodes(ctx, animeID)
 	if err != nil || missing == 0 {
 		return
 	}
+	key := fmt.Sprintf("fillersite:%d", malID)
+	if at, err := e.store.SourceRefreshedAt(ctx, key); err == nil && time.Since(at) < fillerSiteRetry {
+		return
+	}
+	defer func() {
+		if err := e.store.MarkSource(context.WithoutCancel(ctx), key, missing); err != nil {
+			e.log.Debug("note the filler site check", "anime", animeID, "err", err)
+		}
+	}()
 
 	titles, err := e.store.SearchTitles(ctx, animeID)
 	if err != nil {
@@ -484,6 +498,7 @@ func (e *Enricher) Skips(ctx context.Context, animeID, episode int, durationSeco
 	}
 	key := [2]int{animeID, episode}
 	e.mu.Lock()
+	maps.DeleteFunc(e.skipsAsked, func(_ [2]int, at time.Time) bool { return time.Since(at) >= skipsAskEvery })
 	if time.Since(e.skipsAsked[key]) < skipsAskEvery {
 		e.mu.Unlock()
 		return nil

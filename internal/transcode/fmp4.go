@@ -5,20 +5,14 @@ import (
 	"errors"
 )
 
-// The few ISO-BMFF boxes needed to say when a fragment's picture starts: a sliced pass names its files by
-// count, not time, so each is placed by what is inside it.
-
-// fmp4Track is what the init segment says about one track.
 type fmp4Track struct {
 	timescale uint32
 	video     bool
-	// shift is the edit list's offset, in the track's units: media time minus empty edits ahead of it.
-	shift int64
+	shift     int64
 }
 
 var errNoBox = errors.New("box not found")
 
-// box finds the first child of type typ in buf, a run of boxes.
 func box(buf []byte, typ string) ([]byte, error) {
 	if found := boxes(buf, typ, 1); len(found) > 0 {
 		return found[0], nil
@@ -26,7 +20,6 @@ func box(buf []byte, typ string) ([]byte, error) {
 	return nil, errNoBox
 }
 
-// boxes returns the children of type typ in buf, at most limit of them (0 for all).
 func boxes(buf []byte, typ string, limit int) [][]byte {
 	var out [][]byte
 	for len(buf) >= 8 && (limit == 0 || len(out) < limit) {
@@ -52,7 +45,6 @@ func boxes(buf []byte, typ string, limit int) [][]byte {
 	return out
 }
 
-// nested walks into boxes, first match at each level.
 func nested(buf []byte, types ...string) ([]byte, error) {
 	var err error
 	for _, t := range types {
@@ -63,7 +55,6 @@ func nested(buf []byte, types ...string) ([]byte, error) {
 	return buf, nil
 }
 
-// initTracks reads an init segment's tracks by ID.
 func initTracks(init []byte) (map[uint32]fmp4Track, error) {
 	moov, err := box(init, "moov")
 	if err != nil {
@@ -118,8 +109,6 @@ func initTracks(init []byte) (map[uint32]fmp4Track, error) {
 	return tracks, nil
 }
 
-// editShift is what an edit list takes off a sample's time: the first real edit's media time, less any empty
-// edits before it (which delay the track, in movie units).
 func editShift(elst []byte, scale, movieScale uint32) int64 {
 	if len(elst) < 8 {
 		return 0
@@ -157,7 +146,6 @@ func editShift(elst []byte, scale, movieScale uint32) int64 {
 	return -delay
 }
 
-// pictureStart is when a fragment's first video sample shows, in seconds; false when it holds no picture.
 func pictureStart(tracks map[uint32]fmp4Track, seg []byte) (float64, bool) {
 	moof, err := box(seg, "moof")
 	if err != nil {
@@ -192,7 +180,6 @@ func pictureStart(tracks map[uint32]fmp4Track, seg []byte) (float64, bool) {
 	return 0, false
 }
 
-// firstOffset is the first sample's composition offset in a traf's first trun (0 when the run carries none).
 func firstOffset(traf []byte) (int64, bool) {
 	trun, err := box(traf, "trun")
 	if err != nil || len(trun) < 8 {
@@ -203,19 +190,19 @@ func firstOffset(traf []byte) (int64, bool) {
 		return 0, false
 	}
 	at := 8
-	if flags&0x1 != 0 { // data offset
+	if flags&0x1 != 0 {
 		at += 4
 	}
-	if flags&0x4 != 0 { // first sample flags
+	if flags&0x4 != 0 {
 		at += 4
 	}
-	if flags&0x100 != 0 { // sample duration
+	if flags&0x100 != 0 {
 		at += 4
 	}
-	if flags&0x200 != 0 { // sample size
+	if flags&0x200 != 0 {
 		at += 4
 	}
-	if flags&0x400 != 0 { // sample flags
+	if flags&0x400 != 0 {
 		at += 4
 	}
 	if flags&0x800 == 0 {

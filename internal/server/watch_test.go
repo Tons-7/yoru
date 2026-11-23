@@ -13,7 +13,6 @@ import (
 	"yoru/internal/store"
 )
 
-// watchHarness is a server knowing one twelve-episode show, id 1.
 func watchHarness(t *testing.T) *harness {
 	t.Helper()
 	h := newHarness(t, config.Config{}, nil)
@@ -45,7 +44,6 @@ func progressOf(t *testing.T, h *harness) store.DirtyEntry {
 	return entry
 }
 
-// Reaching the end is not enough: the episode has to have actually played.
 func TestProgressCountsAnEpisodeWatchedOnlyOncePlayed(t *testing.T) {
 	h := watchHarness(t)
 
@@ -62,7 +60,6 @@ func TestProgressCountsAnEpisodeWatchedOnlyOncePlayed(t *testing.T) {
 	if !watched {
 		t.Fatal("an episode played through to the end never counted as watched")
 	}
-	// Rewinding a finished episode does not take the tick back.
 	if !report(t, h, 60, 10) {
 		t.Error("a watched episode lost its tick on a rewind")
 	}
@@ -77,7 +74,6 @@ func TestProgressRefusesAReportWithoutAnEpisode(t *testing.T) {
 	}
 }
 
-// Marking by hand moves list progress; unmarking rewinds it rather than deleting it.
 func TestMarkingWatchedByHandMovesListProgress(t *testing.T) {
 	h := watchHarness(t)
 
@@ -129,7 +125,6 @@ func TestListStatusIsSavedAndUnknownOnesRefused(t *testing.T) {
 		t.Errorf("entry is %s scored %d, want PAUSED 70", e.Status, e.Score)
 	}
 
-	// A status alone leaves the score as it was.
 	h.call(t, "POST", "/api/status", `{"animeId":1,"status":"CURRENT"}`)
 	if e := progressOf(t, h); e.Status != "CURRENT" || e.Score != 70 {
 		t.Errorf("entry is %s scored %d, want CURRENT 70", e.Status, e.Score)
@@ -161,7 +156,6 @@ func TestHistoryListsWhatPlayedAndForgetsOnRequest(t *testing.T) {
 		t.Fatalf("history holds %d entries, want 2", n)
 	}
 
-	// Naming nothing must not clear everything.
 	if code, _ := h.call(t, "POST", "/api/history/forget", `{}`); code != http.StatusBadRequest || historyCount(t, h) != 2 {
 		t.Fatalf("an empty forget answered %d and left %d entries", code, historyCount(t, h))
 	}
@@ -233,7 +227,6 @@ func TestNotificationsAreReadAndDeletedOneOrAll(t *testing.T) {
 		t.Errorf("%v unread after reading one, want 2", count)
 	}
 
-	// An id that does not parse must not fall through to "all of them".
 	if code, _ := h.call(t, "DELETE", "/api/notifications?id=abc", ""); code != http.StatusBadRequest {
 		t.Errorf("a malformed id answered %d, want 400", code)
 	}
@@ -264,7 +257,6 @@ func TestFollowNeedsAShow(t *testing.T) {
 	}
 }
 
-// DELETE /api/status/{id} takes the show off the list; nothing listed is left behind for it.
 func TestRemoveStatusTakesTheShowOffTheList(t *testing.T) {
 	h := watchHarness(t)
 	h.call(t, "POST", "/api/status", `{"animeId":1,"status":"CURRENT"}`)
@@ -280,7 +272,6 @@ func TestRemoveStatusTakesTheShowOffTheList(t *testing.T) {
 	}
 }
 
-// lockedBuffer collects log lines from whichever goroutine writes them.
 type lockedBuffer struct {
 	mu  sync.Mutex
 	buf strings.Builder
@@ -298,7 +289,6 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// The page's end-of-episode notes reach the log: a known event, a few short fields, nothing else.
 func TestPlayerNoteIsLogged(t *testing.T) {
 	var logged lockedBuffer
 	h := newHarness(t, config.Config{}, nil, func(d *Deps) { d.Log = slog.New(slog.NewTextHandler(&logged, nil)) })
@@ -318,5 +308,40 @@ func TestPlayerNoteIsLogged(t *testing.T) {
 	h.call(t, "POST", "/api/playback/note", `{"animeId":1,"episode":1,"event":"next","detail":{"by":"`+strings.Repeat("x", 500)+`"}}`)
 	if strings.Contains(logged.String(), strings.Repeat("x", 81)) {
 		t.Error("a long field was logged whole")
+	}
+}
+
+func TestSkipsPreferTheViewersMark(t *testing.T) {
+	h := watchHarness(t)
+	opening := func() []map[string]any {
+		t.Helper()
+		code, body := h.call(t, "GET", "/api/episode/skips?anime=1&episode=1", "")
+		if code != http.StatusOK {
+			t.Fatalf("skips answered %d: %v", code, body)
+		}
+		var out []map[string]any
+		ranges, _ := body["ranges"].([]any)
+		for _, r := range ranges {
+			if m := r.(map[string]any); m["kind"] == "op" {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	if code, _ := h.call(t, "POST", "/api/episode/skips/mark", `{"animeId":1,"episode":1,"kind":"op","start":100,"end":103}`); code != http.StatusBadRequest {
+		t.Errorf("a 3 s opening answered %d, want 400", code)
+	}
+	if code, body := h.call(t, "POST", "/api/episode/skips/mark", `{"animeId":1,"episode":1,"kind":"op","start":100,"end":190}`); code != http.StatusOK {
+		t.Fatalf("mark answered %d: %v", code, body)
+	}
+	op := opening()
+	if len(op) != 1 || op[0]["start"] != float64(100) || op[0]["end"] != float64(190) || op[0]["source"] != "marked" {
+		t.Fatalf("opening = %v, want the viewer's 100-190 mark", op)
+	}
+	if code, _ := h.call(t, "POST", "/api/episode/skips/forget", `{"animeId":1,"episode":1}`); code != http.StatusOK {
+		t.Fatal("forget refused")
+	}
+	if op := opening(); len(op) != 0 {
+		t.Fatalf("after forgetting: %v, want no opening", op)
 	}
 }

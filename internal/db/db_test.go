@@ -27,7 +27,6 @@ func migrated(t *testing.T) *DB {
 	return conn
 }
 
-// A data folder named "Anime #2" or "c%20d" must open that folder's database, not "Anime " or nothing.
 func TestOpenKeepsUnusualFolderNames(t *testing.T) {
 	for _, name := range []string{"Anime #2", "c%20d", "100%"} {
 		dir := filepath.Join(t.TempDir(), name)
@@ -77,7 +76,6 @@ func TestOpenAppliesPragmas(t *testing.T) {
 	}
 }
 
-// SQLite permits one writer, but WAL lets readers run alongside it.
 func TestConnectionPoolShape(t *testing.T) {
 	conn := open(t)
 
@@ -89,7 +87,6 @@ func TestConnectionPoolShape(t *testing.T) {
 	}
 }
 
-// query_only makes the split structural: a write on the read handle fails, not contends.
 func TestReadHandleRejectsWrites(t *testing.T) {
 	conn := migrated(t)
 
@@ -134,7 +131,6 @@ func TestMigrateIsIdempotent(t *testing.T) {
 		}
 	}
 
-	// Repeated runs must not re-apply anything, whatever the latest version is.
 	var applied, version int
 	if err := conn.R.QueryRow(
 		`SELECT count(*), coalesce(max(version_id), 0) FROM goose_db_version WHERE version_id > 0`,
@@ -160,7 +156,6 @@ func TestMigrateCreatesSchema(t *testing.T) {
 			t.Errorf("table %q missing: %v", table, err)
 		}
 	}
-	// Dropped by 00029: never used.
 	for _, table := range []string{"watch_session", "release", "job", "home_widget", "image_cache"} {
 		var n int
 		conn.R.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = ?`, table).Scan(&n)
@@ -170,7 +165,6 @@ func TestMigrateCreatesSchema(t *testing.T) {
 	}
 }
 
-// STRICT tables reject a type mismatch instead of coercing it silently.
 func TestStrictTablesRejectWrongTypes(t *testing.T) {
 	conn := migrated(t)
 
@@ -208,7 +202,31 @@ func TestCloseReleasesBothHandles(t *testing.T) {
 	}
 }
 
-// Migration 31 removes the episodes a one-part film took from release names, and nothing a film really has.
+func TestAnUpdateKeepsACopyOfTheDatabaseUntilTheNextCleanStart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	conn, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.MigrateTo(30); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := path + ".pre-30.bak"
+	if _, err := os.Stat(snapshot); err != nil {
+		t.Fatalf("no copy before the update: %v", err)
+	}
+	if err := conn.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(snapshot); !os.IsNotExist(err) {
+		t.Errorf("the copy outlived a clean start: %v", err)
+	}
+}
+
 func TestStrayFilmEpisodesAreRemoved(t *testing.T) {
 	conn := open(t)
 	if err := conn.MigrateTo(30); err != nil {
@@ -243,7 +261,6 @@ func TestStrayFilmEpisodesAreRemoved(t *testing.T) {
 		}
 		kept = append(kept, k)
 	}
-	// Kept: the film itself, a titled row, one with watch history, and other entries' episodes.
 	if got, want := strings.Join(kept, " "), "1:1 1:3 1:5 2:2 3:2"; got != want {
 		t.Errorf("kept %q, want %q", got, want)
 	}

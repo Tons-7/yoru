@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// A download from before safe names is found under its old name and moved; on Windows that includes data
-// kept in another file's hidden stream, which goes without taking the host file's other streams.
 func TestLegacyNamesMove(t *testing.T) {
 	cache := t.TempDir()
 	best := "[G] Show. "

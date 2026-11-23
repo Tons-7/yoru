@@ -23,8 +23,6 @@ func BenchmarkDecodePieces(t *testing.B) {
 	b := inputMsg.MustMarshalBinary()
 	t.SetBytes(int64(len(b)))
 	var r bytes.Reader
-	// Try to somewhat emulate what torrent.Client would do. But the goal is to get decoding as fast
-	// as possible and let consumers apply their own adjustments.
 	d := Decoder{
 		R:         bufio.NewReaderSize(&r, 1<<10),
 		MaxLength: 1 << 18,
@@ -44,11 +42,9 @@ func BenchmarkDecodePieces(t *testing.B) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// This is very expensive, and should be discovered in tests rather than a benchmark.
 		if false {
 			qt.Assert(t, qt.DeepEquals(msg, inputMsg))
 		}
-		// WWJD
 		d.Pool.Put(&msg.Piece)
 	}
 }

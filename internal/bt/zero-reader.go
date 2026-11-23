@@ -1,6 +1,5 @@
 package bt
 
-// TODO: This should implement extra methods to make io.CopyN more efficient.
 var zeroReader zeroReaderType
 
 type zeroReaderType struct{}

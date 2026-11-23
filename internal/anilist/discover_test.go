@@ -23,7 +23,6 @@ func TestSeasonAndTheOneAfterIt(t *testing.T) {
 		{time.July, "SUMMER", "FALL", false},
 		{time.September, "SUMMER", "FALL", false},
 		{time.October, "FALL", "WINTER", true},
-		// The last day of the year: next season is next year's winter.
 		{time.December, "FALL", "WINTER", true},
 	} {
 		at := time.Date(2026, tc.month, 28, 12, 0, 0, 0, time.UTC)
@@ -50,7 +49,6 @@ func TestRisingWindowsAreTheComputedSortsOnly(t *testing.T) {
 	if _, ok := RisingWindow(SortTrending); ok {
 		t.Error("trending is AniList's own ranking, not a computed window")
 	}
-	// Every sort the app offers is either computed here or one AniList can order by.
 	for _, s := range Sorts() {
 		_, computed := RisingWindow(s)
 		if _, upstream := sorts[s]; !computed && !upstream {
@@ -59,7 +57,6 @@ func TestRisingWindowsAreTheComputedSortsOnly(t *testing.T) {
 	}
 }
 
-// Each ranking is the same query with its own order and filter.
 func TestDiscoverAsksForTheRankingItWasGiven(t *testing.T) {
 	var query string
 	var vars map[string]any
@@ -120,7 +117,6 @@ func TestDiscoverRefusesUnknownSortsAndClampsThePage(t *testing.T) {
 	if _, err := c.Discover(ctx, "newest", 1, 20); err == nil || calls != 0 {
 		t.Fatalf("an unknown sort: err=%v, %d requests sent", err, calls)
 	}
-	// A computed window is not something AniList can be asked for directly.
 	if _, err := c.Discover(ctx, SortWeek, 1, 20); err == nil {
 		t.Error("the week window was sent to AniList as a sort")
 	}

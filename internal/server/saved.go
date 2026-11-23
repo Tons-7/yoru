@@ -13,7 +13,6 @@ import (
 	"yoru/web"
 )
 
-// appFiles lists the built app, for a phone to keep and open Yoru with the PC off.
 func (s *Server) appFiles(w http.ResponseWriter, _ *http.Request) {
 	assets, ok := web.FS()
 	if !ok {
@@ -41,7 +40,6 @@ func (s *Server) appFiles(w http.ResponseWriter, _ *http.Request) {
 	send(w, http.StatusOK, map[string]any{"version": hex.EncodeToString(sum[:6]), "files": files})
 }
 
-// savedReady: the PC has the episode whole for a phone's copy; asked while waiting, so it opens nothing.
 func (s *Server) savedReady(w http.ResponseWriter, r *http.Request) {
 	animeID, _ := strconv.Atoi(r.URL.Query().Get("anime"))
 	episode, _ := strconv.Atoi(r.URL.Query().Get("episode"))
@@ -69,10 +67,8 @@ type savedWatch struct {
 	At       int64   `json:"at"`
 }
 
-// savedProgress takes what was watched on a phone's saved copies while Yoru was out of reach.
 func (s *Server) savedProgress(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		// The phone's clock, so its times can be read on this one's.
 		Now   int64        `json:"now"`
 		Items []savedWatch `json:"items"`
 	}
@@ -85,11 +81,12 @@ func (s *Server) savedProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	watched, failed := []savedWatch{}, []savedWatch{}
+	invalid := 0
 	for _, item := range body.Items {
 		if item.AnimeID == 0 || item.Episode <= 0 {
+			invalid++
 			continue
 		}
-		// Watched here since: the phone's older place would move it back.
 		at := time.UnixMilli(item.At).Add(skew + time.Minute).Unix()
 		if last, err := s.store.PlayedAt(ctx, item.AnimeID, epKey(item.Episode)); err == nil && last > at {
 			continue
@@ -105,5 +102,5 @@ func (s *Server) savedProgress(w http.ResponseWriter, r *http.Request) {
 			watched = append(watched, item)
 		}
 	}
-	send(w, http.StatusOK, map[string]any{"saved": len(body.Items) - len(failed), "watched": watched, "failed": failed})
+	send(w, http.StatusOK, map[string]any{"saved": len(body.Items) - len(failed) - invalid, "watched": watched, "failed": failed})
 }

@@ -1,4 +1,3 @@
-// Toggling Anime4K in its dialog must not scroll the dialog, and a strip's selected tab stays in view.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -15,7 +14,6 @@ const check = (ok, label, detail = '') => {
 check(await prepareLocalEpisode({ base: BASE, lib: process.env.YORU_LIB, anime: ANIME }), 'test episode ready')
 
 const browser = await chromium.launch()
-// A phone: short enough that the dialog has to scroll.
 const page = await browser.newPage({ viewport: { width: 412, height: 700 }, isMobile: true, hasTouch: true })
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 await page.locator('video').first().waitFor({ timeout: 30_000 })
@@ -38,11 +36,10 @@ for (const state of ['on', 'off', 'on']) {
   check(now.dialog === 0 && now.page === start.page, `switching it ${state} leaves the dialog where it was`, JSON.stringify(now))
 }
 
-// The strip still brings its own selection into view, sideways.
-await dialog.getByRole('tab', { name: 'Full' }).scrollIntoViewIfNeeded()
-await dialog.getByRole('tab', { name: 'Full' }).click()
+await dialog.getByRole('radio', { name: 'Full' }).scrollIntoViewIfNeeded()
+await dialog.getByRole('radio', { name: 'Full' }).click()
 await sleep(300)
-const visible = await dialog.getByRole('tab', { name: 'Full' }).evaluate((el) => {
+const visible = await dialog.getByRole('radio', { name: 'Full' }).evaluate((el) => {
   const tab = el.getBoundingClientRect()
   const strip = el.parentElement.getBoundingClientRect()
   return tab.left >= strip.left - 1 && tab.right <= strip.right + 1

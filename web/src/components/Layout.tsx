@@ -42,6 +42,7 @@ import { UpdateButton, UpdateRestarting } from './UpdateButton'
 import { useUpdateOffered } from '../lib/update'
 import { menuItems, useDismiss, useMediaQuery, walkMenu } from '../lib/hooks'
 import { useNewSettings } from '../lib/whatsNew'
+import { WhatsNew } from './WhatsNew'
 import { playingNow } from '../lib/miniplayer'
 import { RoomProvider } from './RoomProvider'
 import { RoomBubble } from './RoomBubble'
@@ -100,18 +101,27 @@ function Shell() {
   const setup = useSetup()
   const navigate = useNavigate()
   const nudged = useRef(false)
+  const hostHere = useAccess().data?.host === true
   useEffect(() => {
-    if (nudged.current || !setup.data || pathname === '/setup') return
+    if (pathname === '/setup') nudged.current = true
+    if (nudged.current || !setup.data || !hostHere) return
     if (setup.data.ready && setup.data.indexers > 0) return
     nudged.current = true
     navigate('/setup', { replace: true })
-  }, [setup.data, pathname, navigate])
+  }, [setup.data, hostHere, pathname, navigate])
 
   const heading = usePageHeading(main, pageKey, backBar)
   const category = settingsCategory(pathname, search)
   const studio = studioName(pathname, search)
   const title = studio ?? (heading.text || category || pageName(pathname, search) || '')
   const titleShown = !!studio || !!category || !heading.text || heading.hidden || heading.away
+  useEffect(() => {
+    if (!title || document.title !== 'Yoru') return
+    document.title = `${title} · Yoru`
+    return () => {
+      document.title = 'Yoru'
+    }
+  }, [title])
 
   return (
     <div className="min-h-dvh">
@@ -121,7 +131,7 @@ function Shell() {
           e.preventDefault()
           main.current?.focus()
         }}
-        className="sr-only z-[60] rounded-lg bg-accent-500 px-3 py-2 text-sm font-medium text-white focus:not-sr-only focus:fixed focus:top-2 focus:left-2"
+        className="sr-only z-60 rounded-lg bg-accent-500 px-3 py-2 text-sm font-medium text-white focus:not-sr-only focus:fixed focus:top-2 focus:left-2"
       >
         Skip to content
       </a>
@@ -137,6 +147,7 @@ function Shell() {
       )}
       <Unpaired />
       <AccessRequests />
+      <WhatsNew hold={fullBleed || guide} />
       <DockedWatch />
       <main
         ref={main}
@@ -151,7 +162,7 @@ function Shell() {
           backBar && '[&_h1.page-title]:sr-only',
         )}
       >
-        <ErrorBoundary key={pageKey} resetKey={pathname}>
+        <ErrorBoundary key={pageKey} resetKey={pathname + search}>
           <Outlet />
         </ErrorBoundary>
       </main>
@@ -196,10 +207,18 @@ function usePageHeading(main: RefObject<HTMLElement | null>, pageKey: string, on
       setFound((prev) => (prev.el === el && prev.text === text && prev.hidden === hidden ? prev : { el, text, hidden }))
     }
     read()
-    const watcher = new MutationObserver(read)
+    let frame = 0
+    const watcher = new MutationObserver(() => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        read()
+      })
+    })
     watcher.observe(root, { childList: true, subtree: true, characterData: true })
     return () => {
       watcher.disconnect()
+      cancelAnimationFrame(frame)
       setFound({ el: null, text: '', hidden: false })
     }
   }, [main, pageKey, on])
@@ -293,7 +312,7 @@ function Header({ wide, back, bare }: { wide: boolean; back: Back | null; bare: 
     <header
       data-stuck="always"
       className={cx(
-        'sticky top-0 z-40 transition-[background-color,transform] duration-200',
+        'sticky top-0 z-40 pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)] transition-[background-color,transform] duration-200',
         tucked && '-translate-y-full',
         !scrolled
           ? 'bg-transparent'
@@ -724,7 +743,7 @@ function ExitItem({ onAsk }: { onAsk: (stops: ExitStops) => void }) {
           {summary && !exiting && <span className="block truncate text-xs text-base-400">{summary}</span>}
         </span>
       </button>
-      {failed && <p className="px-2 pt-1 text-xs text-recap">{failed}</p>}
+      {failed && <p className="px-2 pt-1 text-xs text-red-300">{failed}</p>}
     </>
   )
 }
@@ -762,7 +781,7 @@ function ListShortcuts({ close }: { close: () => void }) {
             >
               <span className="truncate">{status.label}</span>
               {counts && (
-                <span className={cx('text-xs tabular-nums', n > 0 ? 'text-base-300' : 'text-base-600')}>{n}</span>
+                <span className={cx('text-xs tabular-nums', n > 0 ? 'text-base-300' : 'text-base-500')}>{n}</span>
               )}
             </Link>
           )

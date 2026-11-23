@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -48,7 +49,6 @@ func TestAniListRunWithoutImporterOnlyPushes(t *testing.T) {
 	}
 }
 
-// A rejected token ends the run before the pull: every entry retried would only burn the rate limit.
 func TestAniListRunStopsOnUnauthorized(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +92,6 @@ func TestMALPullWhenNotConnectedIsANoOp(t *testing.T) {
 	}
 }
 
-// Connecting with a list ahead of MAL records the site's state, not applies it; the push corrects MAL.
 func TestMALPullSeedsWithoutApplyingWhenLocalExists(t *testing.T) {
 	up := &malServer{list: `{"data":[
 	  {"node":{"id":52991,"title":"Frieren","num_episodes":28},
@@ -102,7 +101,7 @@ func TestMALPullSeedsWithoutApplyingWhenLocalExists(t *testing.T) {
 	ctx := context.Background()
 	addAnime(t, st, 154587, 52991, 28)
 	st.MarkWatched(ctx, 154587, 9)
-	st.ClearDirty(ctx, 154587, 1, 1)
+	st.ClearDirtyAt(ctx, 154587, 1, 1, math.MaxInt64)
 
 	rep, err := sync.Pull(ctx)
 	if err != nil || rep.Applied != 0 || rep.Matched != 1 {
@@ -118,8 +117,6 @@ func TestMALPullSeedsWithoutApplyingWhenLocalExists(t *testing.T) {
 	}
 }
 
-// A MAL-only title (negative id, known to the corpus alone) gets a local entry
-// from the pull, syncs back to MAL, and is never offered to AniList.
 func TestMALPullReachesMALOnlyAnime(t *testing.T) {
 	up := &malServer{list: `{"data":[
 	  {"node":{"id":424242,"title":"MAL only","num_episodes":12},
@@ -127,7 +124,6 @@ func TestMALPullReachesMALOnlyAnime(t *testing.T) {
 	                  "updated_at":"2026-08-01T00:00:00+00:00"}}],"paging":{}}`}
 	sync, st := newMALSync(t, up)
 	ctx := context.Background()
-	// The corpus keys a MAL-only title on the negated MAL id.
 	if _, err := st.SaveCorpus(ctx, []store.CorpusEntry{{AniListID: -424242, MalID: 424242,
 		Titles: []store.CorpusTitle{{Text: "MAL only", Kind: "primary"}}}}); err != nil {
 		t.Fatal(err)
@@ -144,7 +140,6 @@ func TestMALPullReachesMALOnlyAnime(t *testing.T) {
 		t.Fatalf("offered to AniList: %+v", dirty)
 	}
 
-	// Watching it locally reaches MAL through the corpus's mal_id.
 	if _, err := st.MarkWatched(ctx, -424242, 3); err != nil {
 		t.Fatal(err)
 	}

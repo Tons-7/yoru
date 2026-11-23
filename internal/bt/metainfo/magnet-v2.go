@@ -13,13 +13,12 @@ import (
 	infohash_v2 "yoru/internal/bt/types/infohash-v2"
 )
 
-// Magnet link components.
 type MagnetV2 struct {
-	InfoHash    g.Option[Hash] // Expected in this implementation
+	InfoHash    g.Option[Hash]
 	V2InfoHash  g.Option[infohash_v2.T]
-	Trackers    []string   // "tr" values
-	DisplayName string     // "dn" value, if not empty
-	Params      url.Values // All other values, such as "x.pe", "as", "xs" etc.
+	Trackers    []string
+	DisplayName string
+	Params      url.Values
 }
 
 const (
@@ -27,7 +26,6 @@ const (
 )
 
 func (m MagnetV2) String() string {
-	// Deep-copy m.Params
 	vs := make(url.Values, len(m.Params)+len(m.Trackers)+2)
 	for k, v := range m.Params {
 		vs[k] = append([]string(nil), v...)
@@ -40,7 +38,6 @@ func (m MagnetV2) String() string {
 		vs.Add("dn", m.DisplayName)
 	}
 
-	// "urn:btih:" unescaped for Transmission and Deluge, and first for Deluge; InfoHash is BitTorrent's.
 	u := url.URL{
 		Scheme: "magnet",
 	}
@@ -61,7 +58,6 @@ func (m MagnetV2) String() string {
 	return u.String()
 }
 
-// ParseMagnetUri parses Magnet-formatted URIs into a Magnet instance
 func ParseMagnetV2Uri(uri string) (m MagnetV2, err error) {
 	u, err := url.Parse(uri)
 	if err != nil {
@@ -100,11 +96,14 @@ func ParseMagnetV2Uri(uri string) (m MagnetV2, err error) {
 			lazyAddParam(&m.Params, "xt", xt)
 		}
 	}
+	if !m.InfoHash.Ok && !m.V2InfoHash.Ok {
+		err = errors.New("magnet link has no infohash")
+		return
+	}
 	q.Del("xt")
 	m.DisplayName = popFirstValue(q, "dn").UnwrapOrZeroValue()
 	m.Trackers = q["tr"]
 	q.Del("tr")
-	// Add everything we haven't consumed.
 	copyParams(&m.Params, q)
 	return
 }

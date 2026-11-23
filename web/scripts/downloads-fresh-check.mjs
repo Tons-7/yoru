@@ -1,5 +1,3 @@
-// The Downloads page never shows a stale list: a download queued elsewhere is
-// there on arrival, and one queued while the page is open appears without a reload.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -27,7 +25,6 @@ const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
-// Client-side navigation, as the app's own links do: the query cache survives it.
 const go = (path) =>
   page.evaluate((p) => {
     window.history.pushState({}, '', p)
@@ -38,7 +35,6 @@ const row = (episode) => page.getByText(new RegExp(`\\b(ep|episode) ${episode}\\
 await page.goto(`${BASE}/downloads`, { waitUntil: 'domcontentloaded' })
 await sleep(2000)
 
-// Away, something else queues episode 5; back on Downloads it must already be listed.
 await go('/browse')
 await sleep(1000)
 check((await queue(5)).ok, 'episode 5 queued from elsewhere')
@@ -49,7 +45,6 @@ await go('/downloads')
 const onArrival = await row(5).waitFor({ timeout: 4000 }).then(() => true, () => false)
 check(onArrival, 'it is listed on arrival, not after the next poll', `${Date.now() - t0} ms`)
 
-// While the page is open, another is queued from elsewhere: it appears without a reload.
 check((await queue(6)).ok, 'episode 6 queued while the page is open')
 const t1 = Date.now()
 const live = await row(6).waitFor({ timeout: 17_000 }).then(() => true, () => false)

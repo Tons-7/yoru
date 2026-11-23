@@ -7,7 +7,6 @@ import (
 	pp "yoru/internal/bt/peer_protocol"
 )
 
-// queuedPeer is a peer measured at rate bytes a second with queued requests waiting on it.
 func queuedPeer(t *Torrent, rate float64, queued int) *PeerConn {
 	p := &PeerConn{PeerMaxRequests: 250}
 	p.t = t
@@ -19,7 +18,6 @@ func queuedPeer(t *Torrent, rate float64, queued int) *PeerConn {
 	return p
 }
 
-// A seek's urgent request moves only to a peer that would serve it twice as soon, or off a holder gone silent.
 func TestStealsDecision(t *testing.T) {
 	const req RequestIndex = 7
 	for _, c := range []struct {
@@ -27,7 +25,7 @@ func TestStealsDecision(t *testing.T) {
 		ours, theirs          float64
 		ourQueue, theirQueue  int
 		upstream              bool
-		sentAgo               time.Duration // 0: never sent
+		sentAgo               time.Duration
 		holderDeliveredLately bool
 		want                  bool
 	}{
@@ -62,8 +60,41 @@ func TestStealsDecision(t *testing.T) {
 	}
 }
 
-// Request then cancel, over and over, against a request server stalled on its data allowance: the arrival
-// order stays bounded by what is live.
+func TestIsLowOnRequests(t *testing.T) {
+	tor := &Torrent{chunkSize: defaultChunkSize}
+	nominal := queuedPeer(tor, 4e6, 0).nominalMaxRequests()
+	if nominal < 8 {
+		t.Fatalf("nominal %d too small for the cases", nominal)
+	}
+	for _, c := range []struct {
+		name       string
+		queued     int
+		cancelled  int
+		foundNone  bool
+		updatedAgo time.Duration
+		want       bool
+	}{
+		{name: "empty", want: true},
+		{name: "over half full", queued: nominal/2 + 1},
+		{name: "exactly half", queued: nominal / 2, want: true},
+		{name: "cancels awaiting reject count", queued: nominal/2 - 1, cancelled: 2},
+		{name: "nothing found just now", queued: 1, foundNone: true},
+		{name: "nothing found a while ago", queued: 1, foundNone: true, updatedAgo: retryEmptyAfter, want: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := queuedPeer(tor, 4e6, c.queued)
+			for i := range c.cancelled {
+				p.requestState.Cancelled.Add(RequestIndex(5000 + i))
+			}
+			p.queue.foundNothing = c.foundNone
+			p.lastRequestUpdate = time.Now().Add(-c.updatedAgo)
+			if got := p.isLowOnRequests(); got != c.want {
+				t.Fatalf("isLowOnRequests = %v, want %v (nominal %d)", got, c.want, nominal)
+			}
+		})
+	}
+}
+
 func TestRequestFifoSweepsCancelledEntries(t *testing.T) {
 	live := map[Request]uint64{}
 	alive := func(r Request, a uint64) bool {
@@ -82,7 +113,6 @@ func TestRequestFifoSweepsCancelledEntries(t *testing.T) {
 	}
 }
 
-// The rate is closed per second of expecting data and averaged with the last; a shorter span changes nothing.
 func TestSampleRateAveragesWindows(t *testing.T) {
 	p := &Peer{}
 	read := func(bytes int64, expecting time.Duration) {
@@ -98,14 +128,12 @@ func TestSampleRateAveragesWindows(t *testing.T) {
 	if p.queue.rate != 1e6 {
 		t.Fatalf("half a window moved the rate to %v", p.queue.rate)
 	}
-	// The half window counts once the second is full: 3.5 MB over that second, averaged with 1e6.
 	read(3_000_000, 500*time.Millisecond)
 	if want := (1e6 + 3.5e6) / 2; p.queue.rate != want {
 		t.Fatalf("second window: rate = %v, want %v", p.queue.rate, want)
 	}
 }
 
-// The queue holds RequestQueueTime of the rate, never less than MinRequestQueue nor more than the peer allows.
 func TestNominalMaxRequestsScalesWithRate(t *testing.T) {
 	tor := &Torrent{chunkSize: 16 << 10}
 	for _, c := range []struct {

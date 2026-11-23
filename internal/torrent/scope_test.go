@@ -166,7 +166,7 @@ func TestQualityFoldersStillPickTheLargest(t *testing.T) {
 
 func TestOneSeasonPackIsUnchanged(t *testing.T) {
 	files := seasonFolders("Show")
-	f, _, ok := PickNumbered(files, 3, []int{3})
+	f, _, ok := pickNumbered(files, 3, []int{3})
 	if !ok || !strings.Contains(f.Name, "- 03 ") {
 		t.Errorf("picked %q", f.Name)
 	}

@@ -1,5 +1,3 @@
-// package types contains types that are used by the request strategy and the torrent package and
-// need to be shared between them.
 package types
 
 import (
@@ -10,7 +8,6 @@ import (
 
 type PieceIndex = int
 
-// TODO: Where is the doc/spec calling it this?
 type ChunkSpec struct {
 	Begin, Length pp.Integer
 }
@@ -33,7 +30,6 @@ func (r Request) ToMsg(mt pp.MessageType) pp.Message {
 	}
 }
 
-// Describes the importance of obtaining a particular piece.
 type PiecePriority byte
 
 func (pp *PiecePriority) Raise(maybe PiecePriority) bool {
@@ -45,12 +41,10 @@ func (pp *PiecePriority) Raise(maybe PiecePriority) bool {
 }
 
 const (
-	PiecePriorityNone      PiecePriority = iota // Not wanted. Must be the zero value.
-	PiecePriorityNormal                         // Wanted.
-	PiecePriorityHigh                           // Wanted a lot.
-	PiecePriorityReadahead                      // May be required soon.
-	// Deprecated: The piece after a read; the request strategy orders readahead now, but some code
-	// still expects it.
+	PiecePriorityNone PiecePriority = iota
+	PiecePriorityNormal
+	PiecePriorityHigh
+	PiecePriorityReadahead
 	PiecePriorityNext
-	PiecePriorityNow // A Reader is reading in this piece. Highest urgency.
+	PiecePriorityNow
 )

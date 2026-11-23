@@ -15,8 +15,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// Looking never deletes, and a delete takes only the names the page showed: a request without them, or with
-// none, leaves every file where it is.
 func TestCleanOrphansOnlyDeletesNamedFiles(t *testing.T) {
 	dir := t.TempDir()
 	stray := filepath.Join(dir, "stray.mkv")
@@ -56,7 +54,6 @@ func TestCleanOrphansOnlyDeletesNamedFiles(t *testing.T) {
 	if res.StatusCode != http.StatusOK || body["removed"] != float64(1) || onDisk() {
 		t.Fatalf("POST naming it: HTTP %d %v, on disk %v; want it removed", res.StatusCode, body, onDisk())
 	}
-	// A name shown but no longer an orphan (or gone) is reported kept, not silently dropped.
 	if kept, _ := body["kept"].([]any); len(kept) != 1 || kept[0] != "claimed.mkv" {
 		t.Fatalf("kept = %v, want the name that was not removed", body["kept"])
 	}

@@ -19,7 +19,6 @@ import (
 	"yoru/internal/store"
 )
 
-// Airing shows in the shapes that break matching: absolute runs, subtitled cours, numbered sequels.
 var airing = []struct {
 	id      int
 	episode int
@@ -39,8 +38,6 @@ var airing = []struct {
 	{196187, 9, "Super no Ura de Yani Suu Futari"},
 }
 
-// Each show, seeded as the app does, resolves a release of its own cour from the real indexers.
-// Opt-in: YORU_LIVE=1 go test ./internal/library -run LiveAiring -v
 func TestLiveAiringShowsResolveARelease(t *testing.T) {
 	if os.Getenv("YORU_LIVE") == "" {
 		t.Skip("set YORU_LIVE=1 to search the live indexers")
@@ -90,7 +87,6 @@ func TestLiveAiringShowsResolveARelease(t *testing.T) {
 	}
 }
 
-// liveSources reads the sites from YORU_NYAA and YORU_TOKYOTOSHO, so none is named in the repo.
 func liveSources(t *testing.T) indexer.Source {
 	t.Helper()
 	var sites []indexer.Source
@@ -106,7 +102,6 @@ func liveSources(t *testing.T) indexer.Source {
 	return indexer.Multi{Sources: sites}
 }
 
-// sibling names the cour word that makes a title another entry's, if any.
 func sibling(title string, req Request) string {
 	words := strings.Fields(stripSymbols(strings.ToLower(title)))
 	for _, w := range req.Cour.Siblings {
@@ -117,8 +112,6 @@ func sibling(title string, req Request) string {
 	return ""
 }
 
-// seedLikeTheApp stores what a first visit to a show's page stores: the AniList
-// media, the franchise edges around it, and the episode list from ani.zip.
 func seedLikeTheApp(t *testing.T, st *store.Store, al *anilist.Client, log *slog.Logger, animeID int) {
 	t.Helper()
 	ctx := context.Background()

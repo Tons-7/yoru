@@ -1,5 +1,3 @@
-// Watching flow: "Still watching?", the sleep timer, hidden spoilers, and the cards at a show's last aired
-// episode. AniList's answers (episodes, seasons, recommendations) are fed where needed.
 import { copyFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { chromium } from 'playwright'
@@ -31,7 +29,6 @@ for (let i = 0; i < 60; i++) {
   await sleep(1000)
 }
 
-// Five playable episodes from the test file.
 await api('/api/local/paths', { paths: [LIB] })
 for (let n = 2; n <= 5; n++) copyFileSync(join(LIB, 'Yoru Test Show - 01.mkv'), join(LIB, `copy-${n}.mkv`))
 await api('/api/local/scan', {})
@@ -51,7 +48,6 @@ const errors = []
 page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 const video = page.locator('video')
 const playing = () => until(() => video.evaluate((v) => !v.paused && v.currentTime > 0), 60_000)
-// Run the episode out without a key or pointer: nobody is touching anything.
 const runOut = () =>
   video.evaluate((v) => {
     v.currentTime = v.duration - 0.6
@@ -59,10 +55,8 @@ const runOut = () =>
   })
 const at = (ep, anime = ANIME) => until(() => page.url().endsWith(`/watch/${anime}/${ep}`), 30_000)
 
-// "Still watching?": two episodes auto next started untouched, then it asks instead of counting down.
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
 await playing()
-// A progress report in the episode's last minutes readies the next one ahead.
 const log = () => (process.env.YORU_LOG ? readFileSync(process.env.YORU_LOG, 'utf8') : '')
 check(await until(() => /next episode readied/.test(log()), 30_000), 'episode 2 is readied near the end of 1')
 await runOut()
@@ -86,7 +80,6 @@ await still.getByRole('button', { name: 'Keep watching' }).click()
 check(await at(4), 'Keep watching plays on')
 await playing()
 
-// The sleep timer, set to the end of this episode: it ends there, the card saying why there's no countdown.
 const sleepButton = page.getByRole('button', { name: /^Player settings/ })
 const sleepRow = page.getByRole('menuitem', { name: /^Sleep timer/ })
 const pickSleep = async (name) => {
@@ -106,7 +99,7 @@ await page.screenshot({ path: `${SHOTS}/watching-menu.png` })
 await page.keyboard.press('Escape')
 await pickSleep('End of this episode')
 await runOut()
-const upNext = page.getByRole('dialog', { name: 'Up next' })
+const upNext = page.getByRole('region', { name: 'Up next' })
 check(await until(() => upNext.getByText('The sleep timer stopped auto next.').isVisible(), 20_000), 'at the end the card says the timer stopped auto next')
 await sleep(7000)
 check(page.url().endsWith(`/watch/${ANIME}/4`), 'and stays on the episode')
@@ -114,7 +107,6 @@ await page.screenshot({ path: `${SHOTS}/watching-sleep.png` })
 await upNext.getByRole('button', { name: 'Play now' }).click()
 check(await at(5), 'Play now goes on by hand')
 
-// Spoilers on the show page: past the next episode, no title, synopsis or clear still until the eye is pressed.
 const ep = (n, more = {}) => ({
   animeId: ANIME, epKey: String(n), number: n, display: n, titleEn: `Title ${n}`, overview: `What happens in ${n}`,
   still: 'data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==',
@@ -141,14 +133,12 @@ const sent = (await showAll).postDataJSON()
 check(sent.value === 'off' && sent.animeId === ANIME, 'Show all titles turns it off for this show alone', JSON.stringify(sent))
 await page.unroute(`**/api/episodes?id=${ANIME}`)
 
-// The last aired episode: the cards for a season to come, one out already, a show still airing, and the end.
 const lastAired = [ep(4, { watched: true }), ep(5)]
 await page.route(`**/api/episodes?id=${ANIME}`, (r) => r.fulfill({ json: { items: lastAired, count: 2 } }))
 const season = (status) => ({ id: 990001, ordinal: 2, romaji: 'Show Season 2', english: null, year: 2027, status, progress: 0, onList: false })
 let franchise = [{ id: ANIME, ordinal: 1, romaji: 'Show', progress: 4, onList: true, status: 'FINISHED' }, season('NOT_YET_RELEASED')]
 await page.route('**/api/franchise?*', (r) => r.fulfill({ json: { rootId: ANIME, seasons: franchise, related: [] } }))
 await page.route('**/api/score', (r) => r.fulfill({ json: { animeId: ANIME, score: 80 } }))
-// Episode 5 is the entry's last by its count, as the server's play order reads a finale.
 await page.route(`**/api/anime/${ANIME}`, async (r) => {
   const res = await r.fetch()
   return r.fulfill({ response: res, json: { ...(await res.json()), episodes: 5 } })
@@ -162,9 +152,9 @@ check(await finale.getByText('Show Season 2 · coming 2027').isVisible(), 'with 
 check(await finale.getByRole('button', { name: 'Add to Planning' }).isVisible(), 'offering Plan to watch')
 check(await finale.getByRole('button', { name: "Alert me when it's out" }).isVisible(), 'and an alert')
 const scored = page.waitForRequest((r) => r.url().endsWith('/api/score'))
-await finale.getByRole('button', { name: '8', exact: true }).click()
+await finale.getByRole('button', { name: 'Score 8', exact: true }).click()
 check((await scored).postDataJSON().score === 80, 'a score from the card')
-check(await until(async () => (await finale.getByRole('button', { name: '8', exact: true }).getAttribute('aria-pressed')) === 'true'), 'shown as chosen')
+check(await until(async () => (await finale.getByRole('button', { name: 'Score 8', exact: true }).getAttribute('aria-pressed')) === 'true'), 'shown as chosen')
 await page.screenshot({ path: `${SHOTS}/watching-finale.png` })
 
 franchise = [franchise[0], season('RELEASING')]

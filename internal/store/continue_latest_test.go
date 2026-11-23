@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// An older episode left part way is not what to continue once later ones were watched to the end: the
-// rail follows the show's latest episode, as the series page does, and offers the next one.
 func TestContinueWatchingFollowsTheLatestEpisode(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -45,7 +43,6 @@ func TestContinueWatchingFollowsTheLatestEpisode(t *testing.T) {
 	}
 }
 
-// Picking Rewatching puts the show on the rail at once, offering episode 1, before any episode is marked.
 func TestContinueWatchingOffersAFreshRewatch(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

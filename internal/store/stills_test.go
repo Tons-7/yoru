@@ -18,8 +18,6 @@ func seedCatalogue(t *testing.T, s *Store, id int, status string, count int) {
 	}
 }
 
-// The original rule was "stale only if there are no rows at all", which meant a
-// show first opened at episode three never learned about episode four.
 func TestEpisodesStaleWhileAiring(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -58,13 +56,11 @@ func TestEpisodesStaleFinishedAndComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Nothing left to learn: never fetched again, whatever the age.
 	if s.EpisodesStale(ctx, 2, time.Nanosecond) {
 		t.Error("a finished show with every title and still should never refetch")
 	}
 }
 
-// A show the source lacks stores nothing, an answer kept for the refresh window.
 func TestEmptyEpisodeFetchIsRemembered(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -121,7 +117,6 @@ func TestStillGapsAndFill(t *testing.T) {
 	}
 }
 
-// Rows from an episode count are playable but say they're no proof the episode exists.
 func TestPlannedEpisodesAreMarked(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

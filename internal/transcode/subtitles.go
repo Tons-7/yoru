@@ -3,6 +3,7 @@ package transcode
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -17,24 +18,18 @@ import (
 	"yoru/internal/proc"
 )
 
-// A track reads as far as the download reached; the rest comes next request, so no longer wait.
 const subtitleDeadline = 45 * time.Second
 
-// How long a track from a still-downloading file is trusted before being read again.
 const subtitleRefresh = 8 * time.Second
 
-// Subtitles render in the browser, not burned in, which costs a GPU trip per frame and can't switch.
 type Subtitles struct {
 	ffmpeg string
 
-	mu sync.Mutex
-	// Tracks read from a source that won't grow; a downloading one would freeze at its first hole.
+	mu   sync.Mutex
 	done map[string]struct{}
-	// One extraction per output path, or two runs writing one file hand back half of it.
 	busy map[string]*sync.Mutex
 }
 
-// Font extraction sets its working directory to the output folder, so the path must be absolute.
 func NewSubtitles(ffmpeg string) *Subtitles {
 	return &Subtitles{
 		ffmpeg: absolute(ffmpeg),
@@ -43,7 +38,6 @@ func NewSubtitles(ffmpeg string) *Subtitles {
 	}
 }
 
-// lockFor serialises extractions of one track without blocking others.
 func (s *Subtitles) lockFor(path string) *sync.Mutex {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -56,14 +50,25 @@ func (s *Subtitles) lockFor(path string) *sync.Mutex {
 	return m
 }
 
-// Forget drops what is remembered about a closed session's folder, or both maps
-// grow by every track of every episode for the life of the process.
+func (s *Subtitles) lockPath(path string) *sync.Mutex {
+	for {
+		m := s.lockFor(path)
+		m.Lock()
+		s.mu.Lock()
+		current := s.busy[path] == m
+		s.mu.Unlock()
+		if current {
+			return m
+		}
+		m.Unlock()
+	}
+}
+
 func (s *Subtitles) Forget(dir string) {
 	inside := filepath.Clean(dir) + string(filepath.Separator)
 	s.ForgetOwned(func(path string) bool { return strings.HasPrefix(path, inside) })
 }
 
-// ForgetOwned is Forget for every path owned says yes to, such as all of one session's folders.
 func (s *Subtitles) ForgetOwned(owned func(path string) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -73,7 +78,6 @@ func (s *Subtitles) ForgetOwned(owned func(path string) bool) {
 		}
 	}
 	for path, m := range s.busy {
-		// One in use keeps its lock; the next Forget takes it.
 		if owned(path) && m.TryLock() {
 			m.Unlock()
 			delete(s.busy, path)
@@ -89,8 +93,7 @@ type Track struct {
 	Default  bool   `json:"default"`
 	Forced   bool   `json:"forced"`
 	URL      string `json:"url"`
-	// Pictures: a PGS track, its URL a .sup file rather than ASS text.
-	Pictures bool `json:"pictures,omitempty"`
+	Pictures bool   `json:"pictures,omitempty"`
 }
 
 type FontFile struct {
@@ -98,22 +101,24 @@ type FontFile struct {
 	URL  string `json:"url"`
 }
 
-// Cues is how many lines the extracted track holds. Zero means the file was
-// read but nothing recovered, which is a different problem from failing.
 func (s *Subtitles) Cues(dir string, track int, codec string) int {
 	return dialogueLines(filepath.Join(dir, fmt.Sprintf("sub-%d.%s", track, subtitleExt(codec))))
 }
 
-// Extract reads a track as ASS; unless complete, it is reread past subtitleRefresh, keeping the fuller read.
+func (s *Subtitles) Whole(path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.done[path]
+	return ok
+}
+
 func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, codec string, complete bool) (string, error) {
 	name := fmt.Sprintf("sub-%d.%s", track, subtitleExt(codec))
 	path := filepath.Join(dir, name)
 
-	one := s.lockFor(path)
-	one.Lock()
+	one := s.lockPath(path)
 	defer one.Unlock()
 
-	// Checked in the lock, and the file too: closing a session deletes the directory under it.
 	s.mu.Lock()
 	_, already := s.done[path]
 	s.mu.Unlock()
@@ -126,7 +131,6 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 		s.mu.Unlock()
 	}
 
-	// Throttled only once the track holds cues; an empty read must be retried.
 	if !complete {
 		if info, err := os.Stat(path); err == nil && time.Since(info.ModTime()) < subtitleRefresh && dialogueLines(path) > 0 {
 			return path, nil
@@ -142,20 +146,16 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 
 	args := append([]string{"-hide_banner", "-loglevel", "error", "-nostdin"}, reconnectArgs(source)...)
 	args = append(args, "-i", source, "-map", fmt.Sprintf("0:%d", track))
-	// ASS is copied verbatim so its positioning and karaoke survive intact.
 	if isASS(codec) {
 		args = append(args, "-c:s", "copy")
 	} else {
 		args = append(args, "-c:s", "ass")
 	}
-	// Written aside and moved into place; the format is named, or ffmpeg infers it from ".part".
 	staging := path + ".part"
 	args = append(args, "-f", subtitleExt(codec), "-y", staging)
 
 	out, err := proc.Hide(exec.CommandContext(ctx, s.ffmpeg, args...)).CombinedOutput()
 
-	// Cues are interleaved through the file, so a track reads only as far as the
-	// download reached. Partial output covers the part that can be watched.
 	cues := dialogueLines(staging)
 	have := dialogueLines(path)
 	if err != nil && cues == 0 && have == 0 {
@@ -163,7 +163,6 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 		return "", fmt.Errorf("extract subtitle %d: %w: %s", track, err, strings.TrimSpace(string(out)))
 	}
 
-	// Holes move as pieces land, so reads are unioned and nothing read is lost.
 	if have > 0 {
 		if mergeErr := mergeInto(staging, path); mergeErr != nil {
 			os.Remove(staging)
@@ -173,7 +172,6 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 
 	if renameErr := os.Rename(staging, path); renameErr != nil {
 		os.Remove(staging)
-		// The previous track is being served this instant; it is what there is.
 		if have > 0 {
 			return path, nil
 		}
@@ -188,19 +186,16 @@ func (s *Subtitles) Extract(ctx context.Context, source, dir string, track int, 
 	return path, nil
 }
 
-// A playhead read covers a little before, for the line on screen, and minutes ahead.
 const (
 	aroundBefore = 30.0
 	aroundSpan   = 330.0
 	aroundLimit  = 20 * time.Second
 )
 
-// ExtractAround merges in the track near the playhead, which is downloaded where the middle may not be.
 func (s *Subtitles) ExtractAround(ctx context.Context, source, dir string, track int, codec string, at float64) (string, error) {
 	path := filepath.Join(dir, fmt.Sprintf("sub-%d.%s", track, subtitleExt(codec)))
 
-	one := s.lockFor(path)
-	one.Lock()
+	one := s.lockPath(path)
 	defer one.Unlock()
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -213,7 +208,6 @@ func (s *Subtitles) ExtractAround(ctx context.Context, source, dir string, track
 	args := []string{
 		"-hide_banner", "-loglevel", "error", "-nostdin",
 		"-ss", strconv.FormatFloat(from, 'f', 3, 64), "-t", strconv.FormatFloat(aroundSpan, 'f', 0, 64),
-		// Times as in the file, not from the seek point, or the merge misplaces them.
 		"-copyts",
 	}
 	args = append(args, reconnectArgs(source)...)
@@ -239,11 +233,9 @@ func (s *Subtitles) ExtractAround(ctx context.Context, source, dir string, track
 			return path, err
 		}
 	}
-	// Aside and moved, as for a full read: the track may be served this instant.
 	return path, os.Rename(staging, path)
 }
 
-// mergeInto rewrites read as the union of itself and the track at have.
 func mergeInto(read, have string) error {
 	a, err := os.ReadFile(have)
 	if err != nil {
@@ -256,7 +248,6 @@ func mergeInto(read, have string) error {
 	return os.WriteFile(read, []byte(mergeASS(string(a), string(b))), 0o644)
 }
 
-// dialogueLines counts cues; everything is written as ASS, so one shape fits.
 func dialogueLines(path string) int {
 	f, err := os.Open(path)
 	if err != nil {
@@ -275,8 +266,6 @@ func dialogueLines(path string) int {
 	return n
 }
 
-// ExtractFonts writes the container's font attachments to disk. Without them
-// the renderer substitutes fonts and styled signs come out wrong.
 func (s *Subtitles) ExtractFonts(ctx context.Context, source, dir string, attachments []Attachment) ([]FontFile, error) {
 	fontDir := filepath.Join(dir, "fonts")
 
@@ -286,11 +275,9 @@ func (s *Subtitles) ExtractFonts(ctx context.Context, source, dir string, attach
 	if len(attachments) == 0 {
 		return nil, nil
 	}
-	// Dumped beside, kept only whole: a timeout or a file still arriving (holes read as zeros) leaves
-	// nothing, and the next ask tries again.
 	partDir := fontDir + ".part"
 	os.RemoveAll(partDir)
-	if err := os.MkdirAll(partDir, 0o755); err != nil {
+	if err := os.Mkdir(partDir, 0o755); err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(partDir)
@@ -298,7 +285,6 @@ func (s *Subtitles) ExtractFonts(ctx context.Context, source, dir string, attach
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 
-	// By index, to our own names: the stored ones are the release maker's.
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
 	used := map[string]bool{}
 	for i, a := range attachments {
@@ -309,10 +295,8 @@ func (s *Subtitles) ExtractFonts(ctx context.Context, source, dir string, attach
 		used[strings.ToLower(name)] = true
 		args = append(args, fmt.Sprintf("-dump_attachment:%d", a.Index), filepath.Join(partDir, name))
 	}
-	// -t 0 stops after the header; without it ffmpeg decodes the whole file.
 	args = append(args, "-i", source, "-t", "0", "-f", "null", "-")
 
-	// Non-zero is normal here: there is no output stream to write.
 	_ = proc.Hide(exec.CommandContext(ctx, s.ffmpeg, args...)).Run()
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("fonts: %w", err)
@@ -323,7 +307,6 @@ func (s *Subtitles) ExtractFonts(ctx context.Context, source, dir string, attach
 		case fontArriving:
 			return nil, fmt.Errorf("font %s is not whole yet", f.Name)
 		case fontBroken:
-			// Empty or not a font: arriving won't fix it, so it goes and the rest are served.
 			os.Remove(path)
 		}
 	}
@@ -336,12 +319,11 @@ func (s *Subtitles) ExtractFonts(ctx context.Context, source, dir string, attach
 type fontState int
 
 const (
-	fontWhole    fontState = iota
-	fontArriving           // zeros: its bytes haven't downloaded yet
-	fontBroken             // empty, or some other file under a font's name
+	fontWhole fontState = iota
+	fontArriving
+	fontBroken
 )
 
-// fontHeader reads a TrueType, OpenType or collection header.
 func fontHeader(path string) fontState {
 	f, err := os.Open(path)
 	if err != nil {
@@ -357,20 +339,69 @@ func fontHeader(path string) fontState {
 		return fontArriving
 	}
 	switch string(head[:n]) {
-	case "\x00\x01\x00\x00", "OTTO", "true", "ttcf", "wOFF", "wOF2", "typ1":
+	case "\x00\x01\x00\x00", "OTTO", "true", "typ1":
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fontBroken
+		}
+		return fontTables(data)
+	case "ttcf", "wOFF", "wOF2":
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fontBroken
+		}
+		if allZero(data[max(len(data)-4096, 0):]) {
+			return fontArriving
+		}
 		return fontWhole
 	}
 	return fontBroken
 }
 
+func fontTables(data []byte) fontState {
+	if len(data) < 12 {
+		return fontBroken
+	}
+	count := int(binary.BigEndian.Uint16(data[4:6]))
+	if count == 0 || 12+16*count > len(data) {
+		return fontBroken
+	}
+	for i := range count {
+		rec := data[12+16*i:]
+		off, size := int64(binary.BigEndian.Uint32(rec[8:12])), int64(binary.BigEndian.Uint32(rec[12:16]))
+		if off+size > int64(len(data)) {
+			return fontBroken
+		}
+		if size >= 64 && allZero(data[off:off+size]) {
+			return fontArriving
+		}
+	}
+	return fontWhole
+}
+
+func allZero(b []byte) bool {
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._ -]+`)
 
-// safeFontName keeps the stored name's base and nothing that leaves the folder.
 func safeFontName(stored string, i int) string {
 	base := filepath.Base(strings.ReplaceAll(stored, `\`, "/"))
 	base = strings.Trim(unsafeName.ReplaceAllString(base, "_"), ". ")
 	if base == "" || base == "_" {
 		return fmt.Sprintf("font%d.ttf", i)
+	}
+	if len(base) > 200 {
+		ext := filepath.Ext(base)
+		if len(ext) > 8 {
+			ext = ".ttf"
+		}
+		return fmt.Sprintf("font%d%s", i, ext)
 	}
 	return base
 }
@@ -401,8 +432,6 @@ func isFont(name string) bool {
 	return false
 }
 
-// Bitmaps are named rather than the text formats, which are an open list: one
-// missing from a whitelist is a show whose only track silently disappears.
 func isBitmapSubtitle(codec string) bool {
 	switch codec {
 	case "hdmv_pgs_subtitle", "pgssub", "dvd_subtitle", "dvdsub",
@@ -416,12 +445,10 @@ func isTextSubtitle(codec string) bool {
 	return codec != "" && !isBitmapSubtitle(codec)
 }
 
-// TextSubtitle: a track that converts to text (for a TV's WebVTT); pictures don't.
 func TextSubtitle(codec string) bool { return isTextSubtitle(codec) }
 
 func isASS(codec string) bool { return codec == "ass" || codec == "ssa" }
 
-// Names what was written, not what the track started as.
 func subtitleExt(codec string) string {
 	if isTextSubtitle(codec) {
 		return "ass"
@@ -429,13 +456,10 @@ func subtitleExt(codec string) string {
 	return "sup"
 }
 
-// Renderable reports whether the browser renderer can draw the track.
 func Renderable(codec string) bool { return isTextSubtitle(codec) }
 
-// PictureSubtitle: a PGS track, which the browser draws with libpgs and a TV gets laid over the picture.
 func PictureSubtitle(codec string) bool { return codec == "hdmv_pgs_subtitle" || codec == "pgssub" }
 
-// SubtitleCodec is the codec of the subtitle track at stream index, "" when there is none.
 func (m *MediaInfo) SubtitleCodec(index int) string {
 	for _, s := range m.Subtitles {
 		if s.Index == index {

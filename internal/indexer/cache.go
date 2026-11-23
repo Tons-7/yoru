@@ -9,8 +9,6 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// A search hits every indexer with six title variants and is repeated across
-// listing, play and retries; short enough to still find a minutes-old release.
 const searchTTL = 3 * time.Minute
 
 type cachedSearch struct {
@@ -18,14 +16,11 @@ type cachedSearch struct {
 	expires time.Time
 }
 
-// Cached wraps a source with a short-lived result cache. Errors are never
-// cached: a failed search is usually a timeout, and repeating it is the point.
 type Cached struct {
 	source Source
 
-	mu      sync.Mutex
-	entries map[string]cachedSearch
-	// inflight: the same query asked while one is already out waits for that answer.
+	mu       sync.Mutex
+	entries  map[string]cachedSearch
 	inflight singleflight.Group
 }
 
@@ -49,7 +44,6 @@ func (c *Cached) Search(ctx context.Context, q Query) ([]Torrent, error) {
 		return entry.results, nil
 	}
 
-	// Detached: the first asker leaving (a closed sources list) must not fail the others waiting on its answer.
 	ch := c.inflight.DoChan(key, func() (any, error) {
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sharedSearchTimeout)
 		defer cancel()
@@ -68,12 +62,10 @@ func (c *Cached) Search(ctx context.Context, q Query) ([]Torrent, error) {
 	}
 }
 
-// Bounds a shared search nobody may still be waiting for.
-const sharedSearchTimeout = 45 * time.Second
+const sharedSearchTimeout = 2 * time.Minute
 
 func (c *Cached) store(key string, results []Torrent) {
 	c.mu.Lock()
-	// A long session browsing many shows would otherwise grow this forever.
 	if len(c.entries) > 500 {
 		now := time.Now()
 		for k, e := range c.entries {

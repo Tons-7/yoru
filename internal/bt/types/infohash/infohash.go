@@ -3,7 +3,6 @@ package infohash
 import (
 	"bytes"
 	"crypto/sha1"
-	"crypto/sha256"
 	"encoding"
 	"encoding/hex"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 
 const Size = 20
 
-// 20-byte SHA1 hash used for info and pieces.
 type T [Size]byte
 
 var _ fmt.Formatter = (*T)(nil)
@@ -21,8 +19,6 @@ func (l T) Compare(r T) int {
 }
 
 func (t T) Format(f fmt.State, c rune) {
-	// TODO: I can't figure out a nice way to just override the 'x' rune, since it's meaningless
-	// with the "default" 'v', or .String() already returning the hex.
 	f.Write([]byte(t.HexString()))
 }
 
@@ -39,7 +35,7 @@ func (t T) String() string {
 }
 
 func (t T) HexString() string {
-	return fmt.Sprintf("%x", t[:])
+	return hex.EncodeToString(t[:])
 }
 
 func (t *T) FromHexString(s string) (err error) {
@@ -84,13 +80,6 @@ func FromHexString(s string) (h T) {
 
 func HashBytes(b []byte) (ret T) {
 	hasher := sha1.New()
-	hasher.Write(b)
-	copy(ret[:], hasher.Sum(nil))
-	return
-}
-
-func HashBytesV2(b []byte) (ret T) {
-	hasher := sha256.New()
 	hasher.Write(b)
 	copy(ret[:], hasher.Sum(nil))
 	return

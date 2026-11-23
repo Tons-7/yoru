@@ -2,7 +2,13 @@ package library
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"yoru/internal/anilist"
 	"yoru/internal/player"
@@ -16,10 +22,8 @@ type fakePlayer struct {
 
 func (f *fakePlayer) Play(context.Context, player.Options) error { return nil }
 func (f *fakePlayer) Events() <-chan player.Event                { return f.events }
-func (f *fakePlayer) Running() bool                              { return false }
 func (f *fakePlayer) Stop()                                      { f.stopped++ }
 
-// Dragging to mpv's EOF is a peek, not a watch; the same end after playing it through is.
 func TestMpvEOFFollowsThePlayedShareRule(t *testing.T) {
 	ctx := context.Background()
 	run := func(positions []float64) int {
@@ -53,7 +57,6 @@ func TestMpvEOFFollowsThePlayedShareRule(t *testing.T) {
 	}
 }
 
-// The preference names the desktop player; anything unregistered means mpv.
 func TestExternalPlayerFollowsThePreference(t *testing.T) {
 	st := prefetchStore(t)
 	ctx := context.Background()
@@ -79,5 +82,79 @@ func TestExternalPlayerFollowsThePreference(t *testing.T) {
 	p.StopPlayers()
 	if mpv.stopped != 1 || vlc.stopped != 1 {
 		t.Errorf("stop reached mpv %d, vlc %d times", mpv.stopped, vlc.stopped)
+	}
+}
+
+func TestEOFWithoutPositionsCountsAsWatched(t *testing.T) {
+	ctx := context.Background()
+	st := prefetchStore(t)
+	episodes := 12
+	st.ImportList(ctx, []store.Anime{{ID: 9, Romaji: "Show", Synonyms: "[]", Genres: "[]", Episodes: &episodes}}, nil, store.ImportMerge)
+	p := NewPlayback(st, nil, nil, &fakePlayer{}, t.TempDir(), discard()).
+		WithSync(NewSync(st, anilist.New(discard()), discard()))
+
+	pl := &fakePlayer{events: make(chan player.Event, 1)}
+	pl.events <- player.Event{Kind: player.EventEnd, Reason: "eof"}
+	close(pl.events)
+	p.track(pl, 9, 1, 1, p.trackGen.Load(), 0)
+
+	if progress, _ := st.ListProgress(ctx); progress[9] != 1 {
+		t.Fatalf("progress = %d after an end of file with no position reports, want 1", progress[9])
+	}
+}
+
+type recordingPlayer struct {
+	fakePlayer
+	mu    sync.Mutex
+	plays []player.Options
+}
+
+func (r *recordingPlayer) Play(_ context.Context, o player.Options) error {
+	r.mu.Lock()
+	r.plays = append(r.plays, o)
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *recordingPlayer) played() []player.Options {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]player.Options(nil), r.plays...)
+}
+
+func TestAutoNextStartsTheNextEpisode(t *testing.T) {
+	ctx := context.Background()
+	st := prefetchStore(t)
+	episodes := 12
+	st.ImportList(ctx, []store.Anime{{ID: 9, Romaji: "Show", Synonyms: "[]", Genres: "[]", Episodes: &episodes}}, nil, store.ImportMerge)
+	dir := t.TempDir()
+	var files []store.LocalFile
+	for ep := 1; ep <= 2; ep++ {
+		path := filepath.Join(dir, fmt.Sprintf("Show - %02d.mkv", ep))
+		os.WriteFile(path, make([]byte, 1024), 0o644)
+		files = append(files, store.LocalFile{Path: path, Size: 1024, AnimeID: 9, Episode: ep, Season: 1, Confidence: 1})
+	}
+	if _, err := st.SaveLocalFiles(ctx, 9, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSetting(ctx, "playback.autonext", "true"); err != nil {
+		t.Fatal(err)
+	}
+	mpv := &recordingPlayer{fakePlayer: fakePlayer{events: make(chan player.Event)}}
+	p := NewPlayback(st, nil, nil, mpv, t.TempDir(), discard()).
+		WithSync(NewSync(st, anilist.New(discard()), discard()))
+
+	pl := &fakePlayer{events: make(chan player.Event, 1)}
+	pl.events <- player.Event{Kind: player.EventEnd, Reason: "eof"}
+	close(pl.events)
+	p.track(pl, 9, 1, 1, p.trackGen.Load(), 0)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(mpv.played()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	plays := mpv.played()
+	if len(plays) != 1 || !strings.Contains(plays[0].Title, "2") {
+		t.Fatalf("plays after episode 1 ended: %+v, want episode 2", plays)
 	}
 }

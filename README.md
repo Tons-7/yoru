@@ -26,9 +26,9 @@ a browser player and one config file.
 - **Built-in torrent engine.** Picks the best release (resolution, codec, group,
   seeders, SeaDex, TRaSH Guides' grades), skips groups you avoid, handles
   season packs, and needs nothing else installed.
-- **Plays anywhere.** In the browser, so a phone or TV on your network works
-  like the laptop, or in mpv and VLC with Anime4K upscaling. **Cast** sends an
-  episode to a Chromecast or Google TV.
+- **Plays anywhere.** In the browser with Anime4K upscaling, so a phone or TV
+  on your network works like the laptop, or in mpv (with Anime4K) and VLC.
+- **Cast** sends an episode to a Chromecast, Google TV or AirPlay device.
 - **Smooth motion.** Optional frame generation in the browser player, with or
   without Anime4K, made on the watching device's graphics card; the sound is
   held back to match.
@@ -53,7 +53,8 @@ a browser player and one config file.
   the next season.
 - **Watch together.** Open a room and friends with their own Yoru join from a
   link, anywhere, with no router setup: everyone plays, pauses and jumps in
-  step, with chat. The host picks what plays and friends can suggest.
+  step, with chat. The host picks what plays and friends can suggest. Hosting
+  uses Cloudflare's quick tunnel, a one-time download.
 - **Follows airing shows:** alerts you when a new episode can actually be
   played, and of delays and new seasons, and can download them, waiting a few
   hours for your preferred group. Alerts reach a phone even with Yoru closed.
@@ -63,7 +64,8 @@ a browser player and one config file.
 - **Plays files you already have.** Point it at a folder and matched episodes
   play instantly with no torrent involved.
 - **Saves episodes to a phone** to watch with the PC off, subtitles and all,
-  and saves the next one when you finish an episode, if you like.
+  and saves the next one when you finish an episode, if you like. Saving and
+  closed-app alerts need the HTTPS address (see below).
 - **Tracks progress** on AniList and MyAnimeList, in both directions, with
   scores, favourites and rewatches, and keeps a history of what you watched.
 - **Lets you choose the release** when you want to: every one found, best
@@ -92,9 +94,9 @@ a browser player and one config file.
 ## Download
 
 Get `yoru-<version>.zip` from the [latest release](https://github.com/Tons-7/yoru/releases/latest),
-extract it to a folder of its own and run `yoru.exe`. The first-run screen
-downloads ffmpeg (or uses one already on your `PATH`) and shows how to add the
-torrent sites to search. Updates are offered in the app.
+extract it to a folder of its own and run `yoru.exe`. A setup guide fetches
+ffmpeg and any extras, takes your torrent sites and list, and sets how Yoru
+runs. Updates download by themselves; **Restart to update** installs them.
 
 Yoru runs as a normal Windows app, with no console window. While it runs, its
 icon sits in the tray: click it to open Yoru, right-click it to exit (or use
@@ -103,8 +105,9 @@ Settings → This computer keeps it running in the tray; the same tab starts it
 when you sign in to Windows. When something goes wrong, Settings → About copies
 or saves the log to send.
 
-Windows may ask once whether torrent peers can connect: allow it, or later
-under Settings → Downloads.
+Windows warns that the app is unsigned: **More info → Run anyway**. It may also
+ask once whether torrent peers can connect: allow it, or later under Settings →
+Downloads.
 
 **On a Mac**, one line in Terminal installs `Yoru.app` and opens it, with no
 security prompt to get past (fetched by `curl`, the app is not quarantined):
@@ -114,27 +117,27 @@ curl -fsSL https://github.com/Tons-7/yoru/releases/latest/download/install-mac.s
 ```
 
 It checks the download against the release's checksums, stops a running Yoru,
-and keeps its files in `~/Library/Application Support/Yoru`. ffmpeg comes from
+and keeps its program files, cache and config in
+`~/Library/Application Support/Yoru`, and your history and settings in
+`~/.yoru`. ffmpeg comes from
 Homebrew (`brew install ffmpeg`), found there even when Yoru is opened from
 Finder. Linux builds, and the plain Mac program, are on the same page as
 `yoru-<version>-<os>-<arch>.zip`.
 
 ## Building from source
 
-Three things are needed before the first run: the external tools, the torrent
-sites to search, and an AniList application so it can talk to your list.
+Needs Go 1.26 and Node.js with pnpm.
 
 ```powershell
-# Fetch ffmpeg, mpv and the Anime4K shaders into bin/
-./scripts/fetch-deps.ps1
-
 # Build the frontend and the binary that embeds it
 ./scripts/build.ps1
 
 ./yoru.exe
 ```
 
-Then open <http://localhost:4321>.
+It opens its own window (or go to <http://localhost:4321>); the setup guide
+fetches the tools.
+`./scripts/fetch-deps.ps1` does the same from a terminal, if you prefer.
 
 On **macOS and Linux** build with `scripts/build.sh` and run `./yoru`. The
 first-run screen downloads what it can (ffmpeg on Linux) into `bin/`; what has
@@ -151,8 +154,7 @@ Yoru ships with no torrent sites. Add them on the setup screen or under
 Settings → Downloads → Release sites: the feed type the site serves (`nyaa` or
 `tokyotosho`), its address, and whether it is searched only for titles the
 catalogue marks adult. Test runs one search first; a saved list is searched at
-once, no restart. The first site listed decides the record kept for a torrent
-several carry.
+once, no restart.
 
 `config.toml`, written beside the binary on first run, takes the same as
 blocks, read until a list is saved in the app (then restart after editing):
@@ -167,28 +169,31 @@ type = "tokyotosho"
 url  = "https://…"
 ```
 
-To connect AniList, register an application at
-<https://anilist.co/settings/developer> with the redirect URL
-`http://localhost:4321/callback` and paste the client id and secret in.
-MyAnimeList is optional and works the same way, at
+AniList connects in one step from the setup guide or Settings → Accounts.
+Registering your own AniList app (redirect `http://localhost:4321/callback`) is
+optional. MyAnimeList needs a client id of your own, from
 <https://myanimelist.net/apiconfig> with `http://localhost:4321/mal/callback`.
 
-`/api/setup` reports which components are installed and what each is for.
+The setup guide (`/setup`) shows which components are installed and what each
+is for.
 
 ### Updating
 
-A packaged build checks GitHub releases on launch and every few hours, and
-offers a newer version under **Settings → About**. Only `yoru.exe` is
-replaced; `bin/`, the cache, `config.toml` and the database stay. Builds from
-`build.ps1` without `-Version` are `dev` and never update themselves.
+A packaged build checks GitHub releases on launch and every 6 hours, downloads
+a newer one in the background (unless **Update automatically** is off, under
+Settings → About), and installs it when you press **Restart to update**. Only
+`yoru.exe` is replaced; `bin/`, the cache, `config.toml` and the database stay.
+Builds from `build.ps1` without `-Version` are `dev` and never update themselves.
 
 To publish a release: `./scripts/package.ps1 -Version 2026.08.27 -Publish -NotesFile notes.md`
-(needs `gh auth login` once). It attaches the zips, `SHA256SUMS.txt` and its
-signature, which the updater verifies before touching anything.
+(needs `gh auth login` once and the release signing key). It attaches the zips,
+`SHA256SUMS.txt` and its signature, which the updater verifies before touching
+anything.
 
 ### Everything in one folder
 
-Watch history, settings and logins live in `%LOCALAPPDATA%\yoru` by default,
+Watch history, settings and logins live in `%LOCALAPPDATA%\yoru` by default
+(`~/.yoru` on macOS and Linux),
 where a synced or moved folder cannot corrupt them. To keep Yoru
 self-contained (a folder you can extract anywhere and run), pick a folder under
 **Setup → Where things go** (or set `data_dir` in `config.toml`). Yoru copies
@@ -291,12 +296,18 @@ Where Yoru's anime information comes from (Yoru isn't affiliated with any of the
   under the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/): anime names and
   the links between sites' ids
 - nattadasu's [animeApi](https://github.com/nattadasu/animeApi): the links between sites' ids
+- [Jimaku](https://jimaku.cc): Japanese subtitles
 
 Programs Yoru downloads when you turn on what needs them (not bundled):
 
 - [FlyHigh Engine](https://github.com/getflyhigh/flyhigh-engine): smooth motion. Code under the
   Apache License 2.0, model weights under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/);
   Yoru fetches an unmodified copy of its web release
+- [FFmpeg](https://ffmpeg.org), under the LGPL/GPL: converting and reading episodes
+- [mpv](https://mpv.io), under the GPL/LGPL, and [Anime4K](https://github.com/bloc97/Anime4K), under the
+  MIT License: the desktop player and its upscaling
+- [cloudflared](https://github.com/cloudflare/cloudflared), under the Apache License 2.0: hosting a
+  watch-together room through Cloudflare's quick tunnel
 
 ## Layout
 
@@ -321,11 +332,18 @@ internal/
   db              connection setup and migrations
   server          HTTP handlers
   jobs            recurring background work
+  update          self-update: check, download, verify, swap
+  deps            fetching ffmpeg, mpv, FlyHigh and cloudflared
+  tunnel, certs   watch-together tunnel; DuckDNS and Let's Encrypt
+  push, discord   phone alerts; Discord presence
+  metadata, film  episode titles and pictures; film series
+  jimaku, sound   Japanese subtitles; audio filters
+  tray, proc      Windows tray and OS helpers (also power, disk, firewall, shortcut)
 web               the single-page app, embedded into the binary
 scripts           dependency fetch, build and release
 ```
 
-Handlers contain no SQL and no external calls; `store` owns every statement;
+Handlers contain no SQL; `store` owns every statement;
 `library` owns the decisions. The frontend is compiled into `web/dist` and
 embedded by `web/embed.go`, which is why the build script does the frontend
 first.
@@ -340,12 +358,12 @@ go test ./...                    # the whole suite
 
 ```powershell
 cd web
-npm run dev                      # hot reload, proxying /api to :4321
-npm run typecheck                # tsc, TypeScript's native compiler
-npm run lint
-npm run release-check            # Go suite, then every browser check on a throwaway Yoru
+pnpm dev                         # hot reload, proxying /api to :4321
+pnpm typecheck                   # tsc, TypeScript's native compiler
+pnpm lint
+pnpm release-check               # Go suite, then every browser check on a throwaway Yoru
 ```
 
 The dev server proxies `/api` to a running `yoru.exe`, so start the binary
-first and edit the frontend against it. `npm run release-check` needs no
+first and edit the frontend against it. `pnpm release-check` needs no
 running Yoru: each check gets its own instance, data and ports.

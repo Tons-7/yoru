@@ -5,7 +5,6 @@ import (
 	"strconv"
 )
 
-// Extracts the port as an integer from an address string.
 func addrPortOrZero(addr net.Addr) int {
 	switch raw := addr.(type) {
 	case *net.UDPAddr:
@@ -13,7 +12,6 @@ func addrPortOrZero(addr net.Addr) int {
 	case *net.TCPAddr:
 		return raw.Port
 	default:
-		// Consider a unix socket on Windows with a name like "C:notanint".
 		_, port, err := net.SplitHostPort(addr.String())
 		if err != nil {
 			return 0
@@ -63,10 +61,10 @@ func tryIpPortFromNetAddr(addr PeerRemoteAddr) (ipPortAddr, bool) {
 	if err != nil {
 		ok = false
 	}
-	// 16 bits, so a port out of range is refused here rather than wrapped by the uint16 its callers make of it.
 	portU, err := strconv.ParseUint(port, 10, 16)
 	if err != nil {
 		ok = false
 	}
-	return ipPortAddr{net.ParseIP(host), int(portU)}, ok
+	ip := net.ParseIP(host)
+	return ipPortAddr{ip, int(portU)}, ok && ip != nil
 }

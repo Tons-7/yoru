@@ -18,8 +18,6 @@ import (
 	"yoru/internal/store"
 )
 
-// localHarness is a server with a scanner and two library files on record: one
-// matched to show 1, one unmatched. It returns their ids and the folder.
 func localHarness(t *testing.T) (h *harness, matched, unmatched int, dir string) {
 	t.Helper()
 	dir = t.TempDir()
@@ -69,7 +67,6 @@ func TestLocalFilesListsByShowAndUnmatched(t *testing.T) {
 	}
 }
 
-// Seeking in the browser is a range request against the file.
 func TestLocalStreamServesRangesAndOnlyRecordedFiles(t *testing.T) {
 	h, matched, unmatched, _ := localHarness(t)
 
@@ -85,7 +82,6 @@ func TestLocalStreamServesRangesAndOnlyRecordedFiles(t *testing.T) {
 	if code, _, _ := h.fetch(t, "GET", "/api/local/9999/stream"); code != http.StatusNotFound {
 		t.Errorf("a file never recorded answered %d, want 404", code)
 	}
-	// Recorded, but no longer on disk.
 	if code, _, _ := h.fetch(t, "GET", fmt.Sprintf("/api/local/%d/stream", unmatched)); code != http.StatusNotFound {
 		t.Errorf("a file gone from disk answered %d, want 404", code)
 	}
@@ -94,7 +90,6 @@ func TestLocalStreamServesRangesAndOnlyRecordedFiles(t *testing.T) {
 	}
 }
 
-// A typo in a folder is reported when it is set, not as an empty scan later.
 func TestLibraryPathsAreCheckedBeforeTheyAreSaved(t *testing.T) {
 	h, _, _, dir := localHarness(t)
 	ctx := context.Background()
@@ -103,7 +98,6 @@ func TestLibraryPathsAreCheckedBeforeTheyAreSaved(t *testing.T) {
 		return string(b)
 	}
 
-	// Nothing configured yet, so there is nothing to scan.
 	if code, _ := h.call(t, "POST", "/api/local/scan", ""); code != http.StatusPreconditionFailed {
 		t.Errorf("a scan with no folders answered %d, want 412", code)
 	}
@@ -128,7 +122,6 @@ func TestLibraryPathsAreCheckedBeforeTheyAreSaved(t *testing.T) {
 	}
 }
 
-// Folders are the host's to change: a phone on the network cannot repoint the library.
 func TestLibraryPathsCanOnlyBeSetFromTheHost(t *testing.T) {
 	h, _, _, dir := localHarness(t)
 	body, _ := json.Marshal(map[string]any{"paths": []string{dir}})

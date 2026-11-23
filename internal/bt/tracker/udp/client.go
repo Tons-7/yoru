@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/anacrolix/log"
@@ -14,12 +15,11 @@ import (
 	"yoru/internal/bt/dht/krpc"
 )
 
-// Client interacts with UDP trackers via its Writer and Dispatcher. It has no knowledge of
-// connection specifics.
 type Client struct {
-	mu           ctxlock.Lock
-	connId       ConnectionId
-	connIdIssued time.Time
+	mu             ctxlock.Lock
+	connId         ConnectionId
+	connIdIssued   time.Time
+	forceReconnect atomic.Bool
 
 	shouldReconnectOverride func() bool
 
@@ -29,11 +29,9 @@ type Client struct {
 
 func (cl *Client) Announce(
 	ctx context.Context, req AnnounceRequest, opts Options,
-	// Decides whether the response body is IPv6 or IPv4, see BEP 15.
 	ipv6 func(net.Addr) bool,
 ) (
 	respHdr AnnounceResponseHeader,
-	// A slice of krpc.NodeAddr, likely wrapped in an appropriate unmarshalling wrapper.
 	peers AnnounceResponsePeers,
 	err error,
 ) {
@@ -59,34 +57,8 @@ func (cl *Client) Announce(
 	return
 }
 
-// There's no way to pass options in a scrape, since we don't when the request body ends.
-func (cl *Client) Scrape(
-	ctx context.Context, ihs []InfoHash,
-) (
-	out ScrapeResponse, err error,
-) {
-	respBody, _, err := cl.request(ctx, ActionScrape, mustMarshal(ScrapeRequest(ihs)))
-	if err != nil {
-		return
-	}
-	r := bytes.NewBuffer(respBody)
-	for r.Len() != 0 {
-		var item ScrapeInfohashResult
-		err = Read(r, &item)
-		if err != nil {
-			return
-		}
-		out = append(out, item)
-	}
-	if len(out) > len(ihs) {
-		err = fmt.Errorf("got %v results but expected %v", len(out), len(ihs))
-		return
-	}
-	return
-}
-
 func (cl *Client) shouldReconnectDefault() bool {
-	return cl.connIdIssued.IsZero() || time.Since(cl.connIdIssued) >= time.Minute
+	return cl.forceReconnect.Load() || cl.connIdIssued.IsZero() || time.Since(cl.connIdIssued) >= time.Minute
 }
 
 func (cl *Client) shouldReconnect() bool {
@@ -103,7 +75,6 @@ func (cl *Client) connect(ctx context.Context) (err error) {
 	return cl.doConnectRoundTrip(ctx)
 }
 
-// This just does the connect request and updates local state if it succeeds.
 func (cl *Client) doConnectRoundTrip(ctx context.Context) (err error) {
 	respBody, _, err := cl.request(ctx, ActionConnect, nil)
 	if err != nil {
@@ -116,7 +87,7 @@ func (cl *Client) doConnectRoundTrip(ctx context.Context) (err error) {
 	}
 	cl.connId = connResp.ConnectionId
 	cl.connIdIssued = time.Now()
-	//log.Printf("conn id set to %x", cl.connId)
+	cl.forceReconnect.Store(false)
 	return
 }
 
@@ -142,8 +113,6 @@ func (cl *Client) writeRequest(
 	if action == ActionConnect {
 		connId = ConnectRequestConnectionId
 	} else {
-		// Held from getting a connection ID until the request is written, so the server can't hand out
-		// another first (a cancel can't end the wait for an ID).
 		err = cl.mu.LockCtx(ctx)
 		if err != nil {
 			return fmt.Errorf("locking connection id: %w", err)
@@ -165,7 +134,6 @@ func (cl *Client) writeRequest(
 	}
 	buf.Write(body)
 	_, err = cl.Writer.Write(buf.Bytes())
-	//log.Printf("sent request with conn id %x", connId)
 	return
 }
 
@@ -184,9 +152,13 @@ func (cl *Client) requestWriter(
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(timeout(n)):
+		case <-time.After(resendAfter(n)):
 		}
 	}
+}
+
+func resendAfter(n int) time.Duration {
+	return min(timeout(n), 4*time.Second<<min(n, 4))
 }
 
 const ConnectionIdMissmatchNul = "Connection ID missmatch.\x00"
@@ -206,7 +178,10 @@ func (cl *Client) request(
 ) (respBody []byte, addr net.Addr, err error) {
 	respChan := make(chan DispatchedResponse, 1)
 	t := cl.Dispatcher.NewTransaction(func(dr DispatchedResponse) {
-		respChan <- dr
+		select {
+		case respChan <- dr:
+		default:
+		}
 	})
 	defer t.End()
 	ctx, cancel := context.WithCancel(ctx)
@@ -221,15 +196,12 @@ func (cl *Client) request(
 			respBody = dr.Body
 			addr = dr.Addr
 		} else if dr.Header.Action == ActionError {
-			// udp://tracker.torrent.eu.org:451 often answers "Connection ID missmatch.\x00".
 			stringBody := string(dr.Body)
 			err = ErrorResponse{Message: stringBody}
 			if stringBody == ConnectionIdMissmatchNul {
 				err = log.WithLevel(log.Debug, err)
 			}
-			// Force a reconnection. Probably any error is worth doing this for, but the one we're
-			// specifically interested in is ConnectionIdMissmatchNul.
-			cl.connIdIssued = time.Time{}
+			cl.forceReconnect.Store(true)
 		} else {
 			err = fmt.Errorf("unexpected response action %v", dr.Header.Action)
 		}

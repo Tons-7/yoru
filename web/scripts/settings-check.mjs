@@ -29,7 +29,7 @@ page.on('pageerror', (e) => errors.push(e.message.slice(0, 200)))
 const visible = (text) => page.getByText(text, { exact: true }).first().isVisible()
 
 await page.goto(`${BASE}/settings`, { waitUntil: 'domcontentloaded' })
-const tabs = page.getByRole('tab')
+const tabs = page.getByRole('navigation', { name: 'Settings sections' }).getByRole('group').getByRole('button')
 await tabs.first().waitFor({ timeout: 15_000 })
 const names = await tabs.allInnerTexts()
 check(names.join('|') ===
@@ -44,14 +44,14 @@ check(await section('Casting').getByText('Draw subtitles into the picture', { ex
   'Casting holds its subtitles choice')
 check(await section('Casting').getByText(/Cast button in the player's bar/).isVisible(), 'and says where casting starts')
 await page.screenshot({ path: `${SHOTS}/settings-playback.png`, fullPage: true })
-await page.getByRole('tab', { name: 'This computer' }).click()
+await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'This computer' }).click()
 check(await until(() => section('This computer').getByText('Open Yoru', { exact: true }).isVisible()),
   'This computer holds how Yoru opens')
 if (process.platform === 'win32') {
   check(await section('This computer').getByText('When the window closes', { exact: true }).isVisible(), 'and what closing it does')
 }
 check(await section('This computer').getByText('Stay awake while downloading', { exact: true }).isVisible(), 'and staying awake')
-await page.getByRole('tab', { name: 'Language and display' }).click()
+await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Language and display' }).click()
 check(await until(() => visible('Show titles as')) && (await visible('Hide spoilers')), 'Language and display holds titles and spoilers')
 
 const stacked = page.locator('[data-row]', { has: page.getByText('Subtitle languages', { exact: true }) })
@@ -61,7 +61,7 @@ check(gap >= 0 && gap <= 16, 'a stacked row keeps its control under its words', 
 await stacked.screenshot({ path: `${SHOTS}/settings-stacked-row.png` })
 
 await page.goto(`${BASE}/settings?tab=Quality`, { waitUntil: 'domcontentloaded' })
-check(await until(() => page.getByRole('tab', { name: 'Downloads', selected: true }).isVisible()), 'an old Quality link opens Downloads')
+check(await until(() => page.locator('nav[aria-label="Settings sections"] button[aria-current="page"]', { hasText: 'Downloads' }).isVisible()), 'an old Quality link opens Downloads')
 check(await until(() => visible('Download ahead while watching')) && (await visible('Download queue while watching')),
   'both download-while-watching choices sit together there')
 
@@ -89,7 +89,7 @@ check(await until(() => visible('Network for torrents')), '"vpn" finds the netwo
 await search.fill('chromecast')
 check(await until(() => visible('Draw subtitles into the picture')), '"chromecast" finds the Casting section')
 await search.fill('tray')
-check(await until(() => visible('When the window closes')) || process.platform !== 'win32', '"tray" finds what closing the window does')
+check(process.platform !== 'win32' || (await until(() => visible('When the window closes'))), '"tray" finds what closing the window does')
 await search.fill('sound')
 const soundRows = ['Voice boost', 'Night mode', 'Headphones', 'Mono', 'Volume boost']
 check(await until(async () => (await Promise.all(soundRows.map(visible))).every(Boolean)), '"sound" shows the whole Sound section')

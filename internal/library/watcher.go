@@ -249,7 +249,7 @@ func (w *Watcher) announceDelays(ctx context.Context, follows []store.Follow, no
 			body := "No new date yet"
 			payload := map[string]any{"wasAt": d.WasAt}
 			if d.NowAt != nil {
-				body = "Now " + time.Unix(*d.NowAt, 0).Format("Mon 2 Jan, 15:04")
+				body = "A new date is set"
 				payload["nowAt"] = *d.NowAt
 			}
 			animeID, episode := d.AnimeID, d.Episode
@@ -317,6 +317,9 @@ func (w *Watcher) check(ctx context.Context, animeID, episode int, notifyOn, aut
 		}
 	}
 	if fetch == nil {
+		if w.store.EpisodeFetched(ctx, animeID, episode) {
+			w.setWaiting(animeID, episode, true)
+		}
 		return
 	}
 	rep.Found++
@@ -334,7 +337,7 @@ func (w *Watcher) check(ctx context.Context, animeID, episode int, notifyOn, aut
 		w.setWaiting(animeID, episode, true)
 	default:
 		w.setWaiting(animeID, episode, false)
-		if err := w.notify(ctx, animeID, episode, announce.Torrent.Title, announce.Torrent.InfoHash); err != nil {
+		if err := w.notify(ctx, animeID, episode, announce.Torrent.Title, announce.Torrent.InfoHash, announce.Torrent.Published); err != nil {
 			w.log.Warn("notify", "err", err)
 		} else {
 			rep.Notified++
@@ -596,14 +599,19 @@ func (w *Watcher) download(ctx context.Context, animeID, episode int, pick *scor
 	return true
 }
 
-func (w *Watcher) notify(ctx context.Context, animeID, episode int, title, infoHash string) error {
+func (w *Watcher) notify(ctx context.Context, animeID, episode int, title, infoHash string, published time.Time) error {
+	var at int64
+	if !published.IsZero() {
+		at = published.Unix()
+	}
 	if _, err := w.store.AddNotification(ctx, store.Notification{
-		Kind:    store.NotifyRelease,
-		AnimeID: &animeID,
-		Episode: &episode,
-		Title:   fmt.Sprintf("Episode %d is available", episode),
-		Body:    title,
-		Payload: map[string]any{"infoHash": infoHash},
+		Kind:      store.NotifyRelease,
+		AnimeID:   &animeID,
+		Episode:   &episode,
+		Title:     fmt.Sprintf("Episode %d is available", episode),
+		Body:      title,
+		Payload:   map[string]any{"infoHash": infoHash},
+		CreatedAt: at,
 	}); err != nil {
 		return err
 	}

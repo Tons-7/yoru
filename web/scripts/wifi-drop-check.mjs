@@ -1,4 +1,3 @@
-// Wi-Fi lost mid-play: downloads cut part way, then the network gone after a seek; playback carries on.
 import { chromium } from 'playwright'
 import { prepareLocalEpisode } from './harness-lib.mjs'
 
@@ -27,9 +26,8 @@ page.on('pageerror', (e) => errors.push(e.message.split('\n')[0].slice(0, 160)))
 const video = page.locator('video')
 const now = () => video.evaluate((v) => v.currentTime)
 const state = () => video.evaluate((v) => `t=${v.currentTime.toFixed(1)} paused=${v.paused} ready=${v.readyState}`)
-const failed = () => page.getByText(/Playback stopped unexpectedly|could not be loaded|Playback failed/).isVisible()
+const failed = () => page.getByText(/Playback stopped unexpectedly|could not be loaded|could not load|Playback failed|couldn't convert|can't decode/i).isVisible()
 
-// Each of the first three segment downloads is cut off, as a dropping connection cuts a transfer.
 let cut = 0
 await page.route(/\/api\/stream\/[^/]+\/\d+\.mp4$/, (route) => (cut++ < 3 ? route.abort('connectionreset') : route.continue()))
 await page.goto(`${BASE}/watch/${ANIME}/1`, { waitUntil: 'domcontentloaded' })
@@ -37,7 +35,6 @@ check(await until(() => video.evaluate((v) => v.readyState >= 2 && !v.paused && 
 check(cut >= 3, 'the downloads really were cut', `${cut} asked`)
 await page.unrouteAll({ behavior: 'ignoreErrors' })
 
-// The network gone right after a seek, while what the seek needs is still to come, then back.
 await video.evaluate((v) => (v.currentTime = 90))
 await context.setOffline(true)
 await sleep(8000)

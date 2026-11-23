@@ -5,7 +5,6 @@ import (
 	"strconv"
 )
 
-// upNext is the Up next list, top to bottom.
 func (s *Server) upNext(w http.ResponseWriter, r *http.Request) {
 	items, err := s.store.UpNext(r.Context())
 	if err != nil {
@@ -35,7 +34,6 @@ func (s *Server) addUpNext(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"added": added})
 }
 
-// removeUpNext takes one episode off, or without ?episode the whole show.
 func (s *Server) removeUpNext(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.PathValue("anime"))
 	episode, _ := strconv.Atoi(r.URL.Query().Get("episode"))
@@ -58,7 +56,6 @@ func (s *Server) clearUpNext(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"cleared": true})
 }
 
-// moveUpNext puts a show at a place among the list's shows, 0 being the top.
 func (s *Server) moveUpNext(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AnimeID int `json:"animeId"`
@@ -78,7 +75,6 @@ func (s *Server) moveUpNext(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"moved": true})
 }
 
-// fillUpNext is "Add next episodes": one per show being watched, and how many that was.
 func (s *Server) fillUpNext(w http.ResponseWriter, r *http.Request) {
 	added, err := s.store.FillUpNext(r.Context())
 	if err != nil {
@@ -88,7 +84,6 @@ func (s *Server) fillUpNext(w http.ResponseWriter, r *http.Request) {
 	send(w, http.StatusOK, map[string]any{"added": added})
 }
 
-// upNextAfter is what the player's card offers once an episode ends: the list's next two, when it has any.
 func (s *Server) upNextAfter(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.URL.Query().Get("id"))
 	episode, _ := strconv.Atoi(r.URL.Query().Get("episode"))

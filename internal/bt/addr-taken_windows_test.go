@@ -10,7 +10,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// A random port whose UDP twin was taken failed outright on Windows: its "in use" isn't the Unix errno.
 func TestWindowsTakenPortIsRetried(t *testing.T) {
 	bind := func(errno windows.Errno) error {
 		return fmt.Errorf("subsequent listen: %w", &net.OpError{Op: "listen", Net: "udp4", Err: os.NewSyscallError("bind", errno)})
@@ -24,7 +23,6 @@ func TestWindowsTakenPortIsRetried(t *testing.T) {
 		t.Error("an unrelated error is taken as a port to retry")
 	}
 
-	// The real thing: a UDP port in use refuses a second socket with the error retried.
 	held, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

@@ -53,8 +53,10 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusServiceUnavailable, map[string]any{"error": "updater unavailable"})
 		return
 	}
-	if _, err := s.updater.Check(r.Context()); err != nil {
-		s.log.Warn("update check", "err", err)
+	if fromHost(r) {
+		if _, err := s.updater.Check(r.Context()); err != nil {
+			s.log.Warn("update check", "err", err)
+		}
 	}
 	send(w, http.StatusOK, s.updateView(r))
 }

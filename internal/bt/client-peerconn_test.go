@@ -23,7 +23,6 @@ func TestPeerConnEstablished(t *testing.T) {
 	missinggo.CopyExact(&expectedPeerId, "12345123451234512345")
 
 	gotPeerConnectedEvt := false
-	// Disconnect occurs asynchronously to Client/Torrent lifetime.
 	var gotPeerDisconnectedEvt chansync.SetOnce
 
 	ps := testClientTransferParams{
@@ -34,7 +33,6 @@ func TestPeerConnEstablished(t *testing.T) {
 		},
 		ConfigureLeecher: ConfigureClient{
 			Config: func(cfg *ClientConfig) {
-				// cfg.DisableUTP = true
 				cfg.DisableTCP = true
 				cfg.Debug = false
 				cfg.DisableTrackers = true
@@ -52,7 +50,6 @@ func TestPeerConnEstablished(t *testing.T) {
 						if e.Event == PeerDisconnected {
 							require.Equal(t, expectedPeerId, e.PeerId)
 							require.NoError(t, e.Error)
-							// Signal after checking the values.
 							gotPeerDisconnectedEvt.Set()
 						}
 					},
@@ -62,7 +59,6 @@ func TestPeerConnEstablished(t *testing.T) {
 	}
 
 	testClientTransfer(t, ps)
-	// double check that the callbacks were called
 	require.True(t, gotPeerConnectedEvt)
 	<-gotPeerDisconnectedEvt.Done()
 }
@@ -81,15 +77,11 @@ type testClientTransferParams struct {
 	LeecherStartsWithoutMetadata bool
 }
 
-// Simplified version of testClientTransfer found in test/leecher-storage.go.
-// Could not import and reuse that function due to circular dependencies between modules.
 func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	greetingTempDir, mi := testutil.GreetingTestTorrent()
 	defer os.RemoveAll(greetingTempDir)
-	// Create seeder and a Torrent.
 	cfg := TestingConfig(t)
 	cfg.Seed = true
-	// Some test instances don't like this being on, even when there's no cache involved.
 	cfg.DropMutuallyCompletePeers = false
 	cfg.UploadRateLimiter = cmp.Or(ps.SeederUploadRateLimiter, cfg.UploadRateLimiter)
 	cfg.DataDir = greetingTempDir
@@ -105,10 +97,8 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	defer seeder.Close()
 	<-seederTorrent.Complete().On()
 
-	// Create leecher and a Torrent.
 	leecherDataDir := t.TempDir()
 	cfg = TestingConfig(t)
-	// See the seeder client config comment.
 	cfg.DropMutuallyCompletePeers = false
 	cfg.DataDir = leecherDataDir
 	if ps.LeecherDownloadRateLimiter != nil {
@@ -138,8 +128,6 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 
 	added := leecherTorrent.AddClientPeer(seeder)
 	assert.False(t, leecherTorrent.Seeding())
-	// The leecher will use peers immediately if it doesn't have the metadata. Otherwise, they
-	// should be sitting idle until we demand data.
 	if !ps.LeecherStartsWithoutMetadata {
 		assert.EqualValues(t, added, leecherTorrent.Stats().PendingPeers)
 	}
@@ -155,8 +143,6 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	assert.NotEmpty(t, seederTorrent.PeerConns())
 	leecherPeerConns := leecherTorrent.PeerConns()
 	if cfg.DropMutuallyCompletePeers {
-		// I don't think we can assume it will be empty already, due to timing.
-		// assert.Empty(t, leecherPeerConns)
 	} else {
 		assert.NotEmpty(t, leecherPeerConns)
 	}
@@ -180,7 +166,6 @@ func testClientTransfer(t *testing.T, ps testClientTransferParams) {
 	assert.True(t, 13 <= leecherStats.BytesReadData.Int64())
 	assert.True(t, 8 <= leecherStats.ChunksRead.Int64())
 
-	// Again, for torrents bigger than the cache.
 	assertReadAllGreeting(t, r)
 }
 

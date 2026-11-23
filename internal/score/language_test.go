@@ -9,13 +9,22 @@ import (
 
 func subCandidate(title string, seeders int) Candidate {
 	return Candidate{
-		Torrent:   indexer.Torrent{Title: title, Seeders: seeders, Size: 300 << 20, InfoHash: title},
+		Torrent:   indexer.Torrent{Title: title, Seeders: seeders, SeedersKnown: true, Size: 300 << 20, InfoHash: title},
 		Release:   parse.Parse(title),
 		Confirmed: true,
 	}
 }
 
-// Of thirteen releases, a Chinese fansub outscored the English one on quality and seeders alone.
+func TestAReadablePackBeatsAnUnreadableSingle(t *testing.T) {
+	prefs := DefaultPreferences()
+	chinese := subCandidate("[Group] Show - 05 [1080p][简体内嵌]", 60)
+	english := subCandidate("[Good] Show (01-12) [1080p][WEB-DL][English Sub][Batch]", 60)
+	ranked := Rank([]Candidate{chinese, english}, prefs)
+	if got := ranked[0].Torrent.Title; got != english.Torrent.Title {
+		t.Errorf("ranked first:\n  %s\nwant the English pack", got)
+	}
+}
+
 func TestEnglishBeatsChineseHardsub(t *testing.T) {
 	prefs := DefaultPreferences()
 
@@ -65,8 +74,6 @@ func TestSubtitleLanguageDetection(t *testing.T) {
 	}
 }
 
-// Most English releases never say "English". Treating that silence as the
-// wrong language would bury every one of them under the groups that do label.
 func TestUnlabelledReleaseIsNotPenalised(t *testing.T) {
 	prefs := DefaultPreferences()
 
@@ -84,7 +91,6 @@ func TestUnlabelledReleaseIsNotPenalised(t *testing.T) {
 	}
 }
 
-// The wrong language ranks lower but is never refused: for some shows it's the only release.
 func TestWrongLanguageStillPlayable(t *testing.T) {
 	prefs := DefaultPreferences()
 	only := subCandidate("[Group] Show - 01 [1080p][简体内嵌]", 120)
@@ -95,7 +101,6 @@ func TestWrongLanguageStillPlayable(t *testing.T) {
 	}
 }
 
-// Resolution first; within one, readable subtitles beat playability and seeders.
 func TestReadableWinsWithinAResolution(t *testing.T) {
 	prefs := DefaultPreferences()
 

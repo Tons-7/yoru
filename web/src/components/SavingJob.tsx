@@ -49,7 +49,6 @@ export function SavingJob({
         <div className="min-w-0 flex-1">
           <p className={cx('truncate text-base-100', compact ? 'text-xs font-medium' : 'text-sm')}>{name}</p>
           <p
-            role="status"
             className={cx(
               compact ? 'text-xs' : 'text-[13px]',
               phase === 'failed' ? 'text-red-300' : phase === 'stopped' || phase === 'paused' ? 'text-amber-300' : 'text-base-400',
@@ -68,7 +67,7 @@ export function SavingJob({
               <button
                 type="button"
                 onClick={() => (phase === 'paused' ? resumeSave(key) : pauseSave(key))}
-                aria-label={phase === 'paused' ? `Resume saving episode ${job.episode}` : `Pause saving episode ${job.episode}`}
+                aria-label={`${phase === 'paused' ? 'Resume' : 'Pause'} saving ${show.data?.title ? `${show.data.title} ` : ''}episode ${job.episode}`}
                 className={iconButton}
               >
                 {phase === 'paused' ? <PlayGlyph /> : <PauseGlyph />}
@@ -77,7 +76,7 @@ export function SavingJob({
             <button
               type="button"
               onClick={cancel}
-              aria-label={phase === 'failed' ? `Remove episode ${job.episode}` : `Cancel saving episode ${job.episode}`}
+              aria-label={`${phase === 'failed' ? 'Remove' : 'Cancel saving'} ${show.data?.title ? `${show.data.title} ` : ''}episode ${job.episode}`}
               className={iconButton}
             >
               <CrossGlyph />

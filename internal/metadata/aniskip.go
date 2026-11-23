@@ -9,10 +9,8 @@ import (
 	"net/url"
 )
 
-// AniSkipBase is v2's skip-times root, for giving times back and voting on them.
 const AniSkipBase = "https://api.aniskip.com/v2/skip-times"
 
-// SubmitSkip offers AniSkip a time it lacks; kind is op or ed, submitter the anonymous id it groups ours by.
 func (c *Client) SubmitSkip(ctx context.Context, malID, episode int, kind string, start, end, length float64, submitter string) error {
 	return c.post(ctx, fmt.Sprintf("%s/%d/%d", c.url("aniskip-base", AniSkipBase), malID, episode), map[string]any{
 		"skipType": kind, "providerName": "Yoru", "startTime": start, "endTime": end,
@@ -20,7 +18,6 @@ func (c *Client) SubmitSkip(ctx context.Context, malID, episode int, kind string
 	})
 }
 
-// VoteSkip says a time was right (up) or wrong.
 func (c *Client) VoteSkip(ctx context.Context, skipID string, up bool) error {
 	vote := "downvote"
 	if up {

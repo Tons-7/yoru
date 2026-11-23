@@ -2,9 +2,13 @@ package httpTracker
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strings"
+	"testing"
 )
 
 type Client struct {
@@ -23,20 +27,52 @@ type NewClientOpts struct {
 	AllowKeepAlive bool
 }
 
-// NewClient checks an HTTPS tracker's certificate against the host each request goes to, a redirect's too,
-// so no one in the way can hand out a peer list of their own.
 func NewClient(url_ *url.URL, opts NewClientOpts) Client {
+	dial := opts.DialContext
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	allowLocal := localHost(url_.Hostname())
 	return Client{
 		url_: url_,
 		hc: &http.Client{
 			Transport: &http.Transport{
-				DialContext: opts.DialContext,
-				Proxy:       opts.Proxy,
-				// This is for S3 trackers that hold connections open.
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					conn, err := dial(ctx, network, addr)
+					if err != nil {
+						return conn, err
+					}
+					ap, err := netip.ParseAddrPort(conn.RemoteAddr().String())
+					if err != nil {
+						return conn, nil
+					}
+					remote := ap.Addr().Unmap()
+					if (remote.IsLoopback() && !loopbackAllowed) || (!allowLocal && localAddr(remote)) {
+						conn.Close()
+						return nil, fmt.Errorf("tracker %s led to local address %s", url_.Host, remote)
+					}
+					return conn, nil
+				},
+				Proxy:             opts.Proxy,
 				DisableKeepAlives: !opts.AllowKeepAlive,
 			},
 		},
 	}
+}
+
+var loopbackAllowed = testing.Testing()
+
+func localHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	a, err := netip.ParseAddr(host)
+	return err == nil && localAddr(a)
+}
+
+func localAddr(a netip.Addr) bool {
+	a = a.Unmap()
+	return a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsUnspecified()
 }
 
 func (cl Client) Close() error {

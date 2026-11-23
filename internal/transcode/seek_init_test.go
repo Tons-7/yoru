@@ -32,7 +32,6 @@ func waitExit(s *Session) {
 	}
 }
 
-// Prestart at the resume segment, then segment 0 and init together: every order serves all three.
 func TestReopenRequestsInEveryOrderAreServed(t *testing.T) {
 	orders := [][]string{
 		{"prestart", "init", "zero"},
@@ -42,7 +41,6 @@ func TestReopenRequestsInEveryOrderAreServed(t *testing.T) {
 	}
 	for i, order := range orders {
 		s, ctx := openClip(t, 60, "re"+string(rune('a'+i)))
-		// Half a minute in, whichever segment that is (they start on keyframes, not every six seconds).
 		resume := s.SegmentAt(30)
 
 		var wg sync.WaitGroup
@@ -71,14 +69,12 @@ func TestReopenRequestsInEveryOrderAreServed(t *testing.T) {
 		for err := range errs {
 			t.Errorf("order %v: %v (produced: %v)", order, err, s.produced())
 		}
-		// The resume segment is still reachable afterwards.
 		if err := s.WaitSegment(ctx, resume, 60*time.Second); err != nil {
 			t.Errorf("order %v: resume segment after reopen: %v", order, err)
 		}
 	}
 }
 
-// Segment 0 and the resume fragment pull the encoder opposite ways; both must be served.
 func TestOpposingSegmentRequestsAreBothServed(t *testing.T) {
 	s, ctx := openClip(t, 60, "oppose")
 
@@ -108,7 +104,6 @@ func TestOpposingSegmentRequestsAreBothServed(t *testing.T) {
 	}
 }
 
-// WaitInit serves the init file of whatever pass is running and never moves it.
 func TestWaitInitNeverRedirectsARunningPass(t *testing.T) {
 	s, ctx := openClip(t, 60, "init")
 
@@ -126,7 +121,6 @@ func TestWaitInitNeverRedirectsARunningPass(t *testing.T) {
 	}
 }
 
-// Prestart is a head start, not a driver: it launches only when nothing runs.
 func TestPrestartOnlyWhenIdle(t *testing.T) {
 	s, ctx := openClip(t, 60, "pre")
 
@@ -150,7 +144,6 @@ func TestPrestartOnlyWhenIdle(t *testing.T) {
 	}
 }
 
-// A backward request after the pass exited, or while it runs, relaunches and delivers.
 func TestBackwardRequestsDeliver(t *testing.T) {
 	s, ctx := openClip(t, 60, "back")
 

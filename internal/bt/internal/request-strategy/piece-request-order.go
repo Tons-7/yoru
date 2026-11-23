@@ -4,7 +4,6 @@ import (
 	"unique"
 
 	g "github.com/anacrolix/generics"
-	"github.com/anacrolix/missinggo/v2/panicif"
 
 	"yoru/internal/bt/metainfo"
 )
@@ -12,7 +11,6 @@ import (
 type Btree interface {
 	Delete(PieceRequestOrderItem)
 	Add(PieceRequestOrderItem)
-	// This is an iterator. Go can't guarantee to not allocate if you return an iterator.
 	Scan(func(PieceRequestOrderItem) bool)
 	Contains(PieceRequestOrderItem) bool
 }
@@ -30,7 +28,6 @@ type PieceRequestOrder struct {
 }
 
 type PieceRequestOrderKey struct {
-	// It should be the canonical short hash.
 	InfoHash unique.Handle[metainfo.Hash]
 	Index    int
 }
@@ -50,7 +47,6 @@ func (me *PieceRequestOrderItem) Less(otherConcrete *PieceRequestOrderItem) bool
 	return pieceOrderLess(me, otherConcrete).Less()
 }
 
-// Returns the old state if the key was already present. The Update method needs to look at it.
 func (me *PieceRequestOrder) Add(
 	key PieceRequestOrderKey,
 	state PieceRequestOrderState,
@@ -95,10 +91,4 @@ func (me *PieceRequestOrder) Iter(yield func(PieceRequestOrderItem) bool) {
 	me.tree.Scan(func(item PieceRequestOrderItem) bool {
 		return yield(item)
 	})
-}
-
-func (me *PieceRequestOrder) Get(key PieceRequestOrderKey) (ret g.Option[PieceRequestOrderState]) {
-	ret.Value, ret.Ok = me.keys[key]
-	panicif.NotEq(ret.Ok, me.tree.Contains(PieceRequestOrderItem{key, ret.Value}))
-	return
 }

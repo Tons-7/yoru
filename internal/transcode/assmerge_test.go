@@ -7,7 +7,6 @@ import (
 
 const mergeHead = "[Script Info]\nScriptType: v4.00+\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
 
-// Reads from the start and the playhead merge, each line once, in time order.
 func TestMergeASSUnionsInTimeOrder(t *testing.T) {
 	start := mergeHead +
 		"Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,one\n" +
@@ -31,7 +30,6 @@ func TestMergeASSUnionsInTimeOrder(t *testing.T) {
 	if !strings.HasPrefix(got, "[Script Info]") || strings.Count(got, "[Events]") != 1 {
 		t.Errorf("header mangled:\n%s", got)
 	}
-	// Merging what is already there changes nothing.
 	if again := mergeASS(got, window); again != got {
 		t.Error("merging a read already included changed the track")
 	}
@@ -43,7 +41,6 @@ func TestMergeASSIntoNothingIsTheRead(t *testing.T) {
 	}
 }
 
-// Ten hours sorts after nine.
 func TestEventStartSortsHours(t *testing.T) {
 	a := eventStart("Dialogue: 0,9:59:59.00,x")
 	b := eventStart("Dialogue: 0,10:00:00.00,x")

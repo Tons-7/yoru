@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// AniList's last answers (anilist.Archive), in the http_cache table.
 const (
 	answersMaxAge = 30 * 24 * time.Hour
 	answersKept   = 2000
@@ -35,7 +34,6 @@ func (s *Store) LoadAnswer(ctx context.Context, key string) ([]byte, time.Time, 
 	return body, time.Unix(at, 0), true
 }
 
-// Gzipped: a page of records is ~150 KB of JSON, a tenth packed.
 func (s *Store) SaveAnswer(ctx context.Context, key string, body []byte) error {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
@@ -52,12 +50,15 @@ func (s *Store) SaveAnswer(ctx context.Context, key string, body []byte) error {
 		return err
 	}
 	if s.answers.Add(1)%pruneEvery == 0 {
-		return s.PruneAnswers(ctx, time.Now().Add(-answersMaxAge), answersKept)
+		s.PruneOldAnswers(ctx)
 	}
 	return nil
 }
 
-// PruneAnswers drops answers older than before, then all but the newest keep.
+func (s *Store) PruneOldAnswers(ctx context.Context) error {
+	return s.PruneAnswers(ctx, time.Now().Add(-answersMaxAge), answersKept)
+}
+
 func (s *Store) PruneAnswers(ctx context.Context, before time.Time, keep int) error {
 	_, err := s.w.ExecContext(ctx, `
 		DELETE FROM http_cache

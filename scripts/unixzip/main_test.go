@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// The program keeps its executable bit through the zip, and an app zip is a bundle macOS can open.
 func TestZipKeepsModesAndBuildsTheApp(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "yoru")

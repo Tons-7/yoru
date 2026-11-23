@@ -19,7 +19,6 @@ func marshalAndUnmarshal(tb testing.TB, orig krpc.Msg) (ret krpc.Msg) {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	// ret.Q = "what"
 	return
 }
 

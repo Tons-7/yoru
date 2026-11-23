@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { cx } from '../lib/format'
+import { toast } from '../lib/toast'
 import { useDismiss, useModalFocus } from '../lib/hooks'
 import {
   holderOf,
@@ -46,7 +47,7 @@ const LEFT: KeyGroup[] = [
 const RIGHT: KeyGroup[] = [
   { title: 'Subtitles', ids: ['subtitles', 'subEarlier', 'subLater', 'subBigger', 'subSmaller'] },
   { title: 'Sound', ids: ['volumeUp', 'volumeDown', 'mute', 'voice'] },
-  { title: 'Picture', ids: ['fullscreen', 'focus', 'info'] },
+  { title: 'Picture', ids: ['fullscreen', 'focus', 'info', 'screenshot'] },
 ]
 
 const LISTED = new Set([...LEFT, ...RIGHT].flatMap((g) => g.ids))
@@ -150,7 +151,7 @@ export function Shortcuts() {
                 aria-label={`${a.does}: ${named(keyOf(a.id))}. Change`}
                 aria-pressed={capturing === a.id}
                 className={cx(
-                  'tap relative flex min-h-8 items-center gap-1 rounded-md px-1 transition-colors hover:bg-white/[0.06] hover:ring-1 hover:ring-accent-400/60',
+                  'tap relative flex min-h-8 items-center gap-1 rounded-md px-1 transition-colors hover:bg-white/6 hover:ring-1 hover:ring-accent-400/60',
                   capturing === a.id && 'bg-accent-500/20 ring-1 ring-accent-400',
                 )}
               >
@@ -186,7 +187,7 @@ export function Shortcuts() {
           role="dialog"
           aria-modal="true"
           aria-label="Keyboard shortcuts"
-          className="flex max-h-[92vh] animate-fade-in flex-col overflow-hidden rounded-card bg-base-850 shadow-panel ring-1 ring-white/[0.06]"
+          className="flex max-h-[92vh] animate-fade-in flex-col overflow-hidden rounded-card bg-base-850 shadow-panel ring-1 ring-white/6"
         >
           <div className="flex shrink-0 items-start justify-between gap-4 px-5 pt-5 pb-3">
             <div>
@@ -262,9 +263,10 @@ export function Shortcuts() {
               </div>
               <button
                 onClick={() => {
-                  resetKeys()
+                  const undo = resetKeys()
                   setCapturing(null)
                   setSaid('Every key is back to how it came')
+                  toast('Every key is back to how it came', 'info', { label: 'Undo', run: undo })
                 }}
                 disabled={!changed}
                 className="tap relative rounded-md px-2 py-1 text-xs text-base-300 transition-colors hover:bg-base-800 hover:text-white disabled:text-base-600 disabled:hover:bg-transparent"

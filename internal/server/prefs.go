@@ -47,8 +47,14 @@ var allowed = map[string][]string{
 }
 
 var numeric = map[string]bool{
-	"cache.budget_bytes": true, "notify.poll_seconds": true, "cache.prefetch_count": true, "downloads.limit_bytes": true,
+	"cache.budget_bytes": true, "notify.poll_seconds": true, "sync.poll_seconds": true, "cache.prefetch_count": true, "downloads.limit_bytes": true,
 }
+
+var listSettings = map[string]bool{
+	"release.prefer_groups": true, "release.avoid_groups": true, "release.exclude_terms": true,
+}
+
+const listSettingMax = 4000
 
 func isBool(def string) bool { return def == "true" || def == "false" }
 
@@ -109,6 +115,9 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 			send(w, http.StatusBadRequest, map[string]any{"error": "invalid value for " + body.Key + ": a whole number"})
 			return
 		}
+	} else if listSettings[body.Key] && len(body.Value) > listSettingMax {
+		send(w, http.StatusBadRequest, map[string]any{"error": "That list is too long."})
+		return
 	}
 
 	var err error
@@ -173,6 +182,11 @@ func (s *Server) setBookmark(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.PatchBookmark(r.Context(), body.AnimeID, body.BookmarkPatch); err != nil {
 		s.fail(w, "set bookmark", err)
 		return
+	}
+	if body.Hidden != nil {
+		s.forYouMu.Lock()
+		s.forYou = forYouPicks{}
+		s.forYouMu.Unlock()
 	}
 	send(w, http.StatusOK, map[string]any{"ok": true})
 }

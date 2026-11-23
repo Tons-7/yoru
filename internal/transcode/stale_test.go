@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// An earlier pass's 8 past a gap must not make the new pass's 7 count as complete.
 func TestStaleSegmentPastAGapIsNoProof(t *testing.T) {
 	s := &Session{dir: t.TempDir(), Segments: 20}
 	write := func(n int, at time.Time) {

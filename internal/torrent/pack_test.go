@@ -31,15 +31,15 @@ func TestBracketNumberedPackAndLoneFile(t *testing.T) {
 	for n := 1; n <= 12; n++ {
 		pack = append(pack, File{Name: "[VCB-Studio] Show [" + twoDigits(n) + "][Ma10p_1080p][x265_flac].mkv", Length: mb(900)})
 	}
-	got, _, ok := PickEpisode(pack, 5)
+	got, _, ok := pickEpisode(pack, 5)
 	if !ok || got.Name != pack[4].Name {
 		t.Fatalf("picked %q, %v", got.Name, ok)
 	}
 	lone := []File{{Name: "[Nekomoe kissaten] Show [05][1080p].mkv", Length: mb(900)}}
-	if _, _, ok := PickEpisode(lone, 1); ok {
+	if _, _, ok := pickEpisode(lone, 1); ok {
 		t.Error("episode 5's file was taken as episode 1")
 	}
-	if _, _, ok := PickEpisode(lone, 5); !ok {
+	if _, _, ok := pickEpisode(lone, 5); !ok {
 		t.Error("episode 5's own file was refused")
 	}
 }
@@ -64,12 +64,12 @@ func TestExtrasAreNeverTheEpisode(t *testing.T) {
 		{Name: "Show/[G] Show - 02 [1080p].mkv", Length: mb(1400)},
 		{Name: "Show/SPs/[G] Show - SP01 [1080p].mkv", Length: mb(600)},
 	}
-	got, _, ok := PickEpisode(files, 1)
+	got, _, ok := pickEpisode(files, 1)
 	if !ok || got.Name != "Show/[G] Show - 01 [1080p].mkv" {
 		t.Fatalf("picked %q, %v", got.Name, ok)
 	}
 
-	if _, _, ok := PickEpisode(files[:6], 1); ok {
+	if _, _, ok := pickEpisode(files[:6], 1); ok {
 		t.Error("an opening was taken as episode 1")
 	}
 }
@@ -80,7 +80,7 @@ func TestRecapIsNotTheEpisode(t *testing.T) {
 		{Name: "Show - 12.5.mkv", Length: mb(700)},
 		{Name: "Show - 12.mkv", Length: mb(700)},
 	}
-	got, _, ok := PickEpisode(files, 12)
+	got, _, ok := pickEpisode(files, 12)
 	if !ok || got.Name != "Show - 12.mkv" {
 		t.Fatalf("picked %q, %v", got.Name, ok)
 	}
@@ -95,25 +95,25 @@ func TestPackNumberingIsReadOffItsFiles(t *testing.T) {
 		return out
 	}
 
-	if got, _, ok := PickNumbered(numbered(12, 23), 12, []int{12, 23}); !ok || got.Name != "[G] Mushoku Tensei - 23 [1080p].mkv" {
+	if got, _, ok := pickNumbered(numbered(12, 23), 12, []int{12, 23}); !ok || got.Name != "[G] Mushoku Tensei - 23 [1080p].mkv" {
 		t.Errorf("season count: picked %q, %v", got.Name, ok)
 	}
-	if got, _, ok := PickNumbered(numbered(1, 12), 12, []int{12, 23}); !ok || got.Name != "[G] Mushoku Tensei - 12 [1080p].mkv" {
+	if got, _, ok := pickNumbered(numbered(1, 12), 12, []int{12, 23}); !ok || got.Name != "[G] Mushoku Tensei - 12 [1080p].mkv" {
 		t.Errorf("own count: picked %q, %v", got.Name, ok)
 	}
 
-	if got, _, ok := PickNumbered(numbered(7, 12), 8, []int{8, 19}); !ok || got.Name != "[G] Mushoku Tensei - 08 [1080p].mkv" {
+	if got, _, ok := pickNumbered(numbered(7, 12), 8, []int{8, 19}); !ok || got.Name != "[G] Mushoku Tensei - 08 [1080p].mkv" {
 		t.Errorf("partial pack: picked %q, %v", got.Name, ok)
 	}
 
-	if got, _, ok := PickNumbered(numbered(12, 23), 12, []int{23}); !ok || got.Name != "[G] Mushoku Tensei - 23 [1080p].mkv" {
+	if got, _, ok := pickNumbered(numbered(12, 23), 12, []int{23}); !ok || got.Name != "[G] Mushoku Tensei - 23 [1080p].mkv" {
 		t.Errorf("bare later cour: picked %q, %v", got.Name, ok)
 	}
 }
 
 func TestOtherVideoContainersCount(t *testing.T) {
 	files := []File{{Name: "Show - 01.ogm", Length: mb(300)}, {Name: "Show - 02.m4v", Length: mb(300)}}
-	if got, _, ok := PickEpisode(files, 2); !ok || got.Name != "Show - 02.m4v" {
+	if got, _, ok := pickEpisode(files, 2); !ok || got.Name != "Show - 02.m4v" {
 		t.Errorf("picked %q, %v", got.Name, ok)
 	}
 }

@@ -119,6 +119,7 @@ export function useGuide() {
   const progress = (name: string) => (setup.data?.progress ?? []).find((p) => p.component === name)
   const loading = parts.filter((c) => moving(progress(c.name))).length
   const installed = parts.filter((c) => c.present)
+  const failedParts = parts.filter((c) => !c.present && progress(c.name)?.stage === 'failed')
   const engine = parts.find((c) => c.name === 'ffmpeg')?.present ?? false
 
   const sites = setup.data?.indexers ?? 0
@@ -142,7 +143,12 @@ export function useGuide() {
       sub: loading > 0 ? `Downloading · ${many(loading, 'item')}` : engine ? 'Installed' : STEPS[0].sub,
       value: loading > 0 ? `${many(loading, 'download')} running` : `${installed.length} installed`,
       detail: installed.map((c) => PARTS[c.name]?.short ?? c.label).join(', ') || 'Nothing yet',
-      warn: !engine && loading === 0 ? "The player engine isn't installed" : undefined,
+      warn:
+        !engine && loading === 0
+          ? "The player engine isn't installed"
+          : failedParts.length > 0
+            ? `${failedParts.map((c) => PARTS[c.name]?.short ?? c.label).join(', ')} didn't download`
+            : undefined,
     },
     sources: {
       done: sites > 0,
@@ -194,7 +200,18 @@ export function useGuide() {
     on,
     set: (key: string, next: string) => {
       setChosen((was) => ({ ...was, [key]: next }))
-      setPref.mutate({ key, value: next })
+      setPref.mutate(
+        { key, value: next },
+        {
+          onError: () =>
+            setChosen((was) => {
+              if (was[key] !== next) return was
+              const rest = { ...was }
+              delete rest[key]
+              return rest
+            }),
+        },
+      )
     },
     notes,
     pass,

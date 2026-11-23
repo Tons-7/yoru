@@ -31,9 +31,9 @@
       <p>The computer Yoru runs on may be asleep, Yoru may be closed, or this device is on another network.</p>
       <button id="retry" type="button">Try again</button>
       <p id="status" role="status">Trying again every few seconds.</p>
+      <p>Next time, save episodes to this device in Yoru to watch them without the computer.</p>
     </main>
     <script>
-      // Any answer at all means Yoru is back, even a refusal: reloading then shows the page that was asked for.
       const status = document.getElementById('status')
       let busy = false
       async function check(byHand) {

@@ -9,8 +9,6 @@ import (
 	"yoru/internal/transcode"
 )
 
-// An opened episode names its AirPlay address, which an Apple TV follows without the page's cookie: a master
-// playlist (picture and English track), the track's playlist, and its WebVTT mapped to 0.
 func TestAirPlayGetsThePictureAndTheSubtitles(t *testing.T) {
 	h, source := streamHarness(t)
 	code, opened := h.call(t, "POST", "/api/stream/open?id=1&episode=1&source="+source, "")
@@ -21,7 +19,6 @@ func TestAirPlayGetsThePictureAndTheSubtitles(t *testing.T) {
 	}
 	root := strings.TrimSuffix(link[at:], "master.m3u8")
 
-	// The English track picked on the page.
 	code, _, master := h.fetch(t, "GET", root+"master.m3u8?sub=3")
 	for _, want := range []string{`TYPE=SUBTITLES,GROUP-ID="subs"`, `LANGUAGE="eng",DEFAULT=YES`, `URI="subs-3.m3u8"`,
 		`SUBTITLES="subs"`, "\nplaylist.m3u8\n"} {
@@ -41,17 +38,14 @@ func TestAirPlayGetsThePictureAndTheSubtitles(t *testing.T) {
 	if code, _, playlist := h.fetch(t, "GET", root+"playlist.m3u8"); code != http.StatusOK || !bytes.HasPrefix(playlist, []byte("#EXTM3U")) {
 		t.Fatalf("the picture's playlist answered %d", code)
 	}
-	// The Chromecast's own track keeps no map.
 	if code, _, vtt := h.fetch(t, "GET", root+"sub-3.vtt"); code != http.StatusOK || bytes.Contains(vtt, []byte("X-TIMESTAMP-MAP")) {
 		t.Errorf("the Chromecast's track answered %d: %q", code, vtt)
 	}
-	// Subtitles off on the page: none shown on the TV, nor picked for it.
 	if _, _, master := h.fetch(t, "GET", root+"master.m3u8?sub=off"); !bytes.Contains(master, []byte("DEFAULT=NO,AUTOSELECT=NO")) {
 		t.Errorf("with subtitles off:\n%s", master)
 	}
 }
 
-// A minute a time, each piece holding the cues showing in it, one across its edge in both.
 func TestAirPlaySubtitlesComeAMinuteAtATime(t *testing.T) {
 	vtt := []byte("WEBVTT\n\n00:10.000 --> 00:12.000\nfirst\n\n00:59.000 --> 01:02.000\nacross\n\n01:30.000 --> 01:31.000\nsecond\n")
 	first, second := string(airplayCues(vtt, 0)), string(airplayCues(vtt, 1))
@@ -68,7 +62,6 @@ func TestAirPlaySubtitlesComeAMinuteAtATime(t *testing.T) {
 	}
 }
 
-// The page's pick is the TV's; with none, the file's own default, never simply the first.
 func TestAirPlayFollowsThePagesSubtitles(t *testing.T) {
 	session := &transcode.Session{Info: &transcode.MediaInfo{Subtitles: []transcode.Stream{
 		{Index: 2, Codec: "ass", Language: "eng"}, {Index: 3, Codec: "ass", Language: "spa"},

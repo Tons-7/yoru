@@ -11,6 +11,7 @@ export interface ToastAction {
 }
 
 export const TOAST_MS = 6000
+export const ACTION_TOAST_MS = 10_000
 
 let listeners: Array<(t: Toast) => void> = []
 let dismissers: Array<(id: number) => void> = []

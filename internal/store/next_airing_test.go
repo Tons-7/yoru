@@ -23,7 +23,6 @@ func airingAnime(t *testing.T, nextEpisode int, airingAt int64) *Store {
 	return st
 }
 
-// The list agrees with the schedule: a day-only date can't call an aired episode upcoming, or the reverse.
 func TestEpisodeListKeepsToTheSchedule(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Unix()
@@ -67,7 +66,6 @@ func TestEpisodeListKeepsToTheSchedule(t *testing.T) {
 	}
 }
 
-// Auto-next and prefetch skip, as the watcher does, an episode airing next Saturday.
 func TestNextEpisodeWaitsForTheBroadcast(t *testing.T) {
 	ctx := context.Background()
 

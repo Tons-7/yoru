@@ -1,5 +1,3 @@
-// The prefetch pipeline end to end on a local swarm (scripts/e2e-swarm, the instance's only site): the
-// series page readies an episode, play downloads the next ahead, Continue and Next resume it, once each.
 import { execFileSync, spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
@@ -11,7 +9,6 @@ const ANIME = Number(process.env.YORU_ANIME ?? 127230)
 const LIB = process.env.YORU_LIB
 const REPO = process.env.YORU_REPO
 const SHOTS = process.env.SHOTS ?? '.'
-// The same arithmetic as run-player-check.mjs: the engine's peer port, and the indexer port it wrote.
 const PORT = Number(new URL(BASE).port)
 const PEER_PORT = PORT === 4399 ? 4341 : PORT - 60
 const SEED_PORT = PEER_PORT + 1000
@@ -38,7 +35,6 @@ const post = (p, b) =>
 const searches = async () => (await (await fetch(`${MOCK}/e2e/searches`)).json()).searches
 const downloads = async () => (await get('/api/downloads')).items ?? []
 const listed = async (episode, hash) => (await downloads()).some((d) => d.episode === String(episode) && d.infoHash === hash)
-// From the instance's log: the site cannot tell a search from one the indexer cache answered.
 const serverLog = join(LIB, '..', 'server.log')
 const logged = (msg, episode) => {
   const re = new RegExp(`msg="${msg}".*episode=${episode}\\b`, 'g')
@@ -54,12 +50,11 @@ await until(async () => (await fetch(`${BASE}/api/setup`)).ok, 60_000)
 const title = (await get(`/api/anime/${ANIME}`)).title
 check(!!title, 'the show is known to the instance', title)
 
-// The swarm: one torrent per episode, plus the site that lists them.
 const swarm = spawn('go', ['run', './scripts/e2e-swarm',
   '-src', join(LIB, 'Yoru Test Show - 01.mkv'), '-dir', join(LIB, '..', 'swarm'), '-title', title,
   '-count', String(EPISODES), '-listen', String(SEED_PORT), '-peer', `127.0.0.1:${PEER_PORT}`,
   '-http', `127.0.0.1:${PORT + 2000}`,
-], { cwd: REPO, stdio: ['ignore', 'pipe', 'inherit'] })
+], { cwd: REPO, stdio: ['ignore', 'pipe', 'inherit'], detached: process.platform !== 'win32' })
 const killSwarm = () => {
   try {
     if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(swarm.pid), '/T', '/F'], { stdio: 'ignore' })
@@ -103,7 +98,6 @@ const playing = () => page.evaluate(() => {
 })
 const played = () => page.waitForResponse((r) => r.url().endsWith('/api/play') && r.request().method() === 'POST', { timeout: 120_000 })
 
-// 1. The series page readies the first episode: one search, nothing in the engine.
 await page.goto(`${BASE}/anime/${ANIME}`, { waitUntil: 'domcontentloaded' })
 const watch = page.getByRole('link', { name: /^Play Ep 1\b/ })
 check(await until(() => watch.isVisible(), 60_000), 'the series page offers episode 1')
@@ -111,12 +105,10 @@ check(await until(() => prepared.includes(1)), 'and asks for it to be readied')
 check(await until(async () => (await searches()) > 0, 60_000), 'which searches the site')
 check(await until(() => resolved(1) === 1, 30_000) && (await downloads()).length === 0, 'and resolves it without downloading anything')
 
-// 2. Playing it uses the release readied, then resolves and downloads episode 2 ahead, once.
 let session = played()
 await watch.click()
 let s = await (await session).json()
 check(s.infoHash === hashes[1], 'episode 1 plays the release readied ahead', s.infoHash ?? s.error)
-// Waiting shows in the log only when play arrives mid-resolve; either way it searches no second time.
 check(resolved(1) === 1 && searchedAgain() === 0, 'without a second search of its own', `waited ${waitedFor(1)}`)
 check(await until(playing, 90_000), 'and the video plays')
 check(await until(() => listed(2, hashes[2]), 90_000), 'episode 2 is downloaded ahead while it plays')
@@ -124,8 +116,6 @@ check(resolved(2) === 1 && fetched(2) === 1 && waitedFor(2) === 1, 'resolved onc
 check((await downloads()).length === 2, 'one download per episode', String((await downloads()).length))
 await page.screenshot({ path: `${SHOTS}/prefetch-playing.png` })
 
-// 3. Episode 1 watched (player closed, then its last reports), back on the series page: Continue names
-// the episode downloaded ahead, readying it searches nothing, and opening it resumes that torrent.
 await page.goto('about:blank')
 await sleep(1500)
 for (let i = 0; i < 2; i++) await post('/api/progress', { animeId: ANIME, episode: 1, position: 179, duration: 180, played: 100 })
@@ -146,7 +136,6 @@ check(await until(() => listed(3, hashes[3]), 90_000), 'episode 3 is downloaded 
 check(resolved(3) === 1 && fetched(3) === 1, 'resolved once and fetched once', `resolved ${resolved(3)} fetched ${fetched(3)}`)
 check((await downloads()).length === 3, 'still one download per episode', String((await downloads()).length))
 
-// 4. Next in the player: the same, by the other route.
 await page.mouse.move(640, 400)
 const next = page.getByRole('button', { name: /^Next: Episode/ }).first()
 check(await until(() => next.isVisible()), 'the player offers the next episode')

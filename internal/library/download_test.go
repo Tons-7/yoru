@@ -14,7 +14,6 @@ import (
 	"yoru/internal/torrent"
 )
 
-// Downloading an episode already held promotes that copy to kept instead of fetching a second one.
 func TestDownloadPromotesTheCachedCopy(t *testing.T) {
 	engine := newFakeEngine()
 	srv := httptest.NewServer(engine.handler())
@@ -34,7 +33,6 @@ func TestDownloadPromotesTheCachedCopy(t *testing.T) {
 	engine.ids[1] = goodHash
 	engine.finished[goodHash] = true
 
-	// A nil finder: reaching the search at all is a panic, which is the point.
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	p := NewPrefetcher(st, nil, torrent.NewClient(srv.URL), log)
 	if err := p.Download(ctx, 1, 1, 1, score.DefaultPreferences(), time.Second); err != nil {
@@ -53,7 +51,6 @@ func TestDownloadPromotesTheCachedCopy(t *testing.T) {
 	}
 }
 
-// An asked-for download is outside the cache budget, so a full cache refuses a prefetch but not a download.
 func TestDownloadIgnoresTheCacheBudget(t *testing.T) {
 	engine := newFakeEngine()
 	srv := httptest.NewServer(engine.handler())
@@ -93,8 +90,6 @@ func TestDownloadIgnoresTheCacheBudget(t *testing.T) {
 	}
 }
 
-// A held release that no longer delivers is replaced on play; the replacement
-// inherits its keep and the dead one leaves the engine instead of lingering.
 func TestStartReplacesADeadHeldRelease(t *testing.T) {
 	engine := newFakeEngine(deadHash)
 	p := newPlayback(t, engine, []indexer.Torrent{

@@ -21,17 +21,11 @@ import (
 	"yoru/internal/transcode"
 )
 
-// The TV's own queue: the episodes after the one cast, each linked by the episode rather than a session and
-// opened on its first ask, so the TV goes on with the phone locked or the page shut.
-
 const (
 	castEpisodePrefix = "castep:"
-	// castQueued is an evening's worth; each opens only once the TV reaches it.
-	castQueued = 12
-	// tvAhead is about how far the TV's player reads ahead of what it shows.
-	tvAhead = 20.0
-	// pageWins: a page's exact report within this long beats the TV's estimate.
-	pageWins = 45 * time.Second
+	castQueued        = 12
+	tvAhead           = 20.0
+	pageWins          = 45 * time.Second
 )
 
 type castTrack struct {
@@ -41,7 +35,6 @@ type castTrack struct {
 	URL      string `json:"url"`
 }
 
-// queuedCast is one episode in the TV's queue, as the page hands it over.
 type queuedCast struct {
 	Key       string      `json:"key"`
 	URL       string      `json:"url"`
@@ -51,7 +44,6 @@ type queuedCast struct {
 	Subtitles []castTrack `json:"subtitles"`
 }
 
-// castQueue is what plays after this episode with Auto next on, up to what Still watching lets play unasked.
 func (s *Server) castQueue(ctx context.Context, animeID, episode int, base string, expires time.Time, subLang string) []queuedCast {
 	out := []queuedCast{}
 	prefs, err := s.store.Prefs(ctx, animeID)
@@ -67,7 +59,6 @@ func (s *Server) castQueue(ctx context.Context, animeID, episode int, base strin
 		s.log.Warn("cast queue", "anime", animeID, "episode", episode, "err", err)
 		return out
 	}
-	// Looked up once a show: the queue is mostly one, maybe running on into its next season.
 	shows := map[int][2]string{}
 	for _, p := range picks {
 		show, known := shows[p.AnimeID]
@@ -77,7 +68,6 @@ func (s *Server) castQueue(ctx context.Context, animeID, episode int, base strin
 		}
 		source := fmt.Sprintf("%s%s:%s", castEpisodePrefix, sessionID(p.AnimeID, p.Episode), subLang)
 		root := base + "/c/" + s.signGrant(grant{Source: source, Expires: expires.Unix()}) + "/"
-		// "Episode 5" alone: the TV's queue lists what's coming, and a title there could spoil it.
 		item := queuedCast{
 			Key: sessionID(p.AnimeID, p.Episode), URL: root + "playlist.m3u8", Title: show[0],
 			Subtitle: "Episode " + strconv.Itoa(p.Episode), Artwork: show[1], Subtitles: []castTrack{},
@@ -90,7 +80,6 @@ func (s *Server) castQueue(ctx context.Context, animeID, episode int, base strin
 	return out
 }
 
-// parseCastEpisode reads a queued episode's link: the episode, and the language its subtitles follow.
 func parseCastEpisode(source string) (animeID, episode int, lang string, ok bool) {
 	rest, found := strings.CutPrefix(source, castEpisodePrefix)
 	if !found {
@@ -107,17 +96,14 @@ type tvOpen struct {
 	err  error
 }
 
-// queuedSession is a queued episode's session, opened once however many of the TV's asks arrive at once.
 func (s *Server) queuedSession(ctx context.Context, animeID, episode int) (string, error) {
 	key := sessionID(animeID, episode)
 	s.tvMu.Lock()
 	o := s.tvOpens[key]
-	// Failed, or reaped since: opened again.
 	if o != nil && s.spent(o) {
 		o = nil
 	}
 	if o == nil {
-		// Each new one clears out the rest that are spent, so a night of casting doesn't keep them all.
 		maps.DeleteFunc(s.tvOpens, func(_ string, old *tvOpen) bool { return s.spent(old) })
 		o = &tvOpen{done: make(chan struct{})}
 		s.tvOpens[key] = o
@@ -132,7 +118,6 @@ func (s *Server) queuedSession(ctx context.Context, animeID, episode int) (strin
 	}
 }
 
-// spent: an open that has finished and failed, or whose session has since been reaped.
 func (s *Server) spent(o *tvOpen) bool {
 	select {
 	case <-o.done:
@@ -143,10 +128,8 @@ func (s *Server) spent(o *tvOpen) bool {
 	}
 }
 
-// openForTV plays and opens an episode as a page would, by the same handlers, for the TV's any-browser plan.
 func (s *Server) openForTV(o *tvOpen, animeID, episode int) {
 	defer close(o.done)
-	// The TV gives up on a slow first answer and asks again; the open goes on for that ask.
 	ctx, cancel := detached(5 * time.Minute)
 	defer cancel()
 	var started struct {
@@ -170,12 +153,11 @@ func (s *Server) openForTV(o *tvOpen, animeID, episode int) {
 	}
 	o.id = opened.ID
 	if session, ok := s.streams.Get(o.id); ok {
-		s.heldOnce(session)
+		s.tvHold(session, true)
 	}
 	s.log.Info("cast queue opened the next episode for the TV", "anime", animeID, "episode", episode, "session", o.id)
 }
 
-// within runs one of Yoru's own handlers as the page would ask it, and reads its answer.
 func within(ctx context.Context, h http.HandlerFunc, method, target string, body, out any) error {
 	var in io.Reader
 	if body != nil {
@@ -199,7 +181,6 @@ func within(ctx context.Context, h http.HandlerFunc, method, target string, body
 	return json.Unmarshal(rec.Body.Bytes(), out)
 }
 
-// autoTrack is a queued episode's text track in the language the cast one had, if it has one.
 func autoTrack(session *transcode.Session, lang string) (int, bool) {
 	for _, sub := range session.Info.Subtitles {
 		if transcode.TextSubtitle(sub.Codec) && sameLanguage(sub.Language, lang) {
@@ -209,7 +190,6 @@ func autoTrack(session *transcode.Session, lang string) (int, bool) {
 	return 0, false
 }
 
-// sameLanguage: releases tag one language "en", "eng" or "en-US"; a tag nobody knows matches only itself.
 func sameLanguage(a, b string) bool {
 	if a == "" || b == "" || strings.EqualFold(a, b) {
 		return a != "" && b != ""
@@ -224,18 +204,15 @@ func sameLanguage(a, b string) bool {
 	return baseA == baseB
 }
 
-// tvEstimate moves the TV's place in an episode to at: whether to save it, and how much was played.
 func (s *Server) tvEstimate(key string, at float64, now time.Time) (played float64, save bool) {
 	s.tvMu.Lock()
 	defer s.tvMu.Unlock()
 	w := s.tvSeen[key]
 	if w == nil {
-		// Pruned on each new episode, so a day of casting doesn't keep them all; the first ask is the start.
 		maps.DeleteFunc(s.tvSeen, func(_ string, old *tvWatch) bool { return now.Sub(old.savedAt) > 6*time.Hour })
 		s.tvSeen[key] = &tvWatch{at: at, savedAt: now}
 		return 0, false
 	}
-	// Back to an earlier place (a rewind, or the episode again): counted on from there.
 	if at < w.at {
 		w.at, w.savedAt = at, now
 		return 0, false
@@ -243,20 +220,16 @@ func (s *Server) tvEstimate(key string, at float64, now time.Time) (played float
 	if at == w.at || now.Sub(w.savedAt) < 10*time.Second {
 		return 0, false
 	}
-	// Played no faster than the clock: a seek forward isn't time watched.
 	played = min(at-w.at, now.Sub(w.savedAt).Seconds())
 	w.at, w.savedAt = at, now
 	return played, now.Sub(s.pageReported[key]) >= pageWins
 }
 
-// tvWatch is where the TV has read an episode to, for its progress when no page reports it.
 type tvWatch struct {
 	at      float64
 	savedAt time.Time
 }
 
-// noteTV turns the TV's segment asks into the episode's progress, every 10 s, and only while no page reports
-// it, as the page knows the TV's exact time and this only about where it reads.
 func (s *Server) noteTV(session *transcode.Session, n int) {
 	animeID, episode, ok := parseSessionID(session.ID)
 	if !ok || session.Info == nil {
@@ -273,7 +246,6 @@ func (s *Server) noteTV(session *transcode.Session, n int) {
 		if _, err := s.savePosition(ctx, animeID, episode, at, session.Info.Duration, played); err != nil {
 			s.log.Warn("save the TV's progress", "anime", animeID, "episode", episode, "err", err)
 		}
-		// Near the end the next is made ready, as for a page: the TV asks for it a little before.
 		s.maybeReadyNext(ctx, animeID, episode, at, session.Info.Duration)
 	}()
 }

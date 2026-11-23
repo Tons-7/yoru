@@ -10,7 +10,6 @@ import (
 type Cache[Peer, BlockKey, Hash comparable] struct {
 	Hash func([]byte) Hash
 
-	// Wonder if we should make this an atomic.
 	lock   sync.RWMutex
 	blocks map[BlockKey][]peerAndHash[Peer, Hash]
 }
@@ -61,7 +60,6 @@ func (me *Cache[Peer, BlockKey, Hash]) ForgetBlockSeq(seq iter.Seq[BlockKey]) {
 	}
 }
 
-// Returns whether any block in the sequence has at least one peer recorded.
 func (me *Cache[Peer, BlockKey, Hash]) HasPeerForBlocks(seq iter.Seq[BlockKey]) bool {
 	me.lock.RLock()
 	defer me.lock.RUnlock()

@@ -255,7 +255,7 @@ func ensureAnime(ctx context.Context, db execer, animeID int) error {
 		       coalesce((SELECT text FROM title
 		                 WHERE anime_id = c.anime_id
 		                 ORDER BY (kind != 'primary'), id LIMIT 1), 'Unknown'),
-		       c.kind, c.episodes, c.year, CASE WHEN c.anime_id < 0 THEN c.picture END, 0
+		       nullif(upper(c.kind), 'UNKNOWN'), c.episodes, c.year, CASE WHEN c.anime_id < 0 THEN c.picture END, 0
 		FROM corpus_anime c
 		WHERE c.anime_id = ?
 		ON CONFLICT(id) DO NOTHING`, animeID)
@@ -270,17 +270,31 @@ func ensureAnime(ctx context.Context, db execer, animeID int) error {
 }
 
 func (s *Store) Unhydrated(ctx context.Context, ids []int) ([]int, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT id FROM anime WHERE synced_at <> 0
+		UNION SELECT anime_id FROM dead_anime`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	settled := make(map[int]bool, len(ids))
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		settled[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	var out []int
 	for _, id := range ids {
-		var synced int64
-		err := s.r.QueryRowContext(ctx,
-			`SELECT synced_at FROM anime WHERE id = ?`, id).Scan(&synced)
-		if errors.Is(err, sql.ErrNoRows) || (err == nil && synced == 0) {
+		if !settled[id] {
 			out = append(out, id)
-			continue
-		}
-		if err != nil {
-			return nil, err
 		}
 	}
 	return out, nil

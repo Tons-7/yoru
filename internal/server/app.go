@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	"yoru/internal/config"
@@ -158,4 +159,45 @@ func (s *Server) logFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+var clientErrors = struct {
+	sync.Mutex
+	seen map[string]time.Time
+}{seen: map[string]time.Time{}}
+
+func (s *Server) clientError(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Message        string `json:"message"`
+		Stack          string `json:"stack"`
+		ComponentStack string `json:"componentStack"`
+		Path           string `json:"path"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	message := clip(body.Message, 300)
+	now := time.Now()
+	clientErrors.Lock()
+	last, seen := clientErrors.seen[message]
+	quiet := seen && now.Sub(last) < 10*time.Minute
+	if !quiet {
+		if len(clientErrors.seen) > 200 {
+			clear(clientErrors.seen)
+		}
+		clientErrors.seen[message] = now
+	}
+	clientErrors.Unlock()
+	if !quiet {
+		s.log.Warn("page crashed", "message", message, "path", clip(body.Path, 200), "device", deviceName(r.UserAgent()),
+			"stack", clip(body.Stack, 2000), "components", clip(body.ComponentStack, 2000))
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

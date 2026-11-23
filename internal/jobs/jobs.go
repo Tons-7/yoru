@@ -1,4 +1,3 @@
-// Package jobs runs recurring work through one scheduler, so each task's runs and failures show.
 package jobs
 
 import (
@@ -19,6 +18,17 @@ type Job struct {
 	Every   time.Duration
 	OnStart bool
 	Run     Func
+
+	Interval func() time.Duration
+}
+
+func (j Job) every() time.Duration {
+	if j.Interval != nil {
+		if d := j.Interval(); d > 0 {
+			return d
+		}
+	}
+	return j.Every
 }
 
 type Status struct {
@@ -37,30 +47,42 @@ type Status struct {
 type entry struct {
 	job Job
 
-	mu       sync.Mutex
-	running  bool
-	lastRun  time.Time
-	lastOK   time.Time
-	nextRun  time.Time
-	runs     int
-	failures int
-	lastErr  string
-	took     time.Duration
-	// consecutive failures, for backoff; a manual success resets it too.
+	mu          sync.Mutex
+	running     bool
+	lastRun     time.Time
+	lastOK      time.Time
+	nextRun     time.Time
+	runs        int
+	failures    int
+	lastErr     string
+	took        time.Duration
 	consecutive int
 }
 
-// ErrRunning: the job is already running, so nothing new was started.
 var ErrRunning = errors.New("already running")
 
 type Scheduler struct {
 	log *slog.Logger
-	// ctx lives as long as the scheduler, so a manual run is not tied to the request that asked for it.
 	ctx context.Context
 
 	mu      sync.Mutex
 	entries map[string]*entry
 	order   []string
+	running sync.WaitGroup
+}
+
+func (s *Scheduler) Wait(limit time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		s.running.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(limit):
+		return false
+	}
 }
 
 func New(log *slog.Logger) *Scheduler {
@@ -88,7 +110,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 	s.mu.Unlock()
 
 	for _, name := range names {
-		go s.loop(ctx, name)
+		s.running.Go(func() { s.loop(ctx, name) })
 	}
 }
 
@@ -98,16 +120,23 @@ func (s *Scheduler) loop(ctx context.Context, name string) {
 		return
 	}
 
+	startRetry := false
 	if e.job.OnStart {
 		s.execute(ctx, e)
+		e.mu.Lock()
+		startRetry = e.consecutive > 0
+		e.mu.Unlock()
 	}
 
-	// Consecutive failures back off so a persistently broken job stops hammering whatever it depends on.
 	for {
+		every := e.job.every()
 		e.mu.Lock()
-		wait := e.job.Every
+		wait := every
 		if e.consecutive > 0 {
-			wait = backoff(e.job.Every, e.consecutive)
+			wait = backoff(every, e.consecutive)
+		}
+		if startRetry {
+			wait, startRetry = min(every, startRetryAfter), false
 		}
 		e.nextRun = time.Now().Add(wait)
 		e.mu.Unlock()
@@ -122,9 +151,10 @@ func (s *Scheduler) loop(ctx context.Context, name string) {
 	}
 }
 
+var startRetryAfter = 5 * time.Minute
+
 func backoff(base time.Duration, failures int) time.Duration {
 	capped := math.Min(float64(failures), 5)
-	// Capped, but never under the job's own interval: a daily job that fails must not run four times a day.
 	wait := time.Duration(float64(base) * math.Pow(2, capped))
 	return max(min(wait, 6*time.Hour), base)
 }
@@ -169,8 +199,6 @@ func (s *Scheduler) finish(ctx context.Context, e *entry, run Func) error {
 	return err
 }
 
-// A panic in one job must not take the process down with it. The stack goes to
-// the log because the error alone reaches the jobs tab without a location.
 func safely(log *slog.Logger, name string, ctx context.Context, run Func) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -181,13 +209,10 @@ func safely(log *slog.Logger, name string, ctx context.Context, run Func) (err e
 	return run(ctx)
 }
 
-// Trigger starts a job now in the background, schedule untouched; ErrRunning if it already is.
 func (s *Scheduler) Trigger(name string) error {
 	return s.RunAs(name, nil)
 }
 
-// RunAs starts run under a job's name and lock, so a manual variant (a forced
-// refresh, say) never overlaps the scheduled one. nil runs the job itself.
 func (s *Scheduler) RunAs(name string, run Func) error {
 	e := s.entry(name)
 	if e == nil {
@@ -196,16 +221,19 @@ func (s *Scheduler) RunAs(name string, run Func) error {
 	if run == nil {
 		run = e.job.Run
 	}
-	if !e.claim() {
-		return ErrRunning
-	}
 	s.mu.Lock()
 	ctx := s.ctx
 	s.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	go s.finish(ctx, e, run)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !e.claim() {
+		return ErrRunning
+	}
+	s.running.Go(func() { s.finish(ctx, e, run) })
 	return nil
 }
 
@@ -221,9 +249,10 @@ func (s *Scheduler) Status() []Status {
 			continue
 		}
 
+		every := e.job.every()
 		e.mu.Lock()
 		st := Status{
-			Name: name, Every: e.job.Every.String(),
+			Name: name, Every: every.String(),
 			Running: e.running, LastRun: e.lastRun, LastOK: e.lastOK,
 			NextRun: e.nextRun, Runs: e.runs, Failures: e.failures,
 			LastErr: e.lastErr,

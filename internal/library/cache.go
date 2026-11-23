@@ -5,14 +5,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/text/unicode/norm"
 
 	"yoru/internal/store"
 	"yoru/internal/torrent"
@@ -139,6 +143,8 @@ func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
 		}
 	}
 
+	c.pruneThumbs(ctx)
+
 	usage, err := c.store.CacheUsage(ctx)
 	if err != nil {
 		return SweepReport{}, err
@@ -149,7 +155,11 @@ func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
 		return rep, nil
 	}
 	order := slices.DeleteFunc(evictionOrder(usage.Entries, c.stalled(), c.lastPlayed(ctx)), c.fetching)
-	c.evictDownTo(ctx, &rep, usage.Budget, order, torrentBytes(usage.Entries))
+	freed := torrentBytes(usage.Entries)
+	if keptBytes(usage.Entries) > usage.Budget {
+		return rep, nil
+	}
+	c.evictDownTo(ctx, &rep, usage.Budget, order, freed)
 
 	if rep.Evicted > 0 {
 		c.log.Info("cache swept",
@@ -159,6 +169,36 @@ func (c *Cache) Sweep(ctx context.Context) (SweepReport, error) {
 			"budgetMB", usage.Budget>>20)
 	}
 	return rep, nil
+}
+
+const (
+	thumbsSettle = time.Hour
+	thumbsKeep   = 30 * 24 * time.Hour
+)
+
+func (c *Cache) pruneThumbs(ctx context.Context) {
+	dir := filepath.Join(c.dir, "thumbs")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !e.IsDir() {
+			continue
+		}
+		age := time.Since(info.ModTime())
+		hash, _, keyed := strings.Cut(e.Name(), "-")
+		switch {
+		case keyed && len(hash) == 40:
+			if age < thumbsSettle || c.store.HasTorrent(ctx, hash) {
+				continue
+			}
+		case age < thumbsKeep:
+			continue
+		}
+		os.RemoveAll(filepath.Join(dir, e.Name()))
+	}
 }
 
 func torrentBytes(entries []store.CacheEntry) map[string]int64 {
@@ -175,7 +215,7 @@ func (c *Cache) evictDownTo(ctx context.Context, rep *SweepReport, target int64,
 		if rep.After <= target {
 			break
 		}
-		if gone[e.InfoHash] {
+		if gone[e.InfoHash] || c.inUse(ctx, e.InfoHash) {
 			continue
 		}
 		if err := c.evict(ctx, e); err != nil {
@@ -219,15 +259,7 @@ func (c *Cache) MakeRoom(ctx context.Context, need int64, animeID int) bool {
 	order := slices.DeleteFunc(evictionOrder(usage.Entries, c.stalled(), c.lastPlayed(ctx)), func(e store.CacheEntry) bool {
 		return spared[e.InfoHash] || c.fetching(e)
 	})
-	var available int64
-	counted := map[string]bool{}
-	for _, e := range order {
-		if !counted[e.InfoHash] {
-			counted[e.InfoHash] = true
-			available += freed[e.InfoHash]
-		}
-	}
-	if usage.Bytes-available > target {
+	if usage.Bytes-evictable(order, freed) > target {
 		return false
 	}
 
@@ -238,6 +270,34 @@ func (c *Cache) MakeRoom(ctx context.Context, need int64, animeID int) bool {
 			"anime", animeID, "evicted", rep.Evicted, "freedMB", rep.Freed>>20, "usedMB", rep.After>>20)
 	}
 	return rep.After <= target
+}
+
+func keptBytes(entries []store.CacheEntry) int64 {
+	kept := map[string]bool{}
+	for _, e := range entries {
+		if e.Kept {
+			kept[e.InfoHash] = true
+		}
+	}
+	var total int64
+	for _, e := range entries {
+		if kept[e.InfoHash] && !e.Kept {
+			total += e.Bytes
+		}
+	}
+	return total
+}
+
+func evictable(order []store.CacheEntry, freed map[string]int64) int64 {
+	var available int64
+	counted := map[string]bool{}
+	for _, e := range order {
+		if !counted[e.InfoHash] {
+			counted[e.InfoHash] = true
+			available += freed[e.InfoHash]
+		}
+	}
+	return available
 }
 
 type episodeRef struct {
@@ -255,6 +315,19 @@ func (c *Cache) lastPlayed(ctx context.Context) episodeRef {
 
 func (c *Cache) fetching(e store.CacheEntry) bool {
 	return c.claimed != nil && c.claimed(strings.ToLower(e.InfoHash))
+}
+
+func (c *Cache) inUse(ctx context.Context, hash string) bool {
+	if c.fetching(store.CacheEntry{InfoHash: hash}) {
+		return true
+	}
+	rows, err := c.store.CacheEntries(ctx)
+	if err != nil {
+		return true
+	}
+	return slices.ContainsFunc(rows, func(r store.CacheEntry) bool {
+		return r.Pinned && strings.EqualFold(r.InfoHash, hash)
+	})
 }
 
 func evictionOrder(entries []store.CacheEntry, stalled map[string]bool, watching episodeRef) []store.CacheEntry {
@@ -368,7 +441,7 @@ func (c *Cache) autoDeleteShow(ctx context.Context, animeID int) (int, error) {
 
 	removed := 0
 	for hash := range candidates {
-		if veto[hash] || c.holdsUnrecorded(ctx, hash, doneFiles[hash]) {
+		if veto[hash] || c.inUse(ctx, hash) || c.holdsUnrecorded(ctx, hash, doneFiles[hash]) {
 			continue
 		}
 		if err := c.evict(ctx, store.CacheEntry{InfoHash: hash}); err != nil {
@@ -411,15 +484,21 @@ func dropSuperseded(ctx context.Context, st *store.Store, tc *torrent.Client, lo
 	}
 	live := map[string]int{}
 	if tc != nil {
-		if l, err := tc.Live(ctx); err == nil {
-			live = l
+		l, err := tc.Live(ctx)
+		if err != nil {
+			return
 		}
+		live = l
 	}
 	for _, hash := range hashes {
 		if ready, err := st.SupersededReady(ctx, animeID, epKey, hash); err != nil || !ready {
 			continue
 		}
 		if id, ok := live[strings.ToLower(hash)]; ok {
+			if !tc.InCache(ctx, id) {
+				log.Warn("not deleting a superseded release outside the cache folder", "hash", hash)
+				continue
+			}
 			if err := tc.Delete(ctx, id); err != nil {
 				log.Warn("remove superseded release", "hash", hash, "err", err)
 				continue
@@ -437,6 +516,10 @@ func dropSuperseded(ctx context.Context, st *store.Store, tc *torrent.Client, lo
 			continue
 		}
 		if ready, err := st.SupersededFileReady(ctx, animeID, epKey, f); err != nil || !ready {
+			continue
+		}
+		if !tc.InCache(ctx, id) {
+			log.Warn("not deleting a superseded episode outside the cache folder", "hash", f.InfoHash)
 			continue
 		}
 		if err := tc.DeleteFile(ctx, id, f.FileIndex); err != nil {
@@ -751,6 +834,9 @@ func (c *Cache) forgetVanished(ctx context.Context) error {
 		if err := c.store.DropTorrentCache(ctx, rows[0].InfoHash); err != nil {
 			return err
 		}
+		c.mu.Lock()
+		delete(c.absent, hash)
+		c.mu.Unlock()
 		dropped++
 	}
 	if dropped > 0 {
@@ -761,13 +847,50 @@ func (c *Cache) forgetVanished(ctx context.Context) error {
 
 func (c *Cache) keptOnDisk(rows []store.CacheEntry) bool {
 	for _, e := range rows {
-		if e.Kept && e.Name != "" {
-			if _, err := os.Stat(filepath.Join(c.dir, e.Name)); err == nil {
+		if !e.Kept || e.Name == "" {
+			continue
+		}
+		top := e.Name
+		if parts := strings.FieldsFunc(e.Name, func(r rune) bool { return r == '/' || r == '\\' }); len(parts) > 0 {
+			top = parts[0]
+		}
+		names := torrent.DiskNames(top, e.InfoHash)
+		if host, ok := torrent.StreamHost(top); ok {
+			names = append(names, host)
+		}
+		for _, n := range names {
+			_, err := os.Stat(filepath.Join(c.dir, n))
+			if err == nil || !errors.Is(err, fs.ErrNotExist) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func (c *Cache) Locate(ctx context.Context, infoHash string) (string, bool, error) {
+	names, err := c.store.TorrentNames(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	seen := map[string]bool{}
+	for _, t := range names {
+		if !strings.EqualFold(t.InfoHash, infoHash) || seen[t.Name] {
+			continue
+		}
+		seen[t.Name] = true
+		candidates := torrent.DiskNames(t.Name, t.InfoHash)
+		if host, ok := torrent.StreamHost(t.Name); ok {
+			candidates = append(candidates, host)
+		}
+		for _, n := range candidates {
+			path := filepath.Join(c.dir, n)
+			if _, err := os.Stat(path); err == nil {
+				return path, true, nil
+			}
+		}
+	}
+	return "", false, nil
 }
 
 func (c *Cache) evict(ctx context.Context, e store.CacheEntry) error {
@@ -793,6 +916,7 @@ func (c *Cache) evict(ctx context.Context, e store.CacheEntry) error {
 			c.log.Warn("delete download files", "hash", e.InfoHash, "err", err)
 		}
 	}
+	c.unwatch(e.InfoHash)
 	return c.store.DropTorrentCache(ctx, e.InfoHash)
 }
 
@@ -812,7 +936,13 @@ func (c *Cache) removeByName(ctx context.Context, e store.CacheEntry, live map[s
 		return nil
 	}
 	var refused error
+	shared := c.namesOfOthers(ctx, e.InfoHash)
+	tag := " [" + strings.ToLower(e.InfoHash)[:min(8, len(e.InfoHash))] + "]"
 	for _, n := range torrent.DiskNames(name, e.InfoHash) {
+		if !strings.Contains(strings.ToLower(n), tag) && shared[strings.ToLower(n)] {
+			refused = fmt.Errorf("%q: %w", n, errNotOwnName)
+			continue
+		}
 		found, err := c.removeNamed(ctx, n, live)
 		if errors.Is(err, errNotOwnName) {
 			refused = err
@@ -825,11 +955,28 @@ func (c *Cache) removeByName(ctx context.Context, e store.CacheEntry, live map[s
 	return refused
 }
 
+func (c *Cache) namesOfOthers(ctx context.Context, hash string) map[string]bool {
+	out := map[string]bool{}
+	names, err := c.store.TorrentNames(ctx)
+	if err != nil {
+		return out
+	}
+	for _, t := range names {
+		if strings.EqualFold(t.InfoHash, hash) {
+			continue
+		}
+		for _, n := range torrent.DiskNames(t.Name, t.InfoHash) {
+			out[strings.ToLower(n)] = true
+		}
+	}
+	return out
+}
+
 var errNotOwnName = errors.New("not a download's own name; nothing deleted")
 
 func (c *Cache) removeNamed(ctx context.Context, name string, live map[string]int) (found bool, err error) {
 	first := strings.ToLower(strings.Split(filepath.ToSlash(filepath.Clean(name)), "/")[0])
-	if !filepath.IsLocal(name) || torrent.OwnFolder(first) {
+	if !filepath.IsLocal(name) || strings.ContainsAny(name, `/\`) || torrent.OwnFolder(first) {
 		return false, fmt.Errorf("%q: %w", name, errNotOwnName)
 	}
 	path := filepath.Join(c.dir, name)
@@ -844,11 +991,11 @@ func (c *Cache) removeNamed(ctx context.Context, name string, live map[string]in
 		if err != nil {
 			continue
 		}
-		if filepath.Clean(d.OutputFolder) == filepath.Clean(path) {
+		if samePath(d.OutputFolder, path) {
 			return true, nil
 		}
 		for _, f := range d.Files {
-			if strings.EqualFold(filepath.Join(d.OutputFolder, onDisk(f)), path) {
+			if samePath(filepath.Join(d.OutputFolder, onDisk(f)), path) {
 				return true, nil
 			}
 		}
@@ -859,6 +1006,14 @@ func (c *Cache) removeNamed(ctx context.Context, name string, live map[string]in
 	}
 	defer root.Close()
 	return true, root.RemoveAll(name)
+}
+
+func samePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "linux" {
+		return a == b
+	}
+	return strings.EqualFold(a, b)
 }
 
 func (c *Cache) refresh(ctx context.Context) error {
@@ -1032,6 +1187,8 @@ func (c *Cache) RemoveOrphans(ctx context.Context, names []string) ([]Orphan, er
 	return c.orphans(ctx, false, only)
 }
 
+func foldName(s string) string { return strings.ToLower(norm.NFC.String(s)) }
+
 func (c *Cache) orphans(ctx context.Context, dryRun bool, only map[string]bool) ([]Orphan, error) {
 	list, err := c.torrent.List(ctx)
 	if err != nil {
@@ -1057,29 +1214,32 @@ func (c *Cache) orphans(ctx context.Context, dryRun bool, only map[string]bool) 
 
 	keep := map[string]bool{}
 	for _, k := range known {
-		keep[strings.ToLower(k.Name)] = true
+		keep[foldName(k.Name)] = true
 		for _, name := range torrent.DiskNames(k.Name, k.InfoHash) {
-			keep[strings.ToLower(name)] = true
+			keep[foldName(name)] = true
 		}
 		if host, ok := torrent.StreamHost(k.Name); ok {
-			keep[strings.ToLower(host)] = true
+			keep[foldName(host)] = true
 		}
 	}
 	for _, t := range torrents {
-		keep[strings.ToLower(t.Name)] = true
+		keep[foldName(t.Name)] = true
+		for _, name := range torrent.DiskNames(t.Name, t.InfoHash) {
+			keep[foldName(name)] = true
+		}
 		d, err := c.torrent.Details(ctx, t.ID)
 		if err != nil {
 			return nil, err
 		}
-		if rel, err := filepath.Rel(c.dir, d.OutputFolder); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
-			keep[strings.ToLower(strings.Split(filepath.ToSlash(rel), "/")[0])] = true
+		if rel, err := filepath.Rel(c.dir, d.OutputFolder); err == nil && rel != "." && torrent.Within(c.dir, d.OutputFolder) {
+			keep[foldName(strings.Split(filepath.ToSlash(rel), "/")[0])] = true
 			continue
 		}
 		for _, f := range d.Files {
 			if len(f.Components) > 0 {
-				keep[strings.ToLower(f.Components[0])] = true
+				keep[foldName(f.Components[0])] = true
 			}
-			keep[strings.ToLower(f.Name)] = true
+			keep[foldName(f.Name)] = true
 		}
 	}
 
@@ -1097,7 +1257,7 @@ func (c *Cache) orphans(ctx context.Context, dryRun bool, only map[string]bool) 
 	out := []Orphan{}
 	for _, e := range entries {
 		name := e.Name()
-		if torrent.OwnFolder(name) || keep[strings.ToLower(name)] {
+		if torrent.OwnFolder(name) || keep[foldName(name)] {
 			continue
 		}
 		if only != nil && !only[name] {

@@ -6,7 +6,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// openShared opens for reading without blocking a delete; os.Open's handle failed a dropped segment's removal.
 func openShared(path string) (*os.File, error) {
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {

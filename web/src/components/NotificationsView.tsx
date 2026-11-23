@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, type AlertShow } from '../lib/api'
 import { cx, dayAndTime, whenLabel } from '../lib/format'
-import { useAlertsOff, useNotifications, useNow, useSetPref } from '../lib/queries'
+import { notificationBody, useAlertsOff, useNotifications, useNow, useSetPref } from '../lib/queries'
 import { feedTitle, useAlertShows, useAlertSwitch, useDeviceAlerts, type DeviceAlerts, type FeedItem } from '../lib/alerts'
 import { notificationTarget } from '../lib/notifications'
 import { appleTouchDevice, runningInstalled } from '../lib/install'
@@ -11,7 +11,7 @@ import { testPush } from '../lib/push'
 import { useDeviceWord } from '../lib/shelf'
 import { AlertPill, BellGlyph } from './AlertPill'
 import { MoreMenu, type MoreItem } from './MoreMenu'
-import { Button, ConfirmInline, ErrorState, LinkButton, PageHeader, Skeleton } from './ui'
+import { Button, ConfirmInline, Empty, ErrorState, LinkButton, PageHeader, Skeleton } from './ui'
 
 interface FeedRow {
   key: string
@@ -41,7 +41,8 @@ function rowsOf(items: FeedItem[]): FeedRow[] {
 }
 
 export function NotificationsView() {
-  const feed = useNotifications()
+  const [limit, setLimit] = useState(100)
+  const feed = useNotifications(limit)
   const alerts = useAlertShows()
   const qc = useQueryClient()
   const now = useNow() / 1000
@@ -49,16 +50,14 @@ export function NotificationsView() {
   const refresh = () => qc.invalidateQueries({ queryKey: ['notifications'] })
   const read = useMutation({
     mutationFn: (ids?: number[]) =>
-      ids ? Promise.all(ids.map((id) => api.post(`/api/notifications/read?id=${id}`))) : api.post('/api/notifications/read'),
-    onSuccess: refresh,
+      ids ? Promise.allSettled(ids.map((id) => api.post(`/api/notifications/read?id=${id}`))) : api.post('/api/notifications/read'),
+    onSettled: refresh,
   })
   const remove = useMutation({
     mutationFn: (ids?: number[]) =>
-      ids ? Promise.all(ids.map((id) => api.del(`/api/notifications?id=${id}`))) : api.del('/api/notifications'),
-    onSuccess: () => {
-      setConfirmClear(false)
-      void refresh()
-    },
+      ids ? Promise.allSettled(ids.map((id) => api.del(`/api/notifications?id=${id}`))) : api.del('/api/notifications'),
+    onSuccess: () => setConfirmClear(false),
+    onSettled: refresh,
   })
 
   const items = (feed.data?.items ?? []) as FeedItem[]
@@ -106,36 +105,42 @@ export function NotificationsView() {
       />
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-8 xl:grid-cols-[minmax(0,1fr)_28rem]">
-        <div className="space-y-4 lg:col-start-2 lg:row-start-1">
+        <div className="space-y-4 max-lg:order-2 lg:col-start-2 lg:row-start-1">
           <DeviceStatus />
           {next && <NextAlert show={next} now={now} />}
           <AlertShows result={alerts} now={now} />
         </div>
 
-        <div className="space-y-5 lg:col-start-1 lg:row-start-1">
+        <div className="space-y-5 max-lg:order-1 lg:col-start-1 lg:row-start-1">
           {feed.isError && !feed.data ? (
             <ErrorState error={feed.error} retry={() => feed.refetch()} />
           ) : feed.isPending ? (
             <Skeleton className="h-64 w-full" />
           ) : items.length === 0 ? (
-            <section className="surface flex flex-col items-start gap-3 p-5">
-              <span className="grid size-11 place-items-center rounded-xl bg-base-850 text-base-400">
-                <BellGlyph filled={false} className="size-5" />
-              </span>
-              <p className="font-medium text-base-100">Nothing new yet.</p>
-              <p className="text-sm text-base-400">
-                {next
+            <Empty
+              card
+              icon={<BellGlyph filled={false} className="size-6" />}
+              title="Nothing new yet"
+              hint={
+                next
                   ? `Next alert ${dayAndTime(next.nextAiringAt!, now * 1000)}, for ${next.title}.`
-                  : 'Tap Alert on a show to hear when new episodes are out.'}
-              </p>
-              <LinkButton to="/schedule?view=coming" variant="primary">
-                Open schedule
-              </LinkButton>
-            </section>
+                  : 'Tap Alert on a show to hear when new episodes are out.'
+              }
+              action={
+                <LinkButton to="/schedule?view=coming" variant="primary">
+                  Open schedule
+                </LinkButton>
+              }
+            />
           ) : (
             <>
               <FeedSection title="Today" rows={today} {...rowProps} />
               <FeedSection title="Earlier" rows={earlier} {...rowProps} />
+              {items.length >= limit && limit < 500 && (
+                <Button onClick={() => setLimit((l) => Math.min(500, l + 100))} disabled={feed.isFetching}>
+                  {feed.isFetching ? 'Loading…' : 'Show older'}
+                </Button>
+              )}
             </>
           )}
         </div>
@@ -160,7 +165,7 @@ function FeedSection({
   if (rows.length === 0) return null
   return (
     <section>
-      <h2 className="mb-2 text-sm font-semibold text-base-300">{title}</h2>
+      <h2 className="mb-2 px-1 text-[13px] font-semibold text-base-400">{title}</h2>
       <ul className="surface divide-y divide-line overflow-hidden">
         {rows.map((row) => (
           <FeedRowItem key={row.key} row={row} now={now} onRead={onRead} onRemove={onRemove} />
@@ -193,7 +198,7 @@ function FeedRowItem({
     { label: 'Remove', run: () => onRemove(row.ids), danger: true },
   ]
   return (
-    <li className={cx('flex items-center gap-2 py-2 pr-2 pl-3', row.unread.length > 0 && 'bg-sky-400/[0.05]')}>
+    <li className={cx('flex items-center gap-2 py-2 pr-2 pl-3', row.unread.length > 0 && 'bg-sky-400/5')}>
       <span
         aria-hidden
         className={cx('size-2 shrink-0 rounded-full', row.unread.length > 0 ? 'bg-sky-400' : 'bg-transparent')}
@@ -215,7 +220,7 @@ function FeedRowItem({
             {title}
           </span>
           <span className="block truncate text-xs text-base-500">
-            {release || !n.body ? when : `${n.body} · ${when}`}
+            {release || !n.body ? when : `${notificationBody(n)} · ${when}`}
             {row.unread.length > 0 && <span className="sr-only">, unread</span>}
           </span>
         </span>
@@ -323,7 +328,7 @@ function DeviceStatus() {
         ) : (
           <>
             {state === 'on' && (
-              <Button onClick={() => test.mutate()} disabled={test.isPending}>
+              <Button onClick={() => test.mutate(undefined, { onSuccess: () => window.setTimeout(() => test.reset(), 3000) })} disabled={test.isPending}>
                 {test.isPending ? 'Sending…' : test.isSuccess ? 'Sent' : 'Send a test'}
               </Button>
             )}
@@ -341,7 +346,7 @@ function DeviceStatus() {
           ))}
         </ol>
       )}
-      {(error || test.isError) && <p className="mt-2 text-xs text-recap">{error || (test.error as Error).message}</p>}
+      {(error || test.isError) && <p className="mt-2 text-xs text-red-300">{error || (test.error as Error).message}</p>}
     </StatusCard>
   )
 }
@@ -389,7 +394,7 @@ function AlertShows({ result, now }: { result: ReturnType<typeof useAlertShows>;
   const shows = result.data?.shows ?? []
   return (
     <section>
-      <h2 className="mb-2 text-sm font-semibold text-base-300">
+      <h2 className="mb-2 px-1 text-[13px] font-semibold text-base-400">
         Shows that alert you{shows.length > 0 && <span className="font-normal text-base-500"> · {shows.length}</span>}
       </h2>
       {result.isError && !result.data ? (

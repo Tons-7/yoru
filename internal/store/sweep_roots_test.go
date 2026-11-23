@@ -6,13 +6,11 @@ import (
 	"testing"
 )
 
-// An unreachable root neither marks another's files missing nor hides a healthy root's deletions.
 func TestSweepLocalOnlyTouchesTheRootsThatWalked(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
 	anime := filepath.Join("D:", "Anime")
-	// A sibling whose name starts with the first root's, which a bare prefix match would sweep as well.
 	movies := filepath.Join("D:", "AnimeMovies")
 	downloads := filepath.Join("E:", "Downloads")
 
@@ -31,7 +29,6 @@ func TestSweepLocalOnlyTouchesTheRootsThatWalked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A later scan where only the first root walked.
 	next, _ := s.NextScanStamp(ctx)
 	if _, err := s.SaveLocalFiles(ctx, next, []LocalFile{
 		{Path: kept, Size: 1, Modified: 1},
@@ -57,7 +54,6 @@ func TestSweepLocalOnlyTouchesTheRootsThatWalked(t *testing.T) {
 		}
 	}
 
-	// No roots walked at all: nothing is swept.
 	if n, err := s.SweepLocal(ctx, next, nil); err != nil || n != 0 {
 		t.Fatalf("swept %d with no roots (err %v)", n, err)
 	}

@@ -6,7 +6,6 @@ export interface Notes {
   published?: string
 }
 
-/** Each release's notes under its version, the newest open; older ones fold so a long jump stays readable. */
 export function ReleaseNotesList({ notes }: { notes: Notes[] }) {
   const shown = notes.filter((n) => n.notes.trim())
   if (shown.length === 0) return null

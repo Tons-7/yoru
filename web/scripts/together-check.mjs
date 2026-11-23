@@ -50,7 +50,7 @@ async function viewer(name, width = 1400) {
     const body = route.request().postDataJSON()
     delete body.infoHash
     const res = await route.fetch({ postData: JSON.stringify(body) })
-    route.fulfill({ response: res, json: { ...(await res.json()), infoHash: HASH } })
+    route.fulfill({ response: res, json: { ...(await res.json()), infoHash: HASH, source: 'torrent' } })
   })
   return page
 }
@@ -84,6 +84,13 @@ try {
   check(await until(() => host.getByRole('button', { name: 'Copy link' }).isVisible()), 'a reload keeps the room')
   await video(host).waitFor({ timeout: 30_000 })
   await host.evaluate(() => { const v = document.querySelector('video'); v.muted = true; v.play().catch(() => {}) })
+  await until(async () => !(await paused(host)) && (await at(host)) > 2, 30_000)
+  await sleep(1000)
+  const autoplayWas = (await (await fetch(`${BASE}/api/prefs`)).json()).effective?.['playback.autoplay'] ?? 'false'
+  const setAutoplay = (value) => fetch(`${BASE}/api/prefs`, { method: 'POST', body: JSON.stringify({ key: 'playback.autoplay', value }) })
+  await setAutoplay('true')
+  await host.evaluate(() => document.querySelector('video').pause())
+  check(await until(() => paused(host)), 'the host pauses before anyone joins')
 
   const friend = await viewer('friend')
   await friend.goto(`${FRIEND}/`, { waitUntil: 'domcontentloaded' })
@@ -105,6 +112,12 @@ try {
   check(await loaded(friend, 'section[aria-label="Watch together"] img'), "with the host's picture")
   check(await loaded(host, 'header img[src^="/api/profile/avatar"]'), "which is in the host's own top bar too")
   await video(friend).waitFor({ timeout: 30_000 })
+  await until(() => friend.locator('video').evaluate((v) => v.readyState >= 2), 30_000)
+  await sleep(3000)
+  check((await paused(friend)) && (await paused(host)), 'a guest with autoplay on joins a paused room and nothing starts',
+    `friend paused ${await paused(friend)}, host paused ${await paused(host)}, feed: ${(await friend.locator('[aria-label="Room messages"]').innerText().catch(() => '')).replace(/\n/g, ' | ').slice(-160)}`)
+  await setAutoplay(autoplayWas)
+  await host.evaluate(() => document.querySelector('video').play().catch(() => {}))
 
   await until(async () => !(await paused(friend)), 20_000)
   await host.evaluate(() => document.querySelector('video').pause())

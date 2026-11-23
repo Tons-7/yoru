@@ -15,7 +15,6 @@ import (
 	"yoru/internal/bt/storage"
 )
 
-// A peer on a torrent: one without info yet (a magnet resolving), or one with a small v1 info.
 func hostilePeer(t *testing.T, withInfo bool) (*Client, *Torrent, *PeerConn) {
 	cl := newTestingClient(t)
 	var tor *Torrent
@@ -36,7 +35,6 @@ func hostilePeer(t *testing.T, withInfo bool) (*Client, *Torrent, *PeerConn) {
 	return cl, tor, pc
 }
 
-// Each of these was one message from any peer that took the whole process down.
 func TestHostilePeerMessagesAreErrorsNotPanics(t *testing.T) {
 	for _, withInfo := range []bool{false, true} {
 		cl, tor, pc := hostilePeer(t, withInfo)
@@ -45,8 +43,6 @@ func TestHostilePeerMessagesAreErrorsNotPanics(t *testing.T) {
 		qt.Check(t, qt.IsNotNil(pc.onReadHashes(&hashes)))
 		req := pp.Message{Type: pp.HashRequest, Index: math.MaxUint32, Length: 512}
 		qt.Check(t, qt.IsNotNil(pc.onHashRequest(&req)))
-		// Data for a piece out of range is an error; a request for any piece is rejected politely, as peers
-		// ask before we know the size, and must never index what we hold.
 		qt.Check(t, qt.IsNotNil(cl.gotMetadataExtensionMsg([]byte("d8:msg_typei1e5:piecei-1ee"), tor, pc)))
 		for _, payload := range []string{"d8:msg_typei0e5:piecei-1ee", "d8:msg_typei0e5:piecei99ee"} {
 			qt.Check(t, qt.IsNil(cl.gotMetadataExtensionMsg([]byte(payload), tor, pc)))
@@ -65,7 +61,6 @@ func TestMetadataSizeFromPeerIsBounded(t *testing.T) {
 	qt.Check(t, qt.HasLen(tor.metadataBytes, 1000))
 }
 
-// A wrong first size is corrected by the next peer's, and the whole chunks already in survive it.
 func TestMetadataSizeCorrectionKeepsWholeChunks(t *testing.T) {
 	_, tor, _ := hostilePeer(t, false)
 	qt.Assert(t, qt.IsNil(tor.setMetadataSize(5<<14)))

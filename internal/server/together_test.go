@@ -423,3 +423,29 @@ func TestASilentSocketIsMarkedAway(t *testing.T) {
 		t.Fatal("a socket that answered once and then went silent still counts as connected")
 	}
 }
+
+func TestRoomsEnd(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		setup func(*togetherRoom)
+		want  int
+	}{
+		{"a day old", func(r *togetherRoom) { r.created = time.Now().Add(-25 * time.Hour) }, http.StatusNotFound},
+		{"empty for 11 minutes", func(r *togetherRoom) { r.empty = time.Now().Add(-11 * time.Minute) }, http.StatusNotFound},
+		{"empty for a minute", func(r *togetherRoom) { r.empty = time.Now().Add(-time.Minute) }, http.StatusOK},
+	} {
+		h := newHarness(t, config.Config{}, nil)
+		room, _ := openRoom(t, h)
+		c.setup(room)
+		code, _ := h.call(t, "GET", "/api/together/abc123?k=key", "")
+		if code != c.want {
+			t.Errorf("%s: %d, want %d", c.name, code, c.want)
+		}
+		h.server.togetherMu.Lock()
+		_, kept := h.server.rooms["abc123"]
+		h.server.togetherMu.Unlock()
+		if kept != (c.want == http.StatusOK) {
+			t.Errorf("%s: room kept = %v", c.name, kept)
+		}
+	}
+}

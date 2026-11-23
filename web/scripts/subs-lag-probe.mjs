@@ -1,5 +1,3 @@
-// Reports the seconds a downloading episode's line was due but nothing was drawn.
-//   YORU_EXTRA_CONFIG='[[indexer]] ...' YORU_SHOW_ID=235 EPISODE=1 [SEEK_TO=600] node scripts/run-player-check.mjs subs-lag-probe.mjs
 import { chromium } from 'playwright'
 
 const BASE = process.env.YORU_URL ?? 'http://127.0.0.1:4399'
@@ -15,7 +13,6 @@ await fetch(`${BASE}/api/prefs`, {
   body: JSON.stringify({ key: 'playback.autoplay', value: 'true' }),
 })
 
-// HEADED=1: a real window with the GPU, where the renderer's canvas behaves as it does for a viewer.
 const browser = await chromium.launch({
   headless: process.env.HEADED !== '1',
   args: ['--autoplay-policy=no-user-gesture-required'],
@@ -24,7 +21,6 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const t0 = Date.now()
 const since = () => ((Date.now() - t0) / 1000).toFixed(1).padStart(6)
 
-// What the viewer has: the clock, the buffered video, and whether the subtitle layer holds any drawn pixels.
 const look = () =>
   page
     .evaluate(() => {
@@ -67,7 +63,6 @@ page.on('response', async (res) => {
   }
   if (!url.includes('/subtitle/')) return
   trackUrl ||= url.split('?')[0]
-  // No query: a fresh renderer loading the track, at the start and after every rebuild.
   if (!url.includes('?')) console.log(`${since()}s  renderer load #${++loads} of the track (${res.status()})`)
 })
 
@@ -90,7 +85,6 @@ for (let i = 0; i < SECONDS * 2; i++) {
   if (playing) seen.push({ when: since(), ...now })
 }
 
-// Judged against the fullest track, asked for at the end.
 const last = seen.at(-1) ?? { at: 0, buffered: 0 }
 const cues = trackUrl ? cuesOf(await (await fetch(`${trackUrl}?at=${Math.floor(last.at)}`)).text()) : []
 const due = (t) => cues.some((c) => t >= c.start + 0.3 && t <= c.end - 0.3)
@@ -102,7 +96,6 @@ const report = () => {
   run = null
 }
 for (const s of seen) {
-  // Only moving picture counts: a stalled video shows whatever line it stopped on.
   if (s.stalled || !due(s.at)) {
     report()
     continue

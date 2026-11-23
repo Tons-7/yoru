@@ -10,7 +10,6 @@ import (
 	"yoru/internal/bt"
 )
 
-// While one downloads, complete torrents stay off the network and seed again after; a paused one wants nothing.
 func TestCompleteTorrentsStepAsideWhileOneDownloads(t *testing.T) {
 	doneDir, slowDir := t.TempDir(), t.TempDir()
 	doneMI, _ := makePack(t, doneDir)

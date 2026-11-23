@@ -37,7 +37,7 @@ func TestDownloadAheadStaysInTheShowUnlessToldToCarryOn(t *testing.T) {
 			if err := st.SaveRelations(ctx, nil, []store.Relation{{AnimeID: season1, RelatedID: season2, Kind: "SEQUEL"}}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := st.RebuildFranchises(ctx); err != nil {
+			if _, err := st.RebuildFranchisesFor(ctx, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			if next := st.NextSeason(ctx, season1); next != season2 {

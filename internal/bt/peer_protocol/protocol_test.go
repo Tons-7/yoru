@@ -90,11 +90,9 @@ func TestShortRead(t *testing.T) {
 func TestUnexpectedEOF(t *testing.T) {
 	msg := new(Message)
 	for _, stream := range []string{
-		"\x00\x00\x00",     // Header truncated.
-		"\x00\x00\x00\x01", // Expecting 1 more byte.
-		// Request with wrong length, and too short anyway.
+		"\x00\x00\x00",
+		"\x00\x00\x00\x01",
 		"\x00\x00\x00\x06\x06\x00\x00\x00\x00\x00",
-		// Request truncated.
 		"\x00\x00\x00\x0b\x06\x00\x00\x00\x00\x00",
 	} {
 		dec := Decoder{
