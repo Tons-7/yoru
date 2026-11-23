@@ -393,21 +393,32 @@ export function useEpisodes(animeId: number | undefined) {
     enabled: !!animeId,
     queryKey: ['episodes', animeId],
     queryFn: () =>
-      api.get<{ items: Episode[]; count: number; titlesPending?: boolean }>(
+      api.get<{ items: Episode[]; count: number; titlesPending?: boolean; airingDue?: boolean }>(
         `/api/episodes${query({ id: animeId })}`,
       ),
-    refetchInterval: (q) => (q.state.data?.titlesPending ? 3000 : untilNextAiring(q.state.data?.items)),
+    refetchInterval: (q) => {
+      const data = q.state.data
+      if (data?.titlesPending) return 3000
+      if (data?.airingDue) return AIRED_RECHECK
+      return untilNextAiring(data?.items)
+    },
   })
 }
 
+export const AIRED_RECHECK = 30_000
+
+export function untilAiring(airingAt: number | null | undefined): number | false {
+  if (!airingAt) return false
+  return Math.min(Math.max(airingAt * 1000 - Date.now() + 15_000, 15_000), 12 * 3_600_000)
+}
+
 function untilNextAiring(items: Episode[] | undefined): number | false {
-  const now = Date.now()
+  const now = Date.now() / 1000
   let soonest = Infinity
   for (const e of items ?? []) {
-    if (e.airDate && e.airDate * 1000 > now) soonest = Math.min(soonest, e.airDate * 1000)
+    if (e.airDate && e.airDate > now) soonest = Math.min(soonest, e.airDate)
   }
-  if (!Number.isFinite(soonest)) return false
-  return Math.min(Math.max(soonest - now + 60_000, 60_000), 12 * 3_600_000)
+  return Number.isFinite(soonest) ? untilAiring(soonest) : false
 }
 
 export function newToYou(items: DiscoverItem[], atLeast = 6): DiscoverItem[] {

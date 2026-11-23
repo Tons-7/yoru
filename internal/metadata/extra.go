@@ -115,7 +115,7 @@ func (c *Client) Extra(ctx context.Context, malID int) (Extra, error) {
 			return json.Unmarshal(body, &full) == nil && full.Data.MalID != 0
 		})
 	if errors.Is(err, errNoRecord) {
-		return Extra{StaffMissing: true}, nil
+		return Extra{}, nil
 	}
 	if err != nil {
 		return Extra{}, err

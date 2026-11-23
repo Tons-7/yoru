@@ -21,8 +21,9 @@ jobs:
         with:
           go-version-file: go.mod
       - run: |
-          New-Item -ItemType Directory -Force web/dist | Out-Null
+          New-Item -ItemType Directory -Force web/dist/assets | Out-Null
           Set-Content web/dist/index.html '<!doctype html>'
+          Set-Content web/dist/assets/app.js ''
       - run: go vet ./...
       - run: go test ./...
 

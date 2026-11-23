@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"maps"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -270,26 +271,34 @@ func ensureAnime(ctx context.Context, db execer, animeID int) error {
 }
 
 func (s *Store) Unhydrated(ctx context.Context, ids []int) ([]int, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	rows, err := s.r.QueryContext(ctx, `
-		SELECT id FROM anime WHERE synced_at <> 0
-		UNION SELECT anime_id FROM dead_anime`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	settled := make(map[int]bool, len(ids))
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
+	for part := range slices.Chunk(ids, 400) {
+		args := make([]any, 0, 2*len(part))
+		for range 2 {
+			for _, id := range part {
+				args = append(args, id)
+			}
+		}
+		marks := placeholders(len(part))
+		rows, err := s.r.QueryContext(ctx, `
+			SELECT id FROM anime WHERE synced_at <> 0 AND id IN (`+marks+`)
+			UNION SELECT anime_id FROM dead_anime WHERE anime_id IN (`+marks+`)`, args...)
+		if err != nil {
 			return nil, err
 		}
-		settled[id] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		for rows.Next() {
+			var id int
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			settled[id] = true
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
 	}
 	var out []int
 	for _, id := range ids {

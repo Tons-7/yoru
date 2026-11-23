@@ -107,6 +107,7 @@ export function useLibraryItems(f: ListFilter, page: number, perPage: number, en
         })}`,
         signal,
       ),
+    refetchInterval: 5 * 60_000,
   })
 }
 

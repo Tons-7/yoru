@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,6 +105,7 @@ func (s *Scanner) Scan(ctx context.Context, ix *match.Index) (ScanReport, error)
 
 	var found []store.LocalFile
 	var walked, resolved []string
+	allReachable := true
 	for _, root := range roots {
 		if err := ctx.Err(); err != nil {
 			return rep, err
@@ -111,6 +113,8 @@ func (s *Scanner) Scan(ctx context.Context, ix *match.Index) (ScanReport, error)
 		real := root
 		if r, err := filepath.EvalSymlinks(root); err == nil {
 			real = r
+		} else if _, err := os.Stat(root); err != nil {
+			allReachable = false
 		}
 		resolved = append(resolved, real)
 		files, seen, failed, err := s.walk(ctx, real)
@@ -157,9 +161,11 @@ func (s *Scanner) Scan(ctx context.Context, ix *match.Index) (ScanReport, error)
 	if rep.Missing, err = s.store.SweepLocal(ctx, stamp, walked); err != nil {
 		return failed(err)
 	}
-	if outside, err := s.store.SweepOutside(ctx, resolved); err != nil {
-		return failed(err)
-	} else {
+	if allReachable {
+		outside, err := s.store.SweepOutside(ctx, resolved)
+		if err != nil {
+			return failed(err)
+		}
 		rep.Missing += outside
 	}
 	rep.Took = time.Since(start).Round(time.Millisecond).String()
@@ -176,11 +182,18 @@ func (s *Scanner) Scan(ctx context.Context, ix *match.Index) (ScanReport, error)
 
 func (s *Scanner) walk(ctx context.Context, root string) (out []store.LocalFile, seen int, failed []string, err error) {
 	visited := map[string]bool{}
-	err = s.walkInto(ctx, root, root, visited, &out, &seen, &failed)
+	var caches []string
+	if s.cacheDir != "" {
+		caches = append(caches, s.cacheDir)
+		if real, err := filepath.EvalSymlinks(s.cacheDir); err == nil {
+			caches = append(caches, real)
+		}
+	}
+	err = s.walkInto(ctx, root, root, caches, visited, &out, &seen, &failed)
 	return out, seen, failed, err
 }
 
-func (s *Scanner) walkInto(ctx context.Context, root, dir string, visited map[string]bool, out *[]store.LocalFile, seen *int, failed *[]string) error {
+func (s *Scanner) walkInto(ctx context.Context, root, dir string, caches []string, visited map[string]bool, out *[]store.LocalFile, seen *int, failed *[]string) error {
 	if visited[dir] {
 		return nil
 	}
@@ -205,14 +218,14 @@ func (s *Scanner) walkInto(ctx context.Context, root, dir string, visited map[st
 			sep := string(filepath.Separator)
 			if path == dir {
 				if !strings.HasSuffix(dir, sep) {
-					return s.walkInto(ctx, root, dir+sep, visited, out, seen, failed)
+					return s.walkInto(ctx, root, dir+sep, caches, visited, out, seen, failed)
 				}
 				return nil
 			}
 			if target, err := filepath.EvalSymlinks(path); err == nil {
 				if info, err := os.Stat(target); err == nil && info.IsDir() && !visited["target:"+target] {
 					visited["target:"+target] = true
-					return s.walkInto(ctx, root, path+sep, visited, out, seen, failed)
+					return s.walkInto(ctx, root, path+sep, caches, visited, out, seen, failed)
 				}
 			}
 			return nil
@@ -222,7 +235,7 @@ func (s *Scanner) walkInto(ctx context.Context, root, dir string, visited map[st
 			if skipDir[name] || strings.HasPrefix(name, ".") && path != dir {
 				return fs.SkipDir
 			}
-			if s.cacheDir != "" && torrent.Within(s.cacheDir, path) {
+			if slices.ContainsFunc(caches, func(cache string) bool { return torrent.Within(cache, path) }) {
 				return fs.SkipDir
 			}
 			return nil

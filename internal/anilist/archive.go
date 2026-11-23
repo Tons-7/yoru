@@ -52,6 +52,35 @@ func archiveKey(body []byte, account string) string {
 	return hex.EncodeToString(sum.Sum(nil))
 }
 
+func signedInKey(body []byte) string {
+	sum := sha256.New()
+	sum.Write(body)
+	sum.Write([]byte{1})
+	return hex.EncodeToString(sum.Sum(nil))
+}
+
+type savedKey struct {
+	own, older string
+}
+
+func savedKeyFor(body []byte, account string) savedKey {
+	k := savedKey{own: archiveKey(body, account)}
+	if account != "" {
+		k.older = signedInKey(body)
+	}
+	return k
+}
+
+func loadSaved(ctx context.Context, archive Archive, k savedKey) ([]byte, time.Time, bool) {
+	if body, at, ok := archive.LoadAnswer(ctx, k.own); ok {
+		return body, at, true
+	}
+	if k.older == "" {
+		return nil, time.Time{}, false
+	}
+	return archive.LoadAnswer(ctx, k.older)
+}
+
 func Unreachable(ctx context.Context, err error) bool { return unreachable(ctx, err) }
 
 func unreachable(ctx context.Context, err error) bool {
@@ -153,12 +182,12 @@ func ownAnswer(ctx context.Context) context.Context { return context.WithValue(c
 
 func keepsAnswers(ctx context.Context) bool { return ctx.Value(ownKey{}) == nil }
 
-func (c *Client) fromArchive(ctx context.Context, key string, out any) bool {
+func (c *Client) fromArchive(ctx context.Context, key savedKey, out any) bool {
 	served, archive := servedFrom(ctx), c.archiver()
 	if served == nil || archive == nil || !keepsAnswers(ctx) {
 		return false
 	}
-	body, at, ok := archive.LoadAnswer(ctx, key)
+	body, at, ok := loadSaved(ctx, archive, key)
 	if !ok || decodeInto(body, out) != nil {
 		return false
 	}

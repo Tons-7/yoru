@@ -108,6 +108,12 @@ func (s *Server) episodes(w http.ResponseWriter, r *http.Request) {
 		titlesPending = s.enricher.TitlesPending(r.Context(), id)
 	}
 
+	airingDue := s.importer != nil && s.store.AiringDue(r.Context(), id)
+	if airingDue {
+		_, at, _, _ := s.importer.Kept(r.Context(), id)
+		s.refreshShow(r.Context(), id, at)
+	}
+
 	eps, err := s.store.Episodes(r.Context(), id)
 	if err != nil {
 		s.fail(w, "episodes", err)
@@ -127,7 +133,7 @@ func (s *Server) episodes(w http.ResponseWriter, r *http.Request) {
 		s.deriveEpisodesAsync(id)
 	}
 
-	send(w, http.StatusOK, map[string]any{"items": eps, "count": len(eps), "titlesPending": titlesPending})
+	send(w, http.StatusOK, map[string]any{"items": eps, "count": len(eps), "titlesPending": titlesPending, "airingDue": airingDue})
 }
 
 const deriveRetry = 10 * time.Minute

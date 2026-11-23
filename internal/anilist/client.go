@@ -193,12 +193,14 @@ func (c *Client) query(ctx context.Context, query string, vars map[string]any, o
 	}
 
 	key := cacheKey(body, c.bearerFor(ctx))
-	if data, ok := c.cache.get(key); ok {
-		servedFrom(ctx).noteLive()
-		return decodeInto(data, out)
+	if ctx.Value(freshKey{}) == nil {
+		if data, ok := c.cache.get(key); ok {
+			servedFrom(ctx).noteLive()
+			return decodeInto(data, out)
+		}
 	}
 
-	saved := archiveKey(body, c.bearerFor(ctx))
+	saved := savedKeyFor(body, c.bearerFor(ctx))
 
 	if c.isDown() && c.fromArchive(ctx, saved, out) {
 		return nil
@@ -233,18 +235,24 @@ func (c *Client) query(ctx context.Context, query string, vars map[string]any, o
 
 const refreshWait = 2 * time.Minute
 
+type freshKey struct{}
+
+func Fresh(ctx context.Context) context.Context {
+	return context.WithValue(ctx, freshKey{}, true)
+}
+
 type liveFirstKey struct{}
 
 func LiveFirst(ctx context.Context) context.Context {
 	return context.WithValue(ctx, liveFirstKey{}, true)
 }
 
-func (c *Client) savedFirst(ctx context.Context, query string, body []byte, key, saved string, out any) bool {
+func (c *Client) savedFirst(ctx context.Context, query string, body []byte, key string, saved savedKey, out any) bool {
 	served, archive := servedFrom(ctx), c.archiver()
 	if served == nil || archive == nil || !keepsAnswers(ctx) || ctx.Value(liveFirstKey{}) != nil || c.cache.refused(key) {
 		return false
 	}
-	data, at, ok := archive.LoadAnswer(ctx, saved)
+	data, at, ok := loadSaved(ctx, archive, saved)
 	if !ok || decodeInto(data, out) != nil {
 		return false
 	}
@@ -275,14 +283,14 @@ func (c *Client) savedFirst(ctx context.Context, query string, body []byte, key,
 			return
 		}
 		c.cache.put(key, fresh)
-		if err := archive.SaveAnswer(behind, saved, fresh); err != nil {
+		if err := archive.SaveAnswer(behind, saved.own, fresh); err != nil {
 			c.log.Debug("save anilist answer", "err", err)
 		}
 	}()
 	return true
 }
 
-func (c *Client) fetch(ctx context.Context, query string, body []byte, key, saved string, out any) error {
+func (c *Client) fetch(ctx context.Context, query string, body []byte, key string, saved savedKey, out any) error {
 	var data json.RawMessage
 	if err := c.execute(ctx, query, body, &data); err != nil {
 		if !unreachable(ctx, err) {
@@ -301,7 +309,7 @@ func (c *Client) fetch(ctx context.Context, query string, body []byte, key, save
 		served.noteLive()
 		if archive := c.archiver(); archive != nil && keepsAnswers(ctx) {
 			go func() {
-				if err := archive.SaveAnswer(context.WithoutCancel(ctx), saved, data); err != nil {
+				if err := archive.SaveAnswer(context.WithoutCancel(ctx), saved.own, data); err != nil {
 					c.log.Debug("save anilist answer", "err", err)
 				}
 			}()

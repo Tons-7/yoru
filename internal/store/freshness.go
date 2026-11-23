@@ -60,7 +60,17 @@ func (s *Store) KeptMedia(ctx context.Context, id int) (KeptMedia, bool) {
 const (
 	airingMaxAge   = 6 * time.Hour
 	upcomingMaxAge = 24 * time.Hour
+	airedRecheck   = 5 * time.Minute
 )
+
+func (s *Store) AiringDue(ctx context.Context, id int) bool {
+	var n int
+	err := s.r.QueryRowContext(ctx, `
+		SELECT count(*) FROM anime
+		WHERE id = ? AND status IN ('RELEASING', 'NOT_YET_RELEASED')
+		  AND next_airing_at IS NOT NULL AND next_airing_at <= ?`, id, time.Now().Unix()).Scan(&n)
+	return err == nil && n > 0
+}
 
 func (s *Store) StaleAiring(ctx context.Context, now time.Time, limit int) ([]int, error) {
 	rows, err := s.r.QueryContext(ctx, `
@@ -68,11 +78,12 @@ func (s *Store) StaleAiring(ctx context.Context, now time.Time, limit int) ([]in
 		WHERE id > 0 AND synced_at > 0
 		  AND status IN ('RELEASING', 'NOT_YET_RELEASED')
 		  AND id NOT IN (SELECT anime_id FROM dead_anime)
-		  AND ((next_airing_at IS NOT NULL AND next_airing_at <= ?1 AND synced_at < next_airing_at)
+		  AND ((next_airing_at IS NOT NULL AND next_airing_at <= ?1
+		        AND (synced_at < next_airing_at OR synced_at < ?1 - ?5))
 		       OR synced_at < ?1 - CASE status WHEN 'RELEASING' THEN ?2 ELSE ?3 END)
 		ORDER BY (next_airing_at IS NOT NULL AND next_airing_at <= ?1) DESC, synced_at
 		LIMIT ?4`,
-		now.Unix(), int64(airingMaxAge.Seconds()), int64(upcomingMaxAge.Seconds()), limit)
+		now.Unix(), int64(airingMaxAge.Seconds()), int64(upcomingMaxAge.Seconds()), limit, int64(airedRecheck.Seconds()))
 	if err != nil {
 		return nil, err
 	}

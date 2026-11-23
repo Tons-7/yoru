@@ -24,6 +24,8 @@ import {
   useDownloads,
   useDriveRoom,
   useEpisodes,
+  untilAiring,
+  AIRED_RECHECK,
   useFranchise,
   useNow,
   usePrefs,
@@ -68,6 +70,7 @@ interface AnimeDetail {
   source: 'anilist' | 'myanimelist' | 'corpus'
   title: string
   partial?: boolean
+  airingDue?: boolean
   listStatus?: string
   progress?: number
   episodeCount?: number
@@ -431,6 +434,8 @@ export function Anime() {
     enabled: Number.isFinite(id) && id !== 0,
     queryKey: ['anime', id],
     queryFn: () => api.get<AnimeDetail>(`/api/anime/${id}`),
+    refetchInterval: (q) =>
+      q.state.data?.airingDue ? AIRED_RECHECK : untilAiring(q.state.data?.anime.nextAiringEpisode?.airingAt),
   })
 
   const episodes = useEpisodes(id)

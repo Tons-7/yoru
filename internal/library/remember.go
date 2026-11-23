@@ -80,7 +80,7 @@ func (i *Importer) Refresh(ctx context.Context, limit int) (int, error) {
 	if err != nil || len(ids) == 0 {
 		return 0, err
 	}
-	return i.Hydrate(ctx, ids)
+	return i.Hydrate(anilist.Fresh(ctx), ids)
 }
 
 const (
@@ -108,7 +108,7 @@ func (i *Importer) Kept(ctx context.Context, id int) (m anilist.Media, at time.T
 	case "FINISHED", "CANCELLED":
 		fresh = age < FinishedFreshFor
 	case "RELEASING":
-		aired := k.NextAiringAt > 0 && k.NextAiringAt <= now.Unix() && k.SyncedAt.Unix() < k.NextAiringAt
+		aired := k.NextAiringAt > 0 && k.NextAiringAt <= now.Unix()
 		fresh = age < AiringFreshFor && !aired
 	default:
 		fresh = age < UpcomingFreshFor

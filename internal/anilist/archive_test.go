@@ -297,6 +297,41 @@ func TestWhoIsSignedInIsNeverTakenFromASavedAnswer(t *testing.T) {
 	}
 }
 
+func TestFreshSkipsTheTenMinuteAnswer(t *testing.T) {
+	var n atomic.Int32
+	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `{"data":{"n":%d}}`, n.Add(1))
+	})
+	c.cache = newResponseCache()
+	var out struct{ N int }
+	if err := c.Query(context.Background(), "query { n }", nil, &out); err != nil || out.N != 1 {
+		t.Fatalf("first: %v %+v", err, out)
+	}
+	if err := c.Query(context.Background(), "query { n }", nil, &out); err != nil || out.N != 1 {
+		t.Fatalf("a normal ask should reuse the answer: %v %+v", err, out)
+	}
+	if err := c.Query(Fresh(context.Background()), "query { n }", nil, &out); err != nil || out.N != 2 {
+		t.Fatalf("a fresh ask reused the old answer: %v %+v", err, out)
+	}
+}
+
+func TestCopiesSavedBeforeThePerAccountKeyStillLoad(t *testing.T) {
+	archive := newMemArchive()
+	body := []byte(`{"query":"q"}`)
+	archive.saved[signedInKey(body)] = []byte(`{"n":1}`)
+	got, _, ok := loadSaved(context.Background(), archive, savedKeyFor(body, "one"))
+	if !ok || string(got) != `{"n":1}` {
+		t.Fatalf("older copy = %q %v", got, ok)
+	}
+	archive.saved[archiveKey(body, "one")] = []byte(`{"n":2}`)
+	if got, _, _ := loadSaved(context.Background(), archive, savedKeyFor(body, "one")); string(got) != `{"n":2}` {
+		t.Errorf("the account's own copy lost to the older one: %q", got)
+	}
+	if _, _, ok := loadSaved(context.Background(), archive, savedKeyFor(body, "")); ok {
+		t.Error("signed out read a signed-in copy")
+	}
+}
+
 func TestSavedAnswersBelongToOneAccount(t *testing.T) {
 	body := []byte(`{"query":"q"}`)
 	if archiveKey(body, "one") == archiveKey(body, "two") {

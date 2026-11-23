@@ -239,12 +239,16 @@ func (s *Server) animeCard(r *http.Request, id int) (body map[string]any, ok, do
 	if d, ok := s.store.ShowDelay(r.Context(), id); ok {
 		body["delay"] = map[string]any{"episode": d.Episode, "wasAt": d.WasAt, "nowAt": d.NowAt}
 	}
+	if s.store.AiringDue(r.Context(), id) {
+		body["airingDue"] = true
+	}
 	return body, true, false
 }
 
 const (
 	showRefreshWait  = 2 * time.Minute
 	showRefreshAgain = 10 * time.Minute
+	showAiredAgain   = time.Minute
 )
 
 type showRefreshes struct {
@@ -253,10 +257,10 @@ type showRefreshes struct {
 	missed map[int]time.Time
 }
 
-func (r *showRefreshes) justMissed(id int) bool {
+func (r *showRefreshes) justMissed(id int, within time.Duration) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return time.Since(r.missed[id]) < showRefreshAgain
+	return time.Since(r.missed[id]) < within
 }
 
 func (r *showRefreshes) miss(id int) {
@@ -273,12 +277,16 @@ func (s *Server) refreshShow(ctx context.Context, id int, at time.Time) {
 		anilist.NoteSaved(ctx, at)
 		return
 	}
-	if s.showRefresh.justMissed(id) {
+	again := showRefreshAgain
+	if s.store.AiringDue(ctx, id) {
+		again = showAiredAgain
+	}
+	if s.showRefresh.justMissed(id, again) {
 		return
 	}
 	anilist.NoteRefreshing(ctx)
 	go s.showRefresh.flight.Do(strconv.Itoa(id), func() (any, error) {
-		behind, cancel := context.WithTimeout(anilist.Background(context.Background()), showRefreshWait)
+		behind, cancel := context.WithTimeout(anilist.Fresh(anilist.Background(context.Background())), showRefreshWait)
 		defer cancel()
 		if _, err := s.importer.Hydrate(behind, []int{id}); err != nil {
 			s.log.Debug("refresh a saved show", "anime", id, "err", err)

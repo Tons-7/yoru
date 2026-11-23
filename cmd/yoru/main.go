@@ -329,7 +329,11 @@ func run(log *slog.Logger, out *logSink) error {
 	locked = true
 	defer unlock()
 	out.open(cfg.DataDir())
-	unlockCache, err := lockCache(cfg.CacheDir)
+	cacheWait := time.Duration(0)
+	if update.Handover(os.Args[1:]) {
+		cacheWait = 30 * time.Second
+	}
+	unlockCache, err := lockCache(cfg.CacheDir, cacheWait)
 	if err != nil {
 		return err
 	}
@@ -741,7 +745,7 @@ func run(log *slog.Logger, out *logSink) error {
 		Run: api.ScanLibrary,
 	})
 	scheduler.Add(jobs.Job{
-		Name: "airing-refresh", Every: 15 * time.Minute, OnStart: true,
+		Name: "airing-refresh", Every: 5 * time.Minute, OnStart: true,
 		Run: func(ctx context.Context) error {
 			_, err := importer.Refresh(anilist.Background(ctx), 150)
 			return err
@@ -982,18 +986,24 @@ func yoruAnswers(base string) bool {
 	return res.StatusCode == http.StatusOK && json.NewDecoder(res.Body).Decode(&body) == nil && body.Version != ""
 }
 
-func lockCache(dir string) (func(), error) {
+func lockCache(dir string, wait time.Duration) (func(), error) {
 	path := filepath.Join(dir, torrent.CacheLockName)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return func() {}, nil
 	}
 	f.Close()
-	unlock, err := proc.Lock(path)
-	if err != nil {
-		return nil, fmt.Errorf("another Yoru is using the cache folder %s", dir)
+	deadline := time.Now().Add(wait)
+	for {
+		unlock, err := proc.Lock(path)
+		if err == nil {
+			return unlock, nil
+		}
+		if !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("another Yoru is using the cache folder %s", dir)
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
-	return unlock, nil
 }
 
 func warnSlowDisk(log *slog.Logger, dirs ...string) {

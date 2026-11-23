@@ -380,11 +380,45 @@ func (s *Store) asScheduled(ctx context.Context, animeID int, out []EpisodeRow) 
 			e.AirDate = &at
 		case e.Number < next && e.AirDate != nil && *e.AirDate > now:
 			e.AirDate = &now
+		case e.Number > next && at <= now:
+			if e.AirDate == nil {
+				expected := expectedAir(at, now, e.Number-next)
+				e.AirDate = &expected
+			}
 		case e.Number > next && (e.AirDate == nil || *e.AirDate < at):
 			e.AirDate = &at
 		}
 	}
+	if len(out) == 0 {
+		return out
+	}
+	last := out[len(out)-1].Number
+	if next <= last || next-last > maxScheduledGap {
+		return out
+	}
+	if limit, firm := s.EpisodeLimit(ctx, animeID); firm && next > limit {
+		return out
+	}
+	for n := last + 1; n <= next; n++ {
+		row := EpisodeRow{AnimeID: animeID, EpKey: strconv.Itoa(n), Number: n, Display: n, Planned: true}
+		if n == next {
+			row.AirDate = &at
+		}
+		out = append(out, row)
+	}
 	return out
+}
+
+const (
+	maxScheduledGap = 50
+	airingWeek      = 7 * 24 * 3600
+)
+
+func expectedAir(at, now int64, after int) int64 {
+	if expected := at + int64(after)*airingWeek; expected > now {
+		return expected
+	}
+	return now + int64(after)*airingWeek
 }
 
 func (s *Store) markLocal(ctx context.Context, animeID int, out []EpisodeRow) []EpisodeRow {
