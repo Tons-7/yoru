@@ -302,7 +302,8 @@ Programs Yoru downloads when you turn on what needs them (not bundled):
 
 - [FlyHigh Engine](https://github.com/getflyhigh/flyhigh-engine): smooth motion. Code under the
   Apache License 2.0, model weights under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/);
-  Yoru fetches an unmodified copy of its web release
+  Yoru fetches its web release, rebuilt with one fix to the flash detection
+  ([flash-after-calm](https://github.com/Tons-7/flyhigh-engine/tree/flash-after-calm))
 - [FFmpeg](https://ffmpeg.org), under the LGPL/GPL: converting and reading episodes
 - [mpv](https://mpv.io), under the GPL/LGPL, and [Anime4K](https://github.com/bloc97/Anime4K), under the
   MIT License: the desktop player and its upscaling

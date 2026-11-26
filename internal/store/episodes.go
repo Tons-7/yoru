@@ -379,7 +379,8 @@ func (s *Store) asScheduled(ctx context.Context, animeID int, out []EpisodeRow) 
 		case e.Number == next:
 			e.AirDate = &at
 		case e.Number < next && e.AirDate != nil && *e.AirDate > now:
-			e.AirDate = &now
+			aired := airedBefore(at, now, next-e.Number)
+			e.AirDate = &aired
 		case e.Number > next && at <= now:
 			if e.AirDate == nil {
 				expected := expectedAir(at, now, e.Number-next)
@@ -413,6 +414,13 @@ const (
 	maxScheduledGap = 50
 	airingWeek      = 7 * 24 * 3600
 )
+
+func airedBefore(at, now int64, before int) int64 {
+	if aired := at - int64(before)*airingWeek; aired <= now {
+		return aired
+	}
+	return now/3600*3600 - 3600
+}
 
 func expectedAir(at, now int64, after int) int64 {
 	if expected := at + int64(after)*airingWeek; expected > now {

@@ -1,6 +1,6 @@
 import { chromium } from 'playwright'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
+import { copyFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,6 +45,11 @@ if (!status.ready) {
   }
 }
 if (!status.ready) throw new Error('FlyHigh did not install')
+if (process.env.PROBE_FLYHIGH_PKG) {
+  const into = join(dirname(process.env.YORU_LIB), 'root', 'bin', 'flyhigh')
+  for (const f of ['flyhigh_web.js', 'flyhigh_web_bg.wasm']) copyFileSync(join(process.env.PROBE_FLYHIGH_PKG, f), join(into, f))
+  status = { ...status, version: `${status.version}+local` }
+}
 
 const browser = await chromium.launch({
   headless: process.env.HEADLESS === '1',
@@ -65,11 +70,14 @@ const quantile = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.floor(q 
 async function measure(label, prefs, rateMode) {
   for (const [key, value] of Object.entries(prefs)) await post('/api/prefs', { key, value })
   await post('/api/prefs', { key: 'playback.smooth_rate', value: rateMode })
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
-  await context.addInitScript(() => {
+  const fullScreen = process.env.PROBE_FULL === '1'
+  const context = await browser.newContext(
+    fullScreen ? { viewport: { width: 1707, height: 1067 }, deviceScaleFactor: 1.5 } : { viewport: { width: 1280, height: 800 } },
+  )
+  await context.addInitScript((upscale) => {
     localStorage.setItem('yoru.smooth', 'on')
-    localStorage.setItem('yoru.anime4k', 'off')
-  })
+    localStorage.setItem('yoru.anime4k', upscale)
+  }, process.env.PROBE_A4K ?? 'off')
   await context.addInitScript(record)
   const page = await context.newPage()
   const said = []
@@ -86,14 +94,22 @@ async function measure(label, prefs, rateMode) {
     await video.evaluate((v) => v.play().catch(() => {})).catch(() => {})
     await sleep(1000)
   }
+  if (fullScreen) {
+    await page.mouse.move(800, 500)
+    await page.keyboard.press('f')
+    await sleep(1500)
+    if (!(await page.evaluate(() => !!document.fullscreenElement))) said.push('warning: not full screen')
+  }
   await video.evaluate((v) => (v.currentTime = 2))
   await sleep(8000)
   const target = Number(await page.evaluate(() => document.querySelector('video')?.previousElementSibling?.dataset?.target ?? 0))
   const precise = await page.evaluate(() => document.querySelector('video')?.previousElementSibling?.dataset?.precise ?? '')
   const from = await video.evaluate((v) => v.currentTime)
   await page.evaluate(() => (window.__shown = []))
+  if (process.env.PROBE_TRACE) await page.evaluate(() => (window.__trace = []))
   await sleep(SECONDS * 1000)
   const times = await page.evaluate(() => window.__shown)
+  const trace = process.env.PROBE_TRACE ? await page.evaluate(() => window.__trace ?? []) : []
   const to = await video.evaluate((v) => v.currentTime)
   const gaveUp = await page.getByText('Smooth motion turned itself off').first().isVisible().catch(() => false)
   const stillShown = await page.evaluate(() => {
@@ -142,10 +158,32 @@ async function measure(label, prefs, rateMode) {
     console.log('per second: ' + perSecond.join(' '))
     console.log('said: ' + (said.length ? said.slice(0, 12).join(' | ') : 'nothing'))
   }
+  if (trace.length) {
+    const by = {}
+    const row = (s) => (by[s] ??= { motion: 0, cut: 0, hold: 0, made: 0, orig: 0, motions: [] })
+    for (const e of trace) {
+      if ('f' in e) {
+        const r = row(Math.floor(e.f / 1000))
+        r[e.kind] = (r[e.kind] ?? 0) + 1
+        if (e.kind === 'cut') r.motions.push(`${['?', 'cut', 'flash', 'afterHold'][e.c.why ?? 0]}(mean${(e.c.mean ?? 0).toFixed(3)} flash${e.c.flash ?? '-'} before${(e.c.before ?? -1).toFixed(3)})`)
+      } else {
+        const r = row(Math.floor(e.v))
+        e.o ? r.made++ : r.orig++
+      }
+    }
+    for (const s of Object.keys(by).map(Number).sort((a, b) => a - b)) {
+      const r = by[s]
+      console.log(`clip ${s}s (ep ${s + Number(process.env.YORU_REAL_AT ?? 0)}s): frames motion ${r.motion} hold ${r.hold} cut ${r.cut} | shown made ${r.made} original ${r.orig} ${r.motions.join(' ')}`)
+    }
+  }
 }
 
 for (let n = 1; n <= Number(process.env.PROBE_REPEAT ?? 0); n++) await measure(`default, time ${n}`, { 'playback.smooth_held': 'false' }, 'auto')
-if (process.env.PROBE_ONLY !== 'held') await measure('default', { 'playback.smooth_held': 'false' }, 'auto')
-if (process.env.PROBE_ONLY !== 'default') await measure('held drawings smoothed', { 'playback.smooth_held': 'true' }, 'auto')
+if (process.env.PROBE_ONLY !== 'held') {
+  for (const rate of (process.env.PROBE_RATES ?? 'auto').split(',')) await measure(`default ${rate}`, { 'playback.smooth_held': 'false' }, rate)
+}
+if (process.env.PROBE_ONLY !== 'default') {
+  for (const rate of (process.env.PROBE_RATES ?? 'auto').split(',')) await measure(`held drawings smoothed ${rate}`, { 'playback.smooth_held': 'true' }, rate)
+}
 await post('/api/prefs', { key: 'playback.smooth_held', value: 'false' })
 await browser.close()
