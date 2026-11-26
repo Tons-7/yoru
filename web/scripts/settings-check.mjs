@@ -157,6 +157,36 @@ await sleep(500)
 const seen = await page.evaluate(() => window.__hints)
 check(!seen.some((t) => / cached · .* downloaded$/.test(t)), 'pressed again, it never blinks back', JSON.stringify(seen))
 
+const customValue = async (tab, row, typed, bad) => {
+  await page.goto(`${BASE}/settings?tab=${tab}`, { waitUntil: 'domcontentloaded' })
+  const menu = page.getByRole('combobox', { name: row })
+  await menu.waitFor({ timeout: 10_000 })
+  await menu.click()
+  await page.getByRole('option', { name: 'Custom…' }).click()
+  const field = page.getByRole('textbox', { name: /^Custom value in / })
+  await field.fill(bad)
+  const refused = await page.getByRole('button', { name: 'Save' }).isDisabled()
+  await field.fill(typed)
+  await page.getByRole('button', { name: 'Save' }).click()
+  return { refused, menu }
+}
+{
+  const { refused, menu } = await customValue('Storage', 'Budget', '30', '0.5')
+  check(refused, 'a budget under 1 GB cannot be saved')
+  check(await until(async () => (await prefs())['cache.budget_bytes'] === String(30 * 1024 ** 3)), 'a custom 30 GB budget is saved')
+  check(await until(async () => (await menu.innerText()).includes('30 GB')), 'and the menu shows it')
+  await page.screenshot({ path: `${SHOTS}/settings-custom-budget.png` })
+}
+{
+  const unit = (await prefs())['display.speed']
+  await fetch(`${BASE}/api/prefs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'display.speed', value: 'mbps' }) })
+  const { refused } = await customValue('Downloads', 'Download speed limit', '25', '0.2')
+  check(refused, 'a speed limit under 1 Mbps cannot be saved')
+  check(await until(async () => (await prefs())['downloads.limit_bytes'] === '3125000'), 'a custom 25 Mbps limit is saved')
+  await fetch(`${BASE}/api/prefs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'downloads.limit_bytes', value: '0' }) })
+  await fetch(`${BASE}/api/prefs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: 'display.speed', value: unit }) })
+}
+
 let passwordFields = 0
 let masked = 0
 for (const tab of ['Playback', 'Language', 'Sound', 'Accounts', 'Library', 'Notifications', 'Downloads', 'Storage', 'Devices', 'Computer', 'About', 'New']) {

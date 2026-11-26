@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+const (
+	SyncMinSeconds = 5 * 60
+	SyncMaxSeconds = 7 * 24 * 60 * 60
+)
+
 var Defaults = map[string]string{
 	"playback.player":      "browser",
 	"playback.autoplay":    "false",
@@ -133,6 +138,7 @@ var Defaults = map[string]string{
 
 	"sync.progress_at":  "0.9",
 	"sync.poll_seconds": "900",
+	"sync.auto":         "true",
 
 	"notify.enabled":      "true",
 	"notify.releases":     "sub",

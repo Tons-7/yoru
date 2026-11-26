@@ -477,6 +477,12 @@ export function useFilters() {
   })
 }
 
+export interface ValueRange {
+  min: number
+  max: number
+  off?: boolean
+}
+
 export function usePrefs(animeId?: number) {
   return useQuery({
     queryKey: ['prefs', animeId ?? 0],
@@ -485,6 +491,7 @@ export function usePrefs(animeId?: number) {
         effective: Record<string, string>
         defaults: Record<string, string>
         overrides?: Record<string, string>
+        ranges?: Record<string, ValueRange>
       }>(`/api/prefs${query({ anime: animeId })}`),
   })
 }

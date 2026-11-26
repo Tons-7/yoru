@@ -3,12 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"yoru/internal/disk"
 	"yoru/internal/library"
 	"yoru/internal/score"
 	"yoru/internal/sound"
@@ -50,6 +52,28 @@ var numeric = map[string]bool{
 	"cache.budget_bytes": true, "notify.poll_seconds": true, "sync.poll_seconds": true, "cache.prefetch_count": true, "downloads.limit_bytes": true,
 }
 
+type valueRange struct {
+	Min int64 `json:"min"`
+	Max int64 `json:"max"`
+	Off bool  `json:"off,omitempty"`
+}
+
+var numericRange = map[string]valueRange{
+	"sync.poll_seconds":     {Min: store.SyncMinSeconds, Max: store.SyncMaxSeconds},
+	"cache.budget_bytes":    {Min: 1 << 30, Max: 10 << 40},
+	"downloads.limit_bytes": {Min: 125_000, Max: 1_250_000_000, Off: true},
+}
+
+func (s *Server) ranges() map[string]valueRange {
+	out := maps.Clone(numericRange)
+	if _, total, _, err := disk.Space(s.cfg.CacheDir); err == nil && total > 0 {
+		c := out["cache.budget_bytes"]
+		c.Max = max(min(c.Max, total), c.Min)
+		out["cache.budget_bytes"] = c
+	}
+	return out
+}
+
 var listSettings = map[string]bool{
 	"release.prefer_groups": true, "release.avoid_groups": true, "release.exclude_terms": true,
 }
@@ -67,7 +91,7 @@ func (s *Server) getPrefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := map[string]any{"effective": prefs.All(), "defaults": store.Defaults}
+	body := map[string]any{"effective": prefs.All(), "defaults": store.Defaults, "ranges": s.ranges()}
 	if animeID != 0 {
 		overrides, err := s.store.AnimePrefs(r.Context(), animeID)
 		if err != nil {
@@ -111,8 +135,13 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	} else if numeric[body.Key] && body.Value != "" {
-		if _, err := strconv.ParseInt(body.Value, 10, 64); err != nil {
+		n, err := strconv.ParseInt(body.Value, 10, 64)
+		if err != nil {
 			send(w, http.StatusBadRequest, map[string]any{"error": "invalid value for " + body.Key + ": a whole number"})
+			return
+		}
+		if lim, ok := s.ranges()[body.Key]; ok && !(n == 0 && lim.Off) && (n < lim.Min || n > lim.Max) {
+			send(w, http.StatusBadRequest, map[string]any{"error": "That value is out of range.", "min": lim.Min, "max": lim.Max})
 			return
 		}
 	} else if listSettings[body.Key] && len(body.Value) > listSettingMax {
@@ -136,6 +165,14 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 	if body.AnimeID == 0 && body.Key == "downloads.parallel" {
 		s.downloader.Wake()
 	}
+	if names, ok := retimes[body.Key]; ok && body.AnimeID == 0 && s.jobs != nil {
+		s.jobs.Retime(names...)
+	}
+	if body.AnimeID == 0 && body.Key == "sync.auto" && body.Value == "true" && s.jobs != nil {
+		for _, name := range retimes["sync.poll_seconds"] {
+			s.jobs.Trigger(name)
+		}
+	}
 	if body.AnimeID == 0 && strings.HasPrefix(body.Key, "discord.") && s.presence != nil {
 		if prefs, err := s.store.Prefs(r.Context(), 0); err == nil {
 			s.presence.Apply(prefs)
@@ -145,6 +182,7 @@ func (s *Server) setPref(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
+	retimes       = map[string][]string{"sync.poll_seconds": {"anilist-sync", "mal-sync"}, "notify.poll_seconds": {"release-watch"}}
 	limitSettings = map[string]bool{"downloads.limit_bytes": true, "downloads.upload": true, "downloads.adapter": true}
 	hostSettings  = map[string]bool{"downloads.adapter": true, "discord.enabled": true, "discord.everywhere": true,
 		"power.awake_watching": true, "power.awake_downloading": true, "update.auto": true}

@@ -54,7 +54,7 @@ func TestPrefsRefuseTyposInEverySetting(t *testing.T) {
 			t.Errorf("%s=%q answered %d, want 400", key, bad, res.StatusCode)
 		}
 	}
-	for key, good := range map[string]string{"cache.autodelete": "keep2", "playback.voice": "high", "cache.budget_bytes": "1000"} {
+	for key, good := range map[string]string{"cache.autodelete": "keep2", "playback.voice": "high", "cache.budget_bytes": "1073741824"} {
 		if res, body := h.postJSON(t, "/api/prefs", map[string]any{"key": key, "value": good}); res.StatusCode != http.StatusOK {
 			t.Errorf("%s=%q answered %d %v", key, good, res.StatusCode, body)
 		}

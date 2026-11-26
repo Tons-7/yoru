@@ -57,6 +57,7 @@ type entry struct {
 	lastErr     string
 	took        time.Duration
 	consecutive int
+	retime      chan struct{}
 }
 
 var ErrRunning = errors.New("already running")
@@ -99,7 +100,7 @@ func (s *Scheduler) Add(job Job) {
 	if _, exists := s.entries[job.Name]; exists {
 		return
 	}
-	s.entries[job.Name] = &entry{job: job}
+	s.entries[job.Name] = &entry{job: job, retime: make(chan struct{}, 1)}
 	s.order = append(s.order, job.Name)
 }
 
@@ -129,25 +130,65 @@ func (s *Scheduler) loop(ctx context.Context, name string) {
 	}
 
 	for {
-		every := e.job.every()
+		retry := startRetry
+		startRetry = false
+		select {
+		case <-e.retime:
+		default:
+		}
+		wait := e.due(retry)
 		e.mu.Lock()
-		wait := every
-		if e.consecutive > 0 {
-			wait = backoff(every, e.consecutive)
-		}
-		if startRetry {
-			wait, startRetry = min(every, startRetryAfter), false
-		}
 		e.nextRun = time.Now().Add(wait)
 		e.mu.Unlock()
 
+		if !s.sleep(ctx, e, wait, retry) {
+			return
+		}
+		s.execute(ctx, e)
+	}
+}
+
+func (e *entry) due(retry bool) time.Duration {
+	every := e.job.every()
+	if retry {
+		return min(every, startRetryAfter)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.consecutive > 0 {
+		return backoff(every, e.consecutive)
+	}
+	return every
+}
+
+func (s *Scheduler) sleep(ctx context.Context, e *entry, wait time.Duration, retry bool) bool {
+	started := time.Now()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-time.After(wait):
+			return false
+		case <-timer.C:
+			return true
+		case <-e.retime:
+			next := started.Add(e.due(retry))
+			e.mu.Lock()
+			e.nextRun = next
+			e.mu.Unlock()
+			timer.Reset(max(0, time.Until(next)))
 		}
+	}
+}
 
-		s.execute(ctx, e)
+func (s *Scheduler) Retime(names ...string) {
+	for _, name := range names {
+		if e := s.entry(name); e != nil {
+			select {
+			case e.retime <- struct{}{}:
+			default:
+			}
+		}
 	}
 }
 

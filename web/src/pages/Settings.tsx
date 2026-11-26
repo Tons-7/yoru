@@ -42,6 +42,7 @@ import { SitesEditor } from '../components/SitesEditor'
 import { WhereThingsGo } from '../components/WhereThingsGo'
 import { LocalFolders } from '../components/LocalFolders'
 import { ValueMenu } from '../components/ValueMenu'
+import { useCustomValue } from '../components/CustomValue'
 import { SHOW_SHORTCUTS } from '../components/keys'
 import { install, INSTALL_HELP, useInstall } from '../lib/install'
 import { asSubLook, previewStyle, SUB_LOOKS } from '../player/subLook'
@@ -600,6 +601,7 @@ function useFlag() {
     failed: prefs.isError && !prefs.data ? <ErrorState error={prefs.error} retry={() => void prefs.refetch()} /> : null,
     get: (key: string) => values[key] === 'true',
     value: (key: string) => values[key] ?? '',
+    range: (key: string) => prefs.data?.ranges?.[key],
     set: (key: string, value: string, done?: () => void) =>
       setPref.mutate({ key, value }, done ? { onSettled: done } : undefined),
   }
@@ -1363,20 +1365,7 @@ function StorageTab() {
         hint="Watched episodes stay for an instant rewatch; the oldest go first. Your downloads don't count."
         keywords="cache disk"
       >
-        <Row label="Budget" hint="How much watched episodes may take." keywords="size space gb cache">
-          <ValueMenu
-            value={f.value('cache.budget_bytes')}
-            onChange={(v) => f.set('cache.budget_bytes', v)}
-            options={[5, 10, 20, 40, 80]
-              .map((gb) => ({ value: String(gb * 1024 ** 3), label: `${gb} GB` }))
-              .concat(
-                f.value('cache.budget_bytes') && ![5, 10, 20, 40, 80].some((gb) => String(gb * 1024 ** 3) === f.value('cache.budget_bytes'))
-                  ? [{ value: f.value('cache.budget_bytes'), label: bytes(Number(f.value('cache.budget_bytes'))) }]
-                  : [],
-              )
-              .toSorted((a, b) => Number(a.value) - Number(b.value))}
-          />
-        </Row>
+        <BudgetRow f={f} />
         <Row
           label="Auto-delete watched"
           hint={
@@ -1793,6 +1782,25 @@ function PeersFirewallRow() {
   )
 }
 
+const BUDGETS_GB = [5, 10, 20, 40, 80]
+
+function BudgetRow({ f }: { f: ReturnType<typeof useFlag> }) {
+  const custom = useCustomValue({
+    value: f.value('cache.budget_bytes'),
+    presets: BUDGETS_GB.map((gb) => ({ value: String(gb * 1024 ** 3), label: `${gb} GB` })),
+    label: (v) => `${+(Number(v) / 1024 ** 3).toFixed(2)} GB`,
+    unit: 'GB',
+    scale: 1024 ** 3,
+    range: f.range('cache.budget_bytes'),
+    onChange: (v) => f.set('cache.budget_bytes', v),
+  })
+  return (
+    <Row label="Budget" hint="How much watched episodes may take." keywords="size space gb cache custom" below={custom.below}>
+      <ValueMenu value={f.value('cache.budget_bytes')} onChange={custom.pick} options={custom.options} />
+    </Row>
+  )
+}
+
 const SPEED_LIMITS: Record<SpeedUnit, number[]> = {
   mbps: [5, 10, 20, 40, 80].map((m) => (m * 1_000_000) / 8),
   mbs: [1, 2, 3, 5, 10].map((m) => m * 1024 ** 2),
@@ -1802,22 +1810,27 @@ const STREAM_BYTES = 1_000_000
 function SpeedLimitRow({ f }: { f: ReturnType<typeof useFlag> }) {
   const unit: SpeedUnit = f.value('display.speed') === 'mbs' ? 'mbs' : 'mbps'
   const limit = Number(f.value('downloads.limit_bytes')) || 0
-  const choices = limit && !SPEED_LIMITS[unit].includes(limit) ? [...SPEED_LIMITS[unit], limit].sort((a, b) => a - b) : SPEED_LIMITS[unit]
+  const custom = useCustomValue({
+    value: String(limit),
+    presets: [{ value: '0', label: 'No limit' }, ...SPEED_LIMITS[unit].map((b) => ({ value: String(b), label: speedLimit(b, unit) }))],
+    label: (v) => speedLimit(Number(v), unit),
+    unit: unit === 'mbs' ? 'MB/s' : 'Mbps',
+    scale: unit === 'mbs' ? 1024 ** 2 : 125_000,
+    range: f.range('downloads.limit_bytes'),
+    onChange: (v) => f.set('downloads.limit_bytes', v),
+  })
   return (
     <Row
       label="Download speed limit"
-      keywords="bandwidth throttle cap"
+      keywords="bandwidth throttle cap custom"
       hint={
         limit > 0 && limit < STREAM_BYTES
           ? `Under about ${speedLimit(STREAM_BYTES, unit)} a 1080p episode plays faster than it downloads, so it stops to wait.`
           : 'Leaves room for everything else. Streaming counts too.'
       }
+      below={custom.below}
     >
-      <ValueMenu
-        value={String(limit)}
-        onChange={(v) => f.set('downloads.limit_bytes', v)}
-        options={[{ value: '0', label: 'No limit' }, ...choices.map((b) => ({ value: String(b), label: speedLimit(b, unit) }))]}
-      />
+      <ValueMenu value={String(limit)} onChange={custom.pick} options={custom.options} />
     </Row>
   )
 }
@@ -2243,8 +2256,47 @@ function AccountsTab() {
           <TrackerCard key={tracker.provider} tracker={tracker} host={host} />
         ))
       )}
+      {!f.failed && !f.loading && trackers.data?.trackers.some((t) => t.connected) && <SyncSection f={f} />}
       {f.failed ?? (!f.loading && <DiscordSection f={f} />)}
     </div>
+  )
+}
+
+const SYNC_MINUTES = [5, 15, 30, 60, 360, 1440]
+
+function every(seconds: number): string {
+  const minutes = seconds / 60
+  if (minutes < 60) return `Every ${+minutes.toFixed(1)} min`
+  const hours = minutes / 60
+  if (hours < 24) return hours === 1 ? 'Every hour' : `Every ${+hours.toFixed(1)} hours`
+  const days = hours / 24
+  return days === 1 ? 'Every day' : `Every ${+days.toFixed(1)} days`
+}
+
+function SyncSection({ f }: { f: ReturnType<typeof useFlag> }) {
+  const on = f.get('sync.auto')
+  const range = f.range('sync.poll_seconds')
+  const seconds = String(Math.max(Number(f.value('sync.poll_seconds')) || 0, range?.min ?? 0))
+  const custom = useCustomValue({
+    value: seconds,
+    presets: SYNC_MINUTES.map((m) => ({ value: String(m * 60), label: every(m * 60) })),
+    label: (v) => every(Number(v)),
+    unit: 'min',
+    scale: 60,
+    range,
+    onChange: (v) => f.set('sync.poll_seconds', v),
+  })
+  return (
+    <Section title="Sync" hint="Your changes are sent right away." keywords="tracker anilist myanimelist mal list">
+      <Row label="Check your list for changes" hint="Brings in what you change on the site. Merges, never deletes." keywords="auto sync pull import">
+        <Switch on={on} onChange={(v) => f.set('sync.auto', String(v))} />
+      </Row>
+      {on && (
+        <Row label="How often" keywords="sync interval minutes custom" below={custom.below}>
+          <ValueMenu value={seconds} onChange={custom.pick} options={custom.options} />
+        </Row>
+      )}
+    </Section>
   )
 }
 

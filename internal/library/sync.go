@@ -19,6 +19,7 @@ type Sync struct {
 	al       *anilist.Client
 	mal      *MALSync
 	importer *Importer
+	pulls    func(context.Context) bool
 	log      *slog.Logger
 
 	pushing sync.Mutex
@@ -35,6 +36,11 @@ func (s *Sync) WithMAL(m *MALSync) *Sync {
 
 func (s *Sync) WithImporter(i *Importer) *Sync {
 	s.importer = i
+	return s
+}
+
+func (s *Sync) WithPulls(pulls func(context.Context) bool) *Sync {
+	s.pulls = pulls
 	return s
 }
 
@@ -98,7 +104,7 @@ func (s *Sync) run(ctx context.Context) (SyncReport, error) {
 	}
 
 	userID, _ := s.store.SettingInt(ctx, "anilist.user_id")
-	if s.importer != nil && userID > 0 {
+	if s.importer != nil && userID > 0 && (s.pulls == nil || s.pulls(ctx)) {
 		res, err := s.importer.Run(ctx, userID, store.ImportMerge)
 		if errs, ok := errors.AsType[anilist.Errors](err); ok && errs.Unauthorized() {
 			s.store.SetSetting(ctx, AuthErrorSetting, "true")

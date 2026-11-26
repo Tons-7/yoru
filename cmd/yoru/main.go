@@ -78,6 +78,15 @@ func interval(st *store.Store, key string, fallback time.Duration) time.Duration
 	return fallback
 }
 
+func syncEvery(st *store.Store) time.Duration {
+	return min(max(interval(st, "sync.poll_seconds", 15*time.Minute), store.SyncMinSeconds*time.Second), store.SyncMaxSeconds*time.Second)
+}
+
+func syncPulls(ctx context.Context, st *store.Store) bool {
+	prefs, err := st.Prefs(ctx, 0)
+	return err != nil || prefs.Bool("sync.auto")
+}
+
 func newTorrentEngine(cfg config.Config, log *slog.Logger) (*engine.Engine, error) {
 	upload := cfg.Torrent.UploadLimitBytes
 	if upload == 0 {
@@ -453,7 +462,8 @@ func run(log *slog.Logger, out *logSink) error {
 	importer := library.NewImporter(st, al, log)
 	finder.WithHydrator(importer.Hydrate)
 	malSync := library.NewMALSync(st, malClient, log)
-	sync := library.NewSync(st, al, log).WithMAL(malSync).WithImporter(importer)
+	sync := library.NewSync(st, al, log).WithMAL(malSync).WithImporter(importer).
+		WithPulls(func(ctx context.Context) bool { return syncPulls(ctx, st) })
 	watcher := library.NewWatcher(st, finder, sites.General(), log)
 	scheduler := jobs.New(log)
 
@@ -545,7 +555,7 @@ func run(log *slog.Logger, out *logSink) error {
 
 	scheduler.Add(jobs.Job{
 		Name: "anilist-sync", Every: 15 * time.Minute,
-		Interval: func() time.Duration { return interval(st, "sync.poll_seconds", 15*time.Minute) },
+		Interval: func() time.Duration { return syncEvery(st) },
 		Run:      func(ctx context.Context) error { _, err := sync.Run(ctx); return err },
 	})
 	scheduler.Add(jobs.Job{
@@ -567,9 +577,12 @@ func run(log *slog.Logger, out *logSink) error {
 	})
 	scheduler.Add(jobs.Job{
 		Name: "mal-sync", Every: 15 * time.Minute,
-		Interval: func() time.Duration { return interval(st, "sync.poll_seconds", 15*time.Minute) },
+		Interval: func() time.Duration { return syncEvery(st) },
 		Run: func(ctx context.Context) error {
-			_, pullErr := malSync.Pull(ctx)
+			var pullErr error
+			if syncPulls(ctx, st) {
+				_, pullErr = malSync.Pull(ctx)
+			}
 			_, runErr := malSync.Run(ctx)
 			return errors.Join(pullErr, runErr)
 		},
